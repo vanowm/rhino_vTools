@@ -215,7 +215,7 @@ namespace vTools.Commands
           int number = done + 1;
           string display = LabelText(number);
           var frame = (addLabels || _rotateFlatParts)
-            ? SurfaceLabelFrame(doc, src.Id, ItemTextHeight(doc, src.Id, display))
+            ? SurfaceLabelFrame(doc, src.Id, ItemTextHeight(doc, src.Id, display, src.Brep), src.Brep)
             : null;
 
           if (frame != null)
@@ -907,26 +907,21 @@ namespace vTools.Commands
       return bestNormal;
     }
 
-    private static Point3d? LabelPoint(RhinoDoc doc, Guid objId)
+    private static Point3d? LabelPoint(RhinoDoc doc, Guid objId, Brep? brepHint = null)
     {
-      var obj = doc.Objects.FindId(objId);
-      if (obj == null)
-        return null;
-      var brep = BrepFromGeometry(obj.Geometry);
-      Point3d point;
+      var brep = brepHint ?? BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
       if (brep != null)
       {
         var area = AreaMassProperties.Compute(brep);
-        if (area != null)
-          point = area.Centroid;
-        else
-          point = brep.GetBoundingBox(true).Center;
-
+        Point3d point;
+        if (area != null) point = area.Centroid;
+        else point = brep.GetBoundingBox(true).Center;
         try { return brep.ClosestPoint(point); }
         catch { return point; }
       }
-
-      var bbox = obj.Geometry.GetBoundingBox(true);
+      if (brepHint != null) return null;
+      var obj = doc.Objects.FindId(objId);
+      var bbox = obj?.Geometry.GetBoundingBox(true) ?? BoundingBox.Empty;
       return bbox.IsValid ? bbox.Center : (Point3d?)null;
     }
 
@@ -953,37 +948,32 @@ namespace vTools.Commands
       return pts;
     }
 
-    private static List<Point3d> BoundaryPoints(RhinoDoc doc, Guid objId)
+    private static List<Point3d> BoundaryPoints(RhinoDoc doc, Guid objId, Brep? brepHint = null)
     {
       var pts = new List<Point3d>();
-      var obj = doc.Objects.FindId(objId);
-      if (obj == null)
-        return pts;
-
-      var brep = BrepFromGeometry(obj.Geometry);
+      var brep = brepHint ?? BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
       if (brep != null)
       {
         pts.AddRange(brep.Vertices.Select(v => v.Location));
         foreach (var curve in brep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
           pts.AddRange(CurveSamples(curve, TextBoundarySamples));
       }
-
       if (pts.Count == 0)
       {
-        var bbox = obj.Geometry.GetBoundingBox(true);
-        if (bbox.IsValid)
-          pts.AddRange(bbox.GetCorners());
+        var geom = (GeometryBase?)brepHint ?? doc.Objects.FindId(objId)?.Geometry;
+        var bbox = geom?.GetBoundingBox(true) ?? BoundingBox.Empty;
+        if (bbox.IsValid) pts.AddRange(bbox.GetCorners());
       }
       return pts;
     }
 
-    private static LabelFrame? SurfaceLabelFrame(RhinoDoc doc, Guid objId, double height)
+    private static LabelFrame? SurfaceLabelFrame(RhinoDoc doc, Guid objId, double height, Brep? brepHint = null)
     {
-      var point = LabelPoint(doc, objId);
+      var point = LabelPoint(doc, objId, brepHint);
       if (!point.HasValue)
         return null;
 
-      var brep = BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
+      var brep = brepHint ?? BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
       var tol = doc.ModelAbsoluteTolerance;
       var faceHit = brep != null ? ClosestFaceHit(brep, point.Value, tol) : null;
       var normal = faceHit?.Normal ?? (brep != null ? ClosestNormal(brep, point.Value, Vector3d.ZAxis, tol) : Vector3d.ZAxis);
@@ -1112,13 +1102,15 @@ namespace vTools.Commands
       return max - min;
     }
 
-    private static double HeightCandidate(RhinoDoc doc, Guid objId)
+    private static double HeightCandidate(RhinoDoc doc, Guid objId, Brep? brepHint = null)
     {
-      var point = LabelPoint(doc, objId);
-      var pts = BoundaryPoints(doc, objId);
+      var point = LabelPoint(doc, objId, brepHint);
+      var pts   = BoundaryPoints(doc, objId, brepHint);
       if (!point.HasValue || pts.Count == 0)
       {
-        var bbox = doc.Objects.FindId(objId)?.Geometry.GetBoundingBox(true) ?? BoundingBox.Empty;
+        var bbox = brepHint?.GetBoundingBox(true)
+          ?? doc.Objects.FindId(objId)?.Geometry.GetBoundingBox(true)
+          ?? BoundingBox.Empty;
         if (!bbox.IsValid)
           return 1.0;
         var spans = new[] { bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z }
@@ -1126,7 +1118,7 @@ namespace vTools.Commands
         return spans.Count > 0 ? spans.Min() * 0.04 : 1.0;
       }
 
-      var frame = SurfaceLabelFrame(doc, objId, 1.0);
+      var frame = SurfaceLabelFrame(doc, objId, 1.0, brepHint);
       if (frame == null)
         return 1.0;
       var ys = pts.Select(p => (p - point.Value) * frame.Y);
@@ -1473,15 +1465,15 @@ namespace vTools.Commands
     }
 
     // ── Per-part label height ──────────────────────────────────────────────────
-    private static double ItemTextHeight(RhinoDoc doc, Guid objId, string display)
+    private static double ItemTextHeight(RhinoDoc doc, Guid objId, string display, Brep? brepHint = null)
     {
       double tol = doc.ModelAbsoluteTolerance;
-      double baseH = HeightCandidate(doc, objId);
+      double baseH = HeightCandidate(doc, objId, brepHint);
       double height = Math.Max(baseH, tol * 8.0);
       var caps = new List<double>();
 
       // Edge cap: shortest meaningful naked edge * 0.50
-      var brep = BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
+      var brep = brepHint ?? BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
       if (brep != null)
       {
         var lengths = brep.DuplicateEdgeCurves(true)?
@@ -1499,11 +1491,11 @@ namespace vTools.Commands
       }
 
       // Span caps: x_span * 0.45 / width_factor and y_span * 0.28
-      var pt = LabelPoint(doc, objId);
-      var pts = BoundaryPoints(doc, objId);
+      var pt = LabelPoint(doc, objId, brepHint);
+      var pts = BoundaryPoints(doc, objId, brepHint);
       if (pt.HasValue && pts.Count > 0)
       {
-        var frame = SurfaceLabelFrame(doc, objId, 1.0);
+        var frame = SurfaceLabelFrame(doc, objId, 1.0, brepHint);
         if (frame != null)
         {
           double wf = Math.Max(1.0, display.Length * 0.65);

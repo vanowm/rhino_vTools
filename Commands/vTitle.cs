@@ -3,6 +3,7 @@
 using System;
 using System.Drawing;
 using System.Globalization;
+using System.Linq;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Display;
@@ -444,8 +445,16 @@ public sealed class vTitle : Command
     RhinoApp.Idle -= OnIdleUpdateBoxes;
     var doc = RhinoDoc.ActiveDoc;
     if (doc == null || _pendingBoxUpdates.Count == 0) { _pendingBoxUpdates.Clear(); return; }
-    foreach (var id in _pendingBoxUpdates)
-      UpdateBoxForTitle(doc, id);
+    uint undoRecord = doc.BeginUndoRecord("vTitle: sync box");
+    try
+    {
+      foreach (var id in _pendingBoxUpdates)
+        UpdateBoxForTitle(doc, id);
+    }
+    finally
+    {
+      if (undoRecord != 0) doc.EndUndoRecord(undoRecord);
+    }
     _pendingBoxUpdates.Clear();
     doc.Views.Redraw();
   }
@@ -469,14 +478,18 @@ public sealed class vTitle : Command
     var (ihw, ihh) = GetActualHalfExtents(doc, textId, te.PlainText ?? "", te.TextHeight);
     double pad = te.TextHeight * padding / 100.0;
 
-    foreach (var obj in doc.Objects)
+    // Snapshot IDs before replacing to avoid modifying the collection during enumeration
+    var boxIds = doc.Objects
+      .Where(o => o.Geometry is PolylineCurve)
+      .Where(o => { var gl = o.Attributes.GetGroupList(); return gl != null && Array.IndexOf(gl, grpIdx) >= 0; })
+      .Select(o => o.Id)
+      .ToList();
+
+    foreach (var boxId in boxIds)
     {
-      if (obj.Geometry is not PolylineCurve) continue;
-      var gl = obj.Attributes.GetGroupList();
-      if (gl == null || Array.IndexOf(gl, grpIdx) < 0) continue;
       var newBox = RectCurve(te.Plane.Origin, te.Plane.XAxis, te.Plane.YAxis, ihw + pad, ihh + pad);
       _internalReplace = true;
-      doc.Objects.Replace(obj.Id, newBox);
+      doc.Objects.Replace(boxId, newBox);
       _internalReplace = false;
     }
   }

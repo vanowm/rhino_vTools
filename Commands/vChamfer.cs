@@ -500,59 +500,51 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
-          // Project click to whichever working curve is closer.
-          // If click is near c2 (work2), compute equidistant gap from c2's perspective.
-          work1.ClosestPoint(pickedPt, out double tPick1);
-          work2.ClosestPoint(pickedPt, out double tPick2);
-          var ptNear1 = work1.PointAt(tPick1);
-          var ptNear2 = work2.PointAt(tPick2);
-          double d1 = pickedPt.DistanceTo(ptNear1);
-          double d2 = pickedPt.DistanceTo(ptNear2);
-          Log.Write("vChamfer", $"PointPick  distWork1={d1:G4}  distWork2={d2:G4}");
+          // Binary search along c1: find arc-length position where the perpendicular
+          // distance from the click to the chamfer line equals _length.
+          // perp_dist decreases monotonically as the chamfer moves away from corner.
+          double ppLen1 = work1.GetLength();
+          double ppMaxS = Math.Min(ppLen1, work2.GetLength());
+          double ppLo = 0.0, ppHi = ppMaxS;
+          Point3d ppPtA = Point3d.Unset, ppPtB = Point3d.Unset;
+          double ppTA = double.NaN, ppTB = double.NaN;
 
-          double gPick;
-          if (d1 <= d2)
+          for (int i = 0; i < 52; i++)
           {
-            // Click is near c1 — use work1 projection directly.
-            var tanPickA = work1.TangentAt(tPick1);
-            Log.Write("vChamfer", $"PointPick  projOnWork1={P(ptNear1)}  using c1 side");
-            (gPick, _, _) = EquidistantGap(ptNear1, tanPickA, work2);
-          }
-          else
-          {
-            // Click is near c2 — compute equidistant gap from c2's side.
-            var tanPickB = work2.TangentAt(tPick2);
-            Log.Write("vChamfer", $"PointPick  projOnWork2={P(ptNear2)}  using c2 side");
-            var (gFromC2, _, ptBref) = EquidistantGap(ptNear2, tanPickB, work1);
-            // gFromC2 is the equidistant gap measured from c2 toward c1 — same value as from c1.
-            gPick = gFromC2;
-            Log.Write("vChamfer", $"PointPick  gFromC2={gFromC2:G4}");
+            double s   = 0.5 * (ppLo + ppHi);
+            double seg = c1AtStart ? s : (ppLen1 - s);
+            if (!work1.LengthParameter(seg, out double tMid)) break;
+            var ptMid  = work1.PointAt(tMid);
+            var tanMid = work1.TangentAt(tMid);
+            var (gMid, _, ptBMid) = EquidistantGap(ptMid, tanMid, work2);
+            if (double.IsNaN(gMid) || !ptBMid.IsValid) { ppHi = s; continue; }
+            var chamferDir = ptBMid - ptMid;
+            if (!chamferDir.Unitize()) { ppHi = s; continue; }
+            var pRel = pickedPt - ptMid;
+            double perp = Math.Abs(pRel.X * chamferDir.Y - pRel.Y * chamferDir.X);
+            // perp > _length: chamfer too close to corner, search farther out
+            if (perp > _length) ppLo = s; else ppHi = s;
+            if (ppHi - ppLo < 1e-9) break;
           }
 
-          Log.Write("vChamfer", $"PointPick  gPick={gPick:G4}  _length={_length:G4}");
-          if (double.IsNaN(gPick))
-          {
-            RhinoApp.WriteLine("vChamfer: cannot measure gap at that point.");
-            continue;
-          }
+          double ppSA   = 0.5 * (ppLo + ppHi);
+          double ppSegA = c1AtStart ? ppSA : (ppLen1 - ppSA);
+          if (!work1.LengthParameter(ppSegA, out ppTA)) { RhinoApp.WriteLine("vChamfer: cannot compute offset."); continue; }
+          ppPtA = work1.PointAt(ppTA);
+          var ppTanA = work1.TangentAt(ppTA);
+          var (ppGap, ppTBfinal, ppPtBfinal) = EquidistantGap(ppPtA, ppTanA, work2);
+          if (double.IsNaN(ppGap) || !ppPtBfinal.IsValid) { RhinoApp.WriteLine("vChamfer: cannot find chamfer at offset."); continue; }
+          ppTB = ppTBfinal; ppPtB = ppPtBfinal;
 
-          // Chamfer is placed _length toward the corner from the click reference.
-          double newTargetGap = gPick - _length;
-          Log.Write("vChamfer", $"PointPick  newTargetGap={newTargetGap:G4}");
-          if (newTargetGap <= RhinoMath.ZeroTolerance)
-          {
-            RhinoApp.WriteLine($"vChamfer: reference too close to corner (gap {gPick:0.###} \u2264 Length {_length:0.###}) \u2014 pick farther out.");
-            continue;
-          }
-          if (!ComputeChamfer(work1, c1AtStart, work2, newTargetGap,
-                out var ptANew, out var ptBNew, out var tANew, out var tBNew))
-          {
-            RhinoApp.WriteLine("vChamfer: cannot place chamfer at that point.");
-            continue;
-          }
-          tA = tANew; ptA = ptANew;
-          tB = tBNew; ptB = ptBNew;
-          pickedGap = gPick;       // store G_click so Length-change can re-apply: G_click - new_length
+          // Verify convergence
+          var ppDir = ppPtB - ppPtA; ppDir.Unitize();
+          var ppRel = pickedPt - ppPtA;
+          double ppPerp = Math.Abs(ppRel.X * ppDir.Y - ppRel.Y * ppDir.X);
+          Log.Write("vChamfer", $"PointPick  sA={ppSA:G4}  gap={ppGap:G4}  perpDist={ppPerp:G4}  target={_length:G4}");
+
+          tA = ppTA; ptA = ppPtA;
+          tB = ppTB; ptB = ppPtB;
+          pickedGap = ppSA;  // store arc-from-corner for Length-change re-apply
           pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -606,22 +598,30 @@ public sealed class vChamfer : Command
         {
           bool recomputed = false;
           // If an offset point is active, recompute from the same reference arc position.
-          // If offset point is active, re-apply it with the new _length.
+          // If offset point is active, Length changed ? perp-dist target changed.
+          // Re-run the full perp-dist binary search isn't stored; just recompute
+          // If offset point is active, Length changed ? perp-dist target changed.
+          // Re-run the full perp-dist binary search isn't stored; just recompute
+          // initial placement with new _length (offset point is cleared).
           if (pointActive && !double.IsNaN(pickedGap))
           {
-            double newTargetGap = pickedGap - _length;
-            if (newTargetGap > RhinoMath.ZeroTolerance
-                && ComputeChamfer(work1, c1AtStart, work2, newTargetGap,
-                                  out ptA, out ptB, out tA, out tB))
+            // pickedGap stores the arc-from-corner of the last offset position.
+            // Re-evaluate equidistant gap there and use it.
+            double ppSeg = c1AtStart ? pickedGap : (work1.GetLength() - pickedGap);
+            if (work1.LengthParameter(ppSeg, out double ppTAchg))
             {
-              UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
-              recomputed = true;
+              var ppPtAchg  = work1.PointAt(ppTAchg);
+              var ppTanAchg = work1.TangentAt(ppTAchg);
+              var (ppGchg, ppTBchg, ppPtBchg) = EquidistantGap(ppPtAchg, ppTanAchg, work2);
+              if (!double.IsNaN(ppGchg) && ppPtBchg.IsValid
+                  && ComputeChamfer(work1, c1AtStart, work2, ppGchg,
+                                    out ptA, out ptB, out tA, out tB))
+              {
+                UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
+                recomputed = true;
+              }
             }
-            else
-            {
-              RhinoApp.WriteLine("vChamfer: length too large for this offset position.");
-              conduit.ShowTrim = _trim;
-            }
+            if (!recomputed) { conduit.ShowTrim = _trim; }
           }
 
           if (!recomputed)

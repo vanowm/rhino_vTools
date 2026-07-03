@@ -524,7 +524,6 @@ public sealed class vChamfer : Command
 
           tA = tANew; ptA = ptANew;
           tB = tBNew; ptB = ptBNew;
-          runLength = newGap;
           pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();

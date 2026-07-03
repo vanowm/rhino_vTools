@@ -500,13 +500,17 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
-          // Binary search: find arc position where distance from click to
-          // chamfer LINE MIDPOINT ((ptA+ptB)/2) equals _length.
-          // The click is the reference; chamfer moves until midpoint is
-          // exactly _length away from click (toward the corner side).
+          // Binary search in [0, s_foot]: find arc position where distance from
+          // click to chamfer LINE MIDPOINT ((ptA+ptB)/2) equals _length.
+          // The foot (nearest work1 point to click) is the minimum of this distance;
+          // search only on the corner side [0, s_foot] where dist is monotone decreasing.
+          work1.ClosestPoint(pickedPt, out double ppTFoot);
           double ppLen1 = work1.GetLength();
-          double ppMaxS = Math.Min(ppLen1, work2.GetLength());
-          double ppLo = 0.0, ppHi = ppMaxS;
+          double ppSfoot = c1AtStart
+              ? work1.GetLength(new Interval(work1.Domain.Min, ppTFoot))
+              : work1.GetLength(new Interval(ppTFoot, work1.Domain.Max));
+
+          double ppLo = 0.0, ppHi = ppSfoot;
           for (int i = 0; i < 52; i++)
           {
             double s   = 0.5 * (ppLo + ppHi);

@@ -680,6 +680,19 @@ public sealed class vMiddleCurve : Command
 
     AddOffsetIntersectionSamples(offsetBase, offsetTarget, baseCurve, baseLength, tolerance, samples);
     AddOffsetEndpointExtensionSamples(offsetBase, offsetTarget, baseCurve, baseLength, tolerance, samples);
+
+    // Guard: when seamAllowance exceeds the gap between curves everywhere, the offset curves
+    // cross past each other and all samples end up clamped to the endpoints. Producing a seam
+    // range that spans nearly the full curve causes BuildSeamEqualDistanceLines to emit
+    // degenerate overlapping lines. Detect this by checking whether every sample is within
+    // half a seamAllowance of either end, and if so treat it as "no valid seam".
+    if (samples.Count > 0)
+    {
+      double endMargin = Math.Max(seamAllowance * 0.5, tolerance * 10.0);
+      if (samples.All(s => s.Distance <= endMargin || s.Distance >= baseLength - endMargin))
+        samples.Clear();
+    }
+
     return samples;
   }
 

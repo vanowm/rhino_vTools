@@ -222,8 +222,8 @@ public sealed class vChamfer : Command
     if (events != null && events.Count > 0)
     {
       double bestD = double.MaxValue;
-      double bestTB = tGuess;
-      Point3d bestPt = ptGuess;
+      double bestTB = double.NaN;
+      Point3d bestPt = Point3d.Unset;
       for (int i = 0; i < events.Count; i++)
       {
         if (!events[i].IsPoint) continue;
@@ -232,10 +232,11 @@ public sealed class vChamfer : Command
         double d = hitPt.DistanceTo(pt);
         if (d < bestD) { bestD = d; bestTB = events[i].ParameterA; bestPt = hitPt; }
       }
-      return (bestD < double.MaxValue ? bestD : pt.DistanceTo(ptGuess), bestTB, bestPt);
+      if (bestPt.IsValid)
+        return (bestD, bestTB, bestPt);
     }
 
-    return (pt.DistanceTo(ptGuess), tGuess, ptGuess);  // fallback
+    return (double.NaN, double.NaN, Point3d.Unset);  // c2 doesn’t extend to this location
   }
 
   // length = desired perpendicular gap from c1 to c2.
@@ -261,20 +262,25 @@ public sealed class vChamfer : Command
       return ptA.IsValid && ptB.IsValid;
     }
 
-    // Verify target gap is reachable at the far end of c1.
-    double tFar = c1AtStart ? c1.Domain.Max : c1.Domain.Min;
-    var ptFar   = c1.PointAt(tFar);
-    var tanFar  = c1.TangentAt(tFar);
-    var (gapAtFar, _, _) = NormalRayHit(ptFar, tanFar, c2);
-    if (double.IsNaN(gapAtFar) || gapAtFar < targetGap)
+    // Verify target gap is reachable within the overlap of c1 and c2.
+    // Use min(len1, len2) so a longer c1 doesn’t produce spurious NaN at its far end.
+    double len1 = c1.GetLength();
+    double maxS  = Math.Min(len1, c2.GetLength());
     {
-      Log.Write("vChamfer", $"ComputeChamfer  targetGap={targetGap:G4} > maxGap={gapAtFar:G4}");
-      return false;
+      double seg = c1AtStart ? maxS : (len1 - maxS);
+      if (!c1.LengthParameter(seg, out double tAtMax)) return false;
+      var ptAtMax  = c1.PointAt(tAtMax);
+      var tanAtMax = c1.TangentAt(tAtMax);
+      var (gapAtMax, _, _) = NormalRayHit(ptAtMax, tanAtMax, c2);
+      if (double.IsNaN(gapAtMax) || gapAtMax < targetGap)
+      {
+        Log.Write("vChamfer", $"ComputeChamfer  targetGap={targetGap:G4} > maxGap={gapAtMax:G4}");
+        return false;
+      }
     }
 
     // Binary search on arc-length s from corner end: find s where NormalRayGap = targetGap.
-    double len1 = c1.GetLength();
-    double lo = 0.0, hi = len1;
+    double lo = 0.0, hi = maxS;
     for (int i = 0; i < 48; i++)
     {
       double s   = 0.5 * (lo + hi);
@@ -283,7 +289,7 @@ public sealed class vChamfer : Command
       var ptMid  = c1.PointAt(tMid);
       var tanMid = c1.TangentAt(tMid);
       var (gap, _, _) = NormalRayHit(ptMid, tanMid, c2);
-      if (double.IsNaN(gap)) { lo = s; continue; }
+      if (double.IsNaN(gap)) { hi = s; continue; }  // c2 too short here — search closer to corner
       if (gap < targetGap) lo = s; else hi = s;
       if (hi - lo < 1e-9) break;
     }

@@ -48,10 +48,9 @@ public sealed class vChamfer : Command
   {
     try
     {
-      var dir = System.IO.Path.Combine(
-        System.IO.Path.GetDirectoryName(typeof(vChamfer).Assembly.Location)!, "logs");
-      System.IO.Directory.CreateDirectory(dir);
-      _dbgPath = System.IO.Path.Combine(dir, "vChamfer_debug.log");
+      var logsDir = System.IO.Path.GetDirectoryName(Log.FilePath);
+      if (string.IsNullOrEmpty(logsDir)) { _dbgPath = null; return; }
+      _dbgPath = System.IO.Path.Combine(logsDir, "vChamfer_debug.log");
       System.IO.File.WriteAllText(_dbgPath,
         $"vChamfer debug log\ntime={DateTime.Now:yyyy-MM-dd HH:mm:ss}\n" +
         $"model_tol={doc.ModelAbsoluteTolerance:G}\n\n");
@@ -594,7 +593,20 @@ public sealed class vChamfer : Command
     // This makes the chamfer angle correct for 3D curves not lying in the active CPlane.
     cplane = InferChamferPlane(work1, c1AtStart, work2, c2AtStart, corner, cplane);
 
-    if (!ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, _length,
+    // Initial placement: arc-length from corner to selection click on work1.
+    // Puts the chamfer where the user picked, not at the stored _length.
+    double runLength = _length;
+    if (click1.IsValid && work1.ClosestPoint(click1, out double tClickInit))
+    {
+      double arcFromCorner = c1AtStart
+        ? work1.GetLength(new Interval(work1.Domain.Min, tClickInit))
+        : work1.GetLength(new Interval(tClickInit, work1.Domain.Max));
+      if (arcFromCorner > RhinoMath.ZeroTolerance)
+        runLength = arcFromCorner;
+      Dbg($"RunCommand  click arc-from-corner={arcFromCorner:G4}  runLength={runLength:G4}");
+    }
+
+    if (!ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
           out var ptA, out var ptB, out var tA, out var tB))
     {
       RhinoApp.WriteLine("vChamfer: cannot compute chamfer for these curves.");
@@ -618,7 +630,7 @@ public sealed class vChamfer : Command
           : "Press Enter to apply chamfer; pick a point to place at Length distance from point");
         get.AcceptNothing(true);
         get.AcceptNumber(true, true);
-        var lengthOpt = new OptionDouble(_length, 0.0, double.MaxValue);
+        var lengthOpt = new OptionDouble(runLength, 0.0, double.MaxValue);
         var idxLength = get.AddOptionDouble("Length", ref lengthOpt);
         var trimOpt = new OptionToggle(_trim, "No", "Yes");
         get.AddOptionToggle("Trim", ref trimOpt);
@@ -673,6 +685,7 @@ public sealed class vChamfer : Command
             continue;
           }
 
+          runLength = newLength;
           pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -685,7 +698,7 @@ public sealed class vChamfer : Command
         if (res == GetResult.Option && idxClearPoint >= 0 && get.Option()?.Index == idxClearPoint)
         {
           pointActive = false;
-          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, _length,
+          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -697,6 +710,7 @@ public sealed class vChamfer : Command
           var v = get.Number();
           if (TrySetLength(v))
           {
+            runLength = _length;
             pointActive = false;
             SaveOptions();
           }
@@ -708,14 +722,17 @@ public sealed class vChamfer : Command
           if (_trim) _join = joinOpt.CurrentValue;
 
           if (option?.Index == idxLength && TrySetLength(lengthOpt.CurrentValue))
+          {
+            runLength = _length;
             pointActive = false;
+          }
 
           SaveOptions();
         }
 
         if (res == GetResult.Number || res == GetResult.Option)
         {
-          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, _length,
+          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           else

@@ -297,6 +297,19 @@ public sealed class vChamfer : Command
     var tanA = c1.TangentAt(tA);
     var (finalGap, tBfinal, ptBfinal) = NormalRayHit(ptA, tanA, c2);
     if (double.IsNaN(tBfinal) || !ptBfinal.IsValid) return false;
+
+    // Refine: re-shoot using the average of c1 and c2 tangents at the chamfer points
+    // so the line is perpendicular to the middle curve, not just to c1.
+    var tanB = c2.TangentAt(tBfinal);
+    if (tanB * tanA < 0.0) tanB = -tanB;          // align directions
+    var avgTan = tanA + tanB;
+    if (avgTan.Unitize())
+    {
+      var (_, tBref, ptBref) = NormalRayHit(ptA, avgTan, c2);
+      if (!double.IsNaN(tBref) && ptBref.IsValid)
+        (tBfinal, ptBfinal) = (tBref, ptBref);
+    }
+
     tB  = tBfinal;
     ptB = ptBfinal;
 

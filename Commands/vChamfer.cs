@@ -318,29 +318,21 @@ public sealed class vChamfer : Command
     }
 
     // Walk arc-length s1/s2 from each corner endpoint.
-    // Also guard against s1/s2 exceeding curve length: when that happens
-    // d1=0 or d2=0, LengthParameter returns the far-end parameter (wrong side).
+    // When s1 > curve length, Max(0,...) clamps d to 0 → LengthParameter returns the
+    // far-end parameter, which is where the chamfer line intersects the short curve.
     {
       double arcLen1 = c1.GetLength();
-      if (s1 >= arcLen1)
-      {
-        Log.Write("vChamfer", $"compute  s1={s1:G4} exceeds arcLen1={arcLen1:G4}  c1AtStart={c1AtStart}");
-        return false;
-      }
-      double d1 = c1AtStart ? s1 : arcLen1 - s1;
+      double d1 = c1AtStart ? s1 : Math.Max(0.0, arcLen1 - s1);
       if (!c1.LengthParameter(d1, out tA))
         if (!c1.ClosestPoint(corner + s1 * rawT1, out tA)) return false;
+      Log.Write("vChamfer", $"compute  c1  arcLen={arcLen1:G4}  d1={d1:G4}  tA={tA:G4}");
     }
     {
       double arcLen2 = c2.GetLength();
-      if (s2 >= arcLen2)
-      {
-        Log.Write("vChamfer", $"compute  s2={s2:G4} exceeds arcLen2={arcLen2:G4}  c2AtStart={c2AtStart}");
-        return false;
-      }
-      double d2 = c2AtStart ? s2 : arcLen2 - s2;
+      double d2 = c2AtStart ? s2 : Math.Max(0.0, arcLen2 - s2);
       if (!c2.LengthParameter(d2, out tB))
         if (!c2.ClosestPoint(corner + s2 * rawT2, out tB)) return false;
+      Log.Write("vChamfer", $"compute  c2  arcLen={arcLen2:G4}  d2={d2:G4}  tB={tB:G4}");
     }
 
     ptA = c1.PointAt(tA);

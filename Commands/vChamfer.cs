@@ -323,12 +323,6 @@ public sealed class vChamfer : Command
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
-      // Extensions: cyan (same as chamfer line)
-      if (Ext1 is { } ext1)
-        e.Display.DrawLine(ext1, Color.Cyan, 2);
-      if (Ext2 is { } ext2)
-        e.Display.DrawLine(ext2, Color.Cyan, 2);
-
       // Corner pieces removed by trim — red
       if (ShowTrim)
       {

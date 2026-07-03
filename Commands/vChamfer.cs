@@ -161,10 +161,16 @@ public sealed class vChamfer : Command
     var lineB = new Line(ep2, ep2 + t2 * 1e4);
 
     if (Intersection.LineLine(lineA, lineB, out double a, out double b, 1e-6, false))
-      return (bestC1s, bestC2s, (lineA.PointAt(a) + lineB.PointAt(b)) * 0.5);
+    {
+      var vc = (lineA.PointAt(a) + lineB.PointAt(b)) * 0.5;
+      Log.Write("vChamfer", $"corner  ep1={ep1:F4}  ep2={ep2:F4}  gap={best:F4}  c1AtStart={bestC1s}  c2AtStart={bestC2s}  corner={vc:F4}");
+      return (bestC1s, bestC2s, vc);
+    }
 
-    // Parallel tangents â€” fall back to endpoint midpoint.
-    return (bestC1s, bestC2s, (ep1 + ep2) * 0.5);
+    // Parallel tangents — fall back to endpoint midpoint.
+    var mid = (ep1 + ep2) * 0.5;
+    Log.Write("vChamfer", $"corner  parallel tangents fallback  ep1={ep1:F4}  ep2={ep2:F4}  mid={mid:F4}");
+    return (bestC1s, bestC2s, mid);
   }
 
   // â”€â”€ Extension â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -207,14 +213,24 @@ public sealed class vChamfer : Command
     if (!t1.Unitize() || !t2.Unitize()) return fallback;
 
     var zAxis = Vector3d.CrossProduct(t1, t2);
-    if (zAxis.Length < 1e-6) return fallback; // parallel tangents — no unique plane
+    if (zAxis.Length < 1e-6)
+    {
+      Log.Write("vChamfer", $"plane  parallel tangents — using CPlane fallback  t1={t1:F4}  t2={t2:F4}");
+      return fallback;
+    }
     zAxis.Unitize();
 
     var xAxis = t1;
     var yAxis = Vector3d.CrossProduct(zAxis, xAxis);
-    if (!yAxis.Unitize()) return fallback;
+    if (!yAxis.Unitize())
+    {
+      Log.Write("vChamfer", $"plane  yAxis degenerate — using CPlane fallback");
+      return fallback;
+    }
 
-    return new Plane(corner, xAxis, yAxis);
+    var inferred = new Plane(corner, xAxis, yAxis);
+    Log.Write("vChamfer", $"plane  t1={t1:F4}  t2={t2:F4}  normal={zAxis:F4}  xAxis={xAxis:F4}  yAxis={yAxis:F4}");
+    return inferred;
   }
 
   // ── Chamfer computation ────────────────────────────────────────────────────
@@ -249,7 +265,11 @@ public sealed class vChamfer : Command
     var rawT1 = c1AtStart ?  c1.TangentAtStart : -c1.TangentAtEnd;
     var rawT2 = c2AtStart ?  c2.TangentAtStart : -c2.TangentAtEnd;
 
-    if (rawT1.IsTiny() || rawT2.IsTiny()) return false;
+    if (rawT1.IsTiny() || rawT2.IsTiny())
+    {
+      Log.Write("vChamfer", $"compute  degenerate tangent  rawT1={rawT1:F4}  rawT2={rawT2:F4}");
+      return false;
+    }
     rawT1.Unitize(); rawT2.Unitize();
 
     // Project tangents onto the active CPlane (drop out-of-plane component).
@@ -258,7 +278,11 @@ public sealed class vChamfer : Command
 
     double len1 = Math.Sqrt(t1x * t1x + t1y * t1y);
     double len2 = Math.Sqrt(t2x * t2x + t2y * t2y);
-    if (len1 < 1e-12 || len2 < 1e-12) return false;
+    if (len1 < 1e-12 || len2 < 1e-12)
+    {
+      Log.Write("vChamfer", $"compute  projection too small  t1=({t1x:F4},{t1y:F4}) len={len1:G4}  t2=({t2x:F4},{t2y:F4}) len={len2:G4}");
+      return false;
+    }
 
     t1x /= len1; t1y /= len1;
     t2x /= len2; t2y /= len2;
@@ -274,13 +298,23 @@ public sealed class vChamfer : Command
 
     // Solve for arc-length distances s1, s2 from corner to each chamfer point.
     double det = t1x * t2y - t1y * t2x;
-    if (Math.Abs(det) < 1e-12) return false;
+    if (Math.Abs(det) < 1e-12)
+    {
+      Log.Write("vChamfer", $"compute  det~0 (anti-parallel in plane)  det={det:G4}");
+      return false;
+    }
 
     double s1 = length * (t2x * py - t2y * px) / det;
     double s2 = length * (py  * t1x - px  * t1y) / det;
 
+    Log.Write("vChamfer", $"compute  length={length:G4}  bisector=({bx:F4},{by:F4})  det={det:G4}  s1={s1:G4}  s2={s2:G4}");
+
     if (s1 < 0 && s2 < 0) { s1 = -s1; s2 = -s2; }
-    if (s1 <= 1e-12 || s2 <= 1e-12) return false;
+    if (s1 <= 1e-12 || s2 <= 1e-12)
+    {
+      Log.Write("vChamfer", $"compute  s1/s2 non-positive after flip  s1={s1:G4}  s2={s2:G4}");
+      return false;
+    }
 
     // Walk arc-length s1/s2 from each corner endpoint — more robust than ClosestPoint
     // for wavy curves where the projected target may have multiple close candidates.
@@ -302,11 +336,12 @@ public sealed class vChamfer : Command
 
     // Cut must lie strictly inside the curve (not at the corner endpoint).
     const double tol = 1e-10;
-    if ( c1AtStart && tA <= c1.Domain.Min + tol) return false;
-    if (!c1AtStart && tA >= c1.Domain.Max - tol) return false;
-    if ( c2AtStart && tB <= c2.Domain.Min + tol) return false;
-    if (!c2AtStart && tB >= c2.Domain.Max - tol) return false;
+    if ( c1AtStart && tA <= c1.Domain.Min + tol) { Log.Write("vChamfer", $"compute  tA at domain start  tA={tA:G6}  min={c1.Domain.Min:G6}"); return false; }
+    if (!c1AtStart && tA >= c1.Domain.Max - tol) { Log.Write("vChamfer", $"compute  tA at domain end  tA={tA:G6}  max={c1.Domain.Max:G6}");   return false; }
+    if ( c2AtStart && tB <= c2.Domain.Min + tol) { Log.Write("vChamfer", $"compute  tB at domain start  tB={tB:G6}  min={c2.Domain.Min:G6}"); return false; }
+    if (!c2AtStart && tB >= c2.Domain.Max - tol) { Log.Write("vChamfer", $"compute  tB at domain end  tB={tB:G6}  max={c2.Domain.Max:G6}");   return false; }
 
+    Log.Write("vChamfer", $"compute  OK  ptA={ptA:F4}  ptB={ptB:F4}  chamferLen={ptA.DistanceTo(ptB):G4}");
     return true;
   }
 

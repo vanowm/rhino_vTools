@@ -111,9 +111,22 @@ if ($dllUpdated) {
         $commitMsg = "${ver}: $pendingMsg"
         git add -A
         git commit -m $commitMsg
-        git push origin main
-        Remove-Item $pendingFile -ErrorAction SilentlyContinue
-        Write-Host "Committed and pushed: $commitMsg" -ForegroundColor Green
+        $commitCode = $LASTEXITCODE
+        if ($commitCode -ne 0) {
+            Write-Host "ERROR: git commit failed (exit $commitCode)" -ForegroundColor Red
+        } else {
+            Remove-Item $pendingFile -ErrorAction SilentlyContinue
+            Write-Host "Committed: $commitMsg" -ForegroundColor Green
+            $pushOutput = git push origin main 2>&1
+            $pushCode = $LASTEXITCODE
+            if ($pushCode -eq 0) {
+                Write-Host "Pushed to origin/main." -ForegroundColor Green
+            } else {
+                Write-Host "WARNING: git push failed (exit $pushCode):" -ForegroundColor Yellow
+                Write-Host ($pushOutput | Out-String) -ForegroundColor Yellow
+                Write-Host "Commit was created locally. Run 'git push origin main' manually." -ForegroundColor Yellow
+            }
+        }
     }
 } else {
     Write-Host "DLL not updated (build locked or unchanged) - commit deferred." -ForegroundColor Yellow

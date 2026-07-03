@@ -500,17 +500,35 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
-          // Click at P ? measure equidistant gap G_P at P ? place chamfer at G_P.
-          // _length (stored size) is unchanged; ClearPoint reverts to it.
-          if (!work1.ClosestPoint(pickedPt, out double tPick))
+          // Project click to whichever working curve is closer.
+          // If click is near c2 (work2), compute equidistant gap from c2's perspective.
+          work1.ClosestPoint(pickedPt, out double tPick1);
+          work2.ClosestPoint(pickedPt, out double tPick2);
+          var ptNear1 = work1.PointAt(tPick1);
+          var ptNear2 = work2.PointAt(tPick2);
+          double d1 = pickedPt.DistanceTo(ptNear1);
+          double d2 = pickedPt.DistanceTo(ptNear2);
+          Log.Write("vChamfer", $"PointPick  distWork1={d1:G4}  distWork2={d2:G4}");
+
+          double gPick;
+          if (d1 <= d2)
           {
-            RhinoApp.WriteLine("vChamfer: cannot project point onto curve.");
-            continue;
+            // Click is near c1 — use work1 projection directly.
+            var tanPickA = work1.TangentAt(tPick1);
+            Log.Write("vChamfer", $"PointPick  projOnWork1={P(ptNear1)}  using c1 side");
+            (gPick, _, _) = EquidistantGap(ptNear1, tanPickA, work2);
           }
-          var ptPickA  = work1.PointAt(tPick);
-          var tanPickA = work1.TangentAt(tPick);
-          Log.Write("vChamfer", $"PointPick  projOnWork1={P(ptPickA)}  distFromClick={pickedPt.DistanceTo(ptPickA):G4}");
-          var (gPick, _, _) = EquidistantGap(ptPickA, tanPickA, work2);
+          else
+          {
+            // Click is near c2 — compute equidistant gap from c2's side.
+            var tanPickB = work2.TangentAt(tPick2);
+            Log.Write("vChamfer", $"PointPick  projOnWork2={P(ptNear2)}  using c2 side");
+            var (gFromC2, _, ptBref) = EquidistantGap(ptNear2, tanPickB, work1);
+            // gFromC2 is the equidistant gap measured from c2 toward c1 — same value as from c1.
+            gPick = gFromC2;
+            Log.Write("vChamfer", $"PointPick  gFromC2={gFromC2:G4}");
+          }
+
           Log.Write("vChamfer", $"PointPick  gPick={gPick:G4}  _length={_length:G4}");
           if (double.IsNaN(gPick))
           {

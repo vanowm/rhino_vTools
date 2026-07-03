@@ -500,52 +500,28 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
-          // Find ptA on c1 at Euclidean distance exactly _length from the click.
-          // Project P onto c1 ? foot F at perpendicular distance d.
-          // Then walk sqrt(_length²-d²) arc-length outward from F along c1.
-          if (!work1.ClosestPoint(pickedPt, out double ppTFoot))
+          // Find ptA on c1: step _length from click toward the corner, project onto c1.
+          // "Towards the narrow part" = direction from click to corner.
+          var toCorner = corner - pickedPt;
+          toCorner.Unitize();
+          var ppTarget = pickedPt + toCorner * _length;
+          Log.Write("vChamfer", $"PointPick  target={P((Point3d)ppTarget)}  (click + _length toward corner)");
+
+          if (!work1.ClosestPoint(ppTarget, out double ppTA))
           {
-            RhinoApp.WriteLine("vChamfer: cannot project point onto curve.");
-            continue;
-          }
-          var ppFoot = work1.PointAt(ppTFoot);
-          double ppDist = pickedPt.DistanceTo(ppFoot);
-          Log.Write("vChamfer", $"PointPick  foot={P(ppFoot)}  distToC1={ppDist:G4}  _length={_length:G4}");
-
-          if (ppDist > _length + 1e-6)
-          {
-            RhinoApp.WriteLine($"vChamfer: click is farther from the curve ({ppDist:0.###}) than Length ({_length:0.###}).");
-            continue;
-          }
-
-          // Arc offset from foot so that distance(P, ptA) = _length exactly.
-          double ppArcOffset = Math.Sqrt(Math.Max(_length * _length - ppDist * ppDist, 0.0));
-
-          // Foot arc-position from corner end.
-          double ppFootArc = c1AtStart
-              ? work1.GetLength(new Interval(work1.Domain.Min, ppTFoot))
-              : work1.GetLength(new Interval(ppTFoot, work1.Domain.Max));
-
-          // Walk TOWARD CORNER from foot so that distance(P, ptA) = _length exactly.
-          // "Towards the narrow part" = toward the corner = smaller arc-from-corner.
-          double ppLen1 = work1.GetLength();
-          double ppTargetArc = Math.Max(ppFootArc - ppArcOffset, 0.0);
-
-          double ppSegA = c1AtStart ? ppTargetArc : (ppLen1 - ppTargetArc);
-          if (!work1.LengthParameter(ppSegA, out double ppTA))
-          {
-            RhinoApp.WriteLine("vChamfer: cannot compute offset position.");
+            RhinoApp.WriteLine("vChamfer: cannot project onto curve.");
             continue;
           }
           var ppPtA  = work1.PointAt(ppTA);
           var ppTanA = work1.TangentAt(ppTA);
+          double ppDistPtoA = pickedPt.DistanceTo(ppPtA);
           var (ppGap, ppTBfinal, ppPtBfinal) = EquidistantGap(ppPtA, ppTanA, work2);
           if (double.IsNaN(ppGap) || !ppPtBfinal.IsValid)
           {
             RhinoApp.WriteLine("vChamfer: cannot find chamfer at that point.");
             continue;
           }
-          Log.Write("vChamfer", $"PointPick  ptA={P(ppPtA)}  gap={ppGap:G4}  distPtoA={pickedPt.DistanceTo(ppPtA):G4}");
+          Log.Write("vChamfer", $"PointPick  ptA={P(ppPtA)}  gap={ppGap:G4}  distPtoA={ppDistPtoA:G4}");
 
           tA = ppTA; ptA = ppPtA;
           tB = ppTBfinal; ptB = ppPtBfinal;

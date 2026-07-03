@@ -251,9 +251,20 @@ public sealed class vChamfer : Command
     if (s1 < 0 && s2 < 0) { s1 = -s1; s2 = -s2; }
     if (s1 <= 1e-12 || s2 <= 1e-12) return false;
 
-    // Project approximate tangent-line points onto the actual curves.
-    if (!c1.ClosestPoint(corner + s1 * rawT1, out tA)) return false;
-    if (!c2.ClosestPoint(corner + s2 * rawT2, out tB)) return false;
+    // Walk arc-length s1/s2 from each corner endpoint — more robust than ClosestPoint
+    // for wavy curves where the projected target may have multiple close candidates.
+    {
+      double arcLen1 = c1.GetLength();
+      double d1      = c1AtStart ? s1 : Math.Max(0.0, arcLen1 - s1);
+      if (!c1.LengthParameter(d1, out tA))
+        if (!c1.ClosestPoint(corner + s1 * rawT1, out tA)) return false;
+    }
+    {
+      double arcLen2 = c2.GetLength();
+      double d2      = c2AtStart ? s2 : Math.Max(0.0, arcLen2 - s2);
+      if (!c2.LengthParameter(d2, out tB))
+        if (!c2.ClosestPoint(corner + s2 * rawT2, out tB)) return false;
+    }
 
     ptA = c1.PointAt(tA);
     ptB = c2.PointAt(tB);
@@ -447,15 +458,29 @@ public sealed class vChamfer : Command
     // Computed first so extension-line gating can reference them.
     conduit.CutOff1 = null;
     if (crv1.ClosestPoint(ptA, out var tAorig))
-      conduit.CutOff1 = c1AtStart
-        ? crv1.Trim(crv1.Domain.Min, tAorig)
-        : crv1.Trim(tAorig, crv1.Domain.Max);
+    {
+      // Only show cut-off when ptA is on the curve body, not when it's in the extension
+      // zone (where the closest point on the original curve is its corner endpoint).
+      bool atEndpoint1 = c1AtStart
+        ? tAorig <= crv1.Domain.Min + 1e-6
+        : tAorig >= crv1.Domain.Max - 1e-6;
+      if (!atEndpoint1)
+        conduit.CutOff1 = c1AtStart
+          ? crv1.Trim(crv1.Domain.Min, tAorig)
+          : crv1.Trim(tAorig, crv1.Domain.Max);
+    }
 
     conduit.CutOff2 = null;
     if (crv2.ClosestPoint(ptB, out var tBorig))
-      conduit.CutOff2 = c2AtStart
-        ? crv2.Trim(crv2.Domain.Min, tBorig)
-        : crv2.Trim(tBorig, crv2.Domain.Max);
+    {
+      bool atEndpoint2 = c2AtStart
+        ? tBorig <= crv2.Domain.Min + 1e-6
+        : tBorig >= crv2.Domain.Max - 1e-6;
+      if (!atEndpoint2)
+        conduit.CutOff2 = c2AtStart
+          ? crv2.Trim(crv2.Domain.Min, tBorig)
+          : crv2.Trim(tBorig, crv2.Domain.Max);
+    }
 
     // Extension lines: drawn from original corner tip toward the virtual corner,
     // clipped at the chamfer cut point when ptA lands in the extension zone.

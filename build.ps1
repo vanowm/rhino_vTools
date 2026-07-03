@@ -111,8 +111,9 @@ if ($dllUpdated) {
         $commitMsg = "${ver}: $pendingMsg"
         git add -A
         git commit -m $commitMsg
+        git push origin main
         Remove-Item $pendingFile -ErrorAction SilentlyContinue
-        Write-Host "Committed: $commitMsg" -ForegroundColor Green
+        Write-Host "Committed and pushed: $commitMsg" -ForegroundColor Green
     }
 } else {
     Write-Host "DLL not updated (build locked or unchanged) - commit deferred." -ForegroundColor Yellow

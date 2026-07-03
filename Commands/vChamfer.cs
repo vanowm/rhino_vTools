@@ -298,10 +298,10 @@ public sealed class vChamfer : Command
 
     // Solve for arc-length distances s1, s2 from corner to each chamfer point.
     double det = t1x * t2y - t1y * t2x;
-    // Near-parallel tangents (|det| < 0.01 ≈ < ~0.6°): s1/s2 blow up to huge values.
-    if (Math.Abs(det) < 0.01)
+    // Exactly-parallel tangents → division by zero.
+    if (Math.Abs(det) < 1e-12)
     {
-      Log.Write("vChamfer", $"compute  nearly-parallel tangents  det={det:G4}  (threshold 0.01)");
+      Log.Write("vChamfer", $"compute  exactly-parallel tangents  det={det:G4}");
       return false;
     }
 

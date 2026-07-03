@@ -219,215 +219,71 @@ public sealed class vChamfer : Command
   /// Computes chamfer endpoints on working curves (already extended to corner).
   /// Returns false when geometry is degenerate.
   /// </summary>
-  // ── Plane inference ────────────────────────────────────────────────────────
-
-  /// <summary>
-  /// Builds a plane from the two corner tangents so that the chamfer angle is computed
-  /// in the plane of the curves, not the viewport CPlane. Falls back to <paramref name="fallback"/>
-  /// when the tangents are parallel (no unique plane).
-  /// </summary>
-  private static Plane InferChamferPlane(
-    Curve c1, bool c1AtStart, Curve c2, bool c2AtStart,
-    Point3d corner, Plane fallback)
-  {
-    var t1 = c1AtStart ?  c1.TangentAtStart : -c1.TangentAtEnd;
-    var t2 = c2AtStart ?  c2.TangentAtStart : -c2.TangentAtEnd;
-    if (!t1.Unitize() || !t2.Unitize()) return fallback;
-
-    var zAxis = Vector3d.CrossProduct(t1, t2);
-    if (zAxis.Length < 1e-6)
-    {
-      Log.Write("vChamfer", $"InferChamferPlane  parallel tangents — using CPlane fallback  t1={t1:F4}  t2={t2:F4}");
-      return fallback;
-    }
-    zAxis.Unitize();
-
-    var xAxis = t1;
-    var yAxis = Vector3d.CrossProduct(zAxis, xAxis);
-    if (!yAxis.Unitize())
-    {
-      Log.Write("vChamfer", $"InferChamferPlane  yAxis degenerate — using CPlane fallback");
-      return fallback;
-    }
-
-    var inferred = new Plane(corner, xAxis, yAxis);
-    Log.Write("vChamfer", $"InferChamferPlane  t1={t1:F4}  t2={t2:F4}  normal={zAxis:F4}  xAxis={xAxis:F4}  yAxis={yAxis:F4}");
-    return inferred;
-  }
-
-  // ── Chamfer computation ────────────────────────────────────────────────────
-
-  /// <summary>
-  /// Computes chamfer endpoints on working curves (already extended to corner).\n  /// Returns false when geometry is degenerate.
-  /// </summary>
+  // -- Chamfer computation -----------------------------------------------------
+  //
+  // length = desired chamfer line length (gap from ptA on c1 to closest ptB on c2).
+  // Binary-searches c1 from the corner end for where ClosestPoint(c2) == targetGap.
+  // ptB = ClosestPoint(c2, ptA) ? perpendicular to the middle curve by construction.
   private static bool ComputeChamfer(
     Curve c1, bool c1AtStart,
-    Curve c2, bool c2AtStart,
-    Point3d corner, double length,
+    Curve c2,
+    double targetGap,
     out Point3d ptA, out Point3d ptB,
     out double  tA,  out double  tB)
   {
     ptA = ptB = Point3d.Unset;
     tA  = tB  = double.NaN;
 
-    if (length < 0.0) return false;
+    if (targetGap < 0.0) return false;
 
-    if (length <= RhinoMath.ZeroTolerance)
+    if (targetGap <= RhinoMath.ZeroTolerance)
     {
-      if (!c1.ClosestPoint(corner, out tA)) return false;
-      if (!c2.ClosestPoint(corner, out tB)) return false;
+      tA  = c1AtStart ? c1.Domain.Min : c1.Domain.Max;
       ptA = c1.PointAt(tA);
+      if (!c2.ClosestPoint(ptA, out tB)) return false;
       ptB = c2.PointAt(tB);
       return ptA.IsValid && ptB.IsValid;
     }
 
-    // Cut each curve at arc-length `length` from the corner end.
-    // This gives standard CAD chamfer semantics: length = cut distance along each edge.
+    // Verify target gap is reachable somewhere on c1.
+    double tFar  = c1AtStart ? c1.Domain.Max : c1.Domain.Min;
+    var    ptFar = c1.PointAt(tFar);
+    if (!c2.ClosestPoint(ptFar, out double tBFar)) return false;
+    double gapAtFar = ptFar.DistanceTo(c2.PointAt(tBFar));
+    if (gapAtFar < targetGap)
+    {
+      Log.Write("vChamfer", $"ComputeChamfer  targetGap={targetGap:G4} > maxGap={gapAtFar:G4}");
+      return false;
+    }
+
+    // Binary search on arc-length s from corner end: find s where gap(s) = targetGap.
     double len1 = c1.GetLength();
-    double len2 = c2.GetLength();
+    double lo = 0.0, hi = len1;
+    for (int i = 0; i < 52; i++)
+    {
+      double s   = 0.5 * (lo + hi);
+      double seg = c1AtStart ? s : (len1 - s);
+      if (!c1.LengthParameter(seg, out double tMid)) break;
+      var ptMid = c1.PointAt(tMid);
+      if (!c2.ClosestPoint(ptMid, out double tBMid)) break;
+      double gap = ptMid.DistanceTo(c2.PointAt(tBMid));
+      if (gap < targetGap) lo = s; else hi = s;
+      if (hi - lo < 1e-9) break;
+    }
 
-    if (length >= len1) { Log.Write("vChamfer", $"ComputeChamfer  length={length:G4} >= c1 len={len1:G4}"); return false; }
-    if (length >= len2) { Log.Write("vChamfer", $"ComputeChamfer  length={length:G4} >= c2 len={len2:G4}"); return false; }
-
-    // LengthParameter(s) gives parameter t where arc-length from domain-start to t equals s.
-    double seg1 = c1AtStart ? length : (len1 - length);
-    double seg2 = c2AtStart ? length : (len2 - length);
-
-    if (!c1.LengthParameter(seg1, out tA)) { Log.Write("vChamfer", "ComputeChamfer  LengthParameter failed on c1"); return false; }
-    if (!c2.LengthParameter(seg2, out tB)) { Log.Write("vChamfer", "ComputeChamfer  LengthParameter failed on c2"); return false; }
-
+    double sA   = 0.5 * (lo + hi);
+    double segA = c1AtStart ? sA : (len1 - sA);
+    if (!c1.LengthParameter(segA, out tA)) return false;
     ptA = c1.PointAt(tA);
+    if (!ptA.IsValid) return false;
+    if (!c2.ClosestPoint(ptA, out tB)) return false;
     ptB = c2.PointAt(tB);
+    if (!ptB.IsValid) return false;
 
-    if (!ptA.IsValid || !ptB.IsValid) return false;
-
-    Log.Write("vChamfer", $"ComputeChamfer  OK  length={length:G4}  ptA={P(ptA)}  ptB={P(ptB)}  chamferLen={ptA.DistanceTo(ptB):G4}");
+    Log.Write("vChamfer", $"ComputeChamfer  OK  gap={ptA.DistanceTo(ptB):G4}  ptA={P(ptA)}  ptB={P(ptB)}");
     return true;
   }
 
-  private static bool TryBuildChamferDirections(
-    Curve c1, bool c1AtStart,
-    Curve c2, bool c2AtStart,
-    Plane cplane,
-    out Vector3d bisDir,
-    out Vector3d chamferDir)
-  {
-    bisDir = Vector3d.Unset;
-    chamferDir = Vector3d.Unset;
-
-    var rawT1 = c1AtStart ?  c1.TangentAtStart : -c1.TangentAtEnd;
-    var rawT2 = c2AtStart ?  c2.TangentAtStart : -c2.TangentAtEnd;
-
-    if (rawT1.IsTiny() || rawT2.IsTiny()) return false;
-    rawT1.Unitize(); rawT2.Unitize();
-
-    double t1x = Vector3d.Multiply(rawT1, cplane.XAxis);
-    double t1y = Vector3d.Multiply(rawT1, cplane.YAxis);
-    double t2x = Vector3d.Multiply(rawT2, cplane.XAxis);
-    double t2y = Vector3d.Multiply(rawT2, cplane.YAxis);
-
-    double len1 = Math.Sqrt(t1x * t1x + t1y * t1y);
-    double len2 = Math.Sqrt(t2x * t2x + t2y * t2y);
-    if (len1 < 1e-12 || len2 < 1e-12) return false;
-
-    t1x /= len1; t1y /= len1;
-    t2x /= len2; t2y /= len2;
-
-    double bx = t1x + t2x, by = t1y + t2y;
-    double blen = Math.Sqrt(bx * bx + by * by);
-    if (blen < 1e-12) { bx = -t1y; by = t1x; }
-    else              { bx /= blen; by /= blen; }
-
-    double px = -by, py = bx;
-    bisDir = (cplane.XAxis * bx) + (cplane.YAxis * by);
-    chamferDir = (cplane.XAxis * px) + (cplane.YAxis * py);
-
-    return bisDir.Unitize() && chamferDir.Unitize();
-  }
-
-  private static bool ComputeChamferThroughPoint(
-    Curve c1, bool c1AtStart,
-    Curve c2, bool c2AtStart,
-    Point3d corner, Point3d pickedPt, Plane cplane, double tolerance,
-    out Point3d ptA, out Point3d ptB,
-    out double tA, out double tB)
-  {
-    ptA = ptB = Point3d.Unset;
-    tA = tB = double.NaN;
-
-    tolerance = Math.Max(tolerance, RhinoMath.ZeroTolerance);
-
-    if (!TryBuildChamferDirections(c1, c1AtStart, c2, c2AtStart, cplane, out var bisDir, out var chamferDir))
-      return false;
-
-    if (Vector3d.Multiply(pickedPt - corner, bisDir) <= tolerance)
-      return false;
-
-    var span = Math.Max(corner.DistanceTo(pickedPt) + c1.GetLength() + c2.GetLength(), 1.0) * 4.0;
-    span = Math.Max(span, tolerance * 100.0);
-    var targetLine = new Line(pickedPt - chamferDir * span, pickedPt + chamferDir * span);
-
-    if (!TryIntersectChamferLine(c1, c1AtStart, corner, targetLine, tolerance, out tA, out ptA))
-      return false;
-    if (!TryIntersectChamferLine(c2, c2AtStart, corner, targetLine, tolerance, out tB, out ptB))
-      return false;
-
-    if (ptA.DistanceTo(ptB) <= tolerance)
-      return false;
-
-    var chamferSegment = new Line(ptA, ptB);
-    var closest = chamferSegment.ClosestPoint(pickedPt, true);
-    return closest.DistanceTo(pickedPt) <= Math.Max(tolerance * 10.0, 1e-6);
-  }
-
-  private static bool TryIntersectChamferLine(
-    Curve curve, bool atStart, Point3d corner, Line targetLine, double tolerance,
-    out double t, out Point3d point)
-  {
-    t = double.NaN;
-    point = Point3d.Unset;
-
-    var events = Intersection.CurveLine(curve, targetLine, tolerance, tolerance);
-    if (events == null || events.Count == 0)
-      return false;
-
-    var bestScore = double.MaxValue;
-    for (var i = 0; i < events.Count; i++)
-    {
-      var candidateT = events[i].ParameterA;
-      if (double.IsNaN(candidateT))
-        continue;
-      if (!IsInsideChamferParameter(curve, atStart, candidateT))
-        continue;
-
-      var candidate = curve.PointAt(candidateT);
-      if (!candidate.IsValid)
-        continue;
-
-      var cornerDistance = candidate.DistanceTo(corner);
-      if (cornerDistance <= tolerance)
-        continue;
-
-      var lineDistance = candidate.DistanceTo(targetLine.ClosestPoint(candidate, false));
-      var score = cornerDistance + lineDistance * 1000.0;
-      if (score >= bestScore)
-        continue;
-
-      bestScore = score;
-      t = candidateT;
-      point = candidate;
-    }
-
-    return point.IsValid;
-  }
-
-  private static bool IsInsideChamferParameter(Curve curve, bool atStart, double t)
-  {
-    const double tol = 1e-10;
-    return atStart
-      ? t > curve.Domain.Min + tol
-      : t < curve.Domain.Max - tol;
-  }
 
   // â”€â”€ Preview conduit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -559,31 +415,28 @@ public sealed class vChamfer : Command
       click1.IsValid ? (Point3d?)click1 : null,
       click2.IsValid ? (Point3d?)click2 : null);
     Log.Write("vChamfer", $"RunCommand  corner={P(corner)}  c1AtStart={c1AtStart}  c2AtStart={c2AtStart}");
-    var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
 
     // Extend working copies to the virtual corner so chamfering always works
     // even when the curves are too short (e.g. previously chamfered corner).
     Curve work1 = ExtendToCorner(crv1, c1AtStart, corner);
     Curve work2 = ExtendToCorner(crv2, c2AtStart, corner);
 
-    // Auto-detect the corner plane from the actual tangent directions.
-    // This makes the chamfer angle correct for 3D curves not lying in the active CPlane.
-    cplane = InferChamferPlane(work1, c1AtStart, work2, c2AtStart, corner, cplane);
-
-    // Initial placement: arc-length from corner to selection click on work1.
-    // Puts the chamfer where the user picked, not at the stored _length.
+    // Initial length: gap (closest-point distance) at the selection click on work1.
+    // Gives the correct placement and angle (perpendicular to middle curve) immediately.
     double runLength = _length;
     if (click1.IsValid && work1.ClosestPoint(click1, out double tClickInit))
     {
-      double arcFromCorner = c1AtStart
-        ? work1.GetLength(new Interval(work1.Domain.Min, tClickInit))
-        : work1.GetLength(new Interval(tClickInit, work1.Domain.Max));
-      if (arcFromCorner > RhinoMath.ZeroTolerance)
-        runLength = arcFromCorner;
-      Log.Write("vChamfer", $"RunCommand  click arc-from-corner={arcFromCorner:G4}  runLength={runLength:G4}");
+      var ptClickA = work1.PointAt(tClickInit);
+      if (work2.ClosestPoint(ptClickA, out double tClickB))
+      {
+        double clickGap = ptClickA.DistanceTo(work2.PointAt(tClickB));
+        if (clickGap > RhinoMath.ZeroTolerance)
+          runLength = clickGap;
+        Log.Write("vChamfer", $"RunCommand  click gap={clickGap:G4}  runLength={runLength:G4}");
+      }
     }
 
-    if (!ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
+    if (!ComputeChamfer(work1, c1AtStart, work2, runLength,
           out var ptA, out var ptB, out var tA, out var tB))
     {
       RhinoApp.WriteLine("vChamfer: cannot compute chamfer for these curves.");
@@ -624,41 +477,30 @@ public sealed class vChamfer : Command
         {
           var pickedPt = get.Point();
 
-          if (_length <= RhinoMath.ZeroTolerance)
-          {
-            if (!ComputeChamferThroughPoint(work1, c1AtStart, work2, c2AtStart, corner, pickedPt, cplane,
-                  doc.ModelAbsoluteTolerance, out ptA, out ptB, out tA, out tB))
-            {
-              RhinoApp.WriteLine("vChamfer: cannot create a chamfer through that point.");
-              continue;
-            }
-
-            pointActive = true;
-            UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
-            doc.Views.Redraw();
-            continue;
-          }
-
-          // Find arc-length from corner to the closest point on work1 to the picked location.
+          // Closest point on work1 → closest on work2 → gap = new chamfer size.
           if (!work1.ClosestPoint(pickedPt, out double tPick))
           {
             RhinoApp.WriteLine("vChamfer: cannot project point onto curve.");
             continue;
           }
-          double newLength = c1AtStart
-            ? work1.GetLength(new Interval(work1.Domain.Min, tPick))
-            : work1.GetLength(new Interval(tPick, work1.Domain.Max));
+          var ptPickA = work1.PointAt(tPick);
+          if (!work2.ClosestPoint(ptPickA, out double tPickB))
+          {
+            RhinoApp.WriteLine("vChamfer: cannot find corresponding point on second curve.");
+            continue;
+          }
+          double newLength = ptPickA.DistanceTo(work2.PointAt(tPickB));
 
           if (newLength <= RhinoMath.ZeroTolerance)
           {
-            RhinoApp.WriteLine("vChamfer: picked point is too close to the corner.");
+            RhinoApp.WriteLine("vChamfer: curves touch at that point — no chamfer gap.");
             continue;
           }
 
-          if (!ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, newLength,
+          if (!ComputeChamfer(work1, c1AtStart, work2, newLength,
                 out ptA, out ptB, out tA, out tB))
           {
-            RhinoApp.WriteLine("vChamfer: point-based chamfer exceeds available curve length.");
+            RhinoApp.WriteLine("vChamfer: cannot place chamfer at that point.");
             continue;
           }
 
@@ -675,7 +517,7 @@ public sealed class vChamfer : Command
         if (res == GetResult.Option && idxClearPoint >= 0 && get.Option()?.Index == idxClearPoint)
         {
           pointActive = false;
-          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
+          if (ComputeChamfer(work1, c1AtStart, work2, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -709,7 +551,7 @@ public sealed class vChamfer : Command
 
         if (res == GetResult.Number || res == GetResult.Option)
         {
-          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, runLength,
+          if (ComputeChamfer(work1, c1AtStart, work2, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           else

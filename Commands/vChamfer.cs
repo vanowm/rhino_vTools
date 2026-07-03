@@ -323,6 +323,12 @@ public sealed class vChamfer : Command
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
+      // Extension stubs that survive trimming (cyan — part of the kept curve)
+      if (Ext1 is { } ext1)
+        e.Display.DrawLine(ext1, Color.Cyan, 2);
+      if (Ext2 is { } ext2)
+        e.Display.DrawLine(ext2, Color.Cyan, 2);
+
       // Corner pieces removed by trim — red
       if (ShowTrim)
       {
@@ -378,28 +384,22 @@ public sealed class vChamfer : Command
           : crv2.Trim(tBorig, crv2.Domain.Max);
     }
 
-    // Extension lines: drawn from original corner tip toward the virtual corner,
-    // clipped at the chamfer cut point when ptA lands in the extension zone.
-    //   ptA in extension zone (CutOff null):  Line(crv1End, ptA)      — stops at cut, not past it
-    //   ptA in original body  (CutOff non-null): Line(crv1End, work1End) — full extension; CutOff
-    //     goes the opposite direction from crv1End so there is no cyan-over-red overlap.
+    // Extension lines: only shown when Trim=Yes and the chamfer cut falls inside
+    // the extension zone (CutOff==null means ptA is not on the original curve).
+    // In that case the stub from crv1End to ptA is kept in the trimmed result.
     var crv1End  = c1AtStart ? crv1.PointAtStart : crv1.PointAtEnd;
     var work1End = c1AtStart ? work1.PointAtStart : work1.PointAtEnd;
-    if (crv1End.DistanceTo(work1End) > 1e-6)
-    {
-      var extPt1 = conduit.CutOff1 != null ? work1End : ptA;
-      conduit.Ext1 = crv1End.DistanceTo(extPt1) > 1e-6 ? new Line(crv1End, extPt1) : (Line?)null;
-    }
-    else conduit.Ext1 = null;
+    conduit.Ext1 = _trim && conduit.CutOff1 == null
+                   && crv1End.DistanceTo(work1End) > 1e-6
+                   && crv1End.DistanceTo(ptA) > 1e-6
+      ? new Line(crv1End, ptA) : (Line?)null;
 
     var crv2End  = c2AtStart ? crv2.PointAtStart : crv2.PointAtEnd;
     var work2End = c2AtStart ? work2.PointAtStart : work2.PointAtEnd;
-    if (crv2End.DistanceTo(work2End) > 1e-6)
-    {
-      var extPt2 = conduit.CutOff2 != null ? work2End : ptB;
-      conduit.Ext2 = crv2End.DistanceTo(extPt2) > 1e-6 ? new Line(crv2End, extPt2) : (Line?)null;
-    }
-    else conduit.Ext2 = null;
+    conduit.Ext2 = _trim && conduit.CutOff2 == null
+                   && crv2End.DistanceTo(work2End) > 1e-6
+                   && crv2End.DistanceTo(ptB) > 1e-6
+      ? new Line(crv2End, ptB) : (Line?)null;
 
     conduit.ChamferLine = ptA.DistanceTo(ptB) > 1e-10 ? new Line(ptA, ptB) : (Line?)null;
     conduit.ShowTrim    = _trim;

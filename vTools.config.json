@@ -1,10 +1,116 @@
 {
+  "vChamfer": {
+    "length": 0.1,
+    "trim": true,
+    "join": false
+  },
+  "vCurveToSpline": {
+    "joinMode": "Smooth"
+  },
+  "vDiamonds": {
+    "width": 2.0,
+    "height": 2.0,
+    "countWidth": 3.0,
+    "countHeight": 3.0,
+    "showBoundary": true,
+    "showSize": true,
+    "showCount": true,
+    "bySizeW": 0.0,
+    "bySizeH": 0.0,
+    "layerPlot": "PLOT",
+    "layerCut": "CUT1",
+    "layerRef": "Reference"
+  },
+  "vFacing": {
+    "size": 3.0
+  },
+  "vFitBox": {
+    "angleStepDeg": 5.0,
+    "rotate": false,
+    "fitMode": "height"
+  },
+  "vLine": {
+    "chainMode": 0,
+    "priority": 0,
+    "persistConstraint": false,
+    "length": 0,
+    "angleLock": false,
+    "angle": 0,
+    "angleRelative": false
+  },
+  "vLineLength": {
+    "desiredLength": 10.0,
+    "extendWithLine": false,
+    "mode": 0
+  },
+  "vMatch": {
+    "distance": 2.0,
+    "randStart": 0,
+    "randNext": 0
+  },
   "vMiddleCurve": {
-    "lines": false,
+    "lines": true,
     "lineMode": "EqualDistance",
-    "lineInterval": 0.5,
+    "lineInterval": 1,
     "seamAllowance": 0.5,
     "minimumLength": 0.25
+  },
+  "vNotches": {
+    "notch_length": 0.18,
+    "notch_offset": 0.5,
+    "notch_width": 0.18,
+    "notch_type": "I",
+    "percent": false,
+    "group": false,
+    "label": false,
+    "label_value": "A",
+    "label_size": 0.3,
+    "label_size_auto": false,
+    "label_size_pct": 75,
+    "notch_layer": "*[Current]*",
+    "label_layer": "PLOT",
+    "label_offset": 0.125,
+    "label_offset_y": 0.0,
+    "label_auto_adv": true,
+    "label_side_flip": false,
+    "curve_sides": []
+  },
+  "vPart": {
+    "group": false,
+    "joinPerim": false
+  },
+  "vRectangle": {
+    "width": 10.0,
+    "height": 5.0
+  },
+  "vScallop": {
+    "size": 1.0,
+    "deleteOriginal": false,
+    "free": false,
+    "auto": false,
+    "sizePercent": 5.0
+  },
+  "vSplitAtCorners": {
+    "angle": 45,
+    "minLength": 0
+  },
+  "vTextAligned": {
+    "text": "Text",
+    "height": 5.0,
+    "offset": 0.0,
+    "rotate90": 0.0,
+    "bothSides": false
+  },
+  "vTitle": {
+    "text": "",
+    "size": 20.0,
+    "padding": 50.0,
+    "box": true,
+    "layer": "Reference"
+  },
+  "vTrim": {
+    "extendAsLine": true,
+    "joinAfterTrim": true
   },
   "vUzip": {
     "label": "",
@@ -31,16 +137,8 @@
         "note": "FACE DOWN",
         "mirrorPart": false,
         "offsets": [
-          {
-            "name": "",
-            "offset": -0.75,
-            "layer": null
-          },
-          {
-            "name": "",
-            "offset": 0.75,
-            "layer": null
-          }
+          { "name": "", "offset": -0.75, "layer": null },
+          { "name": "", "offset": 0.75,  "layer": null }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
@@ -52,16 +150,8 @@
         "note": "",
         "mirrorPart": false,
         "offsets": [
-          {
-            "name": "",
-            "offset": -0.75,
-            "layer": null
-          },
-          {
-            "name": "",
-            "offset": 1.125,
-            "layer": null
-          }
+          { "name": "", "offset": -0.75,  "layer": null },
+          { "name": "", "offset": 1.125,  "layer": null }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
@@ -73,25 +163,26 @@
         "note": "",
         "mirrorPart": true,
         "offsets": [
-          {
-            "name": "",
-            "offset": -0.75,
-            "layer": "PLOT"
-          },
-          {
-            "name": "",
-            "offset": -1.5,
-            "layer": null
-          },
-          {
-            "name": "",
-            "offset": 1.125,
-            "layer": null
-          }
+          { "name": "", "offset": -0.75,  "layer": "PLOT" },
+          { "name": "", "offset": -1.5,   "layer": null },
+          { "name": "", "offset": 1.125,  "layer": null }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
       }
     ]
+  },
+  "vUzipCenter": {
+    "left": 2.375,
+    "right": 2.375,
+    "bottom": 1.125,
+    "radius": 12.0,
+    "glass": false,
+    "glassOffset": 0.25,
+    "glassLayer": "Glass",
+    "vis": false,
+    "visOffset": 0.75,
+    "visLayer": "Vis-Line",
+    "centerLayer": "Reference"
   }
 }

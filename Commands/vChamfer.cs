@@ -261,82 +261,33 @@ public sealed class vChamfer : Command
       return ptA.IsValid && ptB.IsValid;
     }
 
-    // Tangents pointing AWAY from the corner along each curve.
-    var rawT1 = c1AtStart ?  c1.TangentAtStart : -c1.TangentAtEnd;
-    var rawT2 = c2AtStart ?  c2.TangentAtStart : -c2.TangentAtEnd;
-
-    if (rawT1.IsTiny() || rawT2.IsTiny())
+    // Compute 3-D bisector and chamfer-line directions from the corner tangents.
+    if (!TryBuildChamferDirections(c1, c1AtStart, c2, c2AtStart, cplane, out var bisDir, out var chamferDir))
     {
-      Log.Write("vChamfer", $"compute  degenerate tangent  rawT1={rawT1:F4}  rawT2={rawT2:F4}");
-      return false;
-    }
-    rawT1.Unitize(); rawT2.Unitize();
-
-    // Project tangents onto the active CPlane (drop out-of-plane component).
-    double t1x = rawT1 * cplane.XAxis, t1y = rawT1 * cplane.YAxis;
-    double t2x = rawT2 * cplane.XAxis, t2y = rawT2 * cplane.YAxis;
-
-    double len1 = Math.Sqrt(t1x * t1x + t1y * t1y);
-    double len2 = Math.Sqrt(t2x * t2x + t2y * t2y);
-    if (len1 < 1e-12 || len2 < 1e-12)
-    {
-      Log.Write("vChamfer", $"compute  projection too small  t1=({t1x:F4},{t1y:F4}) len={len1:G4}  t2=({t2x:F4},{t2y:F4}) len={len2:G4}");
+      Log.Write("vChamfer", "compute  TryBuildChamferDirections failed");
       return false;
     }
 
-    t1x /= len1; t1y /= len1;
-    t2x /= len2; t2y /= len2;
+    // The chamfer line passes through (corner + length*bisDir) perpendicular to the bisector.
+    // Using direct curve-line intersection is exact for any curve shape and immune to the
+    // s1/s2 approximation blowing up when tangents are nearly parallel (det ≈ 0).
+    var foot  = corner + length * bisDir;
+    double span = Math.Max(c1.GetLength() + c2.GetLength() + length * 2.0, 1.0) * 4.0;
+    var chamferLine = new Line(foot - chamferDir * span, foot + chamferDir * span);
 
-    // Angle bisector in CPlane 2-D.
-    double bx = t1x + t2x, by = t1y + t2y;
-    double blen = Math.Sqrt(bx * bx + by * by);
-    if (blen < 1e-12) { bx = -t1y; by = t1x; }   // anti-parallel: use perp to t1
-    else              { bx /= blen; by /= blen; }
+    Log.Write("vChamfer", $"compute  foot={foot:F4}  bisDir={bisDir:F4}  chamferDir={chamferDir:F4}  span={span:G4}");
 
-    // Perpendicular to bisector (90Â° CCW).
-    double px = -by, py = bx;
-
-    // Solve for arc-length distances s1, s2 from corner to each chamfer point.
-    double det = t1x * t2y - t1y * t2x;
-    // Exactly-parallel tangents → division by zero.
-    if (Math.Abs(det) < 1e-12)
+    const double isectTol = 1e-6;
+    if (!TryIntersectChamferLine(c1, c1AtStart, corner, chamferLine, isectTol, out tA, out ptA))
     {
-      Log.Write("vChamfer", $"compute  exactly-parallel tangents  det={det:G4}");
+      Log.Write("vChamfer", "compute  no intersection on c1");
       return false;
     }
-
-    double s1 = length * (t2x * py - t2y * px) / det;
-    double s2 = length * (py  * t1x - px  * t1y) / det;
-
-    Log.Write("vChamfer", $"compute  length={length:G4}  bisector=({bx:F4},{by:F4})  det={det:G4}  s1={s1:G4}  s2={s2:G4}");
-
-    if (s1 < 0 && s2 < 0) { s1 = -s1; s2 = -s2; }
-    if (s1 <= 1e-12 || s2 <= 1e-12)
+    if (!TryIntersectChamferLine(c2, c2AtStart, corner, chamferLine, isectTol, out tB, out ptB))
     {
-      Log.Write("vChamfer", $"compute  s1/s2 non-positive after flip  s1={s1:G4}  s2={s2:G4}");
+      Log.Write("vChamfer", "compute  no intersection on c2");
       return false;
     }
-
-    // Walk arc-length s1/s2 from each corner endpoint.
-    // When s1 > curve length, Max(0,...) clamps d to 0 → LengthParameter returns the
-    // far-end parameter, which is where the chamfer line intersects the short curve.
-    {
-      double arcLen1 = c1.GetLength();
-      double d1 = c1AtStart ? s1 : Math.Max(0.0, arcLen1 - s1);
-      if (!c1.LengthParameter(d1, out tA))
-        if (!c1.ClosestPoint(corner + s1 * rawT1, out tA)) return false;
-      Log.Write("vChamfer", $"compute  c1  arcLen={arcLen1:G4}  d1={d1:G4}  tA={tA:G4}");
-    }
-    {
-      double arcLen2 = c2.GetLength();
-      double d2 = c2AtStart ? s2 : Math.Max(0.0, arcLen2 - s2);
-      if (!c2.LengthParameter(d2, out tB))
-        if (!c2.ClosestPoint(corner + s2 * rawT2, out tB)) return false;
-      Log.Write("vChamfer", $"compute  c2  arcLen={arcLen2:G4}  d2={d2:G4}  tB={tB:G4}");
-    }
-
-    ptA = c1.PointAt(tA);
-    ptB = c2.PointAt(tB);
 
     // Validate that the chamfer point lies strictly inside the curve — not at either endpoint.
     // Use arc-length of the kept region rather than parameter tolerance (NURBS domains vary wildly).

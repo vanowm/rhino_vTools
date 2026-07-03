@@ -253,12 +253,7 @@ public sealed class vChamfer : Command
     // then project onto c2 to get the nearest point actually on the curve.
     var ptBTarget = ptA + normal * targetGap;
     if (!c2.ClosestPoint(ptBTarget, out double tBnew)) return (tB0, ptB0);
-    var ptBnew = c2.PointAt(tBnew);
-
-    // Only use if the projection landed close to the target (c2 not too curved).
-    return ptBnew.DistanceTo(ptBTarget) <= targetGap * 0.2 + 1e-3
-        ? (tBnew, ptBnew)
-        : (tB0, ptB0);
+    return (tBnew, c2.PointAt(tBnew));
   }
 
   // length = desired chamfer line length.

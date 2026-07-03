@@ -469,7 +469,8 @@ public sealed class vChamfer : Command
     conduit.Enabled = true;
     doc.Views.Redraw();
 
-    bool pointActive = false;
+    bool   pointActive        = false;
+    double pickedArcFromCorner = double.NaN;  // arc-length reference when a point was picked
 
     try
     {
@@ -548,6 +549,7 @@ public sealed class vChamfer : Command
 
           tA = tANew; ptA = ptANew;
           tB = tBNew; ptB = ptBNew;
+          pickedArcFromCorner = arcToClick;
           pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -560,6 +562,7 @@ public sealed class vChamfer : Command
         if (res == GetResult.Option && idxClearPoint >= 0 && get.Option()?.Index == idxClearPoint)
         {
           pointActive = false;
+          pickedArcFromCorner = double.NaN;
           if (ComputeChamfer(work1, c1AtStart, work2, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
@@ -573,7 +576,7 @@ public sealed class vChamfer : Command
           if (TrySetLength(v))
           {
             runLength = _length;
-            pointActive = false;
+            if (!pointActive) pointActive = false;  // stay active if offset was set
             SaveOptions();
           }
         }
@@ -584,23 +587,62 @@ public sealed class vChamfer : Command
           if (_trim) _join = joinOpt.CurrentValue;
 
           if (option?.Index == idxLength && TrySetLength(lengthOpt.CurrentValue))
-          {
-            runLength = _length;
-            pointActive = false;
-          }
+            runLength = _length;  // keep pointActive as-is
 
           SaveOptions();
         }
 
         if (res == GetResult.Number || res == GetResult.Option)
         {
-          if (ComputeChamfer(work1, c1AtStart, work2, runLength,
-                out ptA, out ptB, out tA, out tB))
-            UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
-          else
+          bool recomputed = false;
+          // If an offset point is active, recompute from the same reference arc position.
+          if (pointActive && !double.IsNaN(pickedArcFromCorner))
           {
-            conduit.ShowTrim = _trim;   // still reflect trim toggle even when invalid
-            RhinoApp.WriteLine("vChamfer: length too large for this corner.");
+            double len1        = work1.GetLength();
+            double arcToChamfer = pickedArcFromCorner - _length;
+            if (arcToChamfer >= 0.0)
+            {
+              double segA = c1AtStart ? arcToChamfer : (len1 - arcToChamfer);
+              if (work1.LengthParameter(segA, out double tANew))
+              {
+                var ptANew  = work1.PointAt(tANew);
+                var tanANew = work1.TangentAt(tANew);
+                var (_, tBNew, ptBNew) = NormalRayHit(ptANew, tanANew, work2);
+                if (!double.IsNaN(tBNew) && ptBNew.IsValid)
+                {
+                  var tanBNew = work2.TangentAt(tBNew);
+                  if (tanBNew * tanANew < 0.0) tanBNew = -tanBNew;
+                  var avgTanNew = tanANew + tanBNew;
+                  if (avgTanNew.Unitize())
+                  {
+                    var (_, tBref, ptBref) = NormalRayHit(ptANew, avgTanNew, work2);
+                    if (!double.IsNaN(tBref) && ptBref.IsValid)
+                      (tBNew, ptBNew) = (tBref, ptBref);
+                  }
+                  tA = tANew; ptA = ptANew;
+                  tB = tBNew; ptB = ptBNew;
+                  UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
+                  recomputed = true;
+                }
+              }
+            }
+            if (!recomputed)
+            {
+              RhinoApp.WriteLine("vChamfer: length too large for this offset position.");
+              conduit.ShowTrim = _trim;
+            }
+          }
+
+          if (!recomputed)
+          {
+            if (ComputeChamfer(work1, c1AtStart, work2, runLength,
+                  out ptA, out ptB, out tA, out tB))
+              UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
+            else
+            {
+              conduit.ShowTrim = _trim;   // still reflect trim toggle even when invalid
+              RhinoApp.WriteLine("vChamfer: length too large for this corner.");
+            }
           }
 
           doc.Views.Redraw();

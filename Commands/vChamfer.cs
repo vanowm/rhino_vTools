@@ -535,6 +535,17 @@ public sealed class vChamfer : Command
             continue;
           }
 
+          // Refine using average tangent (same as ComputeChamfer).
+          var tanBNew = work2.TangentAt(tBNew);
+          if (tanBNew * tanANew < 0.0) tanBNew = -tanBNew;
+          var avgTanNew = tanANew + tanBNew;
+          if (avgTanNew.Unitize())
+          {
+            var (_, tBref, ptBref) = NormalRayHit(ptANew, avgTanNew, work2);
+            if (!double.IsNaN(tBref) && ptBref.IsValid)
+              (tBNew, ptBNew) = (tBref, ptBref);
+          }
+
           tA = tANew; ptA = ptANew;
           tB = tBNew; ptB = ptBNew;
           pointActive = true;

@@ -302,7 +302,18 @@ public sealed class vChamfer : Command
 
     var tanA = c1.TangentAt(tA);
     var (finalGap, tBfinal, ptBfinal) = NormalRayHit(ptA, tanA, c2);
-    if (double.IsNaN(tBfinal) || !ptBfinal.IsValid) return false;
+    if (double.IsNaN(tBfinal) || !ptBfinal.IsValid)
+    {
+      Log.Write("vChamfer", $"ComputeChamfer  no c2 hit at sA={sA:G4}");
+      return false;
+    }
+    // Convergence check: gap must be within 10% of target — otherwise binary search didn't converge
+    // (targetGap exceeds the max achievable gap between the two curves).
+    if (Math.Abs(finalGap - targetGap) > targetGap * 0.1 + 1e-3)
+    {
+      Log.Write("vChamfer", $"ComputeChamfer  targetGap={targetGap:G4} not achieved  finalGap={finalGap:G4}");
+      return false;
+    }
 
     // Refine: re-shoot using the average of c1 and c2 tangents at the chamfer points
     // so the line is perpendicular to the middle curve, not just to c1.

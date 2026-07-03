@@ -191,6 +191,37 @@ public sealed class vChamfer : Command
   /// Computes chamfer endpoints on working curves (already extended to corner).
   /// Returns false when geometry is degenerate.
   /// </summary>
+  // ── Plane inference ────────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Builds a plane from the two corner tangents so that the chamfer angle is computed
+  /// in the plane of the curves, not the viewport CPlane. Falls back to <paramref name="fallback"/>
+  /// when the tangents are parallel (no unique plane).
+  /// </summary>
+  private static Plane InferChamferPlane(
+    Curve c1, bool c1AtStart, Curve c2, bool c2AtStart,
+    Point3d corner, Plane fallback)
+  {
+    var t1 = c1AtStart ?  c1.TangentAtStart : -c1.TangentAtEnd;
+    var t2 = c2AtStart ?  c2.TangentAtStart : -c2.TangentAtEnd;
+    if (!t1.Unitize() || !t2.Unitize()) return fallback;
+
+    var zAxis = Vector3d.CrossProduct(t1, t2);
+    if (zAxis.Length < 1e-6) return fallback; // parallel tangents — no unique plane
+    zAxis.Unitize();
+
+    var xAxis = t1;
+    var yAxis = Vector3d.CrossProduct(zAxis, xAxis);
+    if (!yAxis.Unitize()) return fallback;
+
+    return new Plane(corner, xAxis, yAxis);
+  }
+
+  // ── Chamfer computation ────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Computes chamfer endpoints on working curves (already extended to corner).\n  /// Returns false when geometry is degenerate.
+  /// </summary>
   private static bool ComputeChamfer(
     Curve c1, bool c1AtStart,
     Curve c2, bool c2AtStart,
@@ -533,6 +564,10 @@ public sealed class vChamfer : Command
     // even when the curves are too short (e.g. previously chamfered corner).
     Curve work1 = ExtendToCorner(crv1, c1AtStart, corner);
     Curve work2 = ExtendToCorner(crv2, c2AtStart, corner);
+
+    // Auto-detect the corner plane from the actual tangent directions.
+    // This makes the chamfer angle correct for 3D curves not lying in the active CPlane.
+    cplane = InferChamferPlane(work1, c1AtStart, work2, c2AtStart, corner, cplane);
 
     if (!ComputeChamfer(work1, c1AtStart, work2, c2AtStart, corner, _length, cplane,
           out var ptA, out var ptB, out var tA, out var tB))

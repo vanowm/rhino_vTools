@@ -76,7 +76,8 @@
     "curve_sides": []
   },
   "vOverlaps": {
-    "tolerance": 0.001
+    "tolerance": 0.001,
+    "segments": false
   },
   "vPart": {
     "group": false,

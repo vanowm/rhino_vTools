@@ -19,8 +19,10 @@ public sealed class vOverlaps : Command
 {
   private const string SectionName = "vOverlaps";
   private const string TolKey      = "tolerance";
+  private const string SegKey      = "segments";
 
   private static double _tolerance = 0.001;
+  private static bool   _segments  = false;
 
   public override string EnglishName => "vOverlaps";
 
@@ -31,12 +33,17 @@ public sealed class vOverlaps : Command
     {
       if (ToolsOptionStore.TryGetDouble(section, TolKey, out var t) && t > 0.0)
         _tolerance = t;
+      if (ToolsOptionStore.TryGetBool(section, SegKey, out var s))
+        _segments = s;
       return 0;
     });
 
   private static void SaveOptions() =>
     ToolsOptionStore.Update(SectionName, section =>
-      section[TolKey] = _tolerance);
+    {
+      section[TolKey] = _tolerance;
+      section[SegKey] = _segments;
+    });
 
   // ── Command ───────────────────────────────────────────────────────────────
 
@@ -44,66 +51,154 @@ public sealed class vOverlaps : Command
   {
     LoadOptions();
 
-    // Accept preselection or prompt; fall back to all visible curves.
-    var go = new GetObject();
-    go.SetCommandPrompt("Select curves to check for overlaps (Enter = all visible)");
-    go.GeometryFilter  = ObjectType.Curve;
-    go.SubObjectSelect = false;
-    go.GroupSelect     = true;
-    go.AcceptNothing(true);
-    go.EnablePreSelect(true, true);
+    // ── Selection loop ─────────────────────────────────────────────────────
+    // Tracks the working set across AddMore / Remove iterations.
+    var selectedIds = new HashSet<Guid>();
 
-    var tolOpt = new OptionDouble(_tolerance, 1e-9, 1e6);
-    go.AddOptionDouble("Tolerance", ref tolOpt);
+    // Seed from preselection.
+    foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
+      if (obj?.ObjectType == ObjectType.Curve) selectedIds.Add(obj.Id);
 
-    List<RhinoObject> inputObjs;
+    bool firstPrompt = true;
 
     while (true)
     {
-      var res = go.GetMultiple(1, 0);
+      var go = new GetObject();
+      go.GeometryFilter    = ObjectType.Curve;
+      go.SubObjectSelect   = false;
+      go.GroupSelect       = true;
+      go.AcceptNothing(true);
+      go.AcceptNumber(true, true);
+      go.EnablePreSelect(false, true);
+      go.DeselectAllBeforePostSelect = false;
+
+      var tolOpt    = new OptionDouble(_tolerance, 1e-9, 1e6);
+      var segOpt    = new OptionToggle(_segments, "No", "Yes");
+      var idxTol    = go.AddOptionDouble("Tolerance", ref tolOpt);
+      var idxSeg    = go.AddOptionToggle("Segments",  ref segOpt);
+      var idxAdd    = go.AddOption("AddMore");
+      var idxRemove = go.AddOption("Remove");
+      var idxAll    = go.AddOption("AllVisible");
+
+      if (selectedIds.Count == 0)
+        go.SetCommandPrompt("Select curves (Enter = all visible)");
+      else if (firstPrompt)
+        go.SetCommandPrompt($"{selectedIds.Count} curves — Enter to find overlaps, or add/remove");
+      else
+        go.SetCommandPrompt($"{selectedIds.Count} curves — Enter to find overlaps");
+
+      firstPrompt = false;
+
+      // Pre-select objects in the working set so the user can see them.
+      foreach (var id in selectedIds)
+        doc.Objects.Select(id, true);
+
+      var res = go.GetMultiple(0, 0);
+
+      _tolerance = tolOpt.CurrentValue;
+      _segments  = segOpt.CurrentValue;
 
       if (res == GetResult.Cancel)
         return Result.Cancel;
 
-      if (res == GetResult.Option)
+      if (res == GetResult.Number)
       {
-        _tolerance = tolOpt.CurrentValue;
+        if (go.Number() > 0.0) _tolerance = go.Number();
         SaveOptions();
         continue;
       }
 
-      if (res == GetResult.Nothing || res == GetResult.Object)
+      if (res == GetResult.Option)
       {
-        _tolerance = tolOpt.CurrentValue;
+        int idx = go.Option()?.Index ?? -1;
         SaveOptions();
 
-        if (res == GetResult.Nothing || go.ObjectCount == 0)
+        if (idx == idxTol)
+          continue;
+
+        if (idx == idxAdd)
         {
-          // Use all visible normal curve objects.
-          var settings = new ObjectEnumeratorSettings
-          {
-            IncludeLights   = false,
-            IncludeGrips    = false,
-            IncludePhantoms = false,
-            NormalObjects   = true,
-            LockedObjects   = false,
-            HiddenObjects   = false,
-          };
-          inputObjs = new List<RhinoObject>();
-          foreach (var obj in doc.Objects.GetObjectList(settings))
-            if (obj?.ObjectType == ObjectType.Curve && obj.IsValid)
-              inputObjs.Add(obj);
+          // Let user pick more curves.
+          var goAdd = new GetObject();
+          goAdd.SetCommandPrompt("Add curves to selection");
+          goAdd.GeometryFilter    = ObjectType.Curve;
+          goAdd.SubObjectSelect   = false;
+          goAdd.GroupSelect       = true;
+          goAdd.AcceptNothing(true);
+          goAdd.EnablePreSelect(false, true);
+          goAdd.DeselectAllBeforePostSelect = false;
+          var addRes = goAdd.GetMultiple(1, 0);
+          if (addRes == GetResult.Object)
+            for (int i = 0; i < goAdd.ObjectCount; i++)
+              selectedIds.Add(goAdd.Object(i).ObjectId);
+          continue;
         }
-        else
+
+        if (idx == idxRemove)
         {
-          inputObjs = new List<RhinoObject>();
-          for (int i = 0; i < go.ObjectCount; i++)
-          {
-            var obj = go.Object(i).Object();
-            if (obj != null) inputObjs.Add(obj);
-          }
+          var goRm = new GetObject();
+          goRm.SetCommandPrompt("Remove curves from selection");
+          goRm.GeometryFilter    = ObjectType.Curve;
+          goRm.SubObjectSelect   = false;
+          goRm.GroupSelect       = true;
+          goRm.AcceptNothing(true);
+          goRm.EnablePreSelect(false, true);
+          goRm.DeselectAllBeforePostSelect = false;
+          var rmRes = goRm.GetMultiple(1, 0);
+          if (rmRes == GetResult.Object)
+            for (int i = 0; i < goRm.ObjectCount; i++)
+              selectedIds.Remove(goRm.Object(i).ObjectId);
+          continue;
         }
-        break;
+
+        if (idx == idxAll)
+        {
+          selectedIds.Clear();
+          continue;  // empty set → next loop uses all visible
+        }
+
+        continue;
+      }
+
+      if (res == GetResult.Object)
+      {
+        // User picked objects — add them to working set.
+        for (int i = 0; i < go.ObjectCount; i++)
+          selectedIds.Add(go.Object(i).ObjectId);
+        continue;
+      }
+
+      // GetResult.Nothing = Enter → run with current set (or all visible).
+      break;
+    }
+
+    SaveOptions();
+
+    // ── Build input object list ────────────────────────────────────────────
+    List<RhinoObject> inputObjs;
+    if (selectedIds.Count == 0)
+    {
+      var settings = new ObjectEnumeratorSettings
+      {
+        IncludeLights   = false,
+        IncludeGrips    = false,
+        IncludePhantoms = false,
+        NormalObjects   = true,
+        LockedObjects   = false,
+        HiddenObjects   = false,
+      };
+      inputObjs = new List<RhinoObject>();
+      foreach (var obj in doc.Objects.GetObjectList(settings))
+        if (obj?.ObjectType == ObjectType.Curve && obj.IsValid)
+          inputObjs.Add(obj);
+    }
+    else
+    {
+      inputObjs = new List<RhinoObject>();
+      foreach (var id in selectedIds)
+      {
+        var obj = doc.Objects.FindId(id);
+        if (obj?.ObjectType == ObjectType.Curve) inputObjs.Add(obj);
       }
     }
 
@@ -113,20 +208,45 @@ public sealed class vOverlaps : Command
       return Result.Nothing;
     }
 
-    // Build curve cache.
+    // ── Build curve cache ──────────────────────────────────────────────────
+    // In Segments mode each polycurve is exploded; items map to parent objects.
+    // In whole-curve mode items map 1:1 to RhinoObjects via RuntimeSerialNumber.
     var curveCache  = new Dictionary<uint, Curve>();
     var lengthCache = new Dictionary<uint, double>();
-    var objById     = new Dictionary<uint, RhinoObject>();
+    var objById     = new Dictionary<uint, RhinoObject>();  // whole-curve mode
+    var parentMap   = new Dictionary<uint, RhinoObject>();  // segment mode
 
-    foreach (var obj in inputObjs)
+    if (_segments)
     {
-      if (obj.Geometry is not Curve crv) continue;
-      var dup = crv.DuplicateCurve();
-      if (dup == null) continue;
-      uint sn = obj.RuntimeSerialNumber;
-      curveCache[sn]  = dup;
-      lengthCache[sn] = dup.GetLength();
-      objById[sn]     = obj;
+      uint key = 1;
+      foreach (var obj in inputObjs)
+      {
+        if (obj.Geometry is not Curve crv) continue;
+        foreach (var seg in ExplodeSegments(crv))
+        {
+          var dup = seg.DuplicateCurve();
+          if (dup == null) continue;
+          double len = dup.GetLength();
+          if (len < 1e-12) continue;
+          curveCache[key]  = dup;
+          lengthCache[key] = len;
+          parentMap[key]   = obj;
+          key++;
+        }
+      }
+    }
+    else
+    {
+      foreach (var obj in inputObjs)
+      {
+        if (obj.Geometry is not Curve crv) continue;
+        var dup = crv.DuplicateCurve();
+        if (dup == null) continue;
+        uint sn = obj.RuntimeSerialNumber;
+        curveCache[sn]  = dup;
+        lengthCache[sn] = dup.GetLength();
+        objById[sn]     = obj;
+      }
     }
 
     if (curveCache.Count < 2)
@@ -186,14 +306,44 @@ public sealed class vOverlaps : Command
 
     // Union-Find: group exact duplicates.
     var groups   = DuplicateGroups(ids, dupPairs);
-    var suppress = SuppressOneOriginalPerGroup(groups, objById);
+    // For suppress: in segment mode use parent serial; in whole mode use item serial.
+    var suppressParents = new HashSet<uint>();
+    foreach (var group in groups)
+    {
+      if (group.Count < 2) continue;
+      // Keep oldest parent (or item in whole mode) unselected.
+      uint oldest = group[0];
+      uint oldestParent = _segments
+          ? (parentMap.TryGetValue(oldest, out var po0) ? po0.RuntimeSerialNumber : oldest)
+          : oldest;
+      foreach (var sn in group)
+      {
+        uint parentSn = _segments
+            ? (parentMap.TryGetValue(sn, out var po) ? po.RuntimeSerialNumber : sn)
+            : sn;
+        if (parentSn < oldestParent) { oldest = sn; oldestParent = parentSn; }
+      }
+      suppressParents.Add(oldestParent);
+    }
 
-    // Collect serial numbers to select.
-    var toSelect = new List<Guid>();
+    // Collect objects to select.
+    var toSelect = new HashSet<Guid>();
     foreach (var sn in ids)
     {
-      if (coveredBy[sn].Count > 0 && !suppress.Contains(sn) && objById.TryGetValue(sn, out var obj))
-        toSelect.Add(obj.Id);
+      if (coveredBy[sn].Count == 0) continue;
+      if (_segments)
+      {
+        if (!parentMap.TryGetValue(sn, out var parentObj)) continue;
+        uint parentSn = parentObj.RuntimeSerialNumber;
+        if (!suppressParents.Contains(parentSn))
+          toSelect.Add(parentObj.Id);
+      }
+      else
+      {
+        if (!objById.TryGetValue(sn, out var obj)) continue;
+        if (!suppressParents.Contains(sn))
+          toSelect.Add(obj.Id);
+      }
     }
 
     doc.Objects.UnselectAll();
@@ -202,13 +352,45 @@ public sealed class vOverlaps : Command
 
     doc.Views.Redraw();
 
+    string modeLabel = _segments ? $", segments mode" : "";
     if (toSelect.Count > 0)
       RhinoApp.WriteLine($"vOverlaps: selected {toSelect.Count} covered curve(s) " +
-        $"({curveCache.Count} inputs, {pairChecks} pair checks, {coverHits} cover hits).");
+        $"({curveCache.Count} items{modeLabel}, {pairChecks} pair checks, {coverHits} cover hits).");
     else
-      RhinoApp.WriteLine($"vOverlaps: no covered curves found ({curveCache.Count} inputs).");
+      RhinoApp.WriteLine($"vOverlaps: no covered curves found ({curveCache.Count} items{modeLabel}).");
 
     return Result.Success;
+  }
+
+  // ── Segment explode ───────────────────────────────────────────────────────
+
+  /// <summary>
+  /// Returns the constituent segments of a curve.
+  /// PolyCurves are exploded; polylines become individual line segments.
+  /// Simple curves (arc, line, NURBS) are returned as-is.
+  /// </summary>
+  private static IEnumerable<Curve> ExplodeSegments(Curve curve)
+  {
+    if (curve is PolyCurve pc)
+    {
+      var segs = pc.Explode();
+      if (segs != null && segs.Length > 0)
+      {
+        foreach (var s in segs)
+          foreach (var sub in ExplodeSegments(s))  // recurse for nested PolyCurves
+            yield return sub;
+        yield break;
+      }
+    }
+
+    if (curve.TryGetPolyline(out var poly) && poly != null && poly.Count > 1)
+    {
+      for (int i = 0; i < poly.Count - 1; i++)
+        yield return new LineCurve(poly[i], poly[i + 1]);
+      yield break;
+    }
+
+    yield return curve;
   }
 
   // ── Geometry helpers ──────────────────────────────────────────────────────
@@ -295,7 +477,6 @@ public sealed class vOverlaps : Command
     foreach (var group in groups)
     {
       if (group.Count < 2) continue;
-      // Keep the oldest (lowest RuntimeSerialNumber) unselected.
       uint oldest = group[0];
       for (int i = 1; i < group.Count; i++)
         if (group[i] < oldest) oldest = group[i];

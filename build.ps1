@@ -117,46 +117,53 @@ if (Test-Path $dllPath) {
         $rmUpdated = $rmContent -replace '(?m)^(# vTools\s+\u00b7\s+v)[\d.]+', "`${1}$builtVer"
 
         # 2. Auto-insert newly added Commands\v*.cs files into README lists.
-        #    Detect files added since the last commit (git status --porcelain).
         $newCmds = git diff --cached --name-only --diff-filter=A -- 'Commands/v*.cs' 2>$null
         if (-not $newCmds) {
-            # Also check unstaged new files.
-            $newCmds = git status --porcelain -- 'Commands/v*.cs' 2>$null |
+            $newCmds = (git status --porcelain -- 'Commands/v*.cs' 2>$null) |
                        Where-Object { $_ -match '^\?\?' } |
-                       ForEach-Object { ($_ -replace '^\?\?\s+','') }
+                       ForEach-Object { $_ -replace '^\?\?\s+','' }
         }
         foreach ($f in $newCmds) {
             $cmdName = [System.IO.Path]::GetFileNameWithoutExtension($f)
             if (-not $cmdName -or -not $cmdName.StartsWith('v')) { continue }
-            $anchor = $cmdName.ToLower()
-            $entry  = "  - [$cmdName](#$anchor-flow) *($builtVer)* — TODO: add description"
-            $link   = "[$cmdName](#$anchor-flow)"
-
-            # Bullet list: insert alphabetically inside the "- Native commands:" block.
+            $anchor  = $cmdName.ToLower()
+            $link    = "[$cmdName](#$anchor-flow)"
             if ($rmUpdated -notmatch [regex]::Escape($link)) {
-                $rmUpdated = $rmUpdated -replace '(?m)(^  - \[v[A-Za-z]+\].*\n)(  - \[v[A-Za-z]+\])' , {
-                    param($m)
-                    $before = $m.Groups[1].Value
-                    $next   = $m.Groups[2].Value
-                    $prevCmd = ([regex]::Match($before, '\[v([A-Za-z]+)\]')).Groups[1].Value
-                    $nextCmd = ([regex]::Match($next,   '\[v([A-Za-z]+)\]')).Groups[1].Value
-                    if ([string]::Compare($prevCmd, $cmdName.Substring(1), $true) -lt 0 -and
-                        [string]::Compare($cmdName.Substring(1), $nextCmd, $true) -le 0) {
-                        "$before$entry`n$next"
-                    } else { $m.Value }
+                # Insert into bullet list alphabetically.
+                $desc  = 'TODO: add description'
+                $entry = "  - $link *($builtVer)* `u2014 $desc"
+                # Find insertion point: first line where the next command sorts after cmdName.
+                $lines = $rmUpdated -split "`n"
+                $inserted = $false
+                for ($li = 0; $li -lt $lines.Count - 1; $li++) {
+                    if ($lines[$li] -match '^  - \[v([A-Za-z]+)\]' -and
+                        $lines[$li+1] -match '^  - \[v([A-Za-z]+)\]') {
+                        $prev = $matches[1]
+                        $null = $lines[$li+1] -match '^  - \[v([A-Za-z]+)\]'; $next = $matches[1]
+                        if ([string]::Compare($prev,$cmdName.Substring(1),$true) -lt 0 -and
+                            [string]::Compare($cmdName.Substring(1),$next,$true) -le 0) {
+                            $lines = $lines[0..$li] + $entry + $lines[($li+1)..($lines.Count-1)]
+                            $inserted = $true
+                            break
+                        }
+                    }
                 }
-                # Inline link list: insert alphabetically.
-                $rmUpdated = $rmUpdated -replace "(?<=\[$cmdName.+?\], )\[v" , "[$cmdName](#$anchor-flow), [v" # noop if not matched
-                $rmUpdated = $rmUpdated -replace '(\[v[A-Za-z]+\]\(#[^)]+\))(, \[v[A-Za-z]+\]\(#[^)]+\))' , {
-                    param($m)
-                    $prevCmd = ([regex]::Match($m.Groups[1].Value, '\[v([A-Za-z]+)\]')).Groups[1].Value
-                    $nextCmd = ([regex]::Match($m.Groups[2].Value, '\[v([A-Za-z]+)\]')).Groups[1].Value
-                    if ([string]::Compare($prevCmd, $cmdName.Substring(1), $true) -lt 0 -and
-                        [string]::Compare($cmdName.Substring(1), $nextCmd, $true) -le 0) {
-                        "$($m.Groups[1].Value), $link$($m.Groups[2].Value)"
-                    } else { $m.Value }
+                if ($inserted) {
+                    $rmUpdated = $lines -join "`n"
+                    # Insert into flat inline list alphabetically.
+                    $rmUpdated = $rmUpdated -replace "(\[$([regex]::Escape($cmdName))\][^,]+, )\[v" , "`$1[v"  # noop guard
+                    $rmUpdated = $rmUpdated -replace `
+                        "(\[v[A-Za-z]+\]\(#[^)]+\))(, \[v([A-Za-z]+)\]\(#[^)]+\))" , {
+                        param($m)
+                        $p = ([regex]::Match($m.Groups[1].Value,'\[v([A-Za-z]+)\]')).Groups[1].Value
+                        $nx = $m.Groups[3].Value
+                        if ([string]::Compare($p,$cmdName.Substring(1),$true) -lt 0 -and
+                            [string]::Compare($cmdName.Substring(1),$nx,$true) -le 0) {
+                            "$($m.Groups[1].Value), $link$($m.Groups[2].Value)"
+                        } else { $m.Value }
+                    }
+                    Write-Host "README: inserted placeholder for $cmdName." -ForegroundColor Cyan
                 }
-                Write-Host "README: inserted placeholder for $cmdName." -ForegroundColor Cyan
             }
         }
 

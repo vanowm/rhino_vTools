@@ -75,6 +75,9 @@
     "label_side_flip": false,
     "curve_sides": []
   },
+  "vOverlaps": {
+    "tolerance": 0.001
+  },
   "vPart": {
     "group": false,
     "joinPerim": false

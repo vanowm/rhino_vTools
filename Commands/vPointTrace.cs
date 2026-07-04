@@ -57,6 +57,9 @@ public sealed class vPointTrace : Command
     if (destCurve == null)
       return Result.Failure;
 
+    // Inherit the destination curve's group so added points join it.
+    var destGroupList = goDest.Object(0).Object()?.Attributes.GetGroupList() ?? Array.Empty<int>();
+
     var destSelPt = goDest.Object(0).SelectionPoint();
     destCurve = OrientFromSelectionPoint(destCurve, destSelPt);
 
@@ -97,7 +100,14 @@ public sealed class vPointTrace : Command
         continue;
       }
 
-      doc.Objects.AddPoint(destPt.Value);
+      if (destGroupList.Length > 0)
+      {
+        var attrs = new ObjectAttributes();
+        foreach (var g in destGroupList) attrs.AddToGroup(g);
+        doc.Objects.AddPoint(destPt.Value, attrs);
+      }
+      else
+        doc.Objects.AddPoint(destPt.Value);
     }
 
     doc.Views.Redraw();

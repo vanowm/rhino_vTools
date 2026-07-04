@@ -33,7 +33,7 @@ public class vToolsPlugIn : PlugIn
     var commandNames = CollectRegisteredCommandNames();
     Log.Write($"startup  commands ({commandNames.Count}): {string.Join(", ", commandNames)}");
 
-    RhinoApp.WriteLine($"vTools v{version} loaded ({commandNames.Count} commands).");
+    RhinoApp.WriteLine($"vTools v{version} loaded — {commandNames.Count} commands: {string.Join(", ", commandNames)}.");
     return LoadReturnCode.Success;
   }
 

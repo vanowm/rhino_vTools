@@ -1,4 +1,4 @@
-# vTools  ·  v26.6.1.1725
+# vTools  ·  v26.7.3
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -15,6 +15,7 @@ vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoComm
   - [vGroup](#vgroup-flow) *(26.5.27.1525)* — groups selected objects by closed-curve boundaries; each boundary is grouped with the objects inside it
   - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, angle lock, length constraint, and perp/tangent endpoint solving
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
+  - [vMatch](#vmatch-flow) *(26.6.-)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2125)* — creates an interpolated curve equidistant between two selected curves
   - [vNotches](#vnotches-flow) *(26.6.1.1725)* — places perpendicular notch marks along one or two selected curves at clicked positions; a floating panel controls notch type, dimensions, optional label, and per-curve side/reverse settings
   - [vOffset](#voffset-flow) *(26.4.27.2125)* — runs built-in Offset in a continuous loop, clearing selection after each run
@@ -31,6 +32,7 @@ vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoComm
   - [vTangent](#vtangent-flow) *(26.5.5.757)* — moves a curve rigidly so one or both endpoints align tangentially to selected driver curves
   - [vTextAligned](#vtextaligned-flow) *(26.4.27.2125)* — places or repositions annotation text aligned and offset along a selected curve
   - [vTextFlip](#vtextflip-flow) *(26.4.27.2125)* — flips or rotates annotation text around its object plane
+  - [vTitle](#vtitle-flow) *(26.6.-)* — places or edits a titled annotation text box with optional bounding rectangle; hover to highlight, click existing to edit
   - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected control point grips
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join
   - [vTrimOff](#vtrimoff-flow) *(26.5.19.1928)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
@@ -80,7 +82,7 @@ Release output is written to:
 
 All command options persist by default unless stated otherwise.
 
-Native commands: [vBiminiParts](#vbiminiparts-flow), [vChamfer](#vchamfer-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vFacing](#vfacing-flow), [vFitBox](#vfitbox-flow), [vGroup](#vgroup-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands: [vBiminiParts](#vbiminiparts-flow), [vChamfer](#vchamfer-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vFacing](#vfacing-flow), [vFitBox](#vfitbox-flow), [vGroup](#vgroup-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -106,13 +108,20 @@ Options:
 
 ### vChamfer flow
 
-1. Pick **curve 1** — near the corner to cut.
+1. Pick **curve 1** — near the corner of the two diverging curves.
 1. Pick **curve 2** — near the same corner.
-1. Adjust options while previewing the cyan cut line:
+1. Adjust options while previewing the cyan chamfer line:
 
-    - `Length`: the cut line length. The cut is always perpendicular to the angle bisector of the two curves at the corner.
+    - `Length`: the desired chamfer line length — the perpendicular (equidistant) gap between both curves at the chamfer point. The chamfer is placed where the equidistant gap equals this value, with the line perpendicular to the middle curve.
+    - `Trim`: `Yes` trims both curves to the chamfer endpoints; `No` only adds the line.
+    - `Join` *(Trim=Yes only)*: `Yes` joins trimmed curves and the chamfer line into a single polycurve.
 
-1. Press Enter to apply: both curves are trimmed to the cut endpoints and a new line is added.
+1. Optional — pick a **reference point** to reposition the chamfer: click anywhere near the curves. The chamfer moves to the arc position where the chamfer line's midpoint is exactly `Length` units away from the click (toward the corner). Press `ClearPoint` to revert to the gap-based placement.
+1. Press Enter to apply.
+
+Notes:
+- Corner detection uses the closest endpoint pair. Extension stubs (toward a virtual corner) are shown in the preview when `Trim=Yes` and the cut falls inside the extension zone.
+- All options persist to `vTools.config.json` under `vChamfer`.
 
 ### vCurveToSpline flow
 
@@ -235,6 +244,19 @@ Hidden keywords while editing:
 
 - `total`, `add`, `subtract`: set mode directly.
 - `add/subtract`: toggle between add and subtract.
+
+### vMatch flow
+
+1. Run `vMatch`.
+1. Click near an **edge-mate dot** (placed by `vUnrollSrf`) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance.
+1. Options:
+
+    - `Distance`: gap between matched edges.
+    - `Auto`: `Yes` assembles all selected parts via BFS (Breadth-First Search) starting from a single clicked dot; `No` does one match per click.
+    - `RandStart` *(Auto only)*: randomise the BFS start part.
+    - `RandNext` *(Auto only)*: randomise the order of BFS neighbours.
+
+Options persist to `vTools.config.json` under `vMatch`.
 
 ### vMiddleCurve flow
 
@@ -424,6 +446,27 @@ Behavior:
     - `Rotate`: rotates selected text by 90 degrees.
     - `Clear`: clears current command selection list.
 
+### vTitle flow
+
+1. Run `vTitle`.
+1. Move the cursor — existing vTitle objects highlight when the cursor enters their bounding box.
+1. **Click existing title** → enter edit mode (loads its text, size, and settings; the object group is highlighted).
+1. **Click empty space** → place a new title at the cursor position.
+1. Options while placing / editing:
+
+    - `Text`: title string.
+    - `Size`: text height.
+    - `Padding`: percentage of text height added as padding on each side of the bounding box.
+    - `Box`: `Yes/No` — draw a padded bounding rectangle around the text.
+    - `Layer`: target layer. Use `.` or `*` for the current layer; default is `Reference`.
+
+1. Press Enter to confirm, Esc to cancel.
+
+Notes:
+- Editing an existing title replaces it in place.
+- If the text annotation is later changed externally (e.g. via `Properties`), the bounding box resizes automatically on the next idle frame.
+- All settings persist to `vTools.config.json` under `vTitle`.
+
 ### vTogglePerpGumball flow
 
 1. Run `vTogglePerpGumball` to toggle monitor state (`ON`/`OFF`).
@@ -531,11 +574,19 @@ Example:
 }
 ```
 
+## Startup output
+
+When the plug-in loads, Rhino's command history shows:
+
+```
+vTools v26.7.3.HHMM loaded — N commands: vBiminiParts, vChamfer, ...
+```
+
+The same line plus the DLL path is written to `logs/debug.log`.
+
 ## Logging
 
-- Plug-in startup log: logs/vTools.log
-
-The code resolves a project-local logs folder first and falls back to an assembly-local logs folder.
+- `logs/debug.log` — cleared on every Rhino startup. First lines show version and command list. All commands write diagnostics here via `Log.Write(tag, message)`.
 
 ## Versioning
 

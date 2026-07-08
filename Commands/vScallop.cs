@@ -117,9 +117,15 @@ public sealed class vScallop : Command
       if (twoPointMode)
       {
         if (!TryPickPoint(doc, "Pick first point", null, out pointA))
-          continue;
+        {
+          SavePersistedOptions();
+          return Result.Cancel;
+        }
         if (!TryPickPoint(doc, "Pick second point", pointA, out pointB))
-          continue;
+        {
+          SavePersistedOptions();
+          return Result.Cancel;
+        }
         sourceLineId = Guid.Empty;
       }
       else if (outerResult == GetResult.Object)
@@ -151,7 +157,10 @@ public sealed class vScallop : Command
 
       // ── Side / bulge ───────────────────────────────────────────────────
       if (!TryGetSideAndBulge(doc, pointA, pointB, out var sideDirection, out var bulgeSize))
-        continue;
+      {
+        SavePersistedOptions();
+        return Result.Cancel;
+      }
 
       // ── Create arc ────────────────────────────────────────────────────
       var arcCurve = CreateScallopArc(pointA, pointB, sideDirection, bulgeSize);

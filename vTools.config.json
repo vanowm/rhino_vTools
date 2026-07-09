@@ -94,6 +94,9 @@
     "auto": false,
     "sizePercent": 5.0
   },
+  "vSplit": {
+    "grips": true
+  },
   "vSplitAtCorners": {
     "angle": 45,
     "minLength": 0

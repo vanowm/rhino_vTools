@@ -37,6 +37,7 @@ public sealed class vSplit : Command
     var completed = CollectSplitPoints(doc, targets, showGrips);
     if (!completed)
     {
+      DeleteSplitPointObjects(doc, targets);
       RestoreTargetGrips(doc, targets);
       SelectExistingTargets(doc, targets);
       return Result.Cancel;
@@ -59,6 +60,37 @@ public sealed class vSplit : Command
   private static void SavePersistedOptions(bool showGrips)
   {
     _ = ToolsOptionStore.Update(OptionsSectionName, section => section[GripsKey] = showGrips);
+  }
+
+  private static ObjectAttributes SplitPointAttributes(Color color)
+  {
+    return new ObjectAttributes
+    {
+      ObjectColor = color,
+      ColorSource = ObjectColorSource.ColorFromObject,
+      Name = "vSplit point"
+    };
+  }
+
+  private static Guid AddSplitPointObject(RhinoDoc doc, Point3d point)
+  {
+    return doc.Objects.AddPoint(point, SplitPointAttributes(SetPointColor));
+  }
+
+  private static void DeleteSplitPointObjects(RhinoDoc doc, IEnumerable<SplitTarget> targets)
+  {
+    foreach (var target in targets)
+    {
+      foreach (var marker in target.SplitPoints.ToList())
+      {
+        if (marker.PointObjectId != Guid.Empty && doc.Objects.FindId(marker.PointObjectId) != null)
+          doc.Objects.Delete(marker.PointObjectId, true);
+      }
+
+      target.SplitPoints.Clear();
+    }
+
+    doc.Views.Redraw();
   }
 
   private static double ModelTolerance(RhinoDoc doc) => Math.Max(doc.ModelAbsoluteTolerance, 1e-6);
@@ -306,7 +338,7 @@ public sealed class vSplit : Command
     return targets;
   }
 
-  private static bool AddUniqueParameter(SplitTarget target, double parameter, bool reportSkipped)
+  private static bool AddUniqueParameter(RhinoDoc doc, SplitTarget target, double parameter, bool reportSkipped)
   {
     var curve = target.Curve;
     var domain = curve.Domain;
@@ -320,9 +352,9 @@ public sealed class vSplit : Command
       return false;
     }
 
-    foreach (var existing in target.Parameters)
+    foreach (var existing in target.SplitPoints)
     {
-      if (Math.Abs(existing - parameter) <= tol)
+      if (Math.Abs(existing.Parameter - parameter) <= tol)
       {
         if (reportSkipped)
           RhinoApp.WriteLine("vSplit: skipped duplicate split point.");
@@ -330,18 +362,30 @@ public sealed class vSplit : Command
       }
     }
 
-    target.Parameters.Add(parameter);
+    var pointId = AddSplitPointObject(doc, curve.PointAt(parameter));
+    if (pointId == Guid.Empty)
+    {
+      if (reportSkipped)
+        RhinoApp.WriteLine("vSplit: could not add split point marker.");
+      return false;
+    }
+
+    target.SplitPoints.Add(new SplitPointMarker(parameter, pointId));
     return true;
   }
 
-  private static bool RemoveParameter(SplitTarget target, double parameter)
+  private static bool RemoveParameter(RhinoDoc doc, SplitTarget target, double parameter)
   {
     var tol = target.ParameterTolerance;
-    for (var i = 0; i < target.Parameters.Count; i++)
+    for (var i = 0; i < target.SplitPoints.Count; i++)
     {
-      if (Math.Abs(target.Parameters[i] - parameter) <= tol)
+      if (Math.Abs(target.SplitPoints[i].Parameter - parameter) <= tol)
       {
-        target.Parameters.RemoveAt(i);
+        var marker = target.SplitPoints[i];
+        if (marker.PointObjectId != Guid.Empty && doc.Objects.FindId(marker.PointObjectId) != null)
+          doc.Objects.Delete(marker.PointObjectId, true);
+
+        target.SplitPoints.RemoveAt(i);
         return true;
       }
     }
@@ -431,6 +475,7 @@ public sealed class vSplit : Command
   }
 
   private static (SplitAction? Action, bool PointWasOnTarget) AddActionFromPick(
+    RhinoDoc doc,
     IEnumerable<SplitTarget> targets,
     Point3d point)
   {
@@ -438,7 +483,7 @@ public sealed class vSplit : Command
     var added = new List<SplitPointItem>();
     foreach (var (target, parameter) in candidates)
     {
-      if (AddUniqueParameter(target, parameter, reportSkipped: false))
+      if (AddUniqueParameter(doc, target, parameter, reportSkipped: false))
         added.Add(new SplitPointItem(target, parameter));
     }
 
@@ -447,7 +492,7 @@ public sealed class vSplit : Command
       : (null, candidates.Count > 0);
   }
 
-  private static SplitAction? ApplyPointAction(SplitAction? action, bool reverse)
+  private static SplitAction? ApplyPointAction(RhinoDoc doc, SplitAction? action, bool reverse)
   {
     if (action == null)
       return null;
@@ -459,8 +504,8 @@ public sealed class vSplit : Command
     foreach (var item in action.Items)
     {
       var success = remove
-        ? RemoveParameter(item.Target, item.Parameter)
-        : AddUniqueParameter(item.Target, item.Parameter, reportSkipped: false);
+        ? RemoveParameter(doc, item.Target, item.Parameter)
+        : AddUniqueParameter(doc, item.Target, item.Parameter, reportSkipped: false);
 
       if (success)
         completed.Add(item);
@@ -532,7 +577,7 @@ public sealed class vSplit : Command
           var selectedOption = gp.OptionIndex();
           if (undoStack.Count > 0 && selectedOption == undoOptionIndex)
           {
-            var undoAction = ApplyPointAction(undoStack.Pop(), reverse: true);
+            var undoAction = ApplyPointAction(doc, undoStack.Pop(), reverse: true);
             if (undoAction != null)
               redoStack.Push(undoAction);
             doc.Views.Redraw();
@@ -542,7 +587,7 @@ public sealed class vSplit : Command
 
           if (redoStack.Count > 0 && selectedOption == redoOptionIndex)
           {
-            var redoAction = ApplyPointAction(redoStack.Pop(), reverse: false);
+            var redoAction = ApplyPointAction(doc, redoStack.Pop(), reverse: false);
             if (redoAction != null)
               undoStack.Push(redoAction);
             doc.Views.Redraw();
@@ -571,12 +616,12 @@ public sealed class vSplit : Command
         bool pointWasOnTarget;
         if (previewAction != null)
         {
-          action = ApplyPointAction(previewAction, reverse: false);
+          action = ApplyPointAction(doc, previewAction, reverse: false);
           pointWasOnTarget = true;
         }
         else
         {
-          (action, pointWasOnTarget) = AddActionFromPick(targets, point);
+          (action, pointWasOnTarget) = AddActionFromPick(doc, targets, point);
         }
 
         conduit.SetRemoveAction(null);
@@ -614,7 +659,7 @@ public sealed class vSplit : Command
 
   private static List<Curve> SplitCurve(RhinoDoc doc, SplitTarget target)
   {
-    if (target.Parameters.Count == 0)
+    if (target.SplitPoints.Count == 0)
       return new List<Curve>();
 
     var parameters = target.Parameters.OrderBy(p => p).ToArray();
@@ -654,10 +699,11 @@ public sealed class vSplit : Command
 
   private static List<Guid> ApplySplits(RhinoDoc doc, List<SplitTarget> targets)
   {
-    var splitTargets = targets.Where(target => target.Parameters.Count > 0).ToList();
+    var splitTargets = targets.Where(target => target.SplitPoints.Count > 0).ToList();
     if (splitTargets.Count == 0)
     {
       RhinoApp.WriteLine("vSplit: no split points were added.");
+      DeleteSplitPointObjects(doc, targets);
       RestoreTargetGrips(doc, targets);
       SelectExistingTargets(doc, targets);
       return new List<Guid>();
@@ -698,6 +744,7 @@ public sealed class vSplit : Command
     }
 
     RestoreTargetGrips(doc, targets);
+    DeleteSplitPointObjects(doc, targets);
     SelectFinalObjects(doc, targets, newIds);
     return newIds;
   }
@@ -720,10 +767,13 @@ public sealed class vSplit : Command
     public bool InitialGrips { get; }
     public double ParameterTolerance { get; }
     public double HitTolerance { get; }
-    public List<double> Parameters { get; } = new();
+    public List<SplitPointMarker> SplitPoints { get; } = new();
+    public IEnumerable<double> Parameters => SplitPoints.Select(marker => marker.Parameter);
   }
 
   private readonly record struct SplitPointItem(SplitTarget Target, double Parameter);
+
+  private readonly record struct SplitPointMarker(double Parameter, Guid PointObjectId);
 
   private enum SplitActionKind
   {
@@ -777,11 +827,14 @@ public sealed class vSplit : Command
         {
           foreach (var parameter in target.Parameters)
           {
+            if (!IsRemovePreview(target, parameter))
+              continue;
+
             e.Display.DrawPoint(
               target.Curve.PointAt(parameter),
               PointStyle.RoundSimple,
               PointSize,
-              IsRemovePreview(target, parameter) ? RemovePointColor : SetPointColor);
+              RemovePointColor);
           }
         }
       }

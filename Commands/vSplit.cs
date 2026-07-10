@@ -23,6 +23,7 @@ public sealed class vSplit : Command
 
   private static readonly Color SetPointColor = Color.Red;
   private static readonly Color RemovePointColor = Color.Cyan;
+  private static readonly Color PointOutlineColor = Color.Pink;
 
   public override string EnglishName => "vSplit";
 
@@ -75,6 +76,12 @@ public sealed class vSplit : Command
   private static Guid AddSplitPointObject(RhinoDoc doc, Point3d point)
   {
     return doc.Objects.AddPoint(point, SplitPointAttributes(SetPointColor));
+  }
+
+  private static void DrawSplitPoint(DisplayPipeline display, Point3d point, Color fillColor)
+  {
+    display.DrawPoint(point, PointStyle.RoundSimple, PointSize, PointOutlineColor);
+    display.DrawPoint(point, PointStyle.RoundSimple, Math.Max(1, PointSize - 1), fillColor);
   }
 
   private static void DeleteSplitPointObjects(RhinoDoc doc, IEnumerable<SplitTarget> targets)
@@ -543,8 +550,8 @@ public sealed class vSplit : Command
 
         var gripsOption = new OptionToggle(showGrips, "Hide", "Show");
         gp.AddOptionToggle("Grips", ref gripsOption);
-        var undoOptionIndex = undoStack.Count > 0 ? gp.AddOption("Undo") : -1;
-        var redoOptionIndex = redoStack.Count > 0 ? gp.AddOption("Redo") : -1;
+        var undoOptionIndex = gp.AddOption("Undo", string.Empty, true);
+        var redoOptionIndex = gp.AddOption("Redo", string.Empty, true);
 
         gp.DynamicDraw += (_, e) =>
         {
@@ -557,10 +564,9 @@ public sealed class vSplit : Command
 
           foreach (var item in previewItems)
           {
-            e.Display.DrawPoint(
+            DrawSplitPoint(
+              e.Display,
               item.Target.Curve.PointAt(item.Parameter),
-              PointStyle.RoundSimple,
-              PointSize,
               RemovePointColor);
           }
         };
@@ -575,8 +581,14 @@ public sealed class vSplit : Command
         if (result == GetResult.Option)
         {
           var selectedOption = gp.OptionIndex();
-          if (undoStack.Count > 0 && selectedOption == undoOptionIndex)
+          if (selectedOption == undoOptionIndex)
           {
+            if (undoStack.Count == 0)
+            {
+              RhinoApp.WriteLine("vSplit: nothing to undo.");
+              continue;
+            }
+
             var undoAction = ApplyPointAction(doc, undoStack.Pop(), reverse: true);
             if (undoAction != null)
               redoStack.Push(undoAction);
@@ -585,8 +597,14 @@ public sealed class vSplit : Command
             continue;
           }
 
-          if (redoStack.Count > 0 && selectedOption == redoOptionIndex)
+          if (selectedOption == redoOptionIndex)
           {
+            if (redoStack.Count == 0)
+            {
+              RhinoApp.WriteLine("vSplit: nothing to redo.");
+              continue;
+            }
+
             var redoAction = ApplyPointAction(doc, redoStack.Pop(), reverse: false);
             if (redoAction != null)
               undoStack.Push(redoAction);
@@ -827,10 +845,9 @@ public sealed class vSplit : Command
         {
           foreach (var parameter in target.Parameters)
           {
-            e.Display.DrawPoint(
+            DrawSplitPoint(
+              e.Display,
               target.Curve.PointAt(parameter),
-              PointStyle.RoundSimple,
-              PointSize,
               IsRemovePreview(target, parameter) ? RemovePointColor : SetPointColor);
           }
         }

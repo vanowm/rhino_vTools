@@ -247,6 +247,12 @@ public sealed class vUzip : Command
 
   private static List<Curve> OffsetBothSides(Curve curve, double distance, Vector3d normal, double tol)
   {
+    if (Math.Abs(distance) <= RhinoMath.ZeroTolerance)
+    {
+      var duplicate = curve.DuplicateCurve();
+      return duplicate != null ? new List<Curve> { duplicate } : new List<Curve>();
+    }
+
     var plane   = new Plane(curve.PointAtStart, normal);
     var pos     = curve.Offset(plane,  distance, tol, CurveOffsetCornerStyle.Sharp);
     var neg     = curve.Offset(plane, -distance, tol, CurveOffsetCornerStyle.Sharp);
@@ -757,9 +763,9 @@ public sealed class vUzip : Command
     {
       if (!string.IsNullOrEmpty(_centerDrop.SelectedKey)) s.CenterLayer = _centerDrop.SelectedKey;
       if (!string.IsNullOrEmpty(_glassDrop.SelectedKey))  s.GlassLayer  = _glassDrop.SelectedKey;
-      if (double.TryParse(_glassOffBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var go) && go > 0) s.GlassOffset = go;
+      if (double.TryParse(_glassOffBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var go) && go >= 0) s.GlassOffset = go;
       if (!string.IsNullOrEmpty(_visDrop.SelectedKey))    s.VisLayer    = _visDrop.SelectedKey;
-      if (double.TryParse(_visOffBox.Text,  NumberStyles.Float, CultureInfo.InvariantCulture, out var vo) && vo > 0) s.VisOffset   = vo;
+      if (double.TryParse(_visOffBox.Text,  NumberStyles.Float, CultureInfo.InvariantCulture, out var vo) && vo >= 0) s.VisOffset   = vo;
       s.Label = (_labelBox.Text ?? "").Trim();
       if (double.TryParse(_tailBox.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var tl) && tl >= 0) s.Tail = tl;
     }

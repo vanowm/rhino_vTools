@@ -1,4 +1,4 @@
-Tools  ·  v26.7.13.842
+Tools  ·  v26.7.13.1037
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -548,7 +548,7 @@ Notes:
 1. Run `vUzip`.
 1. Select the three U-shape curves (left arm, right arm, bottom).  Adjust options while selecting:
 
-    - `Left` / `Right` / `Bottom`: inward offset distances for each arm.  Accepts decimal, fraction (`2 3/8`, `2-3/8`), or `z`/`zipper` keyword.
+    - `Left` / `Right` / `Bottom`: inward offset distances for each arm.  Accepts decimal, fraction (`2 3/8`, `2-3/8`), or `z`/`zipper` keyword; offset distances may be `0`.
     - `Radius`: fillet radius at the two inside corners.
     - `Glass`: `Yes/No` — compute and show glass offset curves.
     - `Vis`: `Yes/No` — compute and show vis offset curves.
@@ -572,7 +572,7 @@ Notes:
     - `Bottom`: offset distance for the bottom curve.
     - `Radius`: fillet radius at the two inside corners.
 
-   Distances accept fractional inch input (`2 3/8`, `2-3/8`, `3/8`, plain decimal) and the shorthand `z`/`zipper` (returns the left-arm default).
+   Distances accept fractional inch input (`2 3/8`, `2-3/8`, `3/8`, plain decimal) and the shorthand `z`/`zipper` (returns the left-arm default). Offset distances may be `0`; radius must be greater than `0`.
 
 1. A cyan preview curve is displayed showing the computed result.
 1. While previewing, adjust the same options to recompute live.

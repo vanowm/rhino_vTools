@@ -145,7 +145,7 @@ public sealed class vUzipCenter : Command
   /// Sub-prompt for a distance value; accepts fractions.
   /// Returns new value, original value on Enter, or null on cancel.
   /// </summary>
-  private static double? GetDistSubprompt(string prompt, double current)
+  private static double? GetDistSubprompt(string prompt, double current, bool allowZero = true)
   {
     var gs = new GetString();
     gs.SetCommandPrompt($"{prompt} ({FmtDist(current)})");
@@ -155,7 +155,7 @@ public sealed class vUzipCenter : Command
     if (res == GetResult.String)
     {
       var v = ParseDist(gs.StringResult());
-      if (v.HasValue && v.Value > 0.0) return v.Value;
+      if (v.HasValue && (allowZero ? v.Value >= 0.0 : v.Value > 0.0)) return v.Value;
       return current;
     }
     return null; // cancel
@@ -248,6 +248,12 @@ public sealed class vUzipCenter : Command
   /// <summary>Offsets a curve both sides; returns up to 2 results.</summary>
   private static List<Curve> OffsetBothSides(Curve curve, double distance, Vector3d normal, double tol)
   {
+    if (Math.Abs(distance) <= RhinoMath.ZeroTolerance)
+    {
+      var duplicate = curve.DuplicateCurve();
+      return duplicate != null ? new List<Curve> { duplicate } : new List<Curve>();
+    }
+
     var plane = new Plane(curve.PointAtStart, normal);
     var pos = curve.Offset(plane, +distance, tol, CurveOffsetCornerStyle.Sharp);
     var neg = curve.Offset(plane, -distance, tol, CurveOffsetCornerStyle.Sharp);
@@ -260,6 +266,9 @@ public sealed class vUzipCenter : Command
   private static Curve? OffsetCurveInward(
     Curve curve, double distance, Point3d centerPt, Vector3d normal, double tol)
   {
+    if (Math.Abs(distance) <= RhinoMath.ZeroTolerance)
+      return curve.DuplicateCurve();
+
     var pos = curve.Offset(centerPt, normal,  distance, tol, CurveOffsetCornerStyle.Sharp);
     var neg = curve.Offset(centerPt, normal, -distance, tol, CurveOffsetCornerStyle.Sharp);
     var candidates = new List<Curve>();
@@ -699,10 +708,10 @@ public sealed class vUzipCenter : Command
       if (!string.IsNullOrEmpty(_centerDrop.SelectedKey)) s.CenterLayer = _centerDrop.SelectedKey;
       if (!string.IsNullOrEmpty(_glassDrop.SelectedKey))  s.GlassLayer  = _glassDrop.SelectedKey;
       if (double.TryParse(_glassOffBox.Text, NumberStyles.Float,
-          CultureInfo.InvariantCulture, out var go) && go > 0) s.GlassOffset = go;
+          CultureInfo.InvariantCulture, out var go) && go >= 0) s.GlassOffset = go;
       if (!string.IsNullOrEmpty(_visDrop.SelectedKey))    s.VisLayer    = _visDrop.SelectedKey;
       if (double.TryParse(_visOffBox.Text, NumberStyles.Float,
-          CultureInfo.InvariantCulture, out var vo) && vo > 0) s.VisOffset   = vo;
+          CultureInfo.InvariantCulture, out var vo) && vo >= 0) s.VisOffset   = vo;
     }
   }
 
@@ -812,7 +821,7 @@ public sealed class vUzipCenter : Command
           }
           else if (name == "Radius")
           {
-            var v = GetDistSubprompt("Fillet radius", radius);
+            var v = GetDistSubprompt("Fillet radius", radius, allowZero: false);
             if (v == null) return Result.Cancel;
             radius = v.Value;
           }
@@ -959,7 +968,7 @@ public sealed class vUzipCenter : Command
           }
           else if (name == "Radius")
           {
-            var v = GetDistSubprompt("Fillet radius", radius);
+            var v = GetDistSubprompt("Fillet radius", radius, allowZero: false);
             if (v == null) { conduit.Enabled = false; doc.Views.Redraw(); return Result.Cancel; }
             radius = v.Value;
           }

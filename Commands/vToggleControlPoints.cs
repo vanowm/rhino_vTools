@@ -16,7 +16,6 @@ namespace vTools.Commands;
 public sealed class vToggleControlPoints : Command
 {
   private const string Tag = "vToggleControlPoints";
-  private const double OnGeometryToleranceFactor = 0.01;
 
   public override string EnglishName => Tag;
 
@@ -32,9 +31,10 @@ public sealed class vToggleControlPoints : Command
     }
 
     var controlPointsShown = SelectionHasControlPointsShown(doc, context);
-    Log.Write(Tag, $"selection controlPointsShown={controlPointsShown}");
+    var editGripsShown = SelectionHasEditGripsShown(doc, context);
+    Log.Write(Tag, $"selection controlPointsShown={controlPointsShown} editGripsShown={editGripsShown}");
 
-    if (controlPointsShown)
+    if (controlPointsShown || !editGripsShown)
       ShowEditPoints(doc, context);
     else
       ShowControlPoints(doc, context);
@@ -48,113 +48,34 @@ public sealed class vToggleControlPoints : Command
 
     foreach (var id in controlPointCapable)
     {
-      if (ObjectDisplayMode(doc, id) == PointDisplayMode.ControlPoints)
+      var obj = doc.Objects.FindId(id);
+      if (obj?.GripsOn == true)
         return true;
     }
 
     return false;
   }
 
-  private static PointDisplayMode ObjectDisplayMode(RhinoDoc doc, Guid objectId)
+  private static bool SelectionHasEditGripsShown(RhinoDoc doc, SelectionContext context)
   {
-    var obj = doc.Objects.FindId(objectId);
-    if (obj == null)
-      return PointDisplayMode.None;
-
-    var grips = VisibleGrips(obj);
-    var gripsOn = obj.GripsOn;
-
-    if (grips.Count > 0 && !gripsOn)
-      return PointDisplayMode.EditPoints;
-
-    if (!gripsOn || grips.Count == 0)
-      return PointDisplayMode.None;
-
-    var onGeometry = GripsAreOnGeometry(doc, objectId, grips);
-    if (onGeometry == true)
-      return PointDisplayMode.EditPoints;
-    if (onGeometry == false)
-      return PointDisplayMode.ControlPoints;
-
-    return PointDisplayMode.ControlPoints;
-  }
-
-  private static bool? GripsAreOnGeometry(RhinoDoc doc, Guid objectId, IReadOnlyList<GripObject> grips)
-  {
-    if (grips.Count == 0)
-      return null;
-
-    var tolerance = OnGeometryTolerance(doc);
-    var foundDistance = false;
-
-    foreach (var index in SampleIndices(grips.Count))
+    foreach (var record in context.PointRecords)
     {
-      var distance = DistanceToGeometry(doc, objectId, grips[index].CurrentLocation);
-      if (!distance.HasValue)
+      var owner = doc.Objects.FindId(record.OwnerId);
+      if (owner?.GripsOn != true)
+        return true;
+    }
+
+    foreach (var id in context.ObjectIds)
+    {
+      var obj = doc.Objects.FindId(id);
+      if (obj == null || obj.GripsOn)
         continue;
 
-      foundDistance = true;
-      if (distance.Value > tolerance)
-        return false;
+      if (VisibleGrips(obj).Count > 0)
+        return true;
     }
 
-    return foundDistance ? true : null;
-  }
-
-  private static IEnumerable<int> SampleIndices(int count)
-  {
-    if (count <= 0)
-      yield break;
-
-    if (count <= 9)
-    {
-      for (var i = 0; i < count; i++)
-        yield return i;
-      yield break;
-    }
-
-    var used = new HashSet<int>();
-    var step = (count - 1) / 8.0;
-    for (var i = 0; i < 9; i++)
-    {
-      var index = (int)Math.Round(step * i);
-      if (used.Add(index))
-        yield return index;
-    }
-  }
-
-  private static double OnGeometryTolerance(RhinoDoc doc)
-  {
-    return Math.Max(doc.ModelAbsoluteTolerance * OnGeometryToleranceFactor, 1.0e-8);
-  }
-
-  private static double? DistanceToGeometry(RhinoDoc doc, Guid objectId, Point3d point)
-  {
-    var obj = doc.Objects.FindId(objectId);
-    if (obj == null)
-      return null;
-
-    try
-    {
-      if (obj.Geometry is Curve curve)
-      {
-        return curve.ClosestPoint(point, out var t)
-          ? point.DistanceTo(curve.PointAt(t))
-          : null;
-      }
-
-      if (obj.Geometry is Surface surface)
-      {
-        return surface.ClosestPoint(point, out var u, out var v)
-          ? point.DistanceTo(surface.PointAt(u, v))
-          : null;
-      }
-    }
-    catch
-    {
-    }
-
-    return null;
+    return false;
   }
 
   private static (List<Guid> ControlPointCapable, List<Guid> EditPointOnly) SplitEditPointOnly(
@@ -447,13 +368,6 @@ public sealed class vToggleControlPoints : Command
     ids.Add(objectId);
   }
 
-  private enum PointDisplayMode
-  {
-    None,
-    ControlPoints,
-    EditPoints
-  }
-
   private readonly record struct PointRecord(Guid OwnerId, int Index, Point3d Point);
 
   private sealed class SelectionContext
@@ -461,19 +375,16 @@ public sealed class vToggleControlPoints : Command
     private SelectionContext(
       List<Guid> objectIds,
       List<PointRecord> pointRecords,
-      bool pointOnly,
-      bool subObjectOnly)
+      bool pointOnly)
     {
       ObjectIds = objectIds;
       PointRecords = pointRecords;
       PointOnly = pointOnly;
-      SubObjectOnly = subObjectOnly;
     }
 
     public List<Guid> ObjectIds { get; }
     public List<PointRecord> PointRecords { get; }
     public bool PointOnly { get; }
-    public bool SubObjectOnly { get; }
 
     public static SelectionContext FromDocument(RhinoDoc doc)
     {
@@ -507,13 +418,12 @@ public sealed class vToggleControlPoints : Command
       }
 
       var pointOnly = pointRecords.Count > 0 && selectedObjectIds.Count == 0;
-      var subObjectOnly = ids.Count > 0 && !ids.Any(normalSelectedIds.Contains);
 
       Log.Write(Tag, string.Create(
         CultureInfo.InvariantCulture,
-        $"selection ids={ids.Count} pointRecords={pointRecords.Count} pointOnly={pointOnly} subObjectOnly={subObjectOnly}"));
+        $"selection ids={ids.Count} pointRecords={pointRecords.Count} pointOnly={pointOnly}"));
 
-      return new SelectionContext(ids, pointRecords, pointOnly, subObjectOnly);
+      return new SelectionContext(ids, pointRecords, pointOnly);
     }
   }
 }

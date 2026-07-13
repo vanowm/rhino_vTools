@@ -1,4 +1,4 @@
-Tools  ·  v26.7.13.1248
+Tools  ·  v26.7.13.1305
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -424,7 +424,7 @@ Behavior:
 1. Press Enter to apply splitting and replace the original curves with split pieces.
 1. Options:
 
-    - `Points`: choose `Default`, `CP`, `Grips`, or `Hidden` while choosing split points. `Default` preserves each selected curve's original point visibility.
+    - `Points`: choose `Default`, `CP`, `Grips`, or `Hidden` while choosing split points. `Default` leaves the original point visibility untouched on start and restores each selected curve's original hidden/CP/grips state when switched back.
 
 ### vSplitAtCorners flow
 

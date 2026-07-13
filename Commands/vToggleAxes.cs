@@ -11,7 +11,7 @@ namespace vTools.Commands;
 /// Toggles visible viewport axes: grid/construction axes plus display-mode Z axis.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vAxesToggle : Command
+public sealed class vToggleAxes : Command
 {
   private static readonly string[] GridAxesPropertyNames =
   [
@@ -34,7 +34,7 @@ public sealed class vAxesToggle : Command
 
   private static AxisProperty? _gridAxesProperty;
 
-  public override string EnglishName => "vAxesToggle";
+  public override string EnglishName => "vToggleAxes";
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
@@ -60,11 +60,11 @@ public sealed class vAxesToggle : Command
 
     if (!gridUpdated && !zUpdated)
     {
-      RhinoApp.WriteLine("vAxesToggle: no supported axis visibility properties found.");
+      RhinoApp.WriteLine("vToggleAxes: no supported axis visibility properties found.");
       return Result.Failure;
     }
 
-    // RhinoApp.WriteLine($"vAxesToggle: axes {(newState ? "shown" : "hidden")}.");
+    // RhinoApp.WriteLine($"vToggleAxes: axes {(newState ? "shown" : "hidden")}.");
     return Result.Success;
   }
 

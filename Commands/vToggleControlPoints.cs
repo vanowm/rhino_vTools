@@ -480,7 +480,6 @@ public sealed class vToggleControlPoints : Command
       var ids = new List<Guid>();
       var seen = new HashSet<Guid>();
       var pointRecords = new List<PointRecord>();
-      var pointOwnerIds = new HashSet<Guid>();
       var selectedObjectIds = new List<Guid>();
       var normalSelectedIds = new HashSet<Guid>(
         doc.Objects.GetSelectedObjects(false, false).Select(o => o.Id));
@@ -490,7 +489,6 @@ public sealed class vToggleControlPoints : Command
         if (selected is GripObject grip)
         {
           pointRecords.Add(new PointRecord(grip.OwnerId, grip.Index, grip.CurrentLocation));
-          pointOwnerIds.Add(grip.OwnerId);
           AddUniqueExistingId(doc, ids, seen, grip.OwnerId);
           continue;
         }
@@ -508,7 +506,7 @@ public sealed class vToggleControlPoints : Command
         }
       }
 
-      var pointOnly = pointRecords.Count > 0 && !selectedObjectIds.Any(id => !pointOwnerIds.Contains(id));
+      var pointOnly = pointRecords.Count > 0 && selectedObjectIds.Count == 0;
       var subObjectOnly = ids.Count > 0 && !ids.Any(normalSelectedIds.Contains);
 
       Log.Write(Tag, string.Create(

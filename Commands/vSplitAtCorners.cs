@@ -37,6 +37,7 @@ public sealed class vSplitAtCorners : Command
     LoadPersistedOptions();
 
     var getObject = new GetObject();
+    getObject.EnableTransparentCommands(true);
     getObject.SetCommandPrompt("Select curve(s) to split at corners");
     getObject.GeometryFilter = ObjectType.Curve;
     getObject.SubObjectSelect = false;
@@ -73,6 +74,7 @@ public sealed class vSplitAtCorners : Command
         conduit.UpdateThresholds(angleOpt.CurrentValue, minLenOpt.CurrentValue);
 
         var gp = new GetPoint();
+        gp.EnableTransparentCommands(true);
         gp.SetCommandPrompt("Click to toggle split points. Enter to apply");
         gp.AcceptNothing(true);
 

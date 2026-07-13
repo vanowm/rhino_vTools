@@ -39,6 +39,7 @@ public sealed class vGroup : Command
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select objects to group by closed curve boundary");
     go.GroupSelect = true;
     go.SubObjectSelect = false;

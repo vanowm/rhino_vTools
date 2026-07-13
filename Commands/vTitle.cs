@@ -57,6 +57,7 @@ public sealed class vTitle : Command
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Title center");
 
       int idxText    = gp.AddOption("Text",    string.IsNullOrEmpty(_text) ? "-" : _text);

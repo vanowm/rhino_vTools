@@ -69,6 +69,7 @@ namespace vTools.Commands
       while (true)
       {
         var gp = new GetPoint();
+        gp.EnableTransparentCommands(true);
         gp.SetCommandPrompt("Click near an edge mate dot");
         int idxDist = gp.AddOption("Distance", $"{_distance:G}");
         int idxAuto = gp.AddOption("Auto");
@@ -160,6 +161,7 @@ namespace vTools.Commands
       {
         // Pass 1: snapshot whatever is currently selected (instant, no prompt)
         var goPre = new GetObject();
+        goPre.EnableTransparentCommands(true);
         goPre.GeometryFilter  = brepsFilt;
         goPre.SubObjectSelect = false;
         goPre.GroupSelect     = true;
@@ -174,6 +176,7 @@ namespace vTools.Commands
         var optRn  = new OptionToggle(_randNext,  "Off", "On");
 
         var go = new GetObject();
+        go.EnableTransparentCommands(true);
         go.SetCommandPrompt("Add/remove parts, Enter=run");
         go.GeometryFilter            = brepsFilt;
         go.SubObjectSelect           = false;

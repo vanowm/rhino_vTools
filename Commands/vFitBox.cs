@@ -229,6 +229,7 @@ public sealed class vFitBox : Command
     fitMode = NormalizeFitMode(_fitMode);
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select objects");
     go.AcceptNothing(true);
     go.AcceptNumber(true, false);

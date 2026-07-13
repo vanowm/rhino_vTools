@@ -43,6 +43,7 @@ public sealed class vScallop : Command
     {
       // ── Outer prompt: select curve or choose Points ──────────────────
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt("Select curve");
       go.GeometryFilter = ObjectType.Curve;
       go.SubObjectSelect = false;
@@ -272,6 +273,7 @@ public sealed class vScallop : Command
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt(prompt);
       if (basePoint.HasValue && basePoint.Value.IsValid)
         gp.DrawLineFromPoint(basePoint.Value, true);
@@ -336,6 +338,7 @@ public sealed class vScallop : Command
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick side for arc bulge");
       gp.SetBasePoint(mid, true);
       gp.AcceptNumber(true, false);

@@ -30,6 +30,7 @@ public sealed class vPerpendicularTo : Command
   private static (Guid Id, Curve? Curve, ObjRef? Ref) PickCurve(string prompt)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt(prompt);
     go.GeometryFilter  = ObjectType.Curve;
     go.SubObjectSelect = true;

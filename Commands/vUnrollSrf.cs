@@ -553,6 +553,7 @@ namespace vTools.Commands
         return preselected;
 
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt("Select surface/polysurface objects to unroll");
       go.GeometryFilter = ObjectType.Surface | ObjectType.Brep | ObjectType.Extrusion;
       go.SubObjectSelect = false;
@@ -586,6 +587,7 @@ namespace vTools.Commands
       Highlight(doc, surfaceIds, true);
 
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt("Select curves, points, or dots to unroll with highlighted surfaces. Press Enter when done");
       go.GeometryFilter = ObjectType.Curve | ObjectType.Point | ObjectType.TextDot;
       go.SubObjectSelect = false;
@@ -636,6 +638,7 @@ namespace vTools.Commands
     private static LayoutOptions? GetLayoutOptions(RhinoDoc doc, string prompt)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt(prompt);
       var shared = AddSharedOptions(gp);
       gp.AcceptNothing(true);

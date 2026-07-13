@@ -134,6 +134,7 @@ public sealed class vFacing : Command
     }
 
     var gp = new GetPoint();
+    gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Pick placement point for Facing");
     gp.AddOption("Size", _size.ToString("G"));
     gp.AcceptNumber(true, false);
@@ -226,6 +227,7 @@ public sealed class vFacing : Command
     result = new List<(Guid, Curve, int)>();
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select facing curves (base + two sides). Press Enter when done");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -523,6 +525,7 @@ public sealed class vFacing : Command
     doc.Views.Redraw();
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select 2 side curves connected to the base");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -650,6 +653,7 @@ public sealed class vFacing : Command
 
     var sizeOpt = new OptionDouble(_size, 0.001, double.MaxValue);
     var goBase  = new GetObject();
+    goBase.EnableTransparentCommands(true);
     goBase.SetCommandPrompt("Click on the base edge");
     goBase.GeometryFilter = ObjectType.Curve;
     goBase.SubObjectSelect = false;

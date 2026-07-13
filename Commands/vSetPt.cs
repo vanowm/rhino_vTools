@@ -47,6 +47,7 @@ public sealed class vSetPt : Command
 
     // Accept pre-selected curves or prompt for selection.
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select curves");
     go.GeometryFilter  = ObjectType.Curve;
     go.GroupSelect     = true;

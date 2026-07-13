@@ -375,6 +375,7 @@ public sealed class vSplit : Command
     go.SubObjectSelect = false;
     go.GroupSelect = true;
     go.EnablePreSelect(true, true);
+    go.EnableTransparentCommands(true);
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(false);
 
@@ -617,6 +618,7 @@ public sealed class vSplit : Command
         var gp = new GetPoint();
         gp.SetCommandPrompt("Point to split at. Press Enter when done");
         gp.AcceptNothing(true);
+        gp.EnableTransparentCommands(true);
         ConfigurePointGetter(gp, targets, constraintCurve);
         AddSplitPointSnaps(gp, targets);
 

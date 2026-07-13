@@ -64,6 +64,7 @@ public sealed class vOverlaps : Command
     while (true)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.GeometryFilter    = ObjectType.Curve;
       go.SubObjectSelect   = false;
       go.GroupSelect       = true;
@@ -120,6 +121,7 @@ public sealed class vOverlaps : Command
         {
           // Let user pick more curves.
           var goAdd = new GetObject();
+          goAdd.EnableTransparentCommands(true);
           goAdd.SetCommandPrompt("Add curves to selection");
           goAdd.GeometryFilter    = ObjectType.Curve;
           goAdd.SubObjectSelect   = false;
@@ -137,6 +139,7 @@ public sealed class vOverlaps : Command
         if (idx == idxRemove)
         {
           var goRm = new GetObject();
+          goRm.EnableTransparentCommands(true);
           goRm.SetCommandPrompt("Remove curves from selection");
           goRm.GeometryFilter    = ObjectType.Curve;
           goRm.SubObjectSelect   = false;

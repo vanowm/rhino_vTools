@@ -577,6 +577,7 @@ public sealed class vUzip : Command
     foreach (var id in selectedIds) doc.Objects.Hide(id, true);
     var conduit = new PlacementPreviewConduit(previewItems, basePoint); conduit.Enabled = true; doc.Views.Redraw();
     var gp = new GetPoint(); gp.SetCommandPrompt("Pick placement point for created parts (Esc to cancel and delete)");
+    gp.EnableTransparentCommands(true);
     var labelOptIdx = gp.AddOption("Label", label); var tailOptIdx = gp.AddOption("Tail", tail.ToString("0.##"));
     gp.DynamicDraw += (_, e) =>
     {
@@ -893,6 +894,7 @@ public sealed class vUzip : Command
     if (need > 0)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.GeometryFilter  = ObjectType.Curve;
       go.SubObjectSelect = false;
       go.EnablePreSelect(false, true);
@@ -1103,6 +1105,7 @@ public sealed class vUzip : Command
           // pre-selected curves highlighted and lets the user add or Shift-remove freely.
           // A single Enter accepts whatever is currently selected — no second prompt needed.
           var gm = new GetObject();
+          gm.EnableTransparentCommands(true);
           gm.SetCommandPrompt($"Select boundary curves for parts ({partsSelectionIds.Count} selected)");
           gm.GeometryFilter = ObjectType.Curve;
           gm.SubObjectSelect = false;
@@ -1198,6 +1201,7 @@ public sealed class vUzip : Command
         {
           // parts=off: single curve click = boundary trim/extend
           var gp2 = new GetObject();
+          gp2.EnableTransparentCommands(true);
           gp2.SetCommandPrompt("Enter to accept; click curve to trim/extend ends");
           gp2.GeometryFilter = ObjectType.Curve; gp2.SubObjectSelect = false;
           gp2.EnablePreSelect(false, true); gp2.DeselectAllBeforePostSelect = true;

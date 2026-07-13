@@ -170,6 +170,7 @@ public class vUzipParts : Command
     {
       var tailOpt = new OptionDouble(tail, 0.0, 1e9);
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt("Select center curve of U-Zip");
       go.GeometryFilter = ObjectType.Curve;
       go.SubObjectSelect = false;
@@ -337,6 +338,7 @@ public class vUzipParts : Command
     doc.Views.Redraw();
 
     var gp = new GetPoint();
+    gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Pick placement point for created parts (Esc to cancel and delete)");
     var labelOptionIndex = gp.AddOption("Label", label);
     var tailOptionIndex = gp.AddOption("Tail", tail.ToString("0.##"));

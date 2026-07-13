@@ -31,6 +31,7 @@ public sealed class vPointTrace : Command
 
     // ── Pick source curve ────────────────────────────────────────────────────
     var goSource = new GetObject();
+    goSource.EnableTransparentCommands(true);
     goSource.SetCommandPrompt("Select source curve at starting end");
     goSource.GeometryFilter = ObjectType.Curve;
     goSource.SubObjectSelect = false;
@@ -51,6 +52,7 @@ public sealed class vPointTrace : Command
 
     // ── Pick destination curve ───────────────────────────────────────────────
     var goDest = new GetObject();
+    goDest.EnableTransparentCommands(true);
     goDest.SetCommandPrompt("Select destination curve at starting end");
     goDest.GeometryFilter = ObjectType.Curve;
     goDest.SubObjectSelect = false;
@@ -84,6 +86,7 @@ public sealed class vPointTrace : Command
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick point along source curve (Enter to finish)");
       gp.AcceptNothing(true);
       gp.Constrain(sourceCurve, allowPickingPointOffObject: false);

@@ -176,6 +176,7 @@ public sealed class vCurveToSpline : Command
 
     var tolerance = doc.ModelAbsoluteTolerance;
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select curves and/or points to convert to InterpCrv");
     go.GeometryFilter = ObjectType.Curve | ObjectType.Point;
     go.AcceptNothing(true);

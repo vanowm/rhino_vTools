@@ -165,6 +165,7 @@ public sealed class vLineLength : Command
   private static PickResult PickCurveWithPreview(RhinoDoc doc, bool canUndo)
   {
     var gp = new GetPoint();
+    gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Hover snapped open curve to preview, click curve to confirm");
     gp.AcceptNumber(true, false);
     gp.AcceptString(true);

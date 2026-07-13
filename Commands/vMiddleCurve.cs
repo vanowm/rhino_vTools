@@ -147,6 +147,7 @@ public sealed class vMiddleCurve : Command
     var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select 2 curves");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -282,6 +283,7 @@ public sealed class vMiddleCurve : Command
       var previewBuild = BuildMiddleCurveAuto(doc, sourceA, sourceB, _seamAllowance);
       var previewLines = previewBuild != null ? CurrentConnectorLines(previewBuild) : new List<Curve>();
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Preview middle curve. Press Enter to create");
       gp.AcceptNothing(true);
       gp.AcceptNumber(true, true);

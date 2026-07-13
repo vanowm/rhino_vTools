@@ -207,6 +207,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     curves    = new List<Curve>();
     curveIds  = new List<Guid>();
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select one or more curves (near start)");
     go.GeometryFilter = ObjectType.Curve;
     go.EnablePreSelect(true, true);
@@ -230,6 +231,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   static void RunLoop(RhinoDoc doc, NotchSession s)
   {
     var gp = new GetPoint();
+    gp.EnableTransparentCommands(true);
     gp.MouseMove += (_, e) =>
     {
       try

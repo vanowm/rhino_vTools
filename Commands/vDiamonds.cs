@@ -169,6 +169,7 @@ public sealed class vDiamonds : Command
       var togCount    = new OptionToggle(_showCount,    "No", "Yes");
 
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick diamond pattern placement point");
       gp.AcceptString(true);
       var idxW        = gp.AddOption("Width",       FmtOpt(_width));

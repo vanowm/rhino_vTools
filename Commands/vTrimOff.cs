@@ -33,6 +33,7 @@ public sealed class vTrimOff : Command
     var tol = doc.ModelAbsoluteTolerance;
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select boundary box, or boundary box plus curves to trim");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;

@@ -255,6 +255,7 @@ public sealed class vBiminiParts : Command
     // ── Stage 1: Select bimini boundary ─────────────────────────────────────
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select bimini boundary curves");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -660,6 +661,7 @@ public sealed class vBiminiParts : Command
       while (true)
       {
         var gp = new GetPoint();
+        gp.EnableTransparentCommands(true);
         gp.SetCommandPrompt($"{prompt} ({i + 1}/{maxCount}). Press Enter to finish, Esc to cancel.");
         gp.AcceptNothing(true);
 

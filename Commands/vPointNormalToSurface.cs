@@ -67,6 +67,7 @@ internal static class PointNormalToSurfaceWorkflow
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick point in space (Enter to finish)");
       gp.AcceptNothing(true);
       gp.AcceptString(true);
@@ -178,6 +179,7 @@ internal static class PointNormalToSurfaceWorkflow
     targetBrep = null;
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select target surface or polysurface");
     go.GeometryFilter = ObjectType.Surface | ObjectType.PolysrfFilter;
 

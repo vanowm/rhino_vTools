@@ -36,6 +36,7 @@ public sealed class vTextFlip : Command
     while (true)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt("Select text or choose action");
       go.SetCommandPromptDefault("Enter to exit");
       go.GeometryFilter = ObjectType.Annotation;

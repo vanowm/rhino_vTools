@@ -351,6 +351,7 @@ public sealed class vLine : Command
   private static FirstPointResult ResolveFirstPoint(RhinoDoc doc, bool initialBothSides, int initialChainMode)
   {
     var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
     getPoint.SetCommandPrompt("Start of line");
     getPoint.AcceptNothing(true);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
@@ -444,6 +445,7 @@ public sealed class vLine : Command
     bool canRedo = false)
   {
     var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
     getPoint.SetBasePoint(startPoint, true);
     getPoint.AcceptNumber(true, true);
     getPoint.AcceptNothing(true);
@@ -871,6 +873,7 @@ public sealed class vLine : Command
           if (option.Index == idxPerp)
           {
             var go = new GetObject();
+            go.EnableTransparentCommands(true);
             go.SetCommandPrompt("Select curve for perpendicular");
             go.GeometryFilter = Rhino.DocObjects.ObjectType.Curve;
             var goResult = go.Get();
@@ -969,12 +972,14 @@ public sealed class vLine : Command
           if (option.Index == idxParallel)
           {
             var gDir1 = new GetPoint();
+            gDir1.EnableTransparentCommands(true);
             gDir1.SetCommandPrompt("Direction start point");
             gDir1.AcceptNothing(true);
             if (gDir1.Get() != GetResult.Point) continue;
             var dirPt1 = gDir1.Point();
 
             var gDir2 = new GetPoint();
+            gDir2.EnableTransparentCommands(true);
             gDir2.SetCommandPrompt("Direction end point");
             gDir2.SetBasePoint(dirPt1, true);
             gDir2.DrawLineFromPoint(dirPt1, true);
@@ -994,6 +999,7 @@ public sealed class vLine : Command
           if (option.Index == idxProjectTo)
           {
             var goPrj = new GetObject();
+            goPrj.EnableTransparentCommands(true);
             goPrj.SetCommandPrompt("Select curve, surface, or mesh to project endpoint onto");
             goPrj.GeometryFilter = ObjectType.Curve | ObjectType.Brep | ObjectType.Mesh;
             goPrj.SubObjectSelect = false;
@@ -1656,6 +1662,7 @@ public sealed class vLine : Command
   private static (Curve Curve, Point3d PickPoint)? PickCurveWithPoint(string prompt)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt(prompt);
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;

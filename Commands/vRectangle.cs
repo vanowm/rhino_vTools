@@ -105,6 +105,7 @@ public sealed class vRectangle : Command
     while (true)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt(prompt);
       go.GeometryFilter = ObjectType.Curve;
       go.EnablePreSelect(false, true);
@@ -176,6 +177,7 @@ public sealed class vRectangle : Command
     while (true)
     {
       var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt(defaultCorner.HasValue
         ? "Pick bottom-left corner (Enter for last position)"
         : "Pick bottom-left corner");

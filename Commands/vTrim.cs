@@ -470,6 +470,7 @@ public sealed class vTrim : Command
   private static CutterPick PickCutters(RhinoDoc doc)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select cutting curves or press Enter for AutoClosest");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -523,6 +524,7 @@ public sealed class vTrim : Command
     while (true)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.GeometryFilter = ObjectType.Curve;
       go.SubObjectSelect = false;
       go.EnablePreSelect(false, true);

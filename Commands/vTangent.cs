@@ -31,6 +31,7 @@ public sealed class vTangent : Command
   private static (ObjRef? Ref, CurveEnd End) PickSubjectEnd(string prompt, Guid? requiredId = null)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt(prompt);
     go.GeometryFilter  = ObjectType.Curve;
     go.EnablePreSelect(false, true);
@@ -72,6 +73,7 @@ public sealed class vTangent : Command
   private static (Curve? Curve, Point3d Pick) PickDriverCurve(string prompt, bool allowNone)
   {
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt(prompt);
     go.GeometryFilter  = ObjectType.Curve;
     go.EnablePreSelect(false, true);

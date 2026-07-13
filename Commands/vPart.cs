@@ -91,6 +91,7 @@ public sealed class vPart : Command
     var joinPerimToggle = new OptionToggle(_joinPerim, "No", "Yes");
 
     var go = new GetObject();
+    go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select perimeter curves. Press Enter when done");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -241,6 +242,7 @@ public sealed class vPart : Command
       joinedPreview.Add((geom.Duplicate()!, doc.Layers[attr.LayerIndex]?.Color ?? Color.Cyan));
 
     var gp = new GetPoint();
+    gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Pick placement point for Part");
     gp.AddOptionToggle("Group",         ref groupToggle);
     gp.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);

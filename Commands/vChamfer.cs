@@ -74,6 +74,7 @@ public sealed class vChamfer : Command
     while (true)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt(prompt);
       go.GeometryFilter              = ObjectType.Curve;
       go.SubObjectSelect             = false;
@@ -484,6 +485,7 @@ public sealed class vChamfer : Command
       while (true)
       {
         var get = new GetPoint();
+        get.EnableTransparentCommands(true);
         get.SetCommandPrompt(pointActive
           ? "Chamfer placed at point — Enter to apply"
           : "Press Enter to apply chamfer; pick a point to place at Length distance from point");

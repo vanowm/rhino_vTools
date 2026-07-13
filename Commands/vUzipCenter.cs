@@ -772,6 +772,7 @@ public sealed class vUzipCenter : Command
     if (need > 0)
     {
       var go = new GetObject();
+      go.EnableTransparentCommands(true);
       go.SetCommandPrompt($"Select {need} U-shape curve{(need == 1 ? "" : "s")}");
       go.GeometryFilter  = ObjectType.Curve;
       go.SubObjectSelect = false;
@@ -907,6 +908,7 @@ public sealed class vUzipCenter : Command
         doc.Views.Redraw();
 
         var gp = new GetObject();
+        gp.EnableTransparentCommands(true);
         gp.SetCommandPrompt("Enter to accept, click curve to trim/extend ends");
         gp.GeometryFilter  = ObjectType.Curve;
         gp.SubObjectSelect = false;

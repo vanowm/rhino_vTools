@@ -10,7 +10,7 @@
     <RootNamespace>vTools</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
-    <BuildVersion>$([System.DateTime]::Now.ToString('yy.M.d.HHmm'))</BuildVersion>
+    <BuildVersion>$([System.DateTime]::Now.ToString('yy.M.d.Hmm'))</BuildVersion>
     <Version>$(BuildVersion)</Version>
     <InformationalVersion>$(BuildVersion)</InformationalVersion>
     <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
@@ -68,6 +68,12 @@
 
   <Message Importance="high" Text="vTools build version: $(BuildVersion)" />
 </Target>
+
+  <Target Name="UpdateReadmeVersion" BeforeTargets="CreateReleaseBackup" Condition="'$(Configuration)' == 'Release'">
+    <Exec
+      Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;$path='$(MSBuildProjectDirectory)\README.md'; if (Test-Path -LiteralPath $path) { $text=[System.IO.File]::ReadAllText($path); $line='Tools  ' + [char]0x00B7 + '  v$(Version)'; $updated=[System.Text.RegularExpressions.Regex]::Replace($text, '^Tools.*$', $line, [System.Text.RegularExpressions.RegexOptions]::Multiline); if ($updated -ne $text) { $enc=New-Object System.Text.UTF8Encoding($false); [System.IO.File]::WriteAllText($path,$updated,$enc) } }&quot;" />
+  </Target>
+
 <!-- Create a timestamped snapshot of build outputs after every successful Release build. -->
   <Target Name="CreateReleaseBackup" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
@@ -91,7 +97,7 @@
   <!-- Commit updated version metadata and release plugin binary after successful Release builds. -->
   <Target Name="CommitReleaseVersion" AfterTargets="CreateReleaseBackup" Condition="'$(Configuration)' == 'Release' and '$(AutoCommitVersionOnRelease)' == 'true' and !Exists('$(MSBuildProjectDirectory)\.git\vtools-hold-commits')">
     <PropertyGroup>
-      <ShortTagVersion>$([System.Text.RegularExpressions.Regex]::Match('$(Version)', '^\d{2}\.\d{2}\.\d{2}').Value)</ShortTagVersion>
+      <ShortTagVersion>$([System.Text.RegularExpressions.Regex]::Match('$(Version)', '^\d{2}\.\d{1,2}\.\d{1,2}').Value)</ShortTagVersion>
     </PropertyGroup>
 
     <Exec

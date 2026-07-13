@@ -1,4 +1,4 @@
-Tools  ·  v26.7.3.2104
+Tools  ·  v26.7.13.842
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -26,11 +26,11 @@ vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoComm
   - [vPart](#vpart-flow) *(26.5.18.1742)* — captures a closed perimeter from selected curves (gaps are bridged automatically), collects all visible objects inside the perimeter (curves trimmed at the boundary; other types included whole), and lets the user place the resulting Part with a full preview
   - [vPerpendicularTo](#vperpendicularto-flow) *(26.5.5.757)* — rotates curve A about its nearest endpoint so it is perpendicular to curve B in the active CPlane
   - [vPointNormalToSurface](#vpointnormaltosurface-flow) *(26.4.27.2109)* — places points projected onto the closest surface normal evaluation point
-  - [vPointTrace](#vpointtrace-flow) *(26.7.10.1332)* — maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position
+  - [vPointTrace](#vpointtrace-flow) *(26.4.30.1044)* — maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position
   - [vRectangle](#vrectangle-flow) *(26.4.27.2259)* — creates an axis-aligned rectangle polyline from width/height inputs driven by numeric value or selected curve lengths
   - [vScallop](#vscallop-flow) *(26.4.27.2125)* — creates an arc scallop between two points or along a selected line
   - [vSetPt](#vsetpt-flow) *(26.5.28.1145)* — aligns the closest-together endpoints of selected open curves to a user-specified location using the built-in SetPt
-  - [vSplit](#vsplit-flow) *(26.7.13.808)* — interactively splits selected curves at picked real point markers with cyan remove preview, point snapping, and hidden Undo/Redo
+  - [vSplit](#vsplit-flow) *(26.7.9.1647)* — interactively splits selected curves at picked real point markers with cyan remove preview and point snapping
   - [vSplitAtCorners](#vsplitatcorners-flow) *(26.4.27.2125)* — splits curves at detected corners with interactive per-corner toggle preview
   - [vTangent](#vtangent-flow) *(26.5.5.757)* — moves a curve rigidly so one or both endpoints align tangentially to selected driver curves
   - [vTextAligned](#vtextaligned-flow) *(26.4.27.2125)* — places or repositions annotation text aligned and offset along a selected curve
@@ -617,7 +617,7 @@ Example:
 When the plug-in loads, Rhino's command history shows:
 
 ```
-vTools v26.7.3.HHMM loaded — N commands: vBiminiParts, vChamfer, ...
+vTools v26.7.3.HMM loaded — N commands: vBiminiParts, vChamfer, ...
 ```
 
 The same line plus the DLL path is written to `logs/debug.log`.
@@ -628,7 +628,7 @@ The same line plus the DLL path is written to `logs/debug.log`.
 
 ## Versioning
 
-This project uses CalVer-style metadata (YY.MM.DD.HHMMSS) in project and assembly informational versions.
+This project uses CalVer-style metadata (`yy.m.d.hmm`) in project and assembly versions, with no seconds and non-padded month/day/hour.
 
 ## License
 

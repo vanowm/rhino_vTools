@@ -1,4 +1,4 @@
-Tools  ·  v26.7.13.1207
+Tools  ·  v26.7.13.1210
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -36,7 +36,7 @@ vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoComm
   - [vTextFlip](#vtextflip-flow) *(26.4.27.2125)* — flips or rotates annotation text around its object plane
   - [vTitle](#vtitle-flow) *(26.7.1.1755)* — places or edits a titled annotation text box with optional bounding rectangle; hover to highlight, click existing to edit
   - [vToggleAxes](#vtoggleaxes-flow) *(26.6.22.1811)* — toggles visible viewport axes (grid/construction axes plus display-mode Z axis)
-  - [vToggleControlPoints](#vtogglecontrolpoints-flow) *(26.7.13.1046)* — toggles selected objects between edit points and control points based on currently visible point mode
+  - [vToggleControlPoints](#vtogglecontrolpoints-flow) *(26.7.13.1046)* — toggles selected objects to edit grips when control points are visible, otherwise to control points
   - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected control point grips
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join
   - [vTrimOff](#vtrimoff-flow) *(26.5.18.849)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
@@ -506,9 +506,8 @@ Notes:
 1. Select objects or selected point grips.
 1. Run `vToggleControlPoints`.
 1. The command is transparent, so it can be run while another Rhino command is active.
-1. If no edit/control points are visible, edit points are shown first.
-1. If edit points are visible, the command switches to control points where supported.
-1. If control points are visible, the command switches back to edit points.
+1. If any selected curve has control points visible, the command switches the selection to edit grips.
+1. Otherwise, the command switches the selection to control points where supported.
 1. Run with nothing selected to turn points off.
 
 ### vTogglePerpGumball flow

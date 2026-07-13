@@ -31,81 +31,28 @@ public sealed class vToggleControlPoints : Command
       return Result.Success;
     }
 
-    var displayMode = SelectionDisplayMode(doc, context);
-    Log.Write(Tag, $"selection mode={displayMode}");
+    var controlPointsShown = SelectionHasControlPointsShown(doc, context);
+    Log.Write(Tag, $"selection controlPointsShown={controlPointsShown}");
 
-    if (displayMode == PointDisplayMode.ControlPoints)
+    if (controlPointsShown)
       ShowEditPoints(doc, context);
-    else if (displayMode == PointDisplayMode.EditPoints)
-      ShowControlPoints(doc, context);
     else
-      ShowEditPoints(doc, context);
+      ShowControlPoints(doc, context);
 
     return Result.Success;
   }
 
-  private static PointDisplayMode SelectionDisplayMode(RhinoDoc doc, SelectionContext context)
+  private static bool SelectionHasControlPointsShown(RhinoDoc doc, SelectionContext context)
   {
     var (controlPointCapable, _) = SplitEditPointOnly(doc, context.ObjectIds);
-    if (controlPointCapable.Count == 0)
-      return PointDisplayMode.None;
 
-    var capable = new HashSet<Guid>(controlPointCapable);
-    if (context.PointRecords.Count > 0)
+    foreach (var id in controlPointCapable)
     {
-      var pointRecordMode = PointRecordMode(doc, context.PointRecords.Where(r => capable.Contains(r.OwnerId)));
-      if (pointRecordMode != PointDisplayMode.None)
-        return pointRecordMode;
+      if (ObjectDisplayMode(doc, id) == PointDisplayMode.ControlPoints)
+        return true;
     }
 
-    if (context.SubObjectOnly)
-      return PointDisplayMode.EditPoints;
-
-    var checkIds = new List<Guid>();
-    var seen = new HashSet<Guid>();
-    foreach (var record in context.PointRecords)
-    {
-      if (capable.Contains(record.OwnerId))
-        AddUniqueExistingId(doc, checkIds, seen, record.OwnerId);
-    }
-
-    if (checkIds.Count == 0)
-    {
-      foreach (var id in controlPointCapable)
-        AddUniqueExistingId(doc, checkIds, seen, id);
-    }
-
-    var foundEditPoints = false;
-    foreach (var id in checkIds)
-    {
-      var objectMode = ObjectDisplayMode(doc, id);
-      if (objectMode == PointDisplayMode.ControlPoints)
-        return PointDisplayMode.ControlPoints;
-      if (objectMode == PointDisplayMode.EditPoints)
-        foundEditPoints = true;
-    }
-
-    return foundEditPoints ? PointDisplayMode.EditPoints : PointDisplayMode.None;
-  }
-
-  private static PointDisplayMode PointRecordMode(RhinoDoc doc, IEnumerable<PointRecord> pointRecords)
-  {
-    var foundEditPoints = false;
-    var tolerance = OnGeometryTolerance(doc);
-
-    foreach (var record in pointRecords)
-    {
-      var distance = DistanceToGeometry(doc, record.OwnerId, record.Point);
-      if (!distance.HasValue)
-        continue;
-
-      if (distance.Value > tolerance)
-        return PointDisplayMode.ControlPoints;
-
-      foundEditPoints = true;
-    }
-
-    return foundEditPoints ? PointDisplayMode.EditPoints : PointDisplayMode.None;
+    return false;
   }
 
   private static PointDisplayMode ObjectDisplayMode(RhinoDoc doc, Guid objectId)

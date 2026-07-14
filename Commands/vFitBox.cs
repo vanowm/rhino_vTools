@@ -45,7 +45,7 @@ public sealed class vFitBox : Command
   {
     LoadPersistedOptions();
 
-    if (!TryPickObjectsWithOptions(doc, out var objectIds, out var angleStepDeg, out var rotate, out var fitMode))
+    if (!TryPickObjectsWithOptions(doc, out var objectIds, out var angleStepDeg, out var rotate, out var fitMode, out var lastPreviewSizes))
     {
       _angleStepDeg = Clamp(angleStepDeg, MinAngleStepDeg, MaxAngleStepDeg);
       _rotate = rotate;
@@ -115,7 +115,9 @@ public sealed class vFitBox : Command
       }
     }
 
-    RhinoApp.WriteLine(FormatFitSizes(doc, bestFit));
+    var finalSizes = FormatFitSizes(doc, bestFit);
+    if (!string.Equals(finalSizes, lastPreviewSizes, StringComparison.Ordinal))
+      RhinoApp.WriteLine(finalSizes);
 
     SelectFitResultObjects(doc, outputObjectIds, fitId);
     doc.Views.Redraw();
@@ -231,12 +233,14 @@ public sealed class vFitBox : Command
     out List<Guid> objectIds,
     out double angleStepDeg,
     out bool rotate,
-    out string fitMode)
+    out string fitMode,
+    out string lastPreviewSizes)
   {
     objectIds = new List<Guid>();
     angleStepDeg = Clamp(_angleStepDeg, MinAngleStepDeg, MaxAngleStepDeg);
     rotate = _rotate;
     fitMode = NormalizeFitMode(_fitMode);
+    lastPreviewSizes = string.Empty;
 
     var go = new GetObject();
     go.EnableTransparentCommands(true);
@@ -259,6 +263,16 @@ public sealed class vFitBox : Command
     conduit.Enabled = true;
 
     var lastPrintedSizes = string.Empty;
+    var printedPreviewSizes = string.Empty;
+    void PrintPreviewSizes(string sizes)
+    {
+      if (string.IsNullOrEmpty(sizes) || sizes == lastPrintedSizes)
+        return;
+
+      lastPrintedSizes = sizes;
+      printedPreviewSizes = sizes;
+      RhinoApp.WriteLine(sizes);
+    }
 
     // WinForms Timer fires on the UI message-pump thread, which continues running
     // during GetMultiple's modal loop — so it reliably fires 90 ms after the last
@@ -269,11 +283,7 @@ public sealed class vFitBox : Command
       debounceTimer.Stop();
       UpdatePreviewBox(doc, conduit, fitToggle.CurrentValue ? "area" : "height", out var sizes);
       doc.Views.Redraw();
-      if (!string.IsNullOrEmpty(sizes) && sizes != lastPrintedSizes)
-      {
-        lastPrintedSizes = sizes;
-        RhinoApp.WriteLine(sizes);
-      }
+      PrintPreviewSizes(sizes);
     };
 
     // SelectObjects / DeselectObjects: restart the debounce window — no expensive work here.
@@ -302,12 +312,7 @@ public sealed class vFitBox : Command
       var currentFitMode = fitToggle.CurrentValue ? "area" : "height";
       UpdatePreviewBox(doc, conduit, currentFitMode, out var loopSizes);
       doc.Views.Redraw();
-      if ((result == GetResult.Option || result == GetResult.Number) &&
-          !string.IsNullOrEmpty(loopSizes) && loopSizes != lastPrintedSizes)
-      {
-        lastPrintedSizes = loopSizes;
-        RhinoApp.WriteLine(loopSizes);
-      }
+      PrintPreviewSizes(loopSizes);
       if (go.CommandResult() != Result.Success)
       {
         angleStepDeg = angleOption.CurrentValue;
@@ -370,6 +375,7 @@ public sealed class vFitBox : Command
       RhinoDoc.DeselectObjects -= onSelectionChanged;
       debounceTimer.Stop();
       debounceTimer.Dispose();
+      lastPreviewSizes = printedPreviewSizes;
       conduit.PreviewBox = Box.Unset;
       conduit.Enabled = false;
       doc.Views.Redraw();
@@ -856,7 +862,7 @@ public sealed class vFitBox : Command
   /// </summary>
   private static Guid AddFitGeometry(RhinoDoc doc, FitCandidate fit)
   {
-    if (fit.Height <= doc.ModelAbsoluteTolerance)
+    if (fit.Height <= doc.ModelAbsoluteTolerance || IsEffectivelyFlatForSizeDisplay(doc, fit))
     {
       var p0 = fit.Plane.PointAt(fit.MinX, fit.MinY, fit.MinZ);
       var p1 = fit.Plane.PointAt(fit.MaxX, fit.MinY, fit.MinZ);

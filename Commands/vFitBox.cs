@@ -205,11 +205,8 @@ public sealed class vFitBox : Command
 
   private static string FormatFitSizes(RhinoDoc doc, FitCandidate fit)
   {
-    var flat = fit.Mode == "2d" || IsEffectivelyFlatForSizeDisplay(doc, fit);
-    var outWidth = flat ? Math.Max(fit.Width, fit.Depth) : fit.Width;
-    var outHeight = flat ? Math.Min(fit.Width, fit.Depth) : fit.Height;
-    if (outWidth < outHeight)
-      (outWidth, outHeight) = (outHeight, outWidth);
+    var outWidth = Math.Max(fit.Width, fit.Depth);
+    var outHeight = Math.Min(fit.Width, fit.Depth);
     var primaryIsFractional = IsFractionalDisplayMode(doc);
     var wP = FormatLengthByMode(doc, outWidth, primaryIsFractional);
     var hP = FormatLengthByMode(doc, outHeight, primaryIsFractional);

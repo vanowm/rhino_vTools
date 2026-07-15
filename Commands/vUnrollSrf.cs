@@ -33,6 +33,7 @@ namespace vTools.Commands
     private const string FlatGroupPrefix = "MultiUnroll_Flat";
     private const string OriginalGroupPrefix = "MultiUnroll_Original";
     private const string FailureMarkerText = "X";
+    private const string LabelHelperDotPrefix = "__vTools_vUnrollSrf_LabelHelper__";
 
     private const string TextFont = "Arial";
     private const double TextHeightScale = 1.5;
@@ -231,6 +232,7 @@ namespace vTools.Commands
           var curves = surfaceItems.Where(x => x.Kind == FollowingKind.Curve).Select(x => x.Geometry).OfType<Curve>().ToList();
           var points = surfaceItems.Where(x => x.Kind == FollowingKind.Point).Select(x => x.Geometry).OfType<Point>().ToList();
           var dots = surfaceItems.Where(x => x.Kind == FollowingKind.Dot).Select(x => x.Geometry).OfType<TextDot>().ToList();
+          Dbg($"part={number} following_input curves={curves.Count} points={points.Count} dots={dots.Count}");
 
           foreach (var curve in curves)
             unroller.AddFollowingGeometry(curve);
@@ -256,15 +258,20 @@ namespace vTools.Commands
           foreach (var point in points)
             unroller.AddFollowingGeometry(point.Location);
 
-          int labelPointIndex = -1;
-          int labelUpIndex = -1;
+          string? labelPointDotText = null;
+          string? labelUpDotText = null;
+          string? labelRightDotText = null;
           if (frame != null)
           {
-            // Point fallback only. The hidden curves above are preferred for orientation.
-            labelPointIndex = points.Count;
-            unroller.AddFollowingGeometry(frame.Point);
-            labelUpIndex = points.Count + 1;
-            unroller.AddFollowingGeometry(frame.UpPoint);
+            // Dot fallback only. The hidden curves above are preferred for orientation.
+            // Keep these out of unrolledPoints because Rhino can reorder point output,
+            // which made selected user points get hidden or replaced by label helpers.
+            labelPointDotText = LabelHelperDotText(src.Id, number, "point");
+            labelUpDotText = LabelHelperDotText(src.Id, number, "up");
+            labelRightDotText = LabelHelperDotText(src.Id, number, "right");
+            unroller.AddFollowingGeometry(new TextDot(labelPointDotText, frame.Point));
+            unroller.AddFollowingGeometry(new TextDot(labelUpDotText, frame.UpPoint));
+            unroller.AddFollowingGeometry(new TextDot(labelRightDotText, frame.RightPoint));
           }
 
           foreach (var dot in dots)
@@ -365,32 +372,32 @@ namespace vTools.Commands
           var labelPoint = curveLabelPoint;
           var labelUp    = curveLabelUp;
           var labelRight = curveLabelRight;
-          var hiddenPointIndexes = new HashSet<int>();
           if (unrolledPoints != null)
           {
-            if (labelPointIndex >= 0 && labelPointIndex < unrolledPoints.Length)
-            {
-              if (!labelPoint.HasValue)
-                labelPoint = unrolledPoints[labelPointIndex];
-              hiddenPointIndexes.Add(labelPointIndex);
-            }
-            if (labelUpIndex >= 0 && labelUpIndex < unrolledPoints.Length)
-            {
-              if (!labelUp.HasValue)
-                labelUp = unrolledPoints[labelUpIndex];
-              hiddenPointIndexes.Add(labelUpIndex);
-            }
             for (int p = 0; p < unrolledPoints.Length; p++)
-            {
-              if (!hiddenPointIndexes.Contains(p))
-                AddValid(outputIds, doc.Objects.AddPoint(unrolledPoints[p]));
-            }
+              AddValid(outputIds, doc.Objects.AddPoint(unrolledPoints[p]));
           }
 
           if (unrolledDots != null)
           {
             foreach (var dot in unrolledDots)
+            {
+              var dotText = dot.Text ?? string.Empty;
+              if (dotText.StartsWith(LabelHelperDotPrefix, StringComparison.Ordinal))
+              {
+                if (dotText == labelPointDotText && !labelPoint.HasValue)
+                  labelPoint = dot.Point;
+                else if (dotText == labelUpDotText && !labelUp.HasValue)
+                  labelUp = dot.Point;
+                else if (dotText == labelRightDotText && !labelRight.HasValue)
+                  labelRight = dot.Point;
+
+                Dbg($"part={number} hidden_label_dot text={dotText} point={P(dot.Point)}");
+                continue;
+              }
+
               AddValid(outputIds, doc.Objects.AddTextDot(dot));
+            }
           }
 
           Vector3d unrolledY = Vector3d.YAxis;
@@ -430,12 +437,6 @@ namespace vTools.Commands
           // Also capture fallback label pt/up for logging (from unrolled points, before labelPoint override)
           Point3d? fallbackLabelPt  = (labelPoint.HasValue && !curveLabelPoint.HasValue) ? labelPoint : null;
           Point3d? fallbackLabelUp  = (labelUp.HasValue   && !curveLabelUp.HasValue)    ? labelUp    : null;
-          if (!fallbackLabelPt.HasValue && unrolledPoints != null &&
-              labelPointIndex >= 0 && labelPointIndex < unrolledPoints.Length)
-            fallbackLabelPt = unrolledPoints[labelPointIndex];
-          if (!fallbackLabelUp.HasValue && unrolledPoints != null &&
-              labelUpIndex >= 0 && labelUpIndex < unrolledPoints.Length)
-            fallbackLabelUp = unrolledPoints[labelUpIndex];
 
           Dbg($"part={number} label_unrolled" +
               $" curve_pt={P(curveLabelPoint)} curve_up={P(curveLabelUp)} curve_right={P(curveLabelRight)}" +
@@ -1501,6 +1502,11 @@ namespace vTools.Commands
     private static TextDot DuplicateDotAt(TextDot? dot, Point3d point)
     {
       return new TextDot(dot?.Text ?? string.Empty, point);
+    }
+
+    private static string LabelHelperDotText(Guid sourceId, int partNumber, string kind)
+    {
+      return $"{LabelHelperDotPrefix}{partNumber}:{sourceId:N}:{kind}";
     }
 
     private static double? AngleToPageUp(Vector3d vector, double tol)

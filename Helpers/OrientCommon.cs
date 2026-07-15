@@ -84,9 +84,34 @@ internal static class OrientCommon
     out Point3d point,
     Point3d? basePoint = null,
     Point3d? traceFrom = null,
-    IReadOnlyList<PreviewSegment>? previewSegments = null)
+    IReadOnlyList<PreviewSegment>? previewSegments = null,
+    bool canUndo = false)
   {
-    return GetPointCore(doc, prompt, false, ref copyMode, out point, basePoint, traceFrom, previewSegments) == GetResult.Point;
+    return GetPointWithCopyOption(
+      doc,
+      prompt,
+      ref copyMode,
+      out point,
+      basePoint,
+      traceFrom,
+      previewSegments,
+      canUndo) == GetResult.Point;
+  }
+
+  /// <summary>
+  /// Gets one required point. Returns GetResult.Undo when the hidden Undo option is used.
+  /// </summary>
+  internal static GetResult GetPointWithCopyOption(
+    RhinoDoc doc,
+    string prompt,
+    ref bool copyMode,
+    out Point3d point,
+    Point3d? basePoint = null,
+    Point3d? traceFrom = null,
+    IReadOnlyList<PreviewSegment>? previewSegments = null,
+    bool canUndo = false)
+  {
+    return GetPointCore(doc, prompt, false, ref copyMode, out point, basePoint, traceFrom, previewSegments, canUndo);
   }
 
   /// <summary>
@@ -99,9 +124,10 @@ internal static class OrientCommon
     out Point3d point,
     Point3d? basePoint = null,
     Point3d? traceFrom = null,
-    IReadOnlyList<PreviewSegment>? previewSegments = null)
+    IReadOnlyList<PreviewSegment>? previewSegments = null,
+    bool canUndo = false)
   {
-    return GetPointCore(doc, prompt, true, ref copyMode, out point, basePoint, traceFrom, previewSegments);
+    return GetPointCore(doc, prompt, true, ref copyMode, out point, basePoint, traceFrom, previewSegments, canUndo);
   }
 
   private static GetResult GetPointCore(
@@ -112,7 +138,8 @@ internal static class OrientCommon
     out Point3d point,
     Point3d? basePoint,
     Point3d? traceFrom,
-    IReadOnlyList<PreviewSegment>? previewSegments)
+    IReadOnlyList<PreviewSegment>? previewSegments,
+    bool canUndo)
   {
     point = Point3d.Unset;
 
@@ -125,6 +152,7 @@ internal static class OrientCommon
 
     var copyToggle = new OptionToggle(copyMode, "No", "Yes");
     gp.AddOptionToggle("Copy", ref copyToggle);
+    var undoOptionIndex = canUndo ? gp.AddOption("Undo", string.Empty, true) : -1;
 
     previewSegments ??= Array.Empty<PreviewSegment>();
     var faintColor = Color.LightGray;
@@ -152,6 +180,9 @@ internal static class OrientCommon
         var result = gp.Get();
         copyMode = copyToggle.CurrentValue;
 
+        if (result == GetResult.Undo)
+          return GetResult.Undo;
+
         if (result == GetResult.Point)
         {
           point = gp.Point();
@@ -159,7 +190,11 @@ internal static class OrientCommon
         }
 
         if (result == GetResult.Option)
+        {
+          if (canUndo && gp.OptionIndex() == undoOptionIndex)
+            return GetResult.Undo;
           continue;
+        }
 
         return result;
       }

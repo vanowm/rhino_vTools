@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Geometry;
+using Rhino.Input;
 
 namespace vTools.Commands;
 
@@ -28,31 +29,113 @@ public sealed class vOrient2pt : Command
     var copyMode = OrientCommon.LoadCopyOption();
     var previewSegments = new List<OrientCommon.PreviewSegment>();
 
-    if (!OrientCommon.TryGetPointWithCopyOption(doc, "Source first point", ref copyMode, out var sourceOrigin, previewSegments: previewSegments))
+    var sourceOrigin = Point3d.Unset;
+    var targetOrigin = Point3d.Unset;
+    var sourceXAxisPoint = Point3d.Unset;
+    var targetXAxisPoint = Point3d.Unset;
+    var hasSourceOrigin = false;
+    var hasTargetOrigin = false;
+    var step = 0;
+
+    void RefreshPreview()
+    {
+      previewSegments.Clear();
+      if (hasSourceOrigin && hasTargetOrigin)
+        previewSegments.Add(new OrientCommon.PreviewSegment(sourceOrigin, targetOrigin));
+    }
+
+    Result Cancel()
     {
       OrientCommon.SaveCopyOption(copyMode);
       return Result.Cancel;
     }
 
-    if (!OrientCommon.TryGetPointWithCopyOption(doc, "Target first point", ref copyMode, out var targetOrigin, traceFrom: sourceOrigin, previewSegments: previewSegments))
+    while (step < 4)
     {
-      OrientCommon.SaveCopyOption(copyMode);
-      return Result.Cancel;
-    }
-    previewSegments.Add(new OrientCommon.PreviewSegment(sourceOrigin, targetOrigin));
+      RefreshPreview();
+      GetResult pickResult;
 
-    if (!OrientCommon.TryGetPointWithCopyOption(doc, "Source second point", ref copyMode, out var sourceXAxisPoint, previewSegments: previewSegments))
-    {
-      OrientCommon.SaveCopyOption(copyMode);
-      return Result.Cancel;
+      switch (step)
+      {
+        case 0:
+          pickResult = OrientCommon.GetPointWithCopyOption(
+            doc,
+            "Source first point",
+            ref copyMode,
+            out sourceOrigin,
+            previewSegments: previewSegments);
+          if (pickResult != GetResult.Point)
+            return Cancel();
+          hasSourceOrigin = true;
+          step = 1;
+          break;
+
+        case 1:
+          pickResult = OrientCommon.GetPointWithCopyOption(
+            doc,
+            "Target first point",
+            ref copyMode,
+            out targetOrigin,
+            traceFrom: sourceOrigin,
+            previewSegments: previewSegments,
+            canUndo: true);
+          if (pickResult == GetResult.Undo)
+          {
+            hasSourceOrigin = false;
+            sourceOrigin = Point3d.Unset;
+            step = 0;
+            break;
+          }
+          if (pickResult != GetResult.Point)
+            return Cancel();
+          hasTargetOrigin = true;
+          step = 2;
+          break;
+
+        case 2:
+          pickResult = OrientCommon.GetPointWithCopyOption(
+            doc,
+            "Source second point",
+            ref copyMode,
+            out sourceXAxisPoint,
+            previewSegments: previewSegments,
+            canUndo: true);
+          if (pickResult == GetResult.Undo)
+          {
+            hasTargetOrigin = false;
+            targetOrigin = Point3d.Unset;
+            step = 1;
+            break;
+          }
+          if (pickResult != GetResult.Point)
+            return Cancel();
+          step = 3;
+          break;
+
+        default:
+          pickResult = OrientCommon.GetPointWithCopyOption(
+            doc,
+            "Target second point",
+            ref copyMode,
+            out targetXAxisPoint,
+            basePoint: targetOrigin,
+            traceFrom: sourceXAxisPoint,
+            previewSegments: previewSegments,
+            canUndo: true);
+          if (pickResult == GetResult.Undo)
+          {
+            sourceXAxisPoint = Point3d.Unset;
+            step = 2;
+            break;
+          }
+          if (pickResult != GetResult.Point)
+            return Cancel();
+          step = 4;
+          break;
+      }
     }
 
-    if (!OrientCommon.TryGetPointWithCopyOption(doc, "Target second point", ref copyMode, out var targetXAxisPoint, basePoint: targetOrigin, traceFrom: sourceXAxisPoint, previewSegments: previewSegments))
-    {
-      OrientCommon.SaveCopyOption(copyMode);
-      return Result.Cancel;
-    }
-    previewSegments.Add(new OrientCommon.PreviewSegment(sourceXAxisPoint, targetXAxisPoint));
+    previewSegments.Clear();
 
     if (!OrientCommon.TryBuildPlaneFromTwoPoints(doc, sourceOrigin, sourceXAxisPoint, out var sourcePlane) ||
         !OrientCommon.TryBuildPlaneFromTwoPoints(doc, targetOrigin, targetXAxisPoint, out var targetPlane))

@@ -237,6 +237,7 @@ public sealed class vFacing : Command
     go.AlreadySelectedObjectSelect = true;
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(true);
+    go.AcceptNumber(true, false);
 
     while (true)
     {
@@ -259,6 +260,16 @@ public sealed class vFacing : Command
             _size = sv;
         }
         SaveOptions();
+        continue;
+      }
+      if (res == GetResult.Number)
+      {
+        var n = go.Number();
+        if (n > 0.0)
+        {
+          _size = n;
+          SaveOptions();
+        }
         continue;
       }
       if (go.CommandResult() != Result.Success) { SaveOptions(); return false; }
@@ -659,6 +670,7 @@ public sealed class vFacing : Command
     goBase.SubObjectSelect = false;
     goBase.DeselectAllBeforePostSelect = false;
     goBase.EnablePreSelect(false, false);
+    goBase.AcceptNumber(true, false);
 
     // Restrict selection to only our temporary objects
     goBase.SetCustomGeometryFilter((obj, _, _) => tempIds.Contains(obj.Id));
@@ -669,9 +681,11 @@ public sealed class vFacing : Command
       goBase.ClearCommandOptions();
       goBase.AddOptionDouble("Size", ref sizeOpt);
       goRes = goBase.Get();
+      if (goRes == GetResult.Number)
+        sizeOpt.CurrentValue = Math.Max(goBase.Number(), 0.001);
       _size = sizeOpt.CurrentValue;
     }
-    while (goRes == GetResult.Option);
+    while (goRes == GetResult.Option || goRes == GetResult.Number);
 
     // Remove temporary objects
     foreach (var id in tempIds) doc.Objects.Delete(id, true);

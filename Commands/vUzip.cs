@@ -578,6 +578,7 @@ public sealed class vUzip : Command
     var conduit = new PlacementPreviewConduit(previewItems, basePoint); conduit.Enabled = true; doc.Views.Redraw();
     var gp = new GetPoint(); gp.SetCommandPrompt("Pick placement point for created parts (Esc to cancel and delete)");
     gp.EnableTransparentCommands(true);
+    gp.AcceptNumber(true, false);
     var labelOptIdx = gp.AddOption("Label", label); var tailOptIdx = gp.AddOption("Tail", tail.ToString("0.##"));
     gp.DynamicDraw += (_, e) =>
     {
@@ -588,6 +589,12 @@ public sealed class vUzip : Command
     while (true)
     {
       var result = gp.Get();
+      if (result == GetResult.Number)
+      {
+        var newTail = Math.Max(0.0, gp.Number());
+        if (Math.Abs(newTail - tail) > RhinoMath.ZeroTolerance) { conduit.Enabled = false; return (true, label, newTail); }
+        continue;
+      }
       if (result == GetResult.Option)
       {
         var opt = gp.Option();

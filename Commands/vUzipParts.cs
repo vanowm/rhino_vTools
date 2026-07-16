@@ -340,6 +340,7 @@ public class vUzipParts : Command
     var gp = new GetPoint();
     gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Pick placement point for created parts (Esc to cancel and delete)");
+    gp.AcceptNumber(true, false);
     var labelOptionIndex = gp.AddOption("Label", label);
     var tailOptionIndex = gp.AddOption("Tail", tail.ToString("0.##"));
     // DynamicDraw: draw preview for smooth cursor tracking and keep conduit CurrentPoint in sync.
@@ -368,6 +369,19 @@ public class vUzipParts : Command
     while (true)
     {
       var result = gp.Get();
+
+      if (result == GetResult.Number)
+      {
+        var newTail = Math.Max(0.0, gp.Number());
+        if (Math.Abs(newTail - tail) > RhinoMath.ZeroTolerance)
+        {
+          gp.DynamicDraw -= handler;
+          conduit.Enabled = false;
+          return (true, label, newTail);
+        }
+
+        continue;
+      }
 
       if (result == GetResult.Option)
       {

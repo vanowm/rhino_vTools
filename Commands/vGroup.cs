@@ -113,6 +113,7 @@ public sealed class vGroup : Command
         var go = new GetOption();
         go.SetCommandPrompt("Adjust boundary tolerance. Press Enter to create groups");
         go.AcceptNothing(true);
+        go.AcceptNumber(true, true);
         go.AddOptionDouble("Tolerance", ref toleranceOption);
 
         var result = go.Get();
@@ -122,10 +123,13 @@ public sealed class vGroup : Command
         if (result == GetResult.Nothing)
           return true;
 
-        if (result != GetResult.Option)
+        if (result != GetResult.Option && result != GetResult.Number)
           return false;
 
-        var nextTolerance = Math.Max(toleranceOption.CurrentValue, RhinoMath.ZeroTolerance);
+        var nextTolerance = result == GetResult.Number
+          ? Math.Max(go.Number(), RhinoMath.ZeroTolerance)
+          : Math.Max(toleranceOption.CurrentValue, RhinoMath.ZeroTolerance);
+        toleranceOption.CurrentValue = nextTolerance;
         if (Math.Abs(nextTolerance - boundaryTolerance) <= RhinoMath.ZeroTolerance)
           continue;
 

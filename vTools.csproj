@@ -10,7 +10,7 @@
     <RootNamespace>vTools</RootNamespace>
     <LangVersion>latest</LangVersion>
     <Deterministic>true</Deterministic>
-    <BuildVersion>$([System.DateTime]::Now.ToString('yy.M.d.Hmm'))</BuildVersion>
+    <BuildVersion>0.0.0.0</BuildVersion>
     <Version>$(BuildVersion)</Version>
     <InformationalVersion>$(BuildVersion)</InformationalVersion>
     <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
@@ -44,6 +44,22 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="ComputeSourceBuildVersion" BeforeTargets="GenerateBuildVersionInfo;UpdateReadmeVersion;CommitReleaseVersion">
+    <Exec
+      ConsoleToMSBuild="true"
+      StandardOutputImportance="low"
+      Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;$root='$(MSBuildProjectDirectory)'; $files=Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.cs' | Where-Object { $_.FullName -notmatch '\\(bin|obj|logs|backups|\.git)\\' -and $_.Name -notlike '*.Generated*' }; $latest=$files | Sort-Object LastWriteTime -Descending | Select-Object -First 1; if ($latest) { $latest.LastWriteTime.ToString('yy.M.d.Hmm') } else { [DateTime]::Now.ToString('yy.M.d.Hmm') }&quot;">
+      <Output TaskParameter="ConsoleOutput" PropertyName="BuildVersion" />
+    </Exec>
+
+    <PropertyGroup>
+      <Version>$(BuildVersion)</Version>
+      <InformationalVersion>$(BuildVersion)</InformationalVersion>
+      <AssemblyVersion>$(BuildVersion)</AssemblyVersion>
+      <FileVersion>$(BuildVersion)</FileVersion>
+    </PropertyGroup>
+  </Target>
 
   <Target Name="GenerateBuildVersionInfo" BeforeTargets="CoreCompile">
   <PropertyGroup>

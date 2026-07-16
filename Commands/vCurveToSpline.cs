@@ -20,8 +20,10 @@ public sealed class vCurveToSpline : Command
 {
   private const string OptionsSectionName = "vCurveToSpline";
   private const string JoinModeKey = "joinMode";
+  private const string SmoothCloseKey = "smoothClose";
   private static readonly string[] JoinModes = { "None", "Connected", "All" };
   private static int _joinModeIndex = 2;
+  private static bool _smoothClose;
 
   /// <summary>Unified representation of a selected curve or point object.</summary>
   private readonly struct Segment
@@ -65,9 +67,9 @@ public sealed class vCurveToSpline : Command
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadPersistedOptions();
-    Log.Write("vCurveToSpline", $"BEGIN joinMode={JoinModes[_joinModeIndex]}");
+    Log.Write("vCurveToSpline", $"BEGIN joinMode={JoinModes[_joinModeIndex]} smoothClose={_smoothClose}");
 
-    var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode);
+    var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode, out var smoothClose);
     _joinModeIndex = Array.IndexOf(JoinModes, joinMode);
     if (_joinModeIndex < 0)
       _joinModeIndex = 2;
@@ -79,11 +81,11 @@ public sealed class vCurveToSpline : Command
       return pickResult;
     }
 
-    Log.Write("vCurveToSpline", $"selected segments={selectedSegments.Count} joinMode={joinMode}");
+    Log.Write("vCurveToSpline", $"selected segments={selectedSegments.Count} joinMode={joinMode} smoothClose={smoothClose}");
     var tolerance = doc.ModelAbsoluteTolerance;
     var newCurveIds = new List<Guid>();
 
-    foreach (var interpCurve in BuildInterpCurves(selectedSegments, joinMode, tolerance))
+    foreach (var interpCurve in BuildInterpCurves(selectedSegments, joinMode, smoothClose, tolerance))
     {
       var id = doc.Objects.AddCurve(interpCurve);
       if (id != Guid.Empty)
@@ -116,21 +118,25 @@ public sealed class vCurveToSpline : Command
       OptionsSectionName,
       section =>
       {
+        var index = _joinModeIndex;
         if (ToolsOptionStore.TryGetString(section, JoinModeKey, out var joinMode))
         {
-          var index = Array.FindIndex(JoinModes, mode => string.Equals(mode, joinMode, StringComparison.OrdinalIgnoreCase));
-          if (index >= 0)
-            return index;
+          var stringIndex = Array.FindIndex(JoinModes, mode => string.Equals(mode, joinMode, StringComparison.OrdinalIgnoreCase));
+          if (stringIndex >= 0)
+            index = stringIndex;
         }
 
         if (ToolsOptionStore.TryGetDouble(section, JoinModeKey, out var numericIndex))
         {
-          var index = (int)Math.Round(numericIndex, MidpointRounding.AwayFromZero);
-          if (index >= 0 && index < JoinModes.Length)
-            return index;
+          var roundedIndex = (int)Math.Round(numericIndex, MidpointRounding.AwayFromZero);
+          if (roundedIndex >= 0 && roundedIndex < JoinModes.Length)
+            index = roundedIndex;
         }
 
-        return _joinModeIndex;
+        if (ToolsOptionStore.TryGetBool(section, SmoothCloseKey, out var smoothClose))
+          _smoothClose = smoothClose;
+
+        return index;
       });
 
     _joinModeIndex = Math.Max(0, Math.Min(JoinModes.Length - 1, loadedIndex));
@@ -142,7 +148,11 @@ public sealed class vCurveToSpline : Command
   private static void SavePersistedOptions()
   {
     var modeName = JoinModes[Math.Max(0, Math.Min(_joinModeIndex, JoinModes.Length - 1))];
-    _ = ToolsOptionStore.Update(OptionsSectionName, section => section[JoinModeKey] = modeName);
+    _ = ToolsOptionStore.Update(OptionsSectionName, section =>
+    {
+      section[JoinModeKey] = modeName;
+      section[SmoothCloseKey] = _smoothClose;
+    });
   }
 
   private static bool TryGetJoinModeIndexFromShortcut(string shortcut, out int joinModeIndex)
@@ -172,10 +182,15 @@ public sealed class vCurveToSpline : Command
   /// <summary>
   /// Gets selected curves and/or points plus join mode, with dynamic preview while editing options.
   /// </summary>
-  private static Result TryGetSelectedSegmentsAndJoinMode(RhinoDoc doc, out List<Segment> segments, out string joinMode)
+  private static Result TryGetSelectedSegmentsAndJoinMode(
+    RhinoDoc doc,
+    out List<Segment> segments,
+    out string joinMode,
+    out bool smoothClose)
   {
     segments = new List<Segment>();
     joinMode = JoinModes[Math.Max(0, Math.Min(_joinModeIndex, JoinModes.Length - 1))];
+    smoothClose = _smoothClose;
 
     var tolerance = doc.ModelAbsoluteTolerance;
     var go = new GetObject();
@@ -189,7 +204,7 @@ public sealed class vCurveToSpline : Command
     go.EnableUnselectObjectsOnExit(false);
     go.DeselectAllBeforePostSelect = false;
 
-    var preview = new InterpPreviewConduit(doc, joinMode, tolerance)
+    var preview = new InterpPreviewConduit(doc, joinMode, smoothClose, tolerance)
     {
       Enabled = true
     };
@@ -203,6 +218,8 @@ public sealed class vCurveToSpline : Command
       {
         go.ClearCommandOptions();
         var joinOptionIndex = go.AddOptionList("Join", JoinModes, _joinModeIndex);
+        var smoothCloseOption = new OptionToggle(_smoothClose, "No", "Yes");
+        var smoothCloseOptionIndex = go.AddOptionToggle("SmoothClose", ref smoothCloseOption);
 
         var getResult = go.GetMultiple(1, 0);
         if (go.CommandResult() != Result.Success)
@@ -211,6 +228,16 @@ public sealed class vCurveToSpline : Command
         if (getResult == GetResult.Option)
         {
           var option = go.Option();
+          if (smoothCloseOption.CurrentValue != _smoothClose)
+          {
+            _smoothClose = smoothCloseOption.CurrentValue;
+            smoothClose = _smoothClose;
+            Log.Write("vCurveToSpline", $"SmoothClose -> {_smoothClose}");
+            preview.SetSmoothClose(_smoothClose);
+            doc.Views.Redraw();
+            SavePersistedOptions();
+          }
+
           if (option != null && option.Index == joinOptionIndex)
           {
             _joinModeIndex = option.CurrentListOptionIndex;
@@ -219,6 +246,10 @@ public sealed class vCurveToSpline : Command
             preview.SetJoinMode(joinMode);
             doc.Views.Redraw();
             SavePersistedOptions();
+          }
+          else if (option != null && option.Index == smoothCloseOptionIndex)
+          {
+            // Value already captured from the toggle above.
           }
           continue;
         }
@@ -243,6 +274,7 @@ public sealed class vCurveToSpline : Command
           segments = SegmentsFromDocumentSelection(doc);
           Log.Write("vCurveToSpline", $"Object: segments={segments.Count} preselected={go.ObjectsWerePreselected}");
           preview.SetJoinMode(joinMode);
+          preview.SetSmoothClose(smoothClose);
           doc.Views.Redraw();
 
           if (go.ObjectsWerePreselected && !preselectedWaitingForEnter)
@@ -339,7 +371,11 @@ public sealed class vCurveToSpline : Command
   /// <summary>
   /// Builds interpolated curves according to selected join mode.
   /// </summary>
-  private static List<Curve> BuildInterpCurves(IReadOnlyList<Segment> segments, string joinMode, double tolerance)
+  private static List<Curve> BuildInterpCurves(
+    IReadOnlyList<Segment> segments,
+    string joinMode,
+    bool smoothClose,
+    double tolerance)
   {
     var interpCurves = new List<Curve>();
 
@@ -352,8 +388,8 @@ public sealed class vCurveToSpline : Command
         ? OrderSegmentsByClosestEndpointPairs(group, tolerance)
         : OrderSegmentsAsChain(group, tolerance);
       var closedOutput = IsClosedOutput(group, orderedChain, tolerance);
-      var interpPoints = BuildInterpPoints(group, orderedChain, tolerance, closedOutput);
-      var interpCurve = CreateInterpCurve(interpPoints, closedOutput, tolerance);
+      var interpPoints = BuildInterpPoints(group, orderedChain, tolerance, closedOutput && !smoothClose);
+      var interpCurve = CreateInterpCurve(interpPoints, closedOutput, smoothClose, tolerance);
       if (interpCurve != null)
         interpCurves.Add(interpCurve);
     }
@@ -924,7 +960,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     IReadOnlyList<Segment> segments,
     IReadOnlyList<(int SegmentIndex, bool Reverse)> orderedChain,
     double tolerance,
-    bool closed)
+    bool closeWithKink)
   {
     var interpPoints = new List<Point3d>();
 
@@ -940,7 +976,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
         interpPoints.AddRange(segPoints);
     }
 
-    if (interpPoints.Count > 2 && closed)
+    if (interpPoints.Count > 2 && closeWithKink)
     {
       if (!PointsMatch(interpPoints[0], interpPoints[^1], tolerance))
         interpPoints.Add(interpPoints[0]);
@@ -956,18 +992,47 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
   /// <summary>
   /// Creates one interpolated curve from a point chain.
   /// </summary>
-  private static Curve? CreateInterpCurve(IReadOnlyList<Point3d> interpPoints, bool closed, double tolerance)
+  private static Curve? CreateInterpCurve(
+    IReadOnlyList<Point3d> interpPoints,
+    bool closed,
+    bool smoothClose,
+    double tolerance)
   {
     if (interpPoints.Count < 2)
       return null;
 
-    var degree = 3;
-    if (interpPoints.Count <= degree)
-      degree = Math.Max(1, interpPoints.Count - 1);
+    static int DegreeFor(int pointCount)
+    {
+      var degree = 3;
+      if (pointCount <= degree)
+        degree = Math.Max(1, pointCount - 1);
+      return degree;
+    }
+
+    if (closed && smoothClose)
+    {
+      var smoothCurve = Curve.CreateInterpolatedCurve(
+        interpPoints,
+        DegreeFor(interpPoints.Count),
+        CurveKnotStyle.ChordPeriodic);
+
+      if (smoothCurve?.IsClosed == true)
+        return smoothCurve;
+
+      Log.Write("vCurveToSpline", "SmoothClose periodic interpolation did not return a closed curve; falling back to kinked close.");
+    }
+
+    var curvePoints = interpPoints;
+    if (closed && (interpPoints.Count < 2 || !PointsMatch(interpPoints[0], interpPoints[^1], tolerance)))
+    {
+      var copiedPoints = interpPoints.ToList();
+      copiedPoints.Add(copiedPoints[0]);
+      curvePoints = copiedPoints;
+    }
 
     var curve = Curve.CreateInterpolatedCurve(
-      interpPoints,
-      degree,
+      curvePoints,
+      DegreeFor(curvePoints.Count),
       CurveKnotStyle.Chord);
 
     if (closed && curve != null && !curve.IsClosed)
@@ -988,13 +1053,15 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     private readonly double _tolerance;
     private readonly Color _color = Color.OrangeRed;
     private string _joinMode;
+    private bool _smoothClose;
     private string _selectionSignature = string.Empty;
     private List<Curve> _previewCurves = new();
 
-    public InterpPreviewConduit(RhinoDoc doc, string joinMode, double tolerance)
+    public InterpPreviewConduit(RhinoDoc doc, string joinMode, bool smoothClose, double tolerance)
     {
       _doc = doc;
       _joinMode = joinMode;
+      _smoothClose = smoothClose;
       _tolerance = tolerance;
     }
 
@@ -1004,6 +1071,12 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     public void SetJoinMode(string joinMode)
     {
       _joinMode = joinMode;
+      _selectionSignature = string.Empty;
+    }
+
+    public void SetSmoothClose(bool smoothClose)
+    {
+      _smoothClose = smoothClose;
       _selectionSignature = string.Empty;
     }
 
@@ -1024,18 +1097,18 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     private void RefreshCacheIfNeeded()
     {
       var selectedObjects = SelectedGeometryObjects(_doc);
-      var signature = BuildSignature(selectedObjects, _joinMode);
+      var signature = BuildSignature(selectedObjects, _joinMode, _smoothClose);
       if (string.Equals(signature, _selectionSignature, StringComparison.Ordinal))
         return;
 
       _selectionSignature = signature;
-      _previewCurves = BuildInterpCurves(SegmentsFromDocumentSelection(_doc), _joinMode, _tolerance);
+      _previewCurves = BuildInterpCurves(SegmentsFromDocumentSelection(_doc), _joinMode, _smoothClose, _tolerance);
     }
 
-    private static string BuildSignature(IEnumerable<RhinoObject> objects, string joinMode)
+    private static string BuildSignature(IEnumerable<RhinoObject> objects, string joinMode, bool smoothClose)
     {
       var ids = string.Join("|", objects.Select(obj => obj.Id.ToString("N")));
-      return joinMode + "::" + ids;
+      return joinMode + "::" + smoothClose + "::" + ids;
     }
   }
 }

@@ -30,16 +30,19 @@ public sealed class vCurveToSpline : Command
     public IReadOnlyList<Point3d> Points { get; }
     private readonly Point3d _start;
     private readonly Point3d _end;
+    private readonly bool _isClosed;
 
-    public Segment(IReadOnlyList<Point3d> points, Point3d start, Point3d end)
+    public Segment(IReadOnlyList<Point3d> points, Point3d start, Point3d end, bool isClosed)
     {
       Points = points;
       _start = start;
       _end = end;
+      _isClosed = isClosed;
     }
 
     public Point3d Start => _start;
     public Point3d End   => _end;
+    public bool IsClosed => _isClosed;
 
     /// <summary>Returns the control-point list, optionally reversed.</summary>
     public IReadOnlyList<Point3d> OrientedPoints(bool reverse)
@@ -313,11 +316,11 @@ public sealed class vCurveToSpline : Command
         for (var i = 0; i < nurbs.Points.Count; i++)
           pts.Add(nurbs.Points[i].Location);
         if (pts.Count >= 1)
-          segments.Add(new Segment(pts, curve.PointAtStart, curve.PointAtEnd));
+          segments.Add(new Segment(pts, curve.PointAtStart, curve.PointAtEnd, curve.IsClosed));
       }
       else if (obj.Geometry is Rhino.Geometry.Point point)
       {
-        segments.Add(new Segment(new[] { point.Location }, point.Location, point.Location));
+        segments.Add(new Segment(new[] { point.Location }, point.Location, point.Location, false));
       }
     }
     return segments;
@@ -344,8 +347,9 @@ public sealed class vCurveToSpline : Command
       var orderedChain = string.Equals(joinMode, "All", StringComparison.OrdinalIgnoreCase)
         ? OrderSegmentsByClosestEndpointPairs(group, tolerance)
         : OrderSegmentsAsChain(group, tolerance);
+      var closedOutput = IsClosedOutput(group, orderedChain, tolerance);
       var interpPoints = BuildInterpPoints(group, orderedChain, tolerance);
-      var interpCurve = CreateInterpCurve(interpPoints);
+      var interpCurve = CreateInterpCurve(interpPoints, closedOutput);
       if (interpCurve != null)
         interpCurves.Add(interpCurve);
     }
@@ -379,6 +383,32 @@ public sealed class vCurveToSpline : Command
            PointsMatch(a.Start, b.End,   tolerance) ||
            PointsMatch(a.End,   b.Start, tolerance) ||
            PointsMatch(a.End,   b.End,   tolerance);
+  }
+
+  /// <summary>
+  /// Returns true when the ordered output should be interpolated as a closed loop.
+  /// </summary>
+  private static bool IsClosedOutput(
+    IReadOnlyList<Segment> segments,
+    IReadOnlyList<(int SegmentIndex, bool Reverse)> orderedChain,
+    double tolerance)
+  {
+    if (orderedChain.Count == 0)
+      return false;
+
+    if (orderedChain.Count == 1)
+      return segments[orderedChain[0].SegmentIndex].IsClosed;
+
+    var first = orderedChain[0];
+    var last = orderedChain[^1];
+    var chainStart = first.Reverse
+      ? segments[first.SegmentIndex].End
+      : segments[first.SegmentIndex].Start;
+    var chainEnd = last.Reverse
+      ? segments[last.SegmentIndex].Start
+      : segments[last.SegmentIndex].End;
+
+    return PointsMatch(chainStart, chainEnd, tolerance);
   }
 
   /// <summary>
@@ -914,7 +944,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
   /// <summary>
   /// Creates one interpolated curve from a point chain.
   /// </summary>
-  private static Curve? CreateInterpCurve(IReadOnlyList<Point3d> interpPoints)
+  private static Curve? CreateInterpCurve(IReadOnlyList<Point3d> interpPoints, bool closed)
   {
     if (interpPoints.Count < 2)
       return null;
@@ -923,7 +953,10 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     if (interpPoints.Count <= degree)
       degree = Math.Max(1, interpPoints.Count - 1);
 
-    return Curve.CreateInterpolatedCurve(interpPoints, degree, CurveKnotStyle.Chord);
+    return Curve.CreateInterpolatedCurve(
+      interpPoints,
+      degree,
+      closed ? CurveKnotStyle.ChordPeriodic : CurveKnotStyle.Chord);
   }
 
   private static bool PointsMatch(Point3d a, Point3d b, double tolerance)

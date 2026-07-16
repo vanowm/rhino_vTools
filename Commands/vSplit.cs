@@ -545,33 +545,9 @@ public sealed class vSplit : Command
     }
   }
 
-  private static GetResult GetWithPointOsnap(GetPoint gp)
+  private static bool PointOsnapEnabled(Rhino.ApplicationSettings.OsnapModes modes)
   {
-    var previous = Rhino.ApplicationSettings.ModelAidSettings.OsnapModes;
-    var restore = false;
-
-    try
-    {
-      Rhino.ApplicationSettings.ModelAidSettings.OsnapModes =
-        previous | Rhino.ApplicationSettings.OsnapModes.Point;
-      restore = true;
-    }
-    catch
-    {
-    }
-
-    try
-    {
-      return gp.Get();
-    }
-    finally
-    {
-      if (restore)
-      {
-        try { Rhino.ApplicationSettings.ModelAidSettings.OsnapModes = previous; }
-        catch { }
-      }
-    }
+    return (modes & Rhino.ApplicationSettings.OsnapModes.Point) == Rhino.ApplicationSettings.OsnapModes.Point;
   }
 
   private static List<SplitTarget>? GetTargetCurves(
@@ -952,6 +928,7 @@ public sealed class vSplit : Command
     var undoStack = new Stack<SplitAction>();
     var redoStack = new Stack<SplitAction>();
     var constraintCurve = BuildConstraintCurve(targets);
+    using var pointOsnap = new PointOsnapSession();
 
     try
     {
@@ -1001,7 +978,7 @@ public sealed class vSplit : Command
           }
         };
 
-        var result = GetWithPointOsnap(gp);
+        var result = pointOsnap.Get(gp);
         if (gp.CommandResult() != Result.Success)
           return false;
 
@@ -1211,6 +1188,74 @@ public sealed class vSplit : Command
     DeleteSplitPointObjects(doc, targets);
     SelectFinalObjects(doc, targets, newIds);
     return newIds;
+  }
+
+  private sealed class PointOsnapSession : IDisposable
+  {
+    private readonly bool _pointWasEnabledByCommand;
+    private bool _pointChangedByUser;
+
+    public PointOsnapSession()
+    {
+      try
+      {
+        var modes = Rhino.ApplicationSettings.ModelAidSettings.OsnapModes;
+        if (PointOsnapEnabled(modes))
+          return;
+
+        Rhino.ApplicationSettings.ModelAidSettings.OsnapModes =
+          modes | Rhino.ApplicationSettings.OsnapModes.Point;
+        _pointWasEnabledByCommand = true;
+      }
+      catch
+      {
+      }
+    }
+
+    public GetResult Get(GetPoint gp)
+    {
+      try
+      {
+        return gp.Get();
+      }
+      finally
+      {
+        TrackUserPointChange();
+      }
+    }
+
+    public void Dispose()
+    {
+      if (!_pointWasEnabledByCommand || _pointChangedByUser)
+        return;
+
+      try
+      {
+        var modes = Rhino.ApplicationSettings.ModelAidSettings.OsnapModes;
+        if (PointOsnapEnabled(modes))
+          Rhino.ApplicationSettings.ModelAidSettings.OsnapModes =
+            modes & ~Rhino.ApplicationSettings.OsnapModes.Point;
+      }
+      catch
+      {
+      }
+    }
+
+    private void TrackUserPointChange()
+    {
+      if (!_pointWasEnabledByCommand || _pointChangedByUser)
+        return;
+
+      try
+      {
+        var modes = Rhino.ApplicationSettings.ModelAidSettings.OsnapModes;
+        if (!PointOsnapEnabled(modes))
+          _pointChangedByUser = true;
+      }
+      catch
+      {
+      }
+    }
   }
 
   private sealed class SplitTarget

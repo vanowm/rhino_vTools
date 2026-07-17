@@ -188,7 +188,9 @@ public sealed class vProjectToSurface : Command
     var ids = new List<Guid>();
     foreach (var curve in curvesToAdd)
     {
-      var id = doc.Objects.AddCurve(curve, attributes.Duplicate());
+      var outputAttributes = attributes.Duplicate();
+      outputAttributes.LayerIndex = doc.Layers.CurrentLayerIndex;
+      var id = doc.Objects.AddCurve(curve, outputAttributes);
       if (id != Guid.Empty)
         ids.Add(id);
     }

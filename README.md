@@ -1,4 +1,4 @@
-Tools  ·  v26.7.16.1432
+Tools  ·  v26.7.17.918
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -384,7 +384,7 @@ Behavior:
 
 1. Select curves and point objects to project.
 1. Select the target surface or polysurface.
-1. Projected point objects and curve pieces are created on the target and selected; source objects are left unchanged.
+1. Projected point objects and curve pieces are created on the target and selected; curve pieces use the current layer and source objects are left unchanged.
 
 Behavior:
 - Curves are pulled to each brep face by closest-point projection.

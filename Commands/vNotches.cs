@@ -328,10 +328,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         break;
     }
 
-    var selectedObjects = doc.Objects.GetSelectedObjects(false, false)
+    var selectedPool = doc.Objects.GetSelectedObjects(false, false)
       .Where(obj => obj.Geometry is Curve && !generatedIds.Contains(obj.Id))
       .ToList();
-    if (selectedObjects.Count == 0)
+    if (selectedPool.Count == 0)
     {
       RhinoApp.WriteLine("vNotches: keep at least one curve selected.");
       SelectBothCurves(doc, s);
@@ -339,6 +339,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
 
     var selectionPoints = new Dictionary<Guid, Point3d>();
+    var getObjectOrder = new List<Guid>();
     for (int i = 0; i < go.ObjectCount; i++)
     {
       var objRef = go.Object(i);
@@ -347,7 +348,27 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       var point = objRef.SelectionPoint();
       if (point != Point3d.Unset)
         selectionPoints[objRef.ObjectId] = point;
+      getObjectOrder.Add(objRef.ObjectId);
     }
+
+    var selectedById = selectedPool.ToDictionary(obj => obj.Id);
+    var orderedIds = new HashSet<Guid>();
+    var selectedObjects = new List<RhinoObject>();
+
+    // Retained curves keep their existing sequence. Newly selected curves follow
+    // GetObject's click order instead of document object-table order.
+    foreach (var id in s.CurveIds)
+      if (selectedById.TryGetValue(id, out var retained) && orderedIds.Add(id))
+        selectedObjects.Add(retained);
+    foreach (var id in getObjectOrder)
+      if (selectedById.TryGetValue(id, out var selected) && orderedIds.Add(id))
+        selectedObjects.Add(selected);
+    foreach (var selected in selectedPool)
+      if (orderedIds.Add(selected.Id))
+        selectedObjects.Add(selected);
+
+    vTools.Log.Write("vNotches", "selection order: " + string.Join(", ",
+      selectedObjects.Select((obj, i) => $"{i + 1}:{obj.Id.ToString("N")[..8]}")));
 
     var selectedIds = selectedObjects.Select(obj => obj.Id).ToHashSet();
     bool changed = false;
@@ -368,7 +389,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       var curve = sourceCurve.DuplicateCurve();
       if (selectionPoints.TryGetValue(rhObj.Id, out var pick))
-        curve = OrientCurveToPickPoint(curve, pick);
+      {
+        curve = OrientCurveToPickPoint(curve, pick, out bool reversed);
+        vTools.Log.Write("vNotches",
+          $"curve {s.Curves.Count + 1} picked {(reversed ? "end" : "start")}");
+      }
+      else
+      {
+        vTools.Log.Write("vNotches",
+          $"curve {s.Curves.Count + 1} has no selection point; source direction retained");
+      }
       AddSessionCurve(s, rhObj, curve);
       retainedIds.Add(rhObj.Id);
       changed = true;
@@ -423,7 +453,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.CurveIds.RemoveAt(curveIndex);
     s.CurveSides = s.CurveSides.Where((_, i) => i != curveIndex).ToArray();
     s.CurveEnabled = s.CurveEnabled.Where((_, i) => i != curveIndex).ToArray();
-    s.CurveDirectionFlipped = s.CurveDirectionFlipped.Where((_, i) => i != curveIndex).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Where((_, i) => i != curveIndex).ToArray();
     s.CurveContextGroupIndices = s.CurveContextGroupIndices.Where((_, i) => i != curveIndex).ToArray();
   }
@@ -439,15 +468,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.CurveIds.Add(rhObj.Id);
     s.CurveSides = s.CurveSides.Append(initialSide).ToArray();
     s.CurveEnabled = s.CurveEnabled.Append(true).ToArray();
-    bool directionFlipped = priorCurveCount < s.SideOrientationCurves.Count &&
-      CurveDirectionsOpposed(curve, s.SideOrientationCurves[priorCurveCount]);
-    s.CurveDirectionFlipped = s.CurveDirectionFlipped.Append(directionFlipped).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Append(-1).ToArray();
     s.CurveContextGroupIndices = s.CurveContextGroupIndices.Append(contextGroup).ToArray();
-    if (priorCurveCount >= s.SideOrientationCurves.Count)
-      s.SideOrientationCurves.Add(curve.DuplicateCurve());
-    vTools.Log.Write("vNotches",
-      $"curve {priorCurveCount + 1} orientation correction={(directionFlipped ? "reversed" : "same")}");
 
     int recordCount = s.NotchRecords.Count;
     s.NotchIdsByCurve.Add(Enumerable.Repeat(Guid.Empty, recordCount).ToList());
@@ -480,16 +502,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     for (int i = 0; i < s.CurveIds.Count && i < s.CurveSides.Length; i++)
       values.Add($"{i + 1}:{s.CurveIds[i].ToString("N")[..8]}={(s.CurveSides[i] ? "Left" : "Right")}");
     return values.Count > 0 ? string.Join(", ", values) : "none";
-  }
-
-  static bool CurveDirectionsOpposed(Curve curve, Curve orientationCurve)
-  {
-    var tangent = curve.TangentAtStart;
-    var orientationTangent = orientationCurve.TangentAtStart;
-    tangent.Z = 0.0;
-    orientationTangent.Z = 0.0;
-    return tangent.Unitize() && orientationTangent.Unitize() &&
-      Vector3d.Multiply(tangent, orientationTangent) < 0.0;
   }
 
   static void RebuildPanelForCurves(RhinoDoc doc, NotchSession s)
@@ -1223,23 +1235,20 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     double lsize = EffectiveLabelSize(s);
     string ltext = s.LabelValueText.Trim();
     bool   canLabel = s.LabelToggle.CurrentValue && ltext.Length > 0 && lsize > doc.ModelAbsoluteTolerance;
-    var referenceTangent = ResolveReferenceTangent(
-      s.Curves, lengths, refIdx, cursorPoint, s.CurveDirectionFlipped);
 
     for (int i = 0; i < s.Curves.Count; i++)
     {
       if (!s.CurveEnabled[i]) continue;
       Point3d? curveCursor = i == refIdx ? cursorPoint : null;
-      Vector3d? tangentHint = i == refIdx ? null : referenceTangent;
       var geom = NotchGeometry(s.Curves[i], lengths[i], nl, no, sides[i], nt, nw,
-        curveCursor, tangentHint);
+        curveCursor, null);
       if (geom == null) continue;
       if (geom is LineCurve lc)           e.Display.DrawLine(lc.Line, System.Drawing.Color.Cyan, 2);
       else if (geom is PolylineCurve plc)  e.Display.DrawPolyline(plc.ToPolyline(), System.Drawing.Color.Cyan, 2);
 
       if (canLabel)
       {
-        GetCurveTangentAndDirection(s.Curves[i], lengths[i], sides[i], curveCursor, tangentHint,
+        GetCurveTangentAndDirection(s.Curves[i], lengths[i], sides[i], curveCursor, null,
           out var tangent, out var direction);
         if (!tangent.IsValid || !direction.IsValid) continue;
 
@@ -1305,7 +1314,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (!tangent.Unitize()) return null;
     }
     tangent = KinkAwareTangent(curve, t.Value, tangent, cursorPoint, tangentHint);
-    tangent = AlignTangentToHint(tangent, tangentHint);
 
     var worldZ   = new Vector3d(0.0, 0.0, 1.0);
     var direction = Vector3d.CrossProduct(worldZ, tangent);
@@ -1486,56 +1494,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (!tangent.Unitize()) { tangent = Vector3d.Unset; return; }
     }
     tangent = KinkAwareTangent(curve, t.Value, tangent, cursorPoint, tangentHint);
-    tangent = AlignTangentToHint(tangent, tangentHint);
 
     var worldZ = new Vector3d(0.0, 0.0, 1.0);
     direction  = Vector3d.CrossProduct(worldZ, tangent);
     if (!direction.Unitize()) { direction = Vector3d.Unset; return; }
     if (side == "Right") direction = -direction;
-  }
-
-  static Vector3d? ResolveReferenceTangent(IReadOnlyList<Curve> curves,
-    IReadOnlyList<double> lengths, int referenceIndex, Point3d? cursorPoint,
-    IReadOnlyList<bool>? directionFlips = null)
-  {
-    if (referenceIndex < 0 || referenceIndex >= curves.Count || referenceIndex >= lengths.Count)
-      return null;
-
-    bool directionFlipped = directionFlips != null && referenceIndex < directionFlips.Count &&
-      directionFlips[referenceIndex];
-    var tangent = ResolveReferenceTangent(
-      curves[referenceIndex], lengths[referenceIndex], cursorPoint, directionFlipped);
-    return tangent;
-  }
-
-  static Vector3d? ResolveReferenceTangent(Curve curve, double lengthFromStart,
-    Point3d? cursorPoint, bool directionFlipped)
-  {
-    GetCurveTangentAndDirection(curve, lengthFromStart, "Left",
-      cursorPoint, null, out var tangent, out _);
-    if (!tangent.IsValid || tangent.IsTiny()) return null;
-    if (directionFlipped) tangent = -tangent;
-    return tangent.IsValid && !tangent.IsTiny() ? tangent : null;
-  }
-
-  static Vector3d AlignTangentToHint(Vector3d tangent, Vector3d? tangentHint)
-  {
-    if (!tangentHint.HasValue) return tangent;
-    var hint = new Vector3d(tangentHint.Value.X, tangentHint.Value.Y, 0.0);
-    if (!hint.Unitize()) return tangent;
-    return Vector3d.Multiply(tangent, hint) < 0.0 ? -tangent : tangent;
-  }
-
-  static int ReferenceCurveIndex(int preferredIndex, bool[]? curveEnabled, int curveCount)
-  {
-    if (preferredIndex >= 0 && preferredIndex < curveCount)
-      return preferredIndex;
-
-    for (int i = 0; i < curveCount; i++)
-      if (curveEnabled == null || i >= curveEnabled.Length || curveEnabled[i])
-        return i;
-
-    return curveCount > 0 ? 0 : -1;
   }
 
   // ── Point at curve arc-length ─────────────────────────────────────────────
@@ -1820,11 +1783,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     var ids = new List<(Guid, Guid?)>();
     string firstSide = sides.Count > 0 ? sides[0] : "Left";
-    int preferredReference = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
-    int referenceIndex = ReferenceCurveIndex(
-      preferredReference, curveEnabled, s.Curves.Count);
-    var referenceTangent = ResolveReferenceTangent(
-      s.Curves, lengths, referenceIndex, cursorPoint, s.CurveDirectionFlipped);
+    int referenceIndex = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
 
     for (int i = 0; i < s.Curves.Count; i++)
     {
@@ -1837,7 +1796,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       string lv = (canLabel && i < labelValues.Count) ? labelValues[i] : "";
       int gi    = i < groupIndices.Length ? groupIndices[i] : -1;
       Point3d? curveCursor = i == referenceIndex ? cursorPoint : null;
-      Vector3d? tangentHint = i == referenceIndex ? null : referenceTangent;
 
       var (nid, lid) = AddNotch(doc, s.Curves[i], lengths[i],
         notchLen, notchOff, sides[i], gi,
@@ -1845,12 +1803,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         canLabel, lv, labelSize,
         notchLayer, labelLayer,
         labelOffset, labelOffsetY,
-        labelCurveSide, curveCursor, tangentHint);
+        labelCurveSide, curveCursor, null);
 
       if (nid != Guid.Empty)
       {
         GetCurveTangentAndDirection(s.Curves[i], lengths[i], sides[i],
-          curveCursor, tangentHint, out var resolvedTangent, out var resolvedDirection);
+          curveCursor, null, out var resolvedTangent, out var resolvedDirection);
         vTools.Log.Write("vNotches",
           $"placed curve={i + 1} side={sides[i]} ref={referenceIndex + 1} " +
           $"tangent=({resolvedTangent.X:0.###},{resolvedTangent.Y:0.###}) " +
@@ -1911,15 +1869,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         continue;
       }
       double d = LengthFromRecord(s.Curves[curveIndex], rec, curveIndex);
-      int referenceIndex = ReferenceCurveIndex(-1, rec.CurveEnabled?.ToArray(), s.Curves.Count);
-      double referenceLength = LengthFromRecord(s.Curves[referenceIndex], rec, referenceIndex);
-      bool directionFlipped = referenceIndex < s.CurveDirectionFlipped.Length &&
-        s.CurveDirectionFlipped[referenceIndex];
-      var referenceTangent = ResolveReferenceTangent(
-        s.Curves[referenceIndex], referenceLength, null, directionFlipped);
-      Vector3d? tangentHint = curveIndex == referenceIndex || !referenceTangent.HasValue
-        ? null
-        : referenceTangent;
       bool lbl = rec.LabelEnabled;
       string lv = (rec.LabelValues != null && curveIndex < rec.LabelValues.Count)
         ? rec.LabelValues[curveIndex] : "";
@@ -1932,7 +1881,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         lbl, lv, rec.LabelSize,
         EffectiveLayerName(doc, rec.NotchLayer, rec.NotchLayer),
         EffectiveLayerName(doc, rec.LabelLayer, rec.NotchLayer),
-        rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null, tangentHint);
+        rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null, null);
       newIds.Add(nid);
       newLabelIds.Add(lid);
     }
@@ -1986,8 +1935,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
     s.Curves[idx].Reverse();
     s.CurveSides[idx] = !s.CurveSides[idx]; // side flips with reverse
-    if (idx < s.SideOrientationCurves.Count)
-      s.SideOrientationCurves[idx].Reverse();
     RebuildCurveNotches(doc, s, idx);
     SelectBothCurves(doc, s);
     s.Panel?.UpdateUndoEnabled();
@@ -2070,10 +2017,21 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static Curve OrientCurveToPickPoint(Curve curve, Point3d pick)
   {
+    return OrientCurveToPickPoint(curve, pick, out _);
+  }
+
+  static Curve OrientCurveToPickPoint(Curve curve, Point3d pick, out bool reversed)
+  {
+    reversed = false;
     if (pick == Point3d.Unset) return curve;
     double sd = pick.DistanceTo(curve.PointAtStart);
     double ed = pick.DistanceTo(curve.PointAtEnd);
-    if (ed < sd) { curve = curve.DuplicateCurve(); curve.Reverse(); }
+    if (ed < sd)
+    {
+      curve = curve.DuplicateCurve();
+      curve.Reverse();
+      reversed = true;
+    }
     return curve;
   }
 
@@ -2157,10 +2115,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public readonly RhinoDoc Doc;
     public readonly List<Curve> Curves;
     public readonly List<Guid>  CurveIds;
-    public readonly List<Curve> SideOrientationCurves;
     public bool[]   CurveSides;  // true = Left
     public bool[]   CurveEnabled;
-    public bool[]   CurveDirectionFlipped;
 
     public OptionDouble NotchLengthOpt;
     public OptionDouble NotchOffsetOpt;
@@ -2241,11 +2197,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       Doc      = doc;
       Curves   = curves;
       CurveIds = curveIds;
-      SideOrientationCurves = curves.Select(curve => curve.DuplicateCurve()).ToList();
 
       CurveSides   = sides;
       CurveEnabled = Enumerable.Repeat(true, curves.Count).ToArray();
-      CurveDirectionFlipped = new bool[curves.Count];
 
       double tol = doc.ModelAbsoluteTolerance;
       NotchLengthOpt    = new OptionDouble(notchLength, tol, 1e9);
@@ -2805,7 +2759,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         },
       };
       multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = {
-        new TableCell(distanceStack, true), new TableCell(_multipleAddButton, false) } });
+        new TableCell(distanceStack, false), new TableCell(_multipleAddButton, false) } });
       var multipleGroup = new GroupBox { Text = "", Content = multipleTable };
       InstallCollapsibleGroupHeader(multipleGroup, multipleTable, "Multiple",
         () => _s.MultipleCollapsed, value => _s.MultipleCollapsed = value);

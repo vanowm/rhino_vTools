@@ -50,8 +50,49 @@ public sealed class vNotches : Rhino.Commands.Command
   static double _multipleEndOffset   = 2.0;
   static int    _multipleNumber      = 2;
   static bool[] _curveSides     = Array.Empty<bool>();
+  static NotchSession? _activeSession;
+  static GetPoint? _activeGetter;
 
   public override string EnglishName => "vNotches";
+
+  internal static Result RunLocalHistory(RhinoDoc doc, bool redo, string source)
+  {
+    var session = _activeSession;
+    var getter = _activeGetter;
+    if (session == null || session.Doc != doc || getter == null)
+      return Result.Nothing;
+
+    GetBaseClass.PostCustomMessage(new NotchHistoryRequest(redo, source));
+    vTools.Log.Write("vNotches", $"{source} {(redo ? "redo" : "undo")} requested");
+    return Result.Success;
+  }
+
+  static void ApplyLocalHistory(RhinoDoc doc, NotchSession session, bool redo, string source)
+  {
+    if (redo)
+    {
+      if (session.RedoBatches.Count == 0)
+      {
+        RhinoApp.WriteLine("vNotches: nothing to redo.");
+        vTools.Log.Write("vNotches", $"{source} redo ignored: empty stack");
+        return;
+      }
+      RedoLastNotch(doc, session);
+    }
+    else
+    {
+      if (session.NotchRecords.Count == 0)
+      {
+        RhinoApp.WriteLine("vNotches: nothing to undo.");
+        vTools.Log.Write("vNotches", $"{source} undo ignored: empty stack");
+        return;
+      }
+      UndoLastNotch(doc, session);
+    }
+
+    vTools.Log.Write("vNotches",
+      $"{source} {(redo ? "redo" : "undo")} handled records={session.NotchRecords.Count} redo={session.RedoBatches.Count}");
+  }
 
   // ── Settings ─────────────────────────────────────────────────────────────
 
@@ -459,6 +500,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     var gp = new GetPoint();
     gp.EnableTransparentCommands(true);
+    gp.AcceptCustomMessage(true);
     gp.MouseMove += (_, e) =>
     {
       try
@@ -505,9 +547,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         $"Rhino Redo ended result={e.CommandResult} localRedo={s.RedoBatches.Count}");
     };
     Rhino.Commands.Command.EndCommand += commandEnded;
+    _activeSession = s;
+    _activeGetter = gp;
+    NotchShortcutSession? shortcutSession = null;
 
     try
     {
+      shortcutSession = new NotchShortcutSession();
       while (true)
       {
         if (s.PanelClosedExit) { FinalizeBlocks(doc, s); return; }
@@ -517,6 +563,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           : "Select a point on any selected curve (notch location)");
         RefreshCommandOptions(gp, s);
         var result = gp.Get();
+
+        if (result == GetResult.CustomMessage && gp.CustomMessage() is NotchHistoryRequest historyRequest)
+        {
+          ApplyLocalHistory(doc, s, historyRequest.Redo, historyRequest.Source);
+          continue;
+        }
 
         if (s.TransparentRedoRequested)
         {
@@ -572,6 +624,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     finally
     {
       Rhino.Commands.Command.EndCommand -= commandEnded;
+      shortcutSession?.Dispose();
+      if (ReferenceEquals(_activeSession, s))
+        _activeSession = null;
+      if (ReferenceEquals(_activeGetter, gp))
+        _activeGetter = null;
       FinalizeBlocks(doc, s);
       var currentPanel = s.Panel;
       if (currentPanel != null)
@@ -2197,6 +2254,73 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public ObjectAttributes Attributes { get; }
   }
 
+  sealed class NotchHistoryRequest
+  {
+    public NotchHistoryRequest(bool redo, string source)
+    {
+      Redo = redo;
+      Source = source;
+    }
+
+    public bool Redo { get; }
+    public string Source { get; }
+  }
+
+  sealed class NotchShortcutSession : IDisposable
+  {
+    readonly string _undoMacro;
+    readonly string _redoMacro;
+    readonly string _alternateRedoMacro;
+    bool _restoreNeeded;
+
+    public NotchShortcutSession()
+    {
+      _undoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+        Rhino.ApplicationSettings.ShortcutKey.CtrlZ) ?? string.Empty;
+      _redoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+        Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
+      _alternateRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+        Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
+
+      try
+      {
+        _restoreNeeded = true;
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlZ, "'_vNotchesUndo");
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vNotchesRedo");
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vNotchesRedo");
+        vTools.Log.Write("vNotches", "installed temporary history shortcuts");
+      }
+      catch (Exception ex)
+      {
+        vTools.Log.Write("vNotches", $"failed to install history shortcuts: {ex.Message}");
+        Dispose();
+      }
+    }
+
+    public void Dispose()
+    {
+      if (!_restoreNeeded) return;
+      _restoreNeeded = false;
+      try
+      {
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlZ, _undoMacro);
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlY, _redoMacro);
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, _alternateRedoMacro);
+        vTools.Log.Write("vNotches", "restored history shortcuts");
+      }
+      catch (Exception ex)
+      {
+        vTools.Log.Write("vNotches", $"failed to restore history shortcuts: {ex.Message}");
+      }
+    }
+  }
+
   // ── Eto panel ─────────────────────────────────────────────────────────────
 
   sealed class NotchPanel : Eto.Forms.Form
@@ -2416,8 +2540,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _undoBtn = new Button { Text = "Undo", Height = 26 };
       _undoBtn.Click += (_, __) =>
       {
-        UndoLastNotch(doc, s);
-        UpdateUndoEnabled();
+        RunLocalHistory(doc, redo: false, source: "panel-button");
       };
       UpdateUndoEnabled();
 
@@ -2476,6 +2599,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       MinimumSize = new Eto.Drawing.Size(280, 0);
       ApplyDynamic();
 
+      KeyDown += (_, e) =>
+      {
+        if (!e.Control || InputEditorFocused()) return;
+        bool redo = e.Key == Keys.Y || (e.Key == Keys.Z && e.Shift);
+        bool undo = e.Key == Keys.Z && !e.Shift;
+        if (!undo && !redo) return;
+        RunLocalHistory(doc, redo, "panel");
+        e.Handled = true;
+      };
+
       Closed += (_, __) =>
       {
         if (!s.SuppressPanelCloseExit)
@@ -2487,6 +2620,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         }
       };
     }
+
+    bool InputEditorFocused() =>
+      _lengthBox.HasFocus ||
+      _offsetBox.HasFocus ||
+      _widthBox.HasFocus ||
+      _labelValueBox.HasFocus ||
+      _labelSizeBox.HasFocus ||
+      _labelOffsetBox.HasFocus ||
+      _labelOffsetYBox.HasFocus ||
+      _multipleStartOffsetStepper.HasFocus ||
+      _multipleEndOffsetStepper.HasFocus ||
+      _multipleNumberStepper.HasFocus;
 
     Control BuildLayout()
     {
@@ -2963,5 +3108,23 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public void UpdateUndoEnabled() =>
       _undoBtn.Enabled = _s.NotchRecords.Count > 0;
   }
+}
+
+[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
+public sealed class vNotchesUndo : Rhino.Commands.Command
+{
+  public override string EnglishName => "vNotchesUndo";
+
+  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+    vNotches.RunLocalHistory(doc, redo: false, source: "shortcut");
+}
+
+[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
+public sealed class vNotchesRedo : Rhino.Commands.Command
+{
+  public override string EnglishName => "vNotchesRedo";
+
+  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+    vNotches.RunLocalHistory(doc, redo: true, source: "shortcut");
 }
 

@@ -1287,6 +1287,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (!tangent.Unitize()) return null;
     }
     tangent = KinkAwareTangent(curve, t.Value, tangent, cursorPoint, tangentHint);
+    tangent = AlignTangentToHint(tangent, tangentHint);
 
     var worldZ   = new Vector3d(0.0, 0.0, 1.0);
     var direction = Vector3d.CrossProduct(worldZ, tangent);
@@ -1467,6 +1468,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (!tangent.Unitize()) { tangent = Vector3d.Unset; return; }
     }
     tangent = KinkAwareTangent(curve, t.Value, tangent, cursorPoint, tangentHint);
+    tangent = AlignTangentToHint(tangent, tangentHint);
 
     var worldZ = new Vector3d(0.0, 0.0, 1.0);
     direction  = Vector3d.CrossProduct(worldZ, tangent);
@@ -1477,13 +1479,32 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   static Vector3d? ResolveReferenceTangent(IReadOnlyList<Curve> curves,
     IReadOnlyList<double> lengths, int referenceIndex, Point3d? cursorPoint)
   {
-    if (!cursorPoint.HasValue || referenceIndex < 0 || referenceIndex >= curves.Count ||
-        referenceIndex >= lengths.Count)
+    if (referenceIndex < 0 || referenceIndex >= curves.Count || referenceIndex >= lengths.Count)
       return null;
 
     GetCurveTangentAndDirection(curves[referenceIndex], lengths[referenceIndex], "Left",
       cursorPoint, null, out var tangent, out _);
     return tangent.IsValid && !tangent.IsTiny() ? tangent : null;
+  }
+
+  static Vector3d AlignTangentToHint(Vector3d tangent, Vector3d? tangentHint)
+  {
+    if (!tangentHint.HasValue) return tangent;
+    var hint = new Vector3d(tangentHint.Value.X, tangentHint.Value.Y, 0.0);
+    if (!hint.Unitize()) return tangent;
+    return Vector3d.Multiply(tangent, hint) < 0.0 ? -tangent : tangent;
+  }
+
+  static int ReferenceCurveIndex(int preferredIndex, bool[]? curveEnabled, int curveCount)
+  {
+    if (preferredIndex >= 0 && preferredIndex < curveCount)
+      return preferredIndex;
+
+    for (int i = 0; i < curveCount; i++)
+      if (curveEnabled == null || i >= curveEnabled.Length || curveEnabled[i])
+        return i;
+
+    return curveCount > 0 ? 0 : -1;
   }
 
   // ── Point at curve arc-length ─────────────────────────────────────────────
@@ -1768,7 +1789,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     var ids = new List<(Guid, Guid?)>();
     string firstSide = sides.Count > 0 ? sides[0] : "Left";
-    int referenceIndex = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
+    int preferredReference = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
+    int referenceIndex = ReferenceCurveIndex(
+      preferredReference, curveEnabled, s.Curves.Count);
     var referenceTangent = ResolveReferenceTangent(
       s.Curves, lengths, referenceIndex, cursorPoint);
 
@@ -1857,6 +1880,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         continue;
       }
       double d = LengthFromRecord(s.Curves[curveIndex], rec, curveIndex);
+      int referenceIndex = ReferenceCurveIndex(-1, rec.CurveEnabled?.ToArray(), s.Curves.Count);
+      double referenceLength = LengthFromRecord(s.Curves[referenceIndex], rec, referenceIndex);
+      GetCurveTangentAndDirection(s.Curves[referenceIndex], referenceLength, "Left",
+        null, null, out var referenceTangent, out _);
+      Vector3d? tangentHint = curveIndex == referenceIndex || !referenceTangent.IsValid
+        ? null
+        : referenceTangent;
       bool lbl = rec.LabelEnabled;
       string lv = (rec.LabelValues != null && curveIndex < rec.LabelValues.Count)
         ? rec.LabelValues[curveIndex] : "";
@@ -1869,7 +1899,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         lbl, lv, rec.LabelSize,
         EffectiveLayerName(doc, rec.NotchLayer, rec.NotchLayer),
         EffectiveLayerName(doc, rec.LabelLayer, rec.NotchLayer),
-        rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null, null);
+        rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null, tangentHint);
       newIds.Add(nid);
       newLabelIds.Add(lid);
     }
@@ -2573,12 +2603,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _fromPrevLbl  = new Label { Text = "-" };
 
       // History buttons
-      _undoBtn = new Button { Text = "Undo", Height = 26 };
+      _undoBtn = new Button { Text = "Undo", Width = 54, Height = 24 };
       _undoBtn.Click += (_, __) =>
       {
         RunLocalHistory(doc, redo: false, source: "panel-undo");
       };
-      _redoBtn = new Button { Text = "Redo", Height = 26 };
+      _redoBtn = new Button { Text = "Redo", Width = 54, Height = 24 };
       _redoBtn.Click += (_, __) =>
       {
         RunLocalHistory(doc, redo: true, source: "panel-redo");
@@ -2776,8 +2806,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From previous"), new TableCell(_fromPrevLbl,  true) } });
       var historyButtons = new StackLayout
       {
-        Orientation = Orientation.Horizontal,
-        Spacing = 4,
+        Orientation = Orientation.Vertical,
+        Spacing = 2,
         VerticalContentAlignment = VerticalAlignment.Center,
         Items =
         {
@@ -2852,13 +2882,42 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       System.Windows.Controls.Button? collapseButton = null;
       System.Windows.Controls.GroupBox? nativeGroup = null;
 
+      static System.Windows.Shapes.Polyline DisclosureChevron(bool collapsed)
+      {
+        var points = new System.Windows.Media.PointCollection();
+        if (collapsed)
+        {
+          points.Add(new System.Windows.Point(4, 2));
+          points.Add(new System.Windows.Point(8, 6));
+          points.Add(new System.Windows.Point(4, 10));
+        }
+        else
+        {
+          points.Add(new System.Windows.Point(2, 4));
+          points.Add(new System.Windows.Point(6, 8));
+          points.Add(new System.Windows.Point(10, 4));
+        }
+
+        return new System.Windows.Shapes.Polyline
+        {
+          Points = points,
+          Stroke = System.Windows.SystemColors.ControlTextBrush,
+          StrokeThickness = 1.5,
+          StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
+          StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+          StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
+          Width = 12,
+          Height = 12,
+        };
+      }
+
       void ApplyCollapsedState()
       {
         bool collapsed = getCollapsed();
         content.Visible = !collapsed;
         if (collapseButton != null)
         {
-          collapseButton.Content = collapsed ? "+" : "-";
+          collapseButton.Content = DisclosureChevron(collapsed);
           collapseButton.ToolTip = collapsed ? $"Restore {title}" : $"Collapse {title}";
         }
         nativeGroup?.InvalidateMeasure();
@@ -2879,6 +2938,26 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
             Orientation = System.Windows.Controls.Orientation.Horizontal,
             VerticalAlignment = System.Windows.VerticalAlignment.Center,
           };
+
+          collapseButton = new System.Windows.Controls.Button
+          {
+            Content = DisclosureChevron(getCollapsed()),
+            Width = 18,
+            Height = 18,
+            Padding = new System.Windows.Thickness(0),
+            Margin = new System.Windows.Thickness(0, 0, 3, 0),
+            Background = System.Windows.Media.Brushes.Transparent,
+            BorderBrush = System.Windows.Media.Brushes.Transparent,
+            HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center,
+            VerticalContentAlignment = System.Windows.VerticalAlignment.Center,
+            Focusable = false,
+          };
+          collapseButton.Click += (_, __) =>
+          {
+            setCollapsed(!getCollapsed());
+            ApplyCollapsedState();
+          };
+          headerPanel.Children.Add(collapseButton);
 
           if (labelToggle)
           {
@@ -2901,22 +2980,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
               VerticalAlignment = System.Windows.VerticalAlignment.Center,
             });
           }
-
-          collapseButton = new System.Windows.Controls.Button
-          {
-            Content = "-",
-            Width = 18,
-            Height = 18,
-            Padding = new System.Windows.Thickness(0),
-            Margin = new System.Windows.Thickness(6, 0, 0, 0),
-            Focusable = false,
-          };
-          collapseButton.Click += (_, __) =>
-          {
-            setCollapsed(!getCollapsed());
-            ApplyCollapsedState();
-          };
-          headerPanel.Children.Add(collapseButton);
         }
 
         native.Header = headerPanel;

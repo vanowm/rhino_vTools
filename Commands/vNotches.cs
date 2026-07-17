@@ -341,11 +341,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     s.CurveSideMemory[s.CurveIds[curveIndex]] = s.CurveSides[curveIndex];
 
-    foreach (var id in s.NotchIdsByCurve[curveIndex])
-      if (id != Guid.Empty) doc.Objects.Delete(id, true);
-    foreach (var id in s.LabelIdsByCurve[curveIndex])
-      if (id.HasValue && id.Value != Guid.Empty) doc.Objects.Delete(id.Value, true);
-
     s.NotchIdsByCurve.RemoveAt(curveIndex);
     s.LabelIdsByCurve.RemoveAt(curveIndex);
     foreach (var ids in s.PlacementIds)
@@ -1850,6 +1845,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public bool CurveSelectionRequested;
     public bool SuppressPanelCloseExit;
     public bool Finalized;
+    public bool NotchCollapsed;
+    public bool LabelCollapsed;
+    public bool MultipleCollapsed;
 
     // Command option indices (set each iteration)
     public int SideOptionIndex, ReverseOptionIndex, UndoOptionIndex;
@@ -2233,7 +2231,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       // Layout
       Content = BuildLayout();
       MinimumSize = new Eto.Drawing.Size(280, 0);
-      Shown += (_, __) => MinimumSize = new Eto.Drawing.Size(280, Size.Height);
       ApplyDynamic();
 
       Closed += (_, __) =>
@@ -2257,7 +2254,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Length"), new TableCell(_lengthBox,      true) } });
       notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Width"),  new TableCell(_widthBox,       true) } });
       notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Offset"), new TableCell(_offsetBox,      true) } });
-      var notchGroup = new GroupBox { Text = "Notch", Content = notchTable };
+      var notchGroup = new GroupBox { Text = "", Content = notchTable };
+      InstallCollapsibleGroupHeader(notchGroup, notchTable, "Notch",
+        () => _s.NotchCollapsed, value => _s.NotchCollapsed = value);
 
       // ── Label group ──────────────────────────────────────────────────────
       var labelHeader = new TableLayout { Spacing = new Eto.Drawing.Size(4, 0) };
@@ -2292,7 +2291,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       labelContent.Items.Add(new StackLayoutItem(labelHeader,   false));
       labelContent.Items.Add(new StackLayoutItem(labelSubTable, false));
       var labelGroup = new GroupBox { Text = "", Content = labelContent };
-      InstallLabelHeaderCheckBox(labelGroup);
+      InstallCollapsibleGroupHeader(labelGroup, labelContent, "Label",
+        () => _s.LabelCollapsed, value => _s.LabelCollapsed = value,
+        labelToggle: true);
 
       // ── Multiple group ───────────────────────────────────────────────────
       var multipleTable = new TableLayout { Padding = new Eto.Drawing.Padding(6), Spacing = new Eto.Drawing.Size(6, 4) };
@@ -2311,7 +2312,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       };
       multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = {
         new TableCell(distanceStack, true), new TableCell(_multipleAddButton, false) } });
-      var multipleGroup = new GroupBox { Text = "Multiple", Content = multipleTable };
+      var multipleGroup = new GroupBox { Text = "", Content = multipleTable };
+      InstallCollapsibleGroupHeader(multipleGroup, multipleTable, "Multiple",
+        () => _s.MultipleCollapsed, value => _s.MultipleCollapsed = value);
 
       // ── Percent / Group ──────────────────────────────────────────────────
       var pgStack = new StackLayout { Orientation = Orientation.Horizontal, Spacing = 10,
@@ -2391,31 +2394,97 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         Height = 22,
       };
 
-    void InstallLabelHeaderCheckBox(GroupBox group)
+    void InstallCollapsibleGroupHeader(GroupBox group, Control content, string title,
+      Func<bool> getCollapsed, Action<bool> setCollapsed, bool labelToggle = false)
     {
-      void Install()
+      System.Windows.Controls.StackPanel? headerPanel = null;
+      System.Windows.Controls.Button? collapseButton = null;
+      System.Windows.Controls.GroupBox? nativeGroup = null;
+
+      void ApplyCollapsedState()
       {
-        if (group.ControlObject is not System.Windows.Controls.GroupBox nativeGroup)
-          return;
-
-        if (_labelHeaderCheck == null)
+        bool collapsed = getCollapsed();
+        content.Visible = !collapsed;
+        if (collapseButton != null)
         {
-          var header = new System.Windows.Controls.CheckBox
-          {
-            Content = "Label",
-            IsChecked = _s.LabelToggle.CurrentValue,
-            VerticalAlignment = System.Windows.VerticalAlignment.Center,
-          };
-          header.Checked += (_, __) => SetLabelEnabledFromHeader(true);
-          header.Unchecked += (_, __) => SetLabelEnabledFromHeader(false);
-          _labelHeaderCheck = header;
+          collapseButton.Content = collapsed ? "+" : "-";
+          collapseButton.ToolTip = collapsed ? $"Restore {title}" : $"Collapse {title}";
         }
-
-        nativeGroup.Header = _labelHeaderCheck;
+        nativeGroup?.InvalidateMeasure();
+        if (Loaded)
+          Application.Instance.AsyncInvoke(ResizePanelToContent);
       }
 
+      void Install()
+      {
+        if (group.ControlObject is not System.Windows.Controls.GroupBox native)
+          return;
+        nativeGroup = native;
+
+        if (headerPanel == null)
+        {
+          headerPanel = new System.Windows.Controls.StackPanel
+          {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            VerticalAlignment = System.Windows.VerticalAlignment.Center,
+          };
+
+          if (labelToggle)
+          {
+            var headerCheck = new System.Windows.Controls.CheckBox
+            {
+              Content = title,
+              IsChecked = _s.LabelToggle.CurrentValue,
+              VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            };
+            headerCheck.Checked += (_, __) => SetLabelEnabledFromHeader(true);
+            headerCheck.Unchecked += (_, __) => SetLabelEnabledFromHeader(false);
+            _labelHeaderCheck = headerCheck;
+            headerPanel.Children.Add(headerCheck);
+          }
+          else
+          {
+            headerPanel.Children.Add(new System.Windows.Controls.TextBlock
+            {
+              Text = title,
+              VerticalAlignment = System.Windows.VerticalAlignment.Center,
+            });
+          }
+
+          collapseButton = new System.Windows.Controls.Button
+          {
+            Content = "-",
+            Width = 18,
+            Height = 18,
+            Padding = new System.Windows.Thickness(0),
+            Margin = new System.Windows.Thickness(6, 0, 0, 0),
+            Focusable = false,
+          };
+          collapseButton.Click += (_, __) =>
+          {
+            setCollapsed(!getCollapsed());
+            ApplyCollapsedState();
+          };
+          headerPanel.Children.Add(collapseButton);
+        }
+
+        native.Header = headerPanel;
+        ApplyCollapsedState();
+      }
+
+      content.Visible = !getCollapsed();
       Install();
       group.Load += (_, __) => Install();
+    }
+
+    void ResizePanelToContent()
+    {
+      if (Content == null)
+        return;
+      Content.UpdateLayout();
+      var preferred = Content.GetPreferredSize();
+      int height = Math.Max(1, (int)Math.Ceiling(preferred.Height));
+      ClientSize = new Eto.Drawing.Size(Math.Max(280, ClientSize.Width), height);
     }
 
     void SetLabelEnabledFromHeader(bool enabled)

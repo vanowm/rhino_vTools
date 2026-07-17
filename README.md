@@ -1,4 +1,4 @@
-Tools  ·  v26.7.17.1031
+Tools  ·  v26.7.17.1040
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -277,6 +277,7 @@ Options persist to `vTools.config.json` under `vMatch`.
 
 1. Select one or two open or closed curves (preselect supported; press Enter to confirm).
 1. A floating **Notches** panel opens. Click positions along the curve(s) to place notches.
+1. Use the small `-` / `+` button in each group header to collapse or restore the Notch, Label, and Multiple settings.
 1. **Notch** group options (panel and command line):
 
     - `Type`: notch shape — `I` (single perpendicular line), `V`, or `U`.
@@ -306,7 +307,7 @@ Options persist to `vTools.config.json` under `vMatch`.
 
     - `Percent`: display the click position as a percentage of total curve length in the distance readout.
     - `Group`: group each notch geometry object with its label.
-    - `Select`: return to individual-curve selection to add curves or Shift-remove existing curves without selecting their groups or ending the command. A curve restores its remembered side when re-added.
+    - `Select`: return to individual-curve selection to add curves or Shift-remove existing curves without selecting their groups or ending the command. Existing placed notches remain in the document, and a curve restores its remembered side when re-added.
     - Per-curve row — `Side N` checkbox: which side of the curve the notch and label are drawn on; `Reverse N` button: flip the curve's travel direction; the last column shows curve length rounded to three decimal places.
     - Distance info: **From start**, **From end**, **From previous** show arc-length values rounded to three decimal places.
     - **Undo** button: removes the most recently placed notch.

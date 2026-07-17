@@ -494,6 +494,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     SyncPanelFromOptions(s);
     UpdateDistanceLabels(s, null, null, null);
 
+    EventHandler<CommandEventArgs> commandEnded = (_, e) =>
+    {
+      if (!string.Equals(e.CommandEnglishName, "Redo", StringComparison.OrdinalIgnoreCase))
+        return;
+      if (e.Document != null && e.Document != doc)
+        return;
+      s.TransparentRedoRequested = true;
+      vTools.Log.Write("vNotches",
+        $"Rhino Redo ended result={e.CommandResult} localRedo={s.RedoBatches.Count}");
+    };
+    Rhino.Commands.Command.EndCommand += commandEnded;
+
     try
     {
       while (true)
@@ -505,6 +517,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           : "Select a point on any selected curve (notch location)");
         RefreshCommandOptions(gp, s);
         var result = gp.Get();
+
+        if (s.TransparentRedoRequested)
+        {
+          s.TransparentRedoRequested = false;
+          RedoLastNotch(doc, s);
+          continue;
+        }
 
         if (s.CurveSelectionRequested)
         {
@@ -552,6 +571,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
     finally
     {
+      Rhino.Commands.Command.EndCommand -= commandEnded;
       FinalizeBlocks(doc, s);
       var currentPanel = s.Panel;
       if (currentPanel != null)
@@ -2027,6 +2047,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public bool PanelNumericPending;
     public bool IgnoreNextNothing;
     public bool CurveSelectionRequested;
+    public bool TransparentRedoRequested;
     public bool SuppressPanelCloseExit;
     public bool Finalized;
     public bool NotchCollapsed;

@@ -3563,7 +3563,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     int CurveViewportHeight()
     {
-      int visibleRows = Math.Clamp(_s.Curves.Count, 1, 2);
+      int visibleRows = Math.Clamp(_s.Curves.Count, 1, 3);
       return (visibleRows * 26) + ((visibleRows - 1) * 2) + 2;
     }
 
@@ -3575,7 +3575,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
 
       native.HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled;
-      native.VerticalScrollBarVisibility = _s.Curves.Count <= 2
+      native.VerticalScrollBarVisibility = _s.Curves.Count <= 3
         ? System.Windows.Controls.ScrollBarVisibility.Hidden
         : System.Windows.Controls.ScrollBarVisibility.Auto;
     }
@@ -3777,17 +3777,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         UseLayoutRounding = true,
         IsHitTestVisible = false,
       };
-      if (active)
+      content.Children.Add(new System.Windows.Controls.Border
       {
-        content.Children.Add(new System.Windows.Controls.Border
-        {
-          BorderBrush = new System.Windows.Media.SolidColorBrush(
-            System.Windows.Media.Color.FromRgb(0, 120, 215)),
-          BorderThickness = new System.Windows.Thickness(1.0),
-          SnapsToDevicePixels = true,
-          IsHitTestVisible = false,
-        });
-      }
+        BorderBrush = new System.Windows.Media.SolidColorBrush(
+          active ? System.Windows.Media.Color.FromRgb(0, 120, 215)
+                :  System.Windows.SystemColors.GrayTextColor),
+        BorderThickness = new System.Windows.Thickness(1.0),
+        SnapsToDevicePixels = true,
+        IsHitTestVisible = false,
+      });
       content.Children.Add(canvas);
       return content;
     }

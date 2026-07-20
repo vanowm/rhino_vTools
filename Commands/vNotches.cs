@@ -1117,13 +1117,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     if (distance > tolerance)
     {
-      for (int interval = 1; ratios.Count < 9999; interval++)
-      {
-        double offset = interval * distance;
-        if (offset >= available - tolerance)
-          break;
-        ratios.Add(offset / available);
-      }
+      // Distance is the minimum spacing. Use only the full intervals that fit;
+      // the last interval absorbs the remainder while the endpoints stay fixed.
+      double rawIntervalCount = available / distance;
+      double ratioTolerance = Math.Max(1e-9, tolerance / Math.Max(distance, tolerance));
+      int intervalCount = rawIntervalCount >= 9999.0
+        ? 9999
+        : Math.Max(1, (int)Math.Floor(rawIntervalCount + ratioTolerance));
+      for (int interval = 1; interval < intervalCount; interval++)
+        ratios.Add((interval * distance) / available);
     }
 
     ratios.Add(1.0);
@@ -2795,8 +2797,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         {
           ToolTip = $"{typeName} notch",
           BackgroundColor = Colors.Transparent,
-          Width = 15,
-          Height = 15,
+          Width = 18,
+          Height = 18,
         };
         _typeButtons[i].Click += (_, __) => SelectNotchType(typeIndex);
         InstallNotchTypeButtonStyle(_typeButtons[i], typeIndex);
@@ -3336,9 +3338,33 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         SnapsToDevicePixels = true,
         UseLayoutRounding = true,
         IsHitTestVisible = false,
+        HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+        VerticalAlignment = System.Windows.VerticalAlignment.Center,
       };
       canvas.Children.Add(glyph);
-      return canvas;
+
+      const double padding = 3.0;
+      var content = new System.Windows.Controls.Grid
+      {
+        Width = size + (padding * 2.0),
+        Height = size + (padding * 2.0),
+        SnapsToDevicePixels = true,
+        UseLayoutRounding = true,
+        IsHitTestVisible = false,
+      };
+      if (active)
+      {
+        content.Children.Add(new System.Windows.Controls.Border
+        {
+          BorderBrush = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(0, 120, 215)),
+          BorderThickness = new System.Windows.Thickness(1.0),
+          SnapsToDevicePixels = true,
+          IsHitTestVisible = false,
+        });
+      }
+      content.Children.Add(canvas);
+      return content;
     }
 
     void InstallNotchTypeButtonStyle(Button button, int typeIndex)
@@ -3346,16 +3372,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (button.ControlObject is not System.Windows.Controls.Button native)
         return;
       bool active = typeIndex == _s.NotchTypeIndex;
-      var accent = new System.Windows.Media.SolidColorBrush(
-        System.Windows.Media.Color.FromRgb(0, 120, 215));
       native.Background = System.Windows.Media.Brushes.Transparent;
-      native.BorderBrush = active ? accent : System.Windows.Media.Brushes.Transparent;
+      native.BorderBrush = System.Windows.Media.Brushes.Transparent;
       native.Padding = new System.Windows.Thickness(0);
-      native.BorderThickness = new System.Windows.Thickness(active ? 1.0 : 0.0);
+      native.BorderThickness = new System.Windows.Thickness(0);
       native.MinWidth = 0;
       native.MinHeight = 0;
-      native.Width = 15;
-      native.Height = 15;
+      native.Width = 18;
+      native.Height = 18;
       native.Focusable = false;
       native.FocusVisualStyle = null;
       native.HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center;

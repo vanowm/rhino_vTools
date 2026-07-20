@@ -3269,7 +3269,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       Content = _scrollable;
       MinimumSize = new Eto.Drawing.Size(280, 0);
       ApplyDynamic();
-      Shown += (_, __) => Application.Instance.AsyncInvoke(ResizePanelToContent);
+      Shown += (_, __) => Application.Instance.AsyncInvoke(() => ResizePanelToContent());
 
       KeyDown += (_, e) =>
       {
@@ -3605,33 +3605,23 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
 
       ClearCurveRowHover();
-      int oldViewportHeight = _curveScrollable.Height;
       CreateCurveRowControls(_s.Doc);
       _curveScrollable.Content = BuildCurveRows();
       _curveScrollable.Height = CurveViewportHeight();
-
-      int heightDelta = _curveScrollable.Height - oldViewportHeight;
-      if (heightDelta != 0)
-      {
-        ClientSize = new Eto.Drawing.Size(
-          ClientSize.Width,
-          Math.Max(1, ClientSize.Height + heightDelta));
-      }
 
       SyncFromSession();
       UpdateMultipleState();
       Application.Instance.AsyncInvoke(() =>
       {
         ConfigureCurveScroller();
-        _curveScrollable.UpdateScrollSizes();
-        _scrollable?.UpdateScrollSizes();
+        ResizePanelToContent(growOnly: true);
       });
     }
 
     public void SetCurveSelectionInProgress(bool selecting)
     {
       _curveSelectionInProgress = selecting;
-      Opacity = selecting ? 0.72 : 1.0;
+      // Opacity = selecting ? 0.72 : 1.0;
       if (_selectCurvesButton.ControlObject is System.Windows.Controls.Button nativeButton)
         ApplySelectButtonState(nativeButton);
     }
@@ -3932,7 +3922,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         }
         nativeGroup?.InvalidateMeasure();
         if (Loaded)
-          Application.Instance.AsyncInvoke(ResizePanelToContent);
+          Application.Instance.AsyncInvoke(() => ResizePanelToContent());
       }
 
       void Install()
@@ -4005,7 +3995,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       group.Load += (_, __) => Install();
     }
 
-    void ResizePanelToContent()
+    void ResizePanelToContent(bool growOnly = false)
     {
       if (_layoutRoot == null)
         return;
@@ -4013,7 +4003,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _curveScrollable?.UpdateScrollSizes();
       _scrollable?.UpdateScrollSizes();
       var preferred = _layoutRoot.GetPreferredSize();
-      int height = Math.Max(1, (int)Math.Ceiling(preferred.Height));
+      int requiredHeight = Math.Max(1, (int)Math.Ceiling(preferred.Height));
+      int height = growOnly
+        ? Math.Max(ClientSize.Height, requiredHeight)
+        : requiredHeight;
       ClientSize = new Eto.Drawing.Size(Math.Max(280, ClientSize.Width), height);
     }
 

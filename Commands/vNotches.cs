@@ -24,7 +24,7 @@ public sealed class vNotches : Rhino.Commands.Command
 
   const string Section            = "vNotches";
   const string SpecialLayerCurrent = "*[Current]*";
-  const string NotchDataPrefix    = "notches.db.";
+  const string NotchDataPrefix    = "notch.";
   const string NotchDataVersion   = "1";
   const double LabelWidthMult     = 0.9;
   const double DefaultLabelOffIn  = 0.1; // inches
@@ -1447,7 +1447,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static GeometryBase? NotchGeometry(Curve curve, double lengthFromStart,
     double notchLength, double notchOffset, string side,
-    string notchType, double notchWidth, Point3d? cursorPoint, KinkTangentChoice? kinkChoice)
+    string notchType, double notchWidth, Point3d? cursorPoint, KinkTangentChoice? kinkChoice,
+    bool logOffsetFit = false)
   {
     var (center, t) = PointAtCurveLength(curve, lengthFromStart);
     if (t == null) return null;
@@ -1509,7 +1510,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
 
     if (notchType == "V")
+    {
+      if (notchOffset > 0.0)
+      {
+        FitNotchLegsToActualOffset(curve, center + direction * notchOffset,
+          notchOffset, "V", tip, ref leftBase, tip, ref rightBase, logOffsetFit);
+      }
       return new PolylineCurve(new[] { leftBase, tip, rightBase });
+    }
 
     if (notchType == "U")
     {
@@ -1517,6 +1525,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       double halfFlat = Math.Max(0.0, notchWidth * 0.1);
       var leftTip  = tip - tangent * halfFlat;
       var rightTip = tip + tangent * halfFlat;
+      if (notchOffset > 0.0)
+      {
+        FitNotchLegsToActualOffset(curve, center + direction * notchOffset,
+          notchOffset, "U", leftTip, ref leftBase, rightTip, ref rightBase, logOffsetFit);
+      }
       return new PolylineCurve(new[] { leftBase, leftTip, rightTip, rightBase });
     }
 
@@ -1595,6 +1608,143 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       return fallback;
 
     return translation;
+  }
+
+  static void FitNotchLegsToActualOffset(Curve sourceCurve, Point3d expectedOffsetPoint,
+    double notchOffset, string notchType,
+    Point3d leftInner, ref Point3d leftOuter,
+    Point3d rightInner, ref Point3d rightOuter,
+    bool logOffsetFit)
+  {
+    double tol = Math.Max(
+      RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.001,
+      RhinoMath.ZeroTolerance * 10.0);
+    var offsetCurves = ClosestNotchOffsetCurves(
+      sourceCurve, expectedOffsetPoint, notchOffset, tol);
+    if (offsetCurves.Count == 0)
+    {
+      if (logOffsetFit)
+        Log.Write("vNotches", $"offset-fit type={notchType} failed: no offset curve");
+      return;
+    }
+
+    try
+    {
+      bool leftHit = TryFitNotchLegEndpoint(
+        sourceCurve, offsetCurves, leftInner, leftOuter, tol,
+        out var fittedLeft, out double leftShift);
+      bool rightHit = TryFitNotchLegEndpoint(
+        sourceCurve, offsetCurves, rightInner, rightOuter, tol,
+        out var fittedRight, out double rightShift);
+
+      if (leftHit)
+        leftOuter = fittedLeft;
+      if (rightHit)
+        rightOuter = fittedRight;
+
+      if (logOffsetFit)
+      {
+        Log.Write("vNotches",
+          $"offset-fit type={notchType} offset={notchOffset:0.###} branches={offsetCurves.Count} " +
+          $"leftHit={leftHit} leftShift={leftShift:0.######} " +
+          $"rightHit={rightHit} rightShift={rightShift:0.######}");
+      }
+    }
+    finally
+    {
+      foreach (var offsetCurve in offsetCurves)
+        offsetCurve.Dispose();
+    }
+  }
+
+  static List<Curve> ClosestNotchOffsetCurves(Curve sourceCurve,
+    Point3d expectedOffsetPoint, double notchOffset, double tolerance)
+  {
+    Curve[]? generated;
+    try
+    {
+      generated = sourceCurve.Offset(
+        expectedOffsetPoint, Vector3d.ZAxis, notchOffset,
+        tolerance, CurveOffsetCornerStyle.Sharp);
+    }
+    catch
+    {
+      generated = null;
+    }
+
+    return generated == null
+      ? new List<Curve>()
+      : generated.Where(offsetCurve => offsetCurve != null).ToList();
+  }
+
+  static bool TryFitNotchLegEndpoint(Curve sourceCurve, IEnumerable<Curve> offsetCurves,
+    Point3d innerPoint, Point3d originalOuterPoint, double tolerance,
+    out Point3d fittedOuterPoint, out double lengthShift)
+  {
+    fittedOuterPoint = originalOuterPoint;
+    lengthShift = 0.0;
+
+    var legDirection = originalOuterPoint - innerPoint;
+    double originalLength = legDirection.Length;
+    if (originalLength <= tolerance || !legDirection.Unitize())
+      return false;
+
+    foreach (var offsetCurve in offsetCurves)
+    {
+      if (!offsetCurve.ClosestPoint(originalOuterPoint, out double closestParameter))
+        continue;
+      if (offsetCurve.PointAt(closestParameter).DistanceTo(originalOuterPoint) <= tolerance)
+        return true;
+    }
+
+    var sourceBounds = sourceCurve.GetBoundingBox(true);
+    double sourceSpan = sourceBounds.IsValid ? sourceBounds.Diagonal.Length : 0.0;
+    double searchLength = Math.Max(
+      originalLength * 4.0,
+      Math.Max(sourceSpan * 2.0, tolerance * 100.0));
+    using var legRay = new LineCurve(
+      innerPoint - legDirection * tolerance,
+      innerPoint + legDirection * searchLength);
+
+    bool found = false;
+    double bestScore = double.MaxValue;
+    double bestLength = originalLength;
+    Point3d bestPoint = originalOuterPoint;
+
+    foreach (var offsetCurve in offsetCurves)
+    {
+      var events = Rhino.Geometry.Intersect.Intersection.CurveCurve(
+        legRay, offsetCurve, tolerance, tolerance);
+      if (events == null)
+        continue;
+
+      foreach (var intersectionEvent in events)
+      {
+        if (!intersectionEvent.IsPoint)
+          continue;
+
+        var point = intersectionEvent.PointA;
+        double legLength = Vector3d.Multiply(point - innerPoint, legDirection);
+        if (legLength <= tolerance)
+          continue;
+
+        double score = Math.Abs(legLength - originalLength);
+        if (score >= bestScore)
+          continue;
+
+        found = true;
+        bestScore = score;
+        bestLength = legLength;
+        bestPoint = point;
+      }
+    }
+
+    if (!found)
+      return false;
+
+    fittedOuterPoint = bestPoint;
+    lengthShift = bestLength - originalLength;
+    return true;
   }
 
   // ── Kink-aware tangent ────────────────────────────────────────────────────
@@ -1996,7 +2146,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       out var tangent, out var direction);
 
     var geom = NotchGeometry(curve, lengthFromStart, notchLength, notchOffset,
-      side, notchType, notchWidth, cursorPoint, kinkChoice);
+      side, notchType, notchWidth, cursorPoint, kinkChoice, logOffsetFit: true);
     if (geom == null) return (Guid.Empty, null);
 
     Guid notchId = Guid.Empty;
@@ -3319,13 +3469,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       }
 
       var stroke = active
-        ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 120, 215))
-        : System.Windows.SystemColors.ControlTextBrush;
+        ? System.Windows.SystemColors.ControlTextBrush //new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 120, 215))
+        : System.Windows.SystemColors.GrayTextBrush;
       var glyph = new System.Windows.Shapes.Polyline
       {
         Points = points,
         Stroke = stroke,
-        StrokeThickness = 1.5,
+        StrokeThickness = active ? 1.5 : 1.5,
         StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
         StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
         StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,

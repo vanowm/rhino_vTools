@@ -1476,8 +1476,32 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       Point3d start, end;
       if (notchOffset > 0.0)
       {
-        start = center + direction * notchOffset;
-        end   = center + direction * Math.Max(0.0, notchOffset - notchLength);
+        var expectedOffsetPoint = center + direction * notchOffset;
+        double offsetTolerance = Math.Max(
+          RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.001,
+          RhinoMath.ZeroTolerance * 10.0);
+        var iOffsetCurves = ClosestNotchOffsetCurves(
+          curve, expectedOffsetPoint, notchOffset, offsetTolerance);
+        try
+        {
+          bool centerHit = TryFindCenterOffsetContact(
+            iOffsetCurves, center, direction, expectedOffsetPoint,
+            offsetTolerance, out var centerContact);
+          start = centerHit ? centerContact : expectedOffsetPoint;
+          end = start - direction * Math.Min(notchLength, notchOffset);
+
+          if (logOffsetFit)
+          {
+            Log.Write("vNotches",
+              $"offset-center type=I hit={centerHit} branches={iOffsetCurves.Count} " +
+              $"expectedError={(centerHit ? centerContact.DistanceTo(expectedOffsetPoint) : 0.0):0.######}");
+          }
+        }
+        finally
+        {
+          foreach (var offsetCurve in iOffsetCurves)
+            offsetCurve.Dispose();
+        }
       }
       else
       {
@@ -1895,13 +1919,20 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         }
 
         double beforeScore = Vector3d.Multiply(cursorDir, dirBefore);
-        double middleScore = Vector3d.Multiply(cursorDir, dirMiddle);
         double afterScore  = Vector3d.Multiply(cursorDir, dirAfter);
+        double middleToBefore = Math.Acos(Math.Clamp(
+          Vector3d.Multiply(dirMiddle, dirBefore), -1.0, 1.0));
+        double middleToAfter = Math.Acos(Math.Clamp(
+          Vector3d.Multiply(dirMiddle, dirAfter), -1.0, 1.0));
+        double cursorToMiddle = Math.Acos(Math.Clamp(
+          Vector3d.Multiply(cursorDir, dirMiddle), -1.0, 1.0));
 
-        const double middleBias = 0.03;
-        middleScore += middleBias;
-
-        if (middleValid && middleScore >= beforeScore && middleScore >= afterScore)
+        // Give the center choice a broad angular sector. The side choices
+        // remain available only near their respective outgoing directions.
+        const double middleSectorFraction = 0.75;
+        double middleHalfWidth = middleSectorFraction *
+          Math.Min(middleToBefore, middleToAfter);
+        if (middleValid && cursorToMiddle <= middleHalfWidth)
         {
           resolvedChoice = KinkTangentChoice.Middle;
           return tanMiddle;
@@ -2968,7 +2999,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     readonly Button[]    _reverseButtons;
     readonly CheckBox[]  _enableChecks;
     readonly Label[]     _curveLengthLabels;
+    readonly CurveRowHoverConduit _curveHoverConduit = new();
     Scrollable? _scrollable;
+    Scrollable? _curveScrollable;
+    Control? _layoutRoot;
     static readonly System.Windows.Style NotchTypeFocusVisualStyle = CreateOutsideFocusStyle();
 
     public NotchPanel(RhinoDoc doc, NotchSession s)
@@ -3243,16 +3277,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ApplyCurveLengthHighlights();
 
       // Layout
+      _layoutRoot = BuildLayout();
       _scrollable = new Scrollable
       {
         Border = BorderType.None,
         ExpandContentWidth = true,
-        ExpandContentHeight = false,
-        Content = BuildLayout(),
+        ExpandContentHeight = true,
+        Content = _layoutRoot,
       };
       Content = _scrollable;
       MinimumSize = new Eto.Drawing.Size(280, 0);
       ApplyDynamic();
+      Shown += (_, __) => Application.Instance.AsyncInvoke(ResizePanelToContent);
 
       KeyDown += (_, e) =>
       {
@@ -3266,6 +3302,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       Closed += (_, __) =>
       {
+        ClearCurveRowHover();
         if (!s.SuppressPanelCloseExit)
         {
           CommitPendingValues();
@@ -3378,16 +3415,33 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       var curveStack = new StackLayout { Orientation = Orientation.Vertical, Spacing = 2 };
       for (int i = 0; i < _s.Curves.Count; i++)
       {
+        int curveIndex = i;
         var row = new StackLayout { Orientation = Orientation.Horizontal, Spacing = 6,
-          VerticalContentAlignment = VerticalAlignment.Center };
+          VerticalContentAlignment = VerticalAlignment.Center, Height = 26 };
         if (_s.Curves.Count > 1 && _enableChecks[i] != null)
           row.Items.Add(new StackLayoutItem(_enableChecks[i], false));
         row.Items.Add(new StackLayoutItem(_sideChecks[i],   false));
         row.Items.Add(new StackLayoutItem(_reverseButtons[i],false));
         row.Items.Add(new StackLayoutItem(null, true));
         row.Items.Add(new StackLayoutItem(_curveLengthLabels[i], false));
+        row.MouseEnter += (_, __) => SetCurveRowHover(curveIndex);
+        row.MouseLeave += (_, __) =>
+        {
+          if (_curveHoverConduit.CurveIndex == curveIndex)
+            ClearCurveRowHover();
+        };
         curveStack.Items.Add(new StackLayoutItem(row));
       }
+      int visibleCurveRows = Math.Clamp(_s.Curves.Count, 1, 2);
+      int curveViewportHeight = (visibleCurveRows * 26) + ((visibleCurveRows - 1) * 2);
+      _curveScrollable = new Scrollable
+      {
+        Border = BorderType.None,
+        ExpandContentWidth = true,
+        ExpandContentHeight = false,
+        Height = curveViewportHeight,
+        Content = curveStack,
+      };
 
       // ── Distance info ────────────────────────────────────────────────────
       var distTable = new TableLayout { Spacing = new Eto.Drawing.Size(6, 2) };
@@ -3429,7 +3483,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       root.Items.Add(new StackLayoutItem(multipleGroup, false));
       root.Items.Add(new StackLayoutItem(labelGroup, false));
       root.Items.Add(new StackLayoutItem(pgStack,    false));
-      root.Items.Add(new StackLayoutItem(curveStack, false));
+      root.Items.Add(new StackLayoutItem(_curveScrollable, true));
       root.Items.Add(new StackLayoutItem(infoRow,    false));
 
       return root;
@@ -3439,6 +3493,26 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       new TableCell(new Label { Text = text, VerticalAlignment = VerticalAlignment.Center });
 
     void Redraw() => _s.Doc.Views.Redraw();
+
+    void SetCurveRowHover(int curveIndex)
+    {
+      if (curveIndex < 0 || curveIndex >= _s.Curves.Count)
+        return;
+      _curveHoverConduit.CurveIndex = curveIndex;
+      _curveHoverConduit.Curve = _s.Curves[curveIndex];
+      _curveHoverConduit.Enabled = true;
+      Redraw();
+    }
+
+    void ClearCurveRowHover()
+    {
+      if (!_curveHoverConduit.Enabled && _curveHoverConduit.Curve == null)
+        return;
+      _curveHoverConduit.Enabled = false;
+      _curveHoverConduit.Curve = null;
+      _curveHoverConduit.CurveIndex = -1;
+      Redraw();
+    }
 
     void ApplyDynamic()
     {
@@ -3765,13 +3839,26 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void ResizePanelToContent()
     {
-      if (Content == null)
+      if (_layoutRoot == null)
         return;
-      Content.UpdateLayout();
+      _layoutRoot.UpdateLayout();
+      _curveScrollable?.UpdateScrollSizes();
       _scrollable?.UpdateScrollSizes();
-      var preferred = Content.GetPreferredSize();
+      var preferred = _layoutRoot.GetPreferredSize();
       int height = Math.Max(1, (int)Math.Ceiling(preferred.Height));
       ClientSize = new Eto.Drawing.Size(Math.Max(280, ClientSize.Width), height);
+    }
+
+    sealed class CurveRowHoverConduit : DisplayConduit
+    {
+      public int CurveIndex { get; set; } = -1;
+      public Curve? Curve { get; set; }
+
+      protected override void DrawForeground(DrawEventArgs e)
+      {
+        if (Curve != null)
+          e.Display.DrawCurve(Curve, System.Drawing.Color.Gold, 4);
+      }
     }
 
     void SetFeatureEnabledFromHeader(bool notch, bool enabled)

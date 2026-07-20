@@ -3280,7 +3280,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       const double size = 12.0;
       const double center = size * 0.5;
-      const double available = 10.5;
+      const double available = 11.25;
       double modelHeight = Math.Max(notchLength, RhinoMath.ZeroTolerance);
       double modelWidth = Math.Max(notchWidth, RhinoMath.ZeroTolerance);
       double scale = Math.Min(available / modelWidth, available / modelHeight);
@@ -3301,7 +3301,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           points.Add(new System.Windows.Point(right, top));
           break;
         case "U":
-          double halfFlat = width * 0.1;
+          // Exaggerate the cap in the tiny icon so U remains distinguishable
+          // from V even when the configured cap is proportionally very short.
+          double halfFlat = width * 0.22;
           points.Add(new System.Windows.Point(left, top));
           points.Add(new System.Windows.Point(center - halfFlat, bottom));
           points.Add(new System.Windows.Point(center + halfFlat, bottom));
@@ -3344,10 +3346,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (button.ControlObject is not System.Windows.Controls.Button native)
         return;
       bool active = typeIndex == _s.NotchTypeIndex;
+      var accent = new System.Windows.Media.SolidColorBrush(
+        System.Windows.Media.Color.FromRgb(0, 120, 215));
       native.Background = System.Windows.Media.Brushes.Transparent;
-      native.BorderBrush = System.Windows.Media.Brushes.Transparent;
+      native.BorderBrush = active ? accent : System.Windows.Media.Brushes.Transparent;
       native.Padding = new System.Windows.Thickness(0);
-      native.BorderThickness = new System.Windows.Thickness(0);
+      native.BorderThickness = new System.Windows.Thickness(active ? 1.0 : 0.0);
       native.MinWidth = 0;
       native.MinHeight = 0;
       native.Width = 15;

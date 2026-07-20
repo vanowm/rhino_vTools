@@ -40,6 +40,8 @@ public sealed class vTextAligned : Command
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadPersistedOptions();
+    Log.Write("vTextAligned",
+      $"BEGIN textLength={_text.Length} height={_height:G9} offset={_offset:G9} rotate={NormalizeRotate(_rotate90) * 90} bothSides={_bothSides}");
 
     Guid? activeCurveId = null;
     Guid? activeTextId = null;
@@ -316,7 +318,7 @@ public sealed class vTextAligned : Command
             effTextPlace, effHeightPlace, _rotate90, upAxis,
             out var plane, out var primarySideSign,
             sideSignHint: placeSideSign, sideDeadband: placeSideDeadband,
-            previewTemplateTextId))
+            previewTemplateTextId, logSolve: true))
       {
         RhinoApp.WriteLine("vTextAligned: could not compute text plane.");
         continue;
@@ -376,7 +378,8 @@ public sealed class vTextAligned : Command
           var oppCursor = curvePoint - sideBaseVec * (primarySideSign * 1000.0);
           if (BuildPlaneFromCurve(doc, curveToUse, t, oppCursor, _offset, _text, _height,
                 NormalizeRotate(_rotate90 + 2), upAxis,
-                out var oppPlane, out _, sideSignHint: 0, sideDeadband: 0.0, previewTemplateTextId))
+                out var oppPlane, out _, sideSignHint: 0, sideDeadband: 0.0,
+                previewTemplateTextId, logSolve: true))
           {
             var secEntity = BuildTextEntity(doc, _text, _height, oppPlane);
             var secAttributes = NewTextAttributes(doc, activeCurveId);
@@ -627,9 +630,27 @@ public sealed class vTextAligned : Command
       if (!plane.IsValid)
         return null;
 
-      // Use the annotation's own plane directly.
-      // This keeps the pick box in the same coordinate system as the real text object.
-      var bbox = textEntity.GetBoundingBox(plane);
+      // Annotation bounds can include a rotated layout box that does not match
+      // the visible glyphs. Measure the exploded glyph outlines in the text's
+      // own plane and retain the annotation box only as a fallback.
+      var bbox = BoundingBox.Empty;
+      var outlines = textEntity.Explode();
+      if (outlines != null)
+      {
+        foreach (var outline in outlines)
+        {
+          if (outline == null)
+            continue;
+
+          var outlineBox = outline.GetBoundingBox(plane);
+          if (outlineBox.IsValid)
+            bbox = bbox.IsValid ? BoundingBox.Union(bbox, outlineBox) : outlineBox;
+        }
+      }
+
+      if (!bbox.IsValid)
+        bbox = textEntity.GetBoundingBox(plane);
+
       if (!bbox.IsValid)
         return null;
 
@@ -666,7 +687,8 @@ public sealed class vTextAligned : Command
     out int sideSign,
     int sideSignHint,
     double sideDeadband,
-    Guid? templateTextId)
+    Guid? templateTextId,
+    bool logSolve = false)
   {
     plane = Plane.Unset;
     sideSign = 0;
@@ -738,10 +760,20 @@ public sealed class vTextAligned : Command
       origin = curvePoint + sideVec * targetGap;
 
       var textHeight = Math.Max(heightValue, RhinoMath.ZeroTolerance);
+      var solveTolerance = Math.Max(
+        RhinoMath.ZeroTolerance * 10.0,
+        Math.Max(1.0, Math.Max(textHeight, targetGap)) * 1e-9);
+
+      if (logSolve)
+      {
+        Log.Write("vTextAligned",
+          $"solve begin textLength={textValue.Length} height={textHeight:G9} targetGap={targetGap:G9} " +
+          $"rotate={quarterTurns * 90} side={resolvedSideSign:G0} template={templateTextId?.ToString() ?? "none"}");
+      }
 
       try
       {
-        for (var i = 0; i < 2; i++)
+        for (var i = 0; i < 3; i++)
         {
           var probePlane = new Plane(origin, xAxis, yAxis);
           var probe = BuildProbeTextEntity(doc, textValue, textHeight, probePlane, templateTextId);
@@ -752,14 +784,37 @@ public sealed class vTextAligned : Command
 
           var measuredRaw = details.Value.Gap;
           var delta = targetGap - measuredRaw;
-          if (Math.Abs(delta) <= doc.ModelAbsoluteTolerance)
+          if (logSolve)
+          {
+            Log.Write("vTextAligned",
+              $"solve pass={i + 1} gap={measuredRaw:G9} delta={delta:G9} " +
+              $"halfW={details.Value.HalfW:G9} halfH={details.Value.HalfH:G9} " +
+              $"du={details.Value.Du:G9} dv={details.Value.Dv:G9} " +
+              $"halfSpan={details.Value.HalfSize:G9} centerDistance={details.Value.CenterDistance:G9}");
+          }
+
+          if (Math.Abs(delta) <= solveTolerance)
             break;
 
           origin += sideVec * delta;
         }
+
+        if (logSolve)
+        {
+          var finalPlane = new Plane(origin, xAxis, yAxis);
+          var finalProbe = BuildProbeTextEntity(doc, textValue, textHeight, finalPlane, templateTextId);
+          var finalDetails = SideRayHitOnTextRect(
+            curvePoint, sideVec, finalProbe, returnDetails: true, clampNonnegative: false);
+          Log.Write("vTextAligned",
+            finalDetails.HasValue
+              ? $"solve end finalGap={finalDetails.Value.Gap:G9} error={targetGap - finalDetails.Value.Gap:G9}"
+              : "solve end no final bounds");
+        }
       }
-      catch
+      catch (Exception ex)
       {
+        if (logSolve)
+          Log.Write("vTextAligned", $"solve failed {ex.GetType().Name}: {ex.Message}");
       }
     }
 
@@ -774,7 +829,8 @@ public sealed class vTextAligned : Command
     {
       Plane = plane,
       TextHeight = Math.Max(heightValue, RhinoMath.ZeroTolerance),
-      Justification = TextJustification.MiddleCenter
+      Justification = TextJustification.MiddleCenter,
+      DrawForward = false
     };
 
     SetTextEntityValue(text, textValue);
@@ -791,6 +847,7 @@ public sealed class vTextAligned : Command
       if (probe != null)
       {
         probe.Plane = plane;
+        probe.DrawForward = false;
         SetTextEntityValue(probe, textValue);
         ApplyHeightOverride(doc, probe, heightValue);
         return probe;
@@ -860,6 +917,7 @@ public sealed class vTextAligned : Command
       return false;
 
     updated.Plane = plane;
+    updated.DrawForward = false;
     SetTextEntityValue(updated, textValue);
     ApplyHeightOverride(doc, updated, heightValue);
 

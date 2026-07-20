@@ -53,6 +53,8 @@ public sealed class vNotches : Rhino.Commands.Command
   static double _multipleStartOffset = 2.0;
   static double _multipleEndOffset   = 2.0;
   static int    _multipleNumber      = 2;
+  static double _multipleDistance    = 0.0;
+  static bool   _multipleUseDistance = false;
   static bool[] _curveSides     = Array.Empty<bool>();
   static NotchSession? _activeSession;
   static GetPoint? _activeGetter;
@@ -126,6 +128,8 @@ public sealed class vNotches : Rhino.Commands.Command
       if (ToolsOptionStore.TryGetDouble(s, "multiple_start_offset", out v)) _multipleStartOffset = Math.Max(0.0, v);
       if (ToolsOptionStore.TryGetDouble(s, "multiple_end_offset",   out v)) _multipleEndOffset   = Math.Max(0.0, v);
       if (ToolsOptionStore.TryGetDouble(s, "multiple_number",       out v)) _multipleNumber      = Math.Clamp((int)Math.Round(v), 2, 10000);
+      if (ToolsOptionStore.TryGetDouble(s, "multiple_distance",     out v)) _multipleDistance    = Math.Max(0.0, v);
+      if (ToolsOptionStore.TryGetBool  (s, "multiple_use_distance", out b)) _multipleUseDistance = b;
       if (s?["curve_sides"] is System.Text.Json.Nodes.JsonArray arr)
       {
         var sides = new List<bool>();
@@ -169,6 +173,8 @@ public sealed class vNotches : Rhino.Commands.Command
     sec["multiple_start_offset"] = _multipleStartOffset;
     sec["multiple_end_offset"]   = _multipleEndOffset;
     sec["multiple_number"]       = _multipleNumber;
+    sec["multiple_distance"]     = _multipleDistance;
+    sec["multiple_use_distance"] = _multipleUseDistance;
 
     var arr = new System.Text.Json.Nodes.JsonArray();
     foreach (var b in _curveSides) arr.Add(b);
@@ -207,6 +213,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   _multipleStartOffset = s.MultipleStartOffset;
   _multipleEndOffset   = s.MultipleEndOffset;
   _multipleNumber      = s.MultipleNumber;
+  _multipleDistance    = s.MultipleDistance;
+  _multipleUseDistance = s.MultipleUseDistance;
   _curveSides    = s.CurveSides.ToArray();
 }
   // ── Entry point ───────────────────────────────────────────────────────────
@@ -253,7 +261,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _labelSize, _labelSizeAuto, _labelSizePct,
       _notchLayer, _labelLayer, _labelOffset, _labelOffsetY,
       _labelAutoAdv, _labelSideFlip, _keepSelection,
-      _multipleStartOffset, _multipleEndOffset, _multipleNumber);
+      _multipleStartOffset, _multipleEndOffset, _multipleNumber,
+      _multipleDistance, _multipleUseDistance);
 
     RunLoop(doc, session);
     SaveOptions(session);
@@ -1010,7 +1019,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static void PlaceMultipleNotches(RhinoDoc doc, NotchSession s)
   {
-    int count = Math.Clamp(s.MultipleNumber, 2, 10000);
     double startOffset = Math.Max(0.0, s.MultipleStartOffset);
     double endOffset = Math.Max(0.0, s.MultipleEndOffset);
     bool usePercent = s.PercentToggle.CurrentValue;
@@ -1039,9 +1047,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       .OrderBy(i => s.Curves[i].GetLength())
       .First();
     double baseAvailable = s.Curves[baseCurveIndex].GetLength() - startOffset - endOffset;
+    var ratios = s.MultipleUseDistance && s.MultipleDistance > doc.ModelAbsoluteTolerance
+      ? BuildMultipleRatios(baseAvailable, s.MultipleDistance, doc.ModelAbsoluteTolerance)
+      : Enumerable.Range(0, Math.Clamp(s.MultipleNumber, 2, 10000))
+        .Select(i => (double)i / (Math.Clamp(s.MultipleNumber, 2, 10000) - 1))
+        .ToList();
+    int count = ratios.Count;
     vTools.Log.Write("vNotches",
-      $"multiple count={count} percent={usePercent} baseCurve={baseCurveIndex + 1} " +
-      $"baseAvailable={baseAvailable:0.###}");
+      $"multiple count={count} spacingMode={(s.MultipleUseDistance ? "distance" : "number")} " +
+      $"distance={s.MultipleDistance:0.###} percent={usePercent} " +
+      $"baseCurve={baseCurveIndex + 1} baseAvailable={baseAvailable:0.###}");
 
     string originalLabel = s.LabelValueText;
     bool labelActive = s.LabelToggle.CurrentValue && originalLabel.Trim().Length > 0;
@@ -1055,7 +1070,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       for (int notchIndex = 0; notchIndex < count; notchIndex++)
       {
-        double ratio = (double)notchIndex / (count - 1);
+        double ratio = ratios[notchIndex];
         double baseLength = startOffset + baseAvailable * ratio;
         var lengths = usePercent
           ? s.Curves
@@ -1092,6 +1107,27 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     SyncPanelFromOptions(s);
     s.Panel?.UpdateUndoEnabled();
     doc.Views.Redraw();
+  }
+
+  static List<double> BuildMultipleRatios(double available, double distance, double tolerance)
+  {
+    var ratios = new List<double> { 0.0 };
+    if (available <= tolerance)
+      return ratios;
+
+    if (distance > tolerance)
+    {
+      for (int interval = 1; ratios.Count < 9999; interval++)
+      {
+        double offset = interval * distance;
+        if (offset >= available - tolerance)
+          break;
+        ratios.Add(offset / available);
+      }
+    }
+
+    ratios.Add(1.0);
+    return ratios;
   }
   // ── Undo ──────────────────────────────────────────────────────────────────
 
@@ -1475,7 +1511,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     if (notchType == "U")
     {
-      double halfFlat = Math.Max(0.0, notchWidth * 0.25);
+      // U is a V with its point truncated, not a parallel-sided channel.
+      double halfFlat = Math.Max(0.0, notchWidth * 0.1);
       var leftTip  = tip - tangent * halfFlat;
       var rightTip = tip + tangent * halfFlat;
       return new PolylineCurve(new[] { leftBase, leftTip, rightTip, rightBase });
@@ -2381,7 +2418,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   }
 
   static string FormatPanelNumber(double value) =>
-    value.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture);
+    value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
   static string IncrementLabelValue(string text)
   {
@@ -2453,6 +2490,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public double MultipleStartOffset;
     public double MultipleEndOffset;
     public int    MultipleNumber;
+    public double MultipleDistance;
+    public bool   MultipleUseDistance;
     public readonly string[] NotchTypeValues = ["I", "V", "U"];
     public int NotchTypeIndex;
 
@@ -2508,7 +2547,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       double labelSize, bool labelSizeAuto, int labelSizePct,
       string notchLayer, string labelLayer, double labelOffset, double labelOffsetY,
       bool labelAutoAdv, bool labelSideFlip, bool keepSelection,
-      double multipleStartOffset, double multipleEndOffset, int multipleNumber)
+      double multipleStartOffset, double multipleEndOffset, int multipleNumber,
+      double multipleDistance, bool multipleUseDistance)
     {
       Doc      = doc;
       Curves   = curves;
@@ -2540,6 +2580,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       MultipleStartOffset = Math.Max(0.0, multipleStartOffset);
       MultipleEndOffset   = Math.Max(0.0, multipleEndOffset);
       MultipleNumber      = Math.Clamp(multipleNumber, 2, 10000);
+      MultipleDistance    = Math.Max(0.0, multipleDistance);
+      MultipleUseDistance = multipleUseDistance;
 
       NotchTypeIndex  = Array.IndexOf(NotchTypeValues, notchType?.ToUpper() ?? "I");
       if (NotchTypeIndex < 0) NotchTypeIndex = 0;
@@ -2748,15 +2790,19 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         int typeIndex = i;
         string typeName = s.NotchTypeValues[i];
+        bool active = i == s.NotchTypeIndex;
         _typeButtons[i] = new ToggleButton
         {
-          Image = CreateNotchTypeIcon(typeName),
+          Image = CreateNotchTypeIcon(typeName, active),
           ToolTip = $"{typeName} notch",
-          Checked = i == s.NotchTypeIndex,
-          Width = 34,
-          Height = 26,
+          Checked = active,
+          BackgroundColor = Colors.Transparent,
+          Width = 20,
+          Height = 20,
         };
         _typeButtons[i].Click += (_, __) => SelectNotchType(typeIndex);
+        InstallNotchTypeButtonStyle(_typeButtons[i]);
+        _typeButtons[i].Load += (_, __) => InstallNotchTypeButtonStyle(_typeButtons[typeIndex]);
       }
 
       // Numeric fields
@@ -2891,20 +2937,20 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _multipleNumberStepper = MakeNumberStepper(
         s.MultipleNumber, 2.0, 10000.0, 1.0, 0);
       _multipleDistanceStepper = MakeNumberStepper(
-        1.0, 0.0, 1e9, 1.0);
+        s.MultipleDistance, 0.0, 1e9, 1.0);
       _multipleAddButton = new Button { Text = "Add", Height = 26 };
 
       _multipleStartOffsetStepper.ValueChanged += (_, __) =>
       {
         if (_suppress || _updatingMultipleControls) return;
-        s.MultipleStartOffset = _multipleStartOffsetStepper.Value;
+        s.MultipleStartOffset = RoundPanelNumber(_multipleStartOffsetStepper.Value);
         UpdateMultipleState();
         Persist();
       };
       _multipleEndOffsetStepper.ValueChanged += (_, __) =>
       {
         if (_suppress || _updatingMultipleControls) return;
-        s.MultipleEndOffset = _multipleEndOffsetStepper.Value;
+        s.MultipleEndOffset = RoundPanelNumber(_multipleEndOffsetStepper.Value);
         UpdateMultipleState();
         Persist();
       };
@@ -2912,7 +2958,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         if (_suppress || _updatingMultipleControls) return;
         s.MultipleNumber = Math.Clamp((int)Math.Round(_multipleNumberStepper.Value), 2, 10000);
-        UpdateMultipleState();
+        s.MultipleUseDistance = false;
+        ApplyMultipleNumber();
         Persist();
       };
       _multipleDistanceStepper.ValueChanged += (_, __) =>
@@ -3199,11 +3246,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       new TextBox { Text = text, Width = 70, Height = 22 };
 
     static NumericStepper MakeNumberStepper(double value, double minValue,
-      double maxValue, double increment, int maximumDecimalPlaces = 6)
+      double maxValue, double increment, int maximumDecimalPlaces = 3)
     {
       return new NumericStepper
       {
-        Value = Math.Clamp(value, minValue, maxValue),
+        Value = Math.Clamp(RoundForDisplay(value, maximumDecimalPlaces), minValue, maxValue),
         MinValue = minValue,
         MaxValue = maxValue,
         Increment = increment,
@@ -3215,32 +3262,49 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       };
     }
 
-    static Bitmap CreateNotchTypeIcon(string notchType)
+    static double RoundForDisplay(double value, int decimalPlaces) =>
+      Math.Round(value, decimalPlaces, MidpointRounding.AwayFromZero);
+
+    static double RoundPanelNumber(double value) => RoundForDisplay(value, 3);
+
+    static Bitmap CreateNotchTypeIcon(string notchType, bool active)
     {
-      var bitmap = new Bitmap(24, 18, PixelFormat.Format32bppRgba);
+      var bitmap = new Bitmap(16, 16, PixelFormat.Format32bppRgba);
       using var graphics = new Graphics(bitmap);
       graphics.Clear(Colors.Transparent);
-      using var pen = new Pen(Color.FromArgb(15, 125, 200), 2.0f);
+      var color = active ? Color.FromArgb(0, 120, 215) : Color.FromArgb(75, 75, 75);
+      using var pen = new Pen(color, active ? 2.0f : 1.5f);
       switch ((notchType ?? "I").ToUpperInvariant())
       {
         case "V":
           graphics.DrawLines(pen, new[]
           {
-            new PointF(3, 3), new PointF(12, 15), new PointF(21, 3),
+            new PointF(2, 2), new PointF(8, 14), new PointF(14, 2),
           });
           break;
         case "U":
           graphics.DrawLines(pen, new[]
           {
-            new PointF(4, 3), new PointF(4, 14),
-            new PointF(20, 14), new PointF(20, 3),
+            new PointF(2, 2), new PointF(7, 13),
+            new PointF(9, 13), new PointF(14, 2),
           });
           break;
         default:
-          graphics.DrawLine(pen, new PointF(12, 2), new PointF(12, 16));
+          graphics.DrawLine(pen, new PointF(8, 1), new PointF(8, 15));
           break;
       }
       return bitmap;
+    }
+
+    static void InstallNotchTypeButtonStyle(ToggleButton button)
+    {
+      if (button.ControlObject is not System.Windows.Controls.Primitives.ToggleButton native)
+        return;
+      native.Background = System.Windows.Media.Brushes.Transparent;
+      native.BorderBrush = System.Windows.Media.Brushes.Transparent;
+      native.Padding = new System.Windows.Thickness(0);
+      native.HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center;
+      native.VerticalContentAlignment = System.Windows.VerticalAlignment.Center;
     }
 
     void SelectNotchType(int typeIndex)
@@ -3253,7 +3317,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       try
       {
         for (int i = 0; i < _typeButtons.Length; i++)
+        {
           _typeButtons[i].Checked = i == selected;
+          _typeButtons[i].Image = CreateNotchTypeIcon(
+            _s.NotchTypeValues[i], i == selected);
+        }
         _s.NotchTypeIndex = selected;
       }
       finally { _suppress = false; }
@@ -3484,7 +3552,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       stepper.ValueChanged += (_, __) =>
       {
         if (_suppress) return;
-        apply(stepper.Value);
+        apply(RoundPanelNumber(stepper.Value));
         Redraw();
         Persist();
       };
@@ -3521,17 +3589,25 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void UpdateMultipleState()
     {
-      double startOffset = _multipleStartOffsetStepper.Value;
-      double endOffset = _multipleEndOffsetStepper.Value;
-      int number = Math.Clamp((int)Math.Round(_multipleNumberStepper.Value), 2, 10000);
-      bool valid = TryGetMultipleBaseAvailable(startOffset, endOffset, out double available);
+      if (_s.MultipleUseDistance && _s.MultipleDistance > _s.Doc.ModelAbsoluteTolerance)
+        ApplyMultipleDistance(_s.MultipleDistance, persist: false);
+      else
+        ApplyMultipleNumber();
+    }
+
+    void ApplyMultipleNumber()
+    {
+      int number = Math.Clamp(_s.MultipleNumber, 2, 10000);
+      bool valid = TryGetMultipleBaseAvailable(
+        _s.MultipleStartOffset, _s.MultipleEndOffset, out double available);
+      double exactDistance = valid ? available / (number - 1) : 0.0;
+      _s.MultipleDistance = exactDistance;
 
       _updatingMultipleControls = true;
       try
       {
-        _multipleDistanceStepper.Value = valid
-          ? available / (number - 1)
-          : 0.0;
+        _multipleNumberStepper.Value = number;
+        _multipleDistanceStepper.Value = RoundPanelNumber(exactDistance);
       }
       finally { _updatingMultipleControls = false; }
     }
@@ -3560,36 +3636,35 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       return baseLength > _s.Doc.ModelAbsoluteTolerance;
     }
 
-    void ApplyMultipleDistance(double requestedDistance)
+    void ApplyMultipleDistance(double requestedDistance, bool persist = true)
     {
-      if (requestedDistance <= _s.Doc.ModelAbsoluteTolerance ||
-          !TryGetMultipleBaseCurveLength(out double baseLength))
+      double distance = Math.Max(0.0, RoundPanelNumber(requestedDistance));
+      _s.MultipleUseDistance = true;
+      _s.MultipleDistance = distance;
+
+      if (distance <= _s.Doc.ModelAbsoluteTolerance ||
+          !TryGetMultipleBaseAvailable(
+            _s.MultipleStartOffset, _s.MultipleEndOffset, out double available))
+      {
+        if (persist)
+          Persist();
         return;
+      }
 
-      double usableFromStart = baseLength - _multipleStartOffsetStepper.Value;
-      if (usableFromStart <= _s.Doc.ModelAbsoluteTolerance)
-        return;
-
-      double distance = Math.Min(requestedDistance, usableFromStart);
-      int segmentCount = Math.Max(1, Math.Min(9999,
-        (int)Math.Floor((usableFromStart + _s.Doc.ModelAbsoluteTolerance) / distance)));
-      int notchCount = segmentCount + 1;
-      double endOffset = Math.Max(0.0,
-        usableFromStart - distance * segmentCount);
-
-      _s.MultipleNumber = notchCount;
-      _s.MultipleEndOffset = endOffset;
+      int notchCount = BuildMultipleRatios(
+        available, distance, _s.Doc.ModelAbsoluteTolerance).Count;
+      _s.MultipleNumber = Math.Clamp(notchCount, 2, 10000);
 
       _updatingMultipleControls = true;
       try
       {
-        _multipleNumberStepper.Value = notchCount;
-        _multipleEndOffsetStepper.Value = endOffset;
+        _multipleDistanceStepper.Value = distance;
+        _multipleNumberStepper.Value = _s.MultipleNumber;
       }
       finally { _updatingMultipleControls = false; }
 
-      UpdateMultipleState();
-      Persist();
+      if (persist)
+        Persist();
     }
 
     void ApplyCurveLengthHighlights()
@@ -3670,10 +3745,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         var bitmap = new Bitmap(18, 18, PixelFormat.Format32bppRgba);
         using var graphics = new Graphics(bitmap);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(242, 242, 242), 0, 0, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(191, 191, 191), 9, 0, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(191, 191, 191), 0, 9, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(242, 242, 242), 9, 9, 9, 9);
+        graphics.Clear(Colors.Transparent);
         graphics.FillRectangle(color, 0, 0, 18, 18);
         graphics.DrawRectangle(Colors.Black, 0, 0, 17, 17);
         return bitmap;
@@ -3749,7 +3821,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       try
       {
         for (int i = 0; i < _typeButtons.Length; i++)
+        {
           _typeButtons[i].Checked = i == _s.NotchTypeIndex;
+          _typeButtons[i].Image = CreateNotchTypeIcon(
+            _s.NotchTypeValues[i], i == _s.NotchTypeIndex);
+        }
         _lengthStepper.Value            = _s.NotchLengthOpt.CurrentValue;
         _offsetStepper.Value            = _s.NotchOffsetOpt.CurrentValue;
         _widthStepper.Value             = _s.NotchWidthOpt.CurrentValue;
@@ -3774,6 +3850,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         _multipleStartOffsetStepper.Value = _s.MultipleStartOffset;
         _multipleEndOffsetStepper.Value   = _s.MultipleEndOffset;
         _multipleNumberStepper.Value      = _s.MultipleNumber;
+        _multipleDistanceStepper.Value    = RoundPanelNumber(_s.MultipleDistance);
         for (int i = 0; i < _sideChecks.Length; i++)
           if (i < _s.CurveSides.Length) _sideChecks[i].Checked = _s.CurveSides[i];
         if (_s.Curves.Count > 1)
@@ -3791,9 +3868,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (_suppress) return;
       int selectedType = Array.FindIndex(_typeButtons, button => button.Checked == true);
       _s.NotchTypeIndex = selectedType >= 0 ? selectedType : _s.NotchTypeIndex;
-      _s.NotchLengthOpt.CurrentValue = _lengthStepper.Value;
-      _s.NotchOffsetOpt.CurrentValue = _offsetStepper.Value;
-      _s.NotchWidthOpt.CurrentValue = _widthStepper.Value;
+      _s.NotchLengthOpt.CurrentValue = RoundPanelNumber(_lengthStepper.Value);
+      _s.NotchOffsetOpt.CurrentValue = RoundPanelNumber(_offsetStepper.Value);
+      _s.NotchWidthOpt.CurrentValue = RoundPanelNumber(_widthStepper.Value);
       _s.NotchLayerName = GetDropDownLayerName(_notchLayerDrop, _s.NotchLayerName);
       _s.NotchToggle.CurrentValue = _notchCheck.Checked == true;
       _s.PercentToggle.CurrentValue = _percentCheck.Checked == true;
@@ -3805,16 +3882,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _s.LabelAutoAdv = _autoAdvCheck.Checked == true;
       _s.LabelSideFlip = _sideFlipCheck.Checked == true;
       _s.LabelLayerName = GetDropDownLayerName(_labelLayerDrop, _s.LabelLayerName);
-      _s.ManualLabelSize = Math.Max(0, _labelSizeStepper.Value);
+      _s.ManualLabelSize = Math.Max(0, RoundPanelNumber(_labelSizeStepper.Value));
       _s.LabelSizeAutoToggle.CurrentValue = _labelSizeAutoCheck.Checked == true;
       int labelPct = Math.Clamp((int)Math.Round(_labelSizePctStepper.Value / 5.0) * 5, 20, 100);
       _s.LabelSizePctIndex = Array.IndexOf(_s.LabelSizePctValues, labelPct);
       if (_s.LabelSizePctIndex < 0) _s.LabelSizePctIndex = 0;
-      _s.LabelOffsetOpt.CurrentValue = _labelOffsetStepper.Value;
-      _s.LabelOffsetYOpt.CurrentValue = _labelOffsetYStepper.Value;
-      _s.MultipleStartOffset = _multipleStartOffsetStepper.Value;
-      _s.MultipleEndOffset = _multipleEndOffsetStepper.Value;
+      _s.LabelOffsetOpt.CurrentValue = RoundPanelNumber(_labelOffsetStepper.Value);
+      _s.LabelOffsetYOpt.CurrentValue = RoundPanelNumber(_labelOffsetYStepper.Value);
+      _s.MultipleStartOffset = RoundPanelNumber(_multipleStartOffsetStepper.Value);
+      _s.MultipleEndOffset = RoundPanelNumber(_multipleEndOffsetStepper.Value);
       _s.MultipleNumber = Math.Clamp((int)Math.Round(_multipleNumberStepper.Value), 2, 10000);
+      if (_s.MultipleUseDistance)
+        _s.MultipleDistance = RoundPanelNumber(_multipleDistanceStepper.Value);
     }
 
     void Persist()

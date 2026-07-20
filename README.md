@@ -1,4 +1,4 @@
-Tools  ·  v26.7.20.1232
+Tools  ·  v26.7.20.1259
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -278,11 +278,12 @@ Options persist to `vTools.config.json` under `vMatch`.
 1. Select one or two open or closed curves (preselect supported; press Enter to confirm).
 1. A floating **Notches** panel opens. Click positions along the curve(s) to place notches.
 1. Use the disclosure chevron in each group header to collapse or restore the Notch, Multiple, and Label settings.
+1. Numeric controls and readouts display at most three decimal places without unnecessary trailing zeroes.
 1. **Notch** group options (panel and command line):
 
     - The `Notch` header checkbox controls notch geometry output. Notch and Label can both be enabled, but the command keeps at least one enabled.
-    - `Type`: three icon buttons select `I` (single perpendicular line), `V`, or `U`; the active shape stays pressed.
-    - `Layer`: target layer for notch geometry, shown with its layer color swatch.
+    - `Type`: three compact transparent icon buttons select `I` (single perpendicular line), `V`, or truncated-`V` `U`; the active icon is highlighted.
+    - `Layer`: target layer for notch geometry, shown with its true layer color and alpha.
     - `Length`, `Width`, and `Offset`: compact numeric steppers; width controls the arm separation used by `V` and `U` types.
     - Created notch curves are named `NOTCH` and carry `notches.db.*` user-string attributes describing their source curve, placement, dimensions, side, label settings, and layers.
 
@@ -292,7 +293,7 @@ Options persist to `vTools.config.json` under `vMatch`.
     - Value text box: the label string placed at the notch.
     - `AutoAdv`: when enabled, increments a trailing numeric suffix after each placement.
     - `FlipSide`: mirrors the label to the opposite side of the curve.
-    - `Layer`: target layer for label text, shown with its layer color swatch.
+    - `Layer`: target layer for label text, shown with its true layer color and alpha.
     - `Size`: manual label text height. `Auto` computes height proportionally from notch geometry; the adjacent percentage stepper scales the auto-computed height.
     - `Offset X` / `Offset Y`: numeric steppers for label position relative to the notch point (along-curve and across-curve).
 
@@ -300,7 +301,7 @@ Options persist to `vTools.config.json` under `vMatch`.
 
     - `Start offset` / `End offset`: numeric steppers for the distances from each curve's respective ends to the first and last notch.
     - `Number`: numeric stepper for the total number of notches, including the first and last positions.
-    - `Distance`: editable numeric stepper with a `1.0` button increment. Changing it updates `Number` and the end offset to fit as many exact intervals as possible. The shortest enabled curve is the spacing reference.
+    - `Distance`: editable numeric stepper with a `1.0` button increment. Changing `Number` evenly distributes the fixed start/end span. Changing `Distance` repeats that spacing and uses a shorter final gap when needed to preserve the fixed end offset. The shortest enabled curve is the spacing reference.
     - `Add`: creates an evenly spaced notch batch. When labels are enabled, only the first notch position receives the label and auto-advance runs once.
 
 1. Other panel controls:

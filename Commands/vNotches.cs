@@ -3113,6 +3113,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     readonly NotchSession _s;
     bool _suppress;
     bool _updatingMultipleControls;
+    int _notchLayerRevision;
+    int _labelLayerRevision;
 
     // Controls
     readonly Button[] _typeButtons;
@@ -3194,17 +3196,23 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       // Notch layer dropdown
       _notchLayerDrop = new DropDown();
       PopulateLayerDropDown(_notchLayerDrop, doc, s.NotchLayerName, true);
+      _notchLayerRevision = LayerDropDownRevision(doc, s.NotchLayerName, true);
       _notchLayerDrop.SelectedIndexChanged += (_, __) =>
       {
         if (_suppress) return;
         s.NotchLayerName = GetDropDownLayerName(_notchLayerDrop, s.NotchLayerName);
+        _notchLayerRevision = LayerDropDownRevision(doc, s.NotchLayerName, true);
         Redraw();
         Persist();
       };
       _notchLayerDrop.DropDownOpening += (_, __) =>
       {
         _suppress = true;
-        try { PopulateLayerDropDown(_notchLayerDrop, doc, s.NotchLayerName, true); }
+        try
+        {
+          _notchLayerRevision = RefreshLayerDropDownIfChanged(
+            _notchLayerDrop, doc, s.NotchLayerName, true, _notchLayerRevision);
+        }
         finally { _suppress = false; }
       };
 
@@ -3262,17 +3270,23 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       _labelLayerDrop = new DropDown();
       PopulateLayerDropDown(_labelLayerDrop, doc, s.LabelLayerName, false);
+      _labelLayerRevision = LayerDropDownRevision(doc, s.LabelLayerName, false);
       _labelLayerDrop.SelectedIndexChanged += (_, __) =>
       {
         if (_suppress) return;
         s.LabelLayerName = GetDropDownLayerName(_labelLayerDrop, s.LabelLayerName);
+        _labelLayerRevision = LayerDropDownRevision(doc, s.LabelLayerName, false);
         Redraw();
         Persist();
       };
       _labelLayerDrop.DropDownOpening += (_, __) =>
       {
         _suppress = true;
-        try { PopulateLayerDropDown(_labelLayerDrop, doc, s.LabelLayerName, false); }
+        try
+        {
+          _labelLayerRevision = RefreshLayerDropDownIfChanged(
+            _labelLayerDrop, doc, s.LabelLayerName, false, _labelLayerRevision);
+        }
         finally { _suppress = false; }
       };
 
@@ -4465,6 +4479,49 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         graphics.DrawRectangle(Colors.Black, 0, 0, 17, 17);
         return bitmap;
       }
+    }
+
+    static int LayerDropDownRevision(
+      RhinoDoc doc, string currentName, bool includeCurrentSpecial)
+    {
+      var hash = new HashCode();
+      hash.Add(currentName, StringComparer.Ordinal);
+      hash.Add(includeCurrentSpecial);
+      hash.Add(doc.Layers.CurrentLayerIndex);
+
+      var activeView = doc.Views.ActiveView;
+      hash.Add(activeView?.ActiveViewportID ?? Guid.Empty);
+
+      foreach (var layer in doc.Layers)
+      {
+        if (layer == null)
+          continue;
+
+        hash.Add(layer.Id);
+        hash.Add(layer.Index);
+        hash.Add(layer.ParentLayerId);
+        hash.Add(layer.SortIndex);
+        hash.Add(layer.IsDeleted);
+        hash.Add(layer.FullPath, StringComparer.Ordinal);
+        hash.Add(ResolveLayerDisplayColor(doc, layer).ToArgb());
+      }
+
+      return hash.ToHashCode();
+    }
+
+    static int RefreshLayerDropDownIfChanged(
+      DropDown drop,
+      RhinoDoc doc,
+      string currentName,
+      bool includeCurrentSpecial,
+      int knownRevision)
+    {
+      var revision = LayerDropDownRevision(doc, currentName, includeCurrentSpecial);
+      if (revision == knownRevision)
+        return knownRevision;
+
+      PopulateLayerDropDown(drop, doc, currentName, includeCurrentSpecial);
+      return revision;
     }
 
     static void PopulateLayerDropDown(DropDown drop, RhinoDoc doc, string currentName, bool includeCurrentSpecial)

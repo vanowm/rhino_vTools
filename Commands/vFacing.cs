@@ -885,11 +885,14 @@ public sealed class vFacing : Command
     var s1Rev = s1Trimmed.DuplicateCurve();
     s1Rev.Reverse();
 
+    var clearanceRange = CurveClearanceRange(baseJoined, offTrimmed, 24);
+
     Log.Write("vFacing",
       $"  result method=zero-radius-fillet " +
       $"side1Span={s1Trimmed.GetLength():F3} side2Span={s2Trimmed.GetLength():F3} " +
       $"clearance1={DistanceToCurve(baseJoined, s1Trimmed.PointAtEnd):F3} " +
       $"clearance2={DistanceToCurve(baseJoined, s2Trimmed.PointAtEnd):F3} " +
+      $"clearanceRange=[{clearanceRange.Min:F3},{clearanceRange.Max:F3}] " +
       $"offsetLen={offTrimmed.GetLength():F3}");
 
     // Output pieces are ready; set them now so they are always returned on success.
@@ -926,7 +929,7 @@ public sealed class vFacing : Command
 
     var first = Curve.CreateFilletCurves(
       side1, side1.PointAtStart,
-      offset, PointOnCurveNearest(offset, baseCurve.PointAtNormalizedLength(0.5)),
+      offset, PointOnCurveNearest(offset, baseCurve.PointAtStart),
       0.0, false, true, false, tol, angleTol);
     if (first == null || first.Length < 2)
       return false;
@@ -937,7 +940,7 @@ public sealed class vFacing : Command
 
     var second = Curve.CreateFilletCurves(
       side2, side2.PointAtStart,
-      first[1], PointOnCurveNearest(first[1], baseCurve.PointAtNormalizedLength(0.5)),
+      offset, PointOnCurveNearest(offset, baseCurve.PointAtEnd),
       0.0, false, true, false, tol, angleTol);
     if (second == null || second.Length < 2)
       return false;
@@ -946,12 +949,25 @@ public sealed class vFacing : Command
     if (trimmedSide2 == null)
       return false;
 
-    var trimmedOffset = second[1].DuplicateCurve();
+    if (!offset.ClosestPoint(trimmedSide1.PointAtEnd, out var offsetAtSide1) ||
+        !offset.ClosestPoint(trimmedSide2.PointAtEnd, out var offsetAtSide2))
+      return false;
+
+    var joinTol = tol * 10.0;
+    if (offset.PointAt(offsetAtSide1).DistanceTo(trimmedSide1.PointAtEnd) > joinTol ||
+        offset.PointAt(offsetAtSide2).DistanceTo(trimmedSide2.PointAtEnd) > joinTol)
+      return false;
+
+    var trimmedOffset = offset.Trim(
+      Math.Min(offsetAtSide1, offsetAtSide2),
+      Math.Max(offsetAtSide1, offsetAtSide2));
+    if (trimmedOffset == null)
+      return false;
+
     if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) >
         trimmedOffset.PointAtEnd.DistanceTo(trimmedSide2.PointAtEnd))
       trimmedOffset.Reverse();
 
-    var joinTol = tol * 10.0;
     if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) > joinTol ||
         trimmedOffset.PointAtEnd.DistanceTo(trimmedSide1.PointAtEnd) > joinTol)
       return false;
@@ -967,6 +983,24 @@ public sealed class vFacing : Command
     return curve.ClosestPoint(point, out var parameter)
       ? point.DistanceTo(curve.PointAt(parameter))
       : double.NaN;
+  }
+
+  private static (double Min, double Max) CurveClearanceRange(
+    Curve source, Curve offset, int sampleCount)
+  {
+    var min = double.MaxValue;
+    var max = double.MinValue;
+    for (var i = 0; i <= sampleCount; i++)
+    {
+      var point = offset.PointAtNormalizedLength(i / (double)sampleCount);
+      var distance = DistanceToCurve(source, point);
+      if (double.IsNaN(distance))
+        continue;
+      min = Math.Min(min, distance);
+      max = Math.Max(max, distance);
+    }
+
+    return min < double.MaxValue ? (min, max) : (double.NaN, double.NaN);
   }
 
   private static Point3d PointOnCurveNearest(Curve curve, Point3d point)

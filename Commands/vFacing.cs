@@ -67,7 +67,7 @@ public sealed class vFacing : Command
     List<(Curve Crv, int Layer)>? outPieces    = null;
     Curve?                         boundaryCurve = null;
     if (!BuildFacingPieces(baseParts!, side1Parts!, side2Parts!,
-          _size, tol, cplane, out outPieces, out boundaryCurve))
+          _size, tol, doc.ModelAngleToleranceRadians, cplane, out outPieces, out boundaryCurve))
     {
       RhinoApp.WriteLine("vFacing: could not build facing boundary. Check that sides are long enough.");
       return Result.Nothing;
@@ -107,7 +107,7 @@ public sealed class vFacing : Command
       List<(Curve Crv, int Layer)>? newPieces    = null;
       Curve?                         newBoundary   = null;
       if (!BuildFacingPieces(baseParts!, side1Parts!, side2Parts!,
-            _size, tol, cplane, out newPieces, out newBoundary))
+            _size, tol, doc.ModelAngleToleranceRadians, cplane, out newPieces, out newBoundary))
       {
         RhinoApp.WriteLine("vFacing: could not rebuild with new size.");
         return false;
@@ -821,7 +821,7 @@ public sealed class vFacing : Command
     List<(Curve Crv, int Layer)> baseParts,
     List<(Curve Crv, int Layer)> side1Parts,
     List<(Curve Crv, int Layer)> side2Parts,
-    double size, double tol, Plane cplane,
+    double size, double tol, double angleTol, Plane cplane,
     out List<(Curve Crv, int Layer)>? outPieces,
     out Curve? boundaryCurve)
   {
@@ -837,40 +837,46 @@ public sealed class vFacing : Command
 
     OrientSides(ref baseJoined, ref s1Joined, ref s2Joined, tol);
 
-    var extLen = Math.Max(baseJoined.GetLength(), s1Joined.GetLength() + s2Joined.GetLength()) + size * 10;
-    var baseExt = TryExtend(baseJoined, CurveEnd.Both, extLen) ?? baseJoined.DuplicateCurve();
-    var sideCenter  = (s1Joined.PointAtEnd + s2Joined.PointAtEnd) / 2.0;
-    var offsetCurve = OffsetTowardPoint(baseExt, size, sideCenter, tol, cplane);
-    if (offsetCurve == null)
-    {
-      RhinoApp.WriteLine("vFacing: could not offset base curve.");
-      return false;
-    }
-
-    var s1Ext  = TryExtend(s1Joined,    CurveEnd.End,  extLen) ?? s1Joined.DuplicateCurve();
-    var s2Ext  = TryExtend(s2Joined,    CurveEnd.End,  extLen) ?? s2Joined.DuplicateCurve();
-
     Log.Write("vFacing",
       $"BuildFacingPieces size={size:F3} baseLen={baseJoined.GetLength():F3} " +
-      $"baseChord={baseJoined.PointAtStart.DistanceTo(baseJoined.PointAtEnd):F3} extLen={extLen:F3}");
+      $"baseChord={baseJoined.PointAtStart.DistanceTo(baseJoined.PointAtEnd):F3}");
 
-    var foundS1 = TryFirstForwardIntersection(s1Ext, offsetCurve, tol,
-      out var t1s1, out var t1off, out var s1HitCount);
-    var foundS2 = TryFirstForwardIntersection(s2Ext, offsetCurve, tol,
-      out var t2s2, out var t2off, out var s2HitCount);
-    if (!foundS1 || !foundS2)
+    Curve? s1Trimmed = null;
+    Curve? s2Trimmed = null;
+    Curve? offTrimmed = null;
+    var bestTargetDistance = double.MaxValue;
+    var sideCenter = (s1Joined.PointAtEnd + s2Joined.PointAtEnd) / 2.0;
+    var offsetCandidates = CreateOffsetCandidates(baseJoined, size, tol, cplane);
+    for (var i = 0; i < offsetCandidates.Count; i++)
     {
+      var candidate = offsetCandidates[i];
+      var filleted = TryFilletFacingCandidate(
+        baseJoined, s1Joined, s2Joined, candidate.Curve, tol, angleTol,
+        out var candidateS1, out var candidateS2, out var candidateOffset);
+
       Log.Write("vFacing",
-        $"  offset intersection failed side1Hits={s1HitCount} side2Hits={s2HitCount}");
-      return false;
+        $"  offsetCandidate[{i}] distance={candidate.SignedDistance:F3} " +
+        $"len={candidate.Curve.GetLength():F3} fillet={filleted}");
+
+      if (!filleted)
+        continue;
+
+      var targetDistance = DistanceToCurve(candidateOffset!, sideCenter);
+      if (targetDistance >= bestTargetDistance)
+        continue;
+
+      bestTargetDistance = targetDistance;
+      s1Trimmed = candidateS1;
+      s2Trimmed = candidateS2;
+      offTrimmed = candidateOffset;
     }
 
-    var s1Trimmed = s1Ext.Trim(s1Ext.Domain.Min, t1s1);
-    var s2Trimmed = s2Ext.Trim(s2Ext.Domain.Min, t2s2);
-    if (s1Trimmed == null || s2Trimmed == null) return false;
-
-    var offTrimmed = offsetCurve.Trim(Math.Min(t1off, t2off), Math.Max(t1off, t2off));
-    if (offTrimmed == null) return false;
+    if (s1Trimmed == null || s2Trimmed == null || offTrimmed == null)
+    {
+      RhinoApp.WriteLine("vFacing: could not fillet the offset to both sides.");
+      Log.Write("vFacing", $"  no usable zero-radius fillet among {offsetCandidates.Count} candidate(s)");
+      return false;
+    }
 
     if (offTrimmed.PointAtStart.DistanceTo(s2Trimmed.PointAtEnd) >
         offTrimmed.PointAtEnd.DistanceTo(s2Trimmed.PointAtEnd))
@@ -880,10 +886,10 @@ public sealed class vFacing : Command
     s1Rev.Reverse();
 
     Log.Write("vFacing",
-      $"  result side1Hits={s1HitCount} side2Hits={s2HitCount} " +
+      $"  result method=zero-radius-fillet " +
       $"side1Span={s1Trimmed.GetLength():F3} side2Span={s2Trimmed.GetLength():F3} " +
-      $"clearance1={DistanceToCurve(baseExt, s1Trimmed.PointAtEnd):F3} " +
-      $"clearance2={DistanceToCurve(baseExt, s2Trimmed.PointAtEnd):F3} " +
+      $"clearance1={DistanceToCurve(baseJoined, s1Trimmed.PointAtEnd):F3} " +
+      $"clearance2={DistanceToCurve(baseJoined, s2Trimmed.PointAtEnd):F3} " +
       $"offsetLen={offTrimmed.GetLength():F3}");
 
     // Output pieces are ready; set them now so they are always returned on success.
@@ -911,34 +917,49 @@ public sealed class vFacing : Command
     return true;
   }
 
-  private static bool TryFirstForwardIntersection(
-    Curve side, Curve offset, double tol,
-    out double sideParameter, out double offsetParameter, out int hitCount)
+  private static bool TryFilletFacingCandidate(
+    Curve baseCurve, Curve side1, Curve side2, Curve offset,
+    double tol, double angleTol,
+    out Curve? side1Result, out Curve? side2Result, out Curve? offsetResult)
   {
-    sideParameter = offsetParameter = 0.0;
-    hitCount = 0;
+    side1Result = side2Result = offsetResult = null;
 
-    var events = Intersection.CurveCurve(side, offset, tol, tol);
-    if (events == null || events.Count == 0)
+    var first = Curve.CreateFilletCurves(
+      side1, side1.PointAtStart,
+      offset, PointOnCurveNearest(offset, baseCurve.PointAtNormalizedLength(0.5)),
+      0.0, false, true, false, tol, angleTol);
+    if (first == null || first.Length < 2)
       return false;
 
-    hitCount = events.Count;
-    var bestParameter = double.MaxValue;
-    for (var i = 0; i < events.Count; i++)
-    {
-      var candidate = events[i];
-      var candidateSideParameter = candidate.ParameterA;
-      if (candidateSideParameter < side.Domain.Min ||
-          candidateSideParameter > side.Domain.Max ||
-          candidateSideParameter >= bestParameter)
-        continue;
+    var trimmedSide1 = OrientFromPoint(first[0], baseCurve.PointAtStart, tol);
+    if (trimmedSide1 == null)
+      return false;
 
-      bestParameter = candidateSideParameter;
-      sideParameter = candidateSideParameter;
-      offsetParameter = candidate.ParameterB;
-    }
+    var second = Curve.CreateFilletCurves(
+      side2, side2.PointAtStart,
+      first[1], PointOnCurveNearest(first[1], baseCurve.PointAtNormalizedLength(0.5)),
+      0.0, false, true, false, tol, angleTol);
+    if (second == null || second.Length < 2)
+      return false;
 
-    return bestParameter < double.MaxValue;
+    var trimmedSide2 = OrientFromPoint(second[0], baseCurve.PointAtEnd, tol);
+    if (trimmedSide2 == null)
+      return false;
+
+    var trimmedOffset = second[1].DuplicateCurve();
+    if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) >
+        trimmedOffset.PointAtEnd.DistanceTo(trimmedSide2.PointAtEnd))
+      trimmedOffset.Reverse();
+
+    var joinTol = tol * 10.0;
+    if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) > joinTol ||
+        trimmedOffset.PointAtEnd.DistanceTo(trimmedSide1.PointAtEnd) > joinTol)
+      return false;
+
+    side1Result = trimmedSide1;
+    side2Result = trimmedSide2;
+    offsetResult = trimmedOffset;
+    return true;
   }
 
   private static double DistanceToCurve(Curve curve, Point3d point)
@@ -948,31 +969,47 @@ public sealed class vFacing : Command
       : double.NaN;
   }
 
-  private static Curve? TryExtend(Curve crv, CurveEnd end, double length)
+  private static Point3d PointOnCurveNearest(Curve curve, Point3d point)
   {
-    try { return crv.Extend(end, length, CurveExtensionStyle.Line); }
-    catch { return null; }
+    return curve.ClosestPoint(point, out var parameter)
+      ? curve.PointAt(parameter)
+      : curve.PointAtNormalizedLength(0.5);
   }
 
-  private static Curve? OffsetTowardPoint(
-    Curve curve, double distance, Point3d targetPt, double tol, Plane plane)
+  private static Curve? OrientFromPoint(Curve curve, Point3d startPoint, double tol)
   {
-    var best     = (Curve?)null;
-    var bestDist = double.MaxValue;
+    var result = curve.DuplicateCurve();
+    if (result.PointAtEnd.DistanceTo(startPoint) < result.PointAtStart.DistanceTo(startPoint))
+      result.Reverse();
+    return result.PointAtStart.DistanceTo(startPoint) <= tol * 10.0 ? result : null;
+  }
+
+  private static List<(Curve Curve, double SignedDistance)> CreateOffsetCandidates(
+    Curve curve, double distance, double tol, Plane plane)
+  {
+    var result = new List<(Curve, double)>();
 
     foreach (var d in new[] { distance, -distance })
     {
       var offsets = curve.Offset(plane, d, tol, CurveOffsetCornerStyle.Sharp);
-      if (offsets == null) continue;
+      if (offsets == null || offsets.Length == 0)
+        continue;
+
       foreach (var c in offsets)
+        if (c != null)
+          result.Add((c, d));
+
+      if (offsets.Length > 1)
       {
-        if (c == null) continue;
-        var dist = c.PointAtNormalizedLength(0.5).DistanceTo(targetPt);
-        if (dist < bestDist) { bestDist = dist; best = c; }
+        var joined = Curve.JoinCurves(offsets, tol * 10.0);
+        if (joined != null)
+          foreach (var c in joined)
+            if (c != null)
+              result.Add((c, d));
       }
     }
 
-    return best;
+    return result;
   }
 
   // ── Inside-object collection (from vPart) ────────────────────────────────

@@ -163,7 +163,8 @@ public sealed class vPart : Command
     //  then falls back to endpoint joining + gap bridging.
 
     var perimLog = new List<string>();
-    var (perimeter, bridges) = BuildClosedPerimeter(perimList.Select(p => p.Crv).ToList(), plane, tol, perimLog);
+    var (perimeter, bridges, perimeterCurves) = BuildClosedPerimeter(
+      perimList.Select(p => p.Crv).ToList(), plane, tol, perimLog);
     L($"BuildClosedPerimeter: {(perimeter != null ? "OK" : "FAILED")}  bridges={bridges.Count}");
     foreach (var entry in perimLog) L($"  perim: {entry}");
     if (perimeter == null)
@@ -185,8 +186,14 @@ public sealed class vPart : Command
 
     var currentLayerAttr = new ObjectAttributes { LayerIndex = doc.Layers.CurrentLayerIndex };
 
+    var effectivePerimeter = perimList
+      .Select((item, index) => (
+        Crv: index < perimeterCurves.Count ? perimeterCurves[index] : item.Crv,
+        item.Attr))
+      .ToList();
+
     var partItems = new List<(GeometryBase Geom, ObjectAttributes Attr)>();
-    foreach (var (crv, attr) in TrimToPerimeter(perimList, perimeter!, tol))
+    foreach (var (crv, attr) in TrimToPerimeter(effectivePerimeter, perimeter!, tol))
       partItems.Add((crv, attr));
     foreach (var bridge in bridges)
       partItems.Add((bridge, currentLayerAttr.Duplicate()));
@@ -302,40 +309,40 @@ public sealed class vPart : Command
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   /// <summary>
-  /// Builds a single closed loop for containment testing.  Does NOT join the
-  /// originals — returns them untouched.  Gap-bridging segments are returned
-  /// separately so the caller can include them in the output Part.
+  /// Builds a single closed loop for containment testing. The source document
+  /// geometry is untouched; working copies may be extended to selected curves.
+  /// Gap-bridging segments are returned separately for the output Part.
   /// </summary>
-  private static (Curve? Closed, List<LineCurve> Bridges) BuildClosedPerimeter(
+  private static (Curve? Closed, List<LineCurve> Bridges, List<Curve> PerimeterCurves) BuildClosedPerimeter(
     List<Curve> curves, Plane plane, double tol, List<string> log)
   {
     var bridges = new List<LineCurve>();
+    var workingCurves = curves.Select(c => c.DuplicateCurve()).ToList();
 
     // Single closed curve → nothing to do
     if (curves.Count == 1 && curves[0].IsClosed)
-      return (curves[0].DuplicateCurve(), bridges);
+      return (curves[0].DuplicateCurve(), bridges, workingCurves);
 
-    // Primary: CreateBooleanRegions — handles curves extending past corners
-    var regions = Curve.CreateBooleanRegions(curves.ToArray(), plane, combineRegions: true, tol);
-    if (regions != null)
+    // Primary: CreateBooleanRegions handles curves that already meet or cross.
+    var boundary = TryCreateBooleanBoundary(workingCurves, plane, tol, "original", log);
+    if (boundary != null)
+      return (boundary, bridges, workingCurves);
+
+    // If an open end stops short, extend it in its own end direction until it
+    // reaches another selected perimeter curve. Only keep these working copies
+    // when they form a genuine Boolean region.
+    var extendedEnds = ExtendDisconnectedEndsToSelectedCurves(workingCurves, tol, log);
+    if (extendedEnds > 0)
     {
-      for (var r = 0; r < regions.RegionCount; r++)
-      {
-        var rc = regions.RegionCurves(r);
-        if (rc == null) continue;
-        foreach (var c in rc)
-          if (c?.IsClosed == true)
-            return (c, bridges);  // success — no bridges needed
-      }
-      log.Add($"vPart[perim]: CreateBooleanRegions: {regions.RegionCount} region(s), none closed — trying endpoint join");
+      boundary = TryCreateBooleanBoundary(workingCurves, plane, tol, "extended", log);
+      if (boundary != null)
+        return (boundary, bridges, workingCurves);
     }
-    else
-    {
-      log.Add("vPart[perim]: CreateBooleanRegions returned null — trying endpoint join");
-    }
+
+    log.Add("vPart[perim]: no closed Boolean region after end extension — trying endpoint join");
 
     // Fallback: endpoint joining with gap bridging
-    var pieces = curves.Select(c => c.DuplicateCurve()).ToList();
+    var pieces = workingCurves.Select(c => c.DuplicateCurve()).ToList();
 
     // Greedily bridge nearest open-endpoint pairs across different curves
     var openEnds = new List<(int CrvIdx, bool IsStart, Point3d Pt)>();
@@ -387,16 +394,261 @@ public sealed class vPart : Command
     // Join copies (only for containment testing)
     var joined = Curve.JoinCurves(pieces.ToArray(), tol * 10);
     log.Add($"vPart[perim]: join@tol×10 → {(joined == null ? "null" : $"{joined.Length} result(s), closed={joined.Any(c => c.IsClosed)}")} ");
-    if (joined != null && joined.Length == 1 && joined[0].IsClosed)
-      return (joined[0], bridges);
+    var joinedClosed = joined?.Where(c => c.IsClosed).OrderByDescending(ClosedCurveArea).FirstOrDefault();
+    if (joinedClosed != null)
+      return (joinedClosed, bridges, workingCurves);
 
     var final = Curve.JoinCurves(pieces.ToArray(), tol * 100);
     log.Add($"vPart[perim]: join@tol×100 → {(final == null ? "null" : $"{final.Length} result(s), closed={final.Any(c => c.IsClosed)}")} ");
-    if (final != null && final.Length == 1 && final[0].IsClosed)
-      return (final[0], bridges);
+    var finalClosed = final?.Where(c => c.IsClosed).OrderByDescending(ClosedCurveArea).FirstOrDefault();
+    if (finalClosed != null)
+      return (finalClosed, bridges, workingCurves);
 
     log.Add("vPart[perim]: FAILED — endpoints not reachable or loop not closed");
-    return (null, bridges);
+    return (null, bridges, workingCurves);
+  }
+
+  private static Curve? TryCreateBooleanBoundary(
+    List<Curve> curves,
+    Plane plane,
+    double tol,
+    string stage,
+    List<string> log)
+  {
+    using var regions = Curve.CreateBooleanRegions(curves.ToArray(), plane, combineRegions: true, tol);
+    if (regions == null)
+    {
+      log.Add($"vPart[perim]: {stage}: CreateBooleanRegions returned null");
+      return null;
+    }
+
+    Curve? bestBoundary = null;
+    var bestArea = double.NegativeInfinity;
+
+    for (var r = 0; r < regions.RegionCount; r++)
+    {
+      var regionCurves = regions.RegionCurves(r);
+      if (regionCurves == null || regionCurves.Length == 0)
+        continue;
+
+      var outerCandidates = regionCurves[0].IsClosed
+        ? new[] { regionCurves[0] }
+        : Curve.JoinCurves(regionCurves, tol * 10.0);
+
+      foreach (var candidate in outerCandidates)
+      {
+        if (candidate?.IsClosed != true)
+          continue;
+
+        var area = ClosedCurveArea(candidate);
+        if (area <= bestArea)
+          continue;
+
+        bestArea = area;
+        bestBoundary = candidate.DuplicateCurve();
+      }
+    }
+
+    log.Add($"vPart[perim]: {stage}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}");
+    return bestBoundary;
+  }
+
+  private static int ExtendDisconnectedEndsToSelectedCurves(
+    List<Curve> curves, double tol, List<string> log)
+  {
+    var extendedEnds = 0;
+    var touchTolerance = tol * 10.0;
+    var bounds = BoundingBox.Empty;
+    foreach (var curve in curves)
+      bounds.Union(curve.GetBoundingBox(true));
+    var probeLength = Math.Max(bounds.IsValid ? bounds.Diagonal.Length * 4.0 : 0.0, tol * 1000.0);
+
+    // Two passes allow one newly extended curve to become a target for another.
+    for (var pass = 0; pass < 2; pass++)
+    {
+      var changed = false;
+      for (var i = 0; i < curves.Count; i++)
+      {
+        if (curves[i].IsClosed)
+          continue;
+
+        foreach (var end in new[] { CurveEnd.Start, CurveEnd.End })
+        {
+          var curve = curves[i];
+          var endpoint = end == CurveEnd.Start ? curve.PointAtStart : curve.PointAtEnd;
+          if (EndpointTouchesAnotherCurve(endpoint, curves, i, touchTolerance))
+            continue;
+
+          var drivers = curves
+            .Where((_, index) => index != i)
+            .Cast<GeometryBase>()
+            .ToArray();
+          Curve? extended;
+          try
+          {
+            extended = curve.Extend(end, CurveExtensionStyle.Line, drivers);
+          }
+          catch (Exception ex)
+          {
+            extended = null;
+            log.Add($"vPart[perim]: curve {i} {end} boundary extension threw {ex.GetType().Name}");
+          }
+
+          var extensionMethod = "boundary";
+          var extensionDistance = 0.0;
+          if (extended != null)
+          {
+            var extendedEndpoint = end == CurveEnd.Start ? extended.PointAtStart : extended.PointAtEnd;
+            if (!EndpointTouchesAnotherCurve(extendedEndpoint, curves, i, touchTolerance))
+              extended = null;
+          }
+
+          if (extended == null)
+          {
+            extended = ExtendEndToNearestForwardIntersection(
+              curve, end, curves, i, probeLength, touchTolerance, out extensionDistance);
+            extensionMethod = "ray";
+          }
+
+          if (extended == null)
+          {
+            log.Add($"vPart[perim]: curve {i} {end} has no forward selected-curve hit within {probeLength:G6}");
+            continue;
+          }
+
+          var addedLength = extended.GetLength() - curve.GetLength();
+          if (addedLength <= tol)
+            continue;
+
+          curves[i] = extended;
+          extendedEnds++;
+          changed = true;
+          var hit = extensionDistance > 0.0 ? $" hit={extensionDistance:G6}" : string.Empty;
+          log.Add($"vPart[perim]: extended curve {i} {end} by {addedLength:G6} via {extensionMethod}{hit}");
+        }
+      }
+
+      if (!changed)
+        break;
+    }
+
+    log.Add($"vPart[perim]: extended {extendedEnds} disconnected end(s)");
+    return extendedEnds;
+  }
+
+  private static Curve? ExtendEndToNearestForwardIntersection(
+    Curve curve,
+    CurveEnd end,
+    List<Curve> curves,
+    int curveIndex,
+    double probeLength,
+    double tol,
+    out double hitDistance)
+  {
+    hitDistance = double.PositiveInfinity;
+    var bestDistance = double.PositiveInfinity;
+
+    var endpoint = end == CurveEnd.Start ? curve.PointAtStart : curve.PointAtEnd;
+    var direction = end == CurveEnd.Start ? -curve.TangentAtStart : curve.TangentAtEnd;
+    if (!direction.Unitize())
+      return null;
+
+    Curve? probe;
+    try
+    {
+      probe = curve.Extend(end, probeLength, CurveExtensionStyle.Line);
+    }
+    catch
+    {
+      probe = null;
+    }
+
+    if (probe == null)
+      return null;
+
+    var bestPoint = Point3d.Unset;
+
+    void Consider(Point3d point)
+    {
+      if (!point.IsValid)
+        return;
+
+      var delta = point - endpoint;
+      var forward = Vector3d.Multiply(delta, direction);
+      if (forward <= tol || forward >= bestDistance)
+        return;
+
+      // Ignore intersections on the original portion of the curve.
+      if (curve.ClosestPoint(point, out var originalT)
+          && point.DistanceTo(curve.PointAt(originalT)) <= tol)
+        return;
+
+      bestPoint = point;
+      bestDistance = forward;
+    }
+
+    for (var i = 0; i < curves.Count; i++)
+    {
+      if (i == curveIndex)
+        continue;
+
+      var events = Intersection.CurveCurve(probe, curves[i], tol, tol);
+      if (events == null)
+        continue;
+
+      foreach (var intersection in events)
+      {
+        Consider(intersection.PointA);
+        if (intersection.IsOverlap)
+          Consider(intersection.PointA2);
+      }
+    }
+
+    if (!bestPoint.IsValid || double.IsPositiveInfinity(bestDistance))
+      return null;
+
+    hitDistance = bestDistance;
+
+    try
+    {
+      var toPoint = curve.Extend(end, CurveExtensionStyle.Line, bestPoint);
+      if (toPoint != null)
+        return toPoint;
+    }
+    catch
+    {
+    }
+
+    if (!probe.ClosestPoint(bestPoint, out var hitT))
+      return null;
+
+    var oppositePoint = end == CurveEnd.Start ? curve.PointAtEnd : curve.PointAtStart;
+    if (!probe.ClosestPoint(oppositePoint, out var oppositeT))
+      return null;
+
+    var interval = new Interval(Math.Min(hitT, oppositeT), Math.Max(hitT, oppositeT));
+    return probe.Trim(interval);
+  }
+
+  private static bool EndpointTouchesAnotherCurve(
+    Point3d endpoint, List<Curve> curves, int curveIndex, double tol)
+  {
+    for (var i = 0; i < curves.Count; i++)
+    {
+      if (i == curveIndex || !curves[i].ClosestPoint(endpoint, out var t))
+        continue;
+
+      if (endpoint.DistanceTo(curves[i].PointAt(t)) <= tol)
+        return true;
+    }
+
+    return false;
+  }
+
+  private static double ClosedCurveArea(Curve curve)
+  {
+    using var properties = AreaMassProperties.Compute(curve);
+    return properties?.Area ?? 0.0;
   }
 
   /// <summary>  /// Splits each perimeter curve at its intersections with the other perimeter

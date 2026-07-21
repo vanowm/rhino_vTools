@@ -415,42 +415,50 @@ public sealed class vPart : Command
     string stage,
     List<string> log)
   {
-    using var regions = Curve.CreateBooleanRegions(curves.ToArray(), plane, combineRegions: true, tol);
-    if (regions == null)
+    foreach (var multiplier in new[] { 1.0, 10.0, 100.0 })
     {
-      log.Add($"vPart[perim]: {stage}: CreateBooleanRegions returned null");
-      return null;
-    }
-
-    Curve? bestBoundary = null;
-    var bestArea = double.NegativeInfinity;
-
-    for (var r = 0; r < regions.RegionCount; r++)
-    {
-      var regionCurves = regions.RegionCurves(r);
-      if (regionCurves == null || regionCurves.Length == 0)
-        continue;
-
-      var outerCandidates = regionCurves[0].IsClosed
-        ? new[] { regionCurves[0] }
-        : Curve.JoinCurves(regionCurves, tol * 10.0);
-
-      foreach (var candidate in outerCandidates)
+      var regionTolerance = tol * multiplier;
+      using var regions = Curve.CreateBooleanRegions(
+        curves.ToArray(), plane, combineRegions: true, regionTolerance);
+      if (regions == null)
       {
-        if (candidate?.IsClosed != true)
-          continue;
-
-        var area = ClosedCurveArea(candidate);
-        if (area <= bestArea)
-          continue;
-
-        bestArea = area;
-        bestBoundary = candidate.DuplicateCurve();
+        log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: CreateBooleanRegions returned null");
+        continue;
       }
+
+      Curve? bestBoundary = null;
+      var bestArea = double.NegativeInfinity;
+
+      for (var r = 0; r < regions.RegionCount; r++)
+      {
+        var regionCurves = regions.RegionCurves(r);
+        if (regionCurves == null || regionCurves.Length == 0)
+          continue;
+
+        var outerCandidates = regionCurves[0].IsClosed
+          ? new[] { regionCurves[0] }
+          : Curve.JoinCurves(regionCurves, regionTolerance * 10.0);
+
+        foreach (var candidate in outerCandidates)
+        {
+          if (candidate?.IsClosed != true)
+            continue;
+
+          var area = ClosedCurveArea(candidate);
+          if (area <= bestArea)
+            continue;
+
+          bestArea = area;
+          bestBoundary = candidate.DuplicateCurve();
+        }
+      }
+
+      log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}");
+      if (bestBoundary != null)
+        return bestBoundary;
     }
 
-    log.Add($"vPart[perim]: {stage}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}");
-    return bestBoundary;
+    return null;
   }
 
   private static int ExtendDisconnectedEndsToSelectedCurves(

@@ -842,7 +842,7 @@ public sealed class vFacing : Command
       $"baseChord={baseJoined.PointAtStart.DistanceTo(baseJoined.PointAtEnd):F3}");
 
     if (!TrySelectOffsetByClosestPoints(
-          baseJoined, s1Joined, s2Joined, size, tol, cplane,
+          baseJoined, s1Joined, s2Joined, size, tol, angleTol, cplane,
           out var offsetCurve,
           out var side1Pick, out var offset1Pick,
           out var side2Pick, out var offset2Pick,
@@ -928,7 +928,7 @@ public sealed class vFacing : Command
 
   private static bool TrySelectOffsetByClosestPoints(
     Curve baseCurve, Curve side1, Curve side2,
-    double size, double tol, Plane plane,
+    double size, double tol, double angleTol, Plane plane,
     out Curve? offsetResult,
     out Point3d side1Point, out Point3d offset1Point,
     out Point3d side2Point, out Point3d offset2Point,
@@ -949,7 +949,7 @@ public sealed class vFacing : Command
     foreach (var signedDistance in new[] { size, -size })
     {
       if (!TryCreateSingleOffset(
-            baseCurve, signedDistance, tol, plane,
+            baseCurve, signedDistance, tol, angleTol, plane,
             out var offset, out var rawCount, out var normalizeFailure))
       {
         Log.Write("vFacing",
@@ -1000,14 +1000,34 @@ public sealed class vFacing : Command
   }
 
   private static bool TryCreateSingleOffset(
-    Curve curve, double distance, double tol, Plane plane,
+    Curve curve, double distance, double tol, double angleTol, Plane plane,
     out Curve? offset, out int rawCount, out string failure)
   {
     offset = null;
     failure = string.Empty;
 
+    var sourceAtMiddle = curve.PointAt(curve.Domain.Mid);
+    var tangent = curve.TangentAt(curve.Domain.Mid);
+    var offsetDirection = Vector3d.CrossProduct(plane.Normal, tangent);
+    if (!offsetDirection.Unitize())
+    {
+      rawCount = 0;
+      failure = "source tangent is invalid at curve middle";
+      return false;
+    }
+
+    if (distance < 0.0)
+      offsetDirection.Reverse();
+
     var rawOffsets = curve.Offset(
-      plane, distance, tol, CurveOffsetCornerStyle.Sharp);
+      sourceAtMiddle + offsetDirection,
+      plane.Normal,
+      Math.Abs(distance),
+      tol,
+      angleTol,
+      false,
+      CurveOffsetCornerStyle.Sharp,
+      CurveOffsetEndStyle.None);
     rawCount = rawOffsets?.Length ?? 0;
     if (rawOffsets == null || rawOffsets.Length == 0)
     {
@@ -1021,14 +1041,55 @@ public sealed class vFacing : Command
       return true;
     }
 
-    var joined = Curve.JoinCurves(rawOffsets);
-    if (joined == null || joined.Length != 1)
+    if (!TryAssembleOffsetFragments(curve, rawOffsets, out offset, out var gaps))
     {
-      failure = $"offset fragments did not join into one curve ({joined?.Length ?? 0} joined)";
+      failure = "offset fragments could not be assembled in source-curve order";
       return false;
     }
 
-    offset = joined[0];
+    Log.Write("vFacing",
+      $"  assembled {rawOffsets.Length} offset fragments " +
+      $"connectionGaps=[{string.Join(",", gaps.Select(gap => gap.ToString("F6")))}]");
+    return true;
+  }
+
+  private static bool TryAssembleOffsetFragments(
+    Curve source, Curve[] fragments,
+    out Curve? offset, out List<double> connectionGaps)
+  {
+    offset = null;
+    connectionGaps = new List<double>();
+    var ordered = new List<(Curve Curve, double MiddleParameter)>();
+
+    foreach (var fragment in fragments)
+    {
+      var piece = fragment.DuplicateCurve();
+      if (!source.ClosestPoint(piece.PointAtStart, out var sourceAtStart) ||
+          !source.ClosestPoint(piece.PointAtEnd, out var sourceAtEnd) ||
+          !source.ClosestPoint(piece.PointAtNormalizedLength(0.5), out var sourceAtMiddle))
+        return false;
+
+      if (sourceAtStart > sourceAtEnd)
+        piece.Reverse();
+
+      ordered.Add((piece, sourceAtMiddle));
+    }
+
+    ordered.Sort((a, b) => a.MiddleParameter.CompareTo(b.MiddleParameter));
+    var polycurve = new PolyCurve();
+    for (var i = 0; i < ordered.Count; i++)
+    {
+      if (i > 0)
+      {
+        connectionGaps.Add(
+          ordered[i - 1].Curve.PointAtEnd.DistanceTo(ordered[i].Curve.PointAtStart));
+      }
+
+      if (!polycurve.Append(ordered[i].Curve))
+        return false;
+    }
+
+    offset = polycurve;
     return true;
   }
 

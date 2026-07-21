@@ -15,7 +15,7 @@ using Rhino.Input.Custom;
 namespace vTools.Commands;
 
 /// <summary>
-/// Places notches (I, V, U shapes) on one or more curves with an interactive live panel.
+/// Places notches (I, V, open-V, U, and T shapes) on one or more curves with an interactive live panel.
 /// Identical to the Notches.py script, without the auto-sync daemon.
 /// </summary>
 public sealed class vNotches : Rhino.Commands.Command
@@ -26,6 +26,8 @@ public sealed class vNotches : Rhino.Commands.Command
   const string SpecialLayerCurrent = "*[Current]*";
   const string NotchDataPrefix    = "notch.";
   const string NotchDataVersion   = "1";
+  const string OpenVNotchType     = "\\/";
+  const string NotchComponentSetKey = NotchDataPrefix + "component_set";
   const double LabelWidthMult     = 0.9;
   const double DefaultLabelOffIn  = 0.1; // inches
 
@@ -309,10 +311,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     vTools.Log.Write("vNotches",
       $"curve selection begin: keepCurrent={keepCurrentSelection}; {DescribeCurveSides(s)}");
 
-    var generatedIds = s.NotchIdsByCurve
+    var generatedPrimaryIds = s.NotchIdsByCurve
       .SelectMany(ids => ids)
       .Concat(s.NotchRecords.SelectMany(record => record.DetachedNotchIds))
       .Where(id => id != Guid.Empty)
+      .ToList();
+    var generatedIds = generatedPrimaryIds
+      .SelectMany(id => RelatedNotchObjects(doc, id).Select(obj => obj.Id))
       .ToHashSet();
 
     var go = new GetObject();
@@ -745,7 +750,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.RedoOptionIndex        = s.RedoBatches.Count > 0
       ? gp.AddOption("Redo", string.Empty, true)
       : -1;
-    s.TypeOptionIndex        = gp.AddOptionList("NotchType", s.NotchTypeValues, s.NotchTypeIndex);
+    s.TypeOptionIndex        = gp.AddOptionList("NotchType", s.NotchTypeOptionValues, s.NotchTypeIndex);
     s.NotchLayerOptionIndex  = gp.AddOption("NotchLayer", s.NotchLayerName);
     s.NotchEnabledIndex      = gp.AddOptionToggle("NotchEnabled", ref s.NotchToggle);
     gp.AddOptionDouble("NotchLength", ref s.NotchLengthOpt);
@@ -1161,7 +1166,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         s.PlacementLabelIds.RemoveAt(s.PlacementLabelIds.Count - 1);
 
       foreach (var id in lastIds)
-        if (id != Guid.Empty) doc.Objects.Delete(id, true);
+        if (id != Guid.Empty) DeleteNotchObjects(doc, id);
       foreach (var id in lastLabelIds)
         if (id.HasValue && id.Value != Guid.Empty) doc.Objects.Delete(id.Value, true);
     }
@@ -1169,7 +1174,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     foreach (var record in removedRecords)
     {
       foreach (var id in record.DetachedNotchIds)
-        if (id != Guid.Empty) doc.Objects.Delete(id, true);
+        if (id != Guid.Empty) DeleteNotchObjects(doc, id);
       foreach (var id in record.DetachedLabelIds)
         if (id != Guid.Empty) doc.Objects.Delete(id, true);
     }
@@ -1268,13 +1273,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         Guid notchId = curveIndex < notchIds.Count ? notchIds[curveIndex] : Guid.Empty;
         Guid? labelId = curveIndex < labelIds.Count ? labelIds[curveIndex] : null;
-        placement.Notches.Add(CaptureDocObject(doc, notchId));
+        placement.Notches.Add(CaptureNotchObject(doc, notchId));
         placement.Labels.Add(CaptureDocObject(doc, labelId ?? Guid.Empty));
       }
 
       foreach (var id in record.DetachedNotchIds)
       {
-        var snapshot = CaptureDocObject(doc, id);
+        var snapshot = CaptureNotchObject(doc, id);
         if (snapshot != null) placement.DetachedNotches.Add(snapshot);
       }
       foreach (var id in record.DetachedLabelIds)
@@ -1297,13 +1302,60 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     return new DocObjectSnapshot(geometry, obj.Attributes.Duplicate());
   }
 
+  static DocObjectSnapshot? CaptureNotchObject(RhinoDoc doc, Guid objectId)
+  {
+    var snapshot = CaptureDocObject(doc, objectId);
+    if (snapshot == null)
+      return null;
+
+    foreach (var component in RelatedNotchObjects(doc, objectId))
+    {
+      if (component.Id == objectId)
+        continue;
+      var componentSnapshot = CaptureDocObject(doc, component.Id);
+      if (componentSnapshot != null)
+        snapshot.Components.Add(componentSnapshot);
+    }
+    return snapshot;
+  }
+
+  static IReadOnlyList<RhinoObject> RelatedNotchObjects(RhinoDoc doc, Guid objectId)
+  {
+    var primary = doc.Objects.FindId(objectId);
+    if (primary == null)
+      return Array.Empty<RhinoObject>();
+
+    string? componentSet = primary.Attributes.GetUserString(NotchComponentSetKey);
+    if (string.IsNullOrWhiteSpace(componentSet))
+      return [primary];
+
+    var related = doc.Objects.FindByUserString(
+      NotchComponentSetKey, componentSet, true) ?? Array.Empty<RhinoObject>();
+    return related
+      .Where(obj => obj != null)
+      .OrderBy(obj => obj.Id == objectId ? 0 : 1)
+      .ToList();
+  }
+
+  static void DeleteNotchObjects(RhinoDoc doc, Guid objectId)
+  {
+    foreach (var obj in RelatedNotchObjects(doc, objectId))
+      doc.Objects.Delete(obj.Id, true);
+  }
+
   static Guid RestoreDocObject(RhinoDoc doc, DocObjectSnapshot? snapshot)
   {
     if (snapshot == null) return Guid.Empty;
     var geometry = snapshot.Geometry.Duplicate();
-    return geometry == null
+    Guid restoredId = geometry == null
       ? Guid.Empty
       : doc.Objects.Add(geometry, snapshot.Attributes.Duplicate());
+    if (restoredId == Guid.Empty)
+      return Guid.Empty;
+
+    foreach (var component in snapshot.Components)
+      RestoreDocObject(doc, component);
+    return restoredId;
   }
 
   // ── Finalize ──────────────────────────────────────────────────────────────
@@ -1409,8 +1461,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (geom == null) continue;
       if (canNotch)
       {
-        if (geom is LineCurve lc)          e.Display.DrawLine(lc.Line, System.Drawing.Color.Cyan, 2);
-        else if (geom is PolylineCurve plc) e.Display.DrawPolyline(plc.ToPolyline(), System.Drawing.Color.Cyan, 2);
+        foreach (var component in geom)
+          e.Display.DrawCurve(component, System.Drawing.Color.Cyan, 2);
       }
 
       if (canLabel)
@@ -1464,7 +1516,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   // ── Notch geometry ────────────────────────────────────────────────────────
 
-  static GeometryBase? NotchGeometry(Curve curve, double lengthFromStart,
+  static string CanonicalNotchType(string? notchType)
+  {
+    string value = (notchType ?? "I").Trim().ToUpperInvariant();
+    return value == "OPENV" || value == OpenVNotchType ? OpenVNotchType : value;
+  }
+
+  static IReadOnlyList<Curve>? NotchGeometry(Curve curve, double lengthFromStart,
     double notchLength, double notchOffset, string side,
     string notchType, double notchWidth, Point3d? cursorPoint, KinkTangentChoice? kinkChoice,
     bool logOffsetFit = false)
@@ -1488,9 +1546,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     if (!direction.Unitize()) return null;
     if (side == "Right") direction = -direction;
 
-    notchType = (notchType ?? "I").ToUpperInvariant();
+    notchType = CanonicalNotchType(notchType);
 
-    if (notchType == "I")
+    if (notchType is "I" or "T")
     {
       Point3d start, end;
       if (notchOffset > 0.0)
@@ -1528,7 +1586,17 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         end   = center + direction * notchLength;
       }
       var lc = new LineCurve(start, end);
-      return lc.IsValid ? lc : null;
+      if (!lc.IsValid) return null;
+
+      var curves = new List<Curve> { lc };
+      if (notchType == "T")
+      {
+        double halfCap = Math.Max(0.0, notchWidth * 0.5);
+        var cap = new LineCurve(end - tangent * halfCap, end + tangent * halfCap);
+        if (cap.IsValid)
+          curves.Add(cap);
+      }
+      return curves;
     }
 
     double totalLength = curve.GetLength();
@@ -1579,25 +1647,27 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           FitNotchLegsToActualOffset(curve, offsetCurves,
             "V", tip, ref leftBase, tip, ref rightBase, logOffsetFit);
         }
-        return new PolylineCurve(new[] { leftBase, tip, rightBase });
+        return [new PolylineCurve(new[] { leftBase, tip, rightBase })];
       }
 
-      if (notchType == "U")
+      if (notchType is "U" or OpenVNotchType)
       {
         // U is a V with its point truncated, not a parallel-sided channel.
-        double halfFlat = Math.Max(0.0, notchWidth * 0.1);
+        double halfFlat = Math.Max(0.0, notchWidth * 0.25);
         var leftTip  = tip - tangent * halfFlat;
         var rightTip = tip + tangent * halfFlat;
         if (notchOffset > 0.0)
         {
           FitNotchLegsToActualOffset(curve, offsetCurves,
-            "U", leftTip, ref leftBase, rightTip, ref rightBase, logOffsetFit);
+            notchType, leftTip, ref leftBase, rightTip, ref rightBase, logOffsetFit);
         }
-        return new PolylineCurve(new[] { leftBase, leftTip, rightTip, rightBase });
+        if (notchType == OpenVNotchType)
+          return [new LineCurve(leftBase, leftTip), new LineCurve(rightTip, rightBase)];
+        return [new PolylineCurve(new[] { leftBase, leftTip, rightTip, rightBase })];
       }
 
       // Fallback
-      return new LineCurve(center, center + direction * notchLength);
+      return [new LineCurve(center, center + direction * notchLength)];
     }
     finally
     {
@@ -2111,22 +2181,34 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     return Vector3d.Multiply(new Vector3d(pt.X, pt.Y, pt.Z), plane.XAxis);
   }
 
-  static (double min, double max) GeometryXRangeInPlane(GeometryBase geom, Plane plane)
+  static (double min, double max) GeometryXRangeInPlane(
+    IReadOnlyList<Curve> geometry, Plane plane)
   {
     var values = new List<double>();
-    if (geom is LineCurve lc)
+    foreach (var geom in geometry)
     {
-      values.Add(GeometryXInPlane(plane, lc.Line.From));
-      values.Add(GeometryXInPlane(plane, lc.Line.To));
-    }
-    else if (geom is PolylineCurve plc)
-    {
-      foreach (var pt in plc.ToPolyline())
-        values.Add(GeometryXInPlane(plane, pt));
+      if (geom is LineCurve lc)
+      {
+        values.Add(GeometryXInPlane(plane, lc.Line.From));
+        values.Add(GeometryXInPlane(plane, lc.Line.To));
+      }
+      else if (geom is PolylineCurve plc)
+      {
+        foreach (var pt in plc.ToPolyline())
+          values.Add(GeometryXInPlane(plane, pt));
+      }
+      else
+      {
+        var bbox = geom.GetBoundingBox(plane);
+        if (bbox.IsValid)
+        {
+          values.Add(bbox.Min.X);
+          values.Add(bbox.Max.X);
+        }
+      }
     }
     if (values.Count > 0) return (values.Min(), values.Max());
-    var bbox = geom.GetBoundingBox(plane);
-    return bbox.IsValid ? (bbox.Min.X, bbox.Max.X) : (0.0, 0.0);
+    return (0.0, 0.0);
   }
 
   static double MeasuredLabelHalfWidth(RhinoDoc doc, string text, double height, Plane plane)
@@ -2169,7 +2251,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   static (Plane plane, bool sideFlipped, BoundingBox bbox) ComputeLabelLayout(
     RhinoDoc doc, Curve curve, double lengthFromStart,
     Vector3d direction, Vector3d tangent, double notchOffset,
-    GeometryBase? notchGeom, string labelText, double labelSize,
+    IReadOnlyList<Curve>? notchGeom, string labelText, double labelSize,
     double labelOffset, double labelOffsetY, string curveSide)
   {
     double tol = doc.ModelAbsoluteTolerance;
@@ -2236,32 +2318,24 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     GetCurveTangentAndDirection(curve, lengthFromStart, side, cursorPoint, kinkChoice,
       out var tangent, out var direction);
+    notchType = CanonicalNotchType(notchType);
 
     var geom = NotchGeometry(curve, lengthFromStart, notchLength, notchOffset,
       side, notchType, notchWidth, cursorPoint, kinkChoice, logOffsetFit: true);
     if (geom == null) return (Guid.Empty, null);
 
     Guid notchId = Guid.Empty;
-    if (notchEnabled && geom is LineCurve lc)
+    if (notchEnabled)
     {
       var attrs = CreateNotchAttributes(doc, curve, sourceCurveId, curveIndex,
         placementMode, lengthFromStart, notchLength, notchOffset, notchType,
         notchWidth, side, labelEnabled, labelText, labelSize, labelOffset,
         labelOffsetY, labelCurveSide, notchLayer, labelLayer, tangent);
       if (groupIndex >= 0) attrs.AddToGroup(groupIndex);
-      notchId = doc.Objects.AddLine(lc.Line, attrs);
+      notchId = AddNotchComponents(doc, geom, attrs);
+      if (notchId == Guid.Empty)
+        return (Guid.Empty, null);
     }
-    else if (notchEnabled && geom is PolylineCurve plc)
-    {
-      var attrs = CreateNotchAttributes(doc, curve, sourceCurveId, curveIndex,
-        placementMode, lengthFromStart, notchLength, notchOffset, notchType,
-        notchWidth, side, labelEnabled, labelText, labelSize, labelOffset,
-        labelOffsetY, labelCurveSide, notchLayer, labelLayer, tangent);
-      if (groupIndex >= 0) attrs.AddToGroup(groupIndex);
-      notchId = doc.Objects.AddPolyline(plc.ToPolyline(), attrs);
-    }
-    else if (notchEnabled)
-      return (Guid.Empty, null);
 
     Guid? labelId = null;
     if (labelEnabled && tangent.IsValid && direction.IsValid)
@@ -2295,6 +2369,48 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
 
     return (notchId, labelId);
+  }
+
+  static Guid AddNotchComponents(RhinoDoc doc, IReadOnlyList<Curve> geometry,
+    ObjectAttributes baseAttributes)
+  {
+    if (geometry.Count == 0)
+      return Guid.Empty;
+
+    bool compound = geometry.Count > 1;
+    string componentSet = compound ? Guid.NewGuid().ToString("N") : string.Empty;
+    int componentGroup = compound ? doc.Groups.Add() : -1;
+    var addedIds = new List<Guid>();
+
+    for (int i = 0; i < geometry.Count; i++)
+    {
+      var attrs = baseAttributes.Duplicate();
+      attrs.ObjectId = Guid.NewGuid();
+      attrs.SetUserString(NotchDataPrefix + "notch_id", attrs.ObjectId.ToString());
+      if (compound)
+      {
+        attrs.SetUserString(NotchComponentSetKey, componentSet);
+        attrs.SetUserString(NotchDataPrefix + "component_index",
+          i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        attrs.SetUserString(NotchDataPrefix + "component_count",
+          geometry.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (componentGroup >= 0)
+          attrs.AddToGroup(componentGroup);
+      }
+
+      Guid id = doc.Objects.Add(geometry[i], attrs);
+      if (id == Guid.Empty)
+      {
+        foreach (var addedId in addedIds)
+          doc.Objects.Delete(addedId, true);
+        if (componentGroup >= 0)
+          doc.Groups.Delete(componentGroup);
+        return Guid.Empty;
+      }
+      addedIds.Add(id);
+    }
+
+    return addedIds[0];
   }
 
   static ObjectAttributes CreateNotchAttributes(RhinoDoc doc, Curve sourceCurve,
@@ -2421,7 +2537,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       var id = s.NotchIdsByCurve[curveIndex][^1];
       s.NotchIdsByCurve[curveIndex].RemoveAt(s.NotchIdsByCurve[curveIndex].Count - 1);
-      if (id != Guid.Empty) doc.Objects.Delete(id, true);
+      if (id != Guid.Empty) DeleteNotchObjects(doc, id);
     }
     while (s.LabelIdsByCurve[curveIndex].Count > 0)
     {
@@ -2736,7 +2852,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public int    MultipleNumber;
     public double MultipleDistance;
     public bool   MultipleUseDistance;
-    public readonly string[] NotchTypeValues = ["I", "V", "U"];
+    public readonly string[] NotchTypeValues = ["I", "V", OpenVNotchType, "U", "T"];
+    public readonly string[] NotchTypeOptionValues = ["I", "V", "OpenV", "U", "T"];
+    public readonly string[] NotchTypeToolTips = ["Slit", "Vee", "Open Vee", "Castle", "Tee"];
     public int NotchTypeIndex;
 
     public readonly int[] LabelSizePctValues;
@@ -2828,7 +2946,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       MultipleDistance    = Math.Max(0.0, multipleDistance);
       MultipleUseDistance = multipleUseDistance;
 
-      NotchTypeIndex  = Array.IndexOf(NotchTypeValues, notchType?.ToUpper() ?? "I");
+      NotchTypeIndex  = Array.IndexOf(NotchTypeValues, CanonicalNotchType(notchType));
       if (NotchTypeIndex < 0) NotchTypeIndex = 0;
 
       LabelSizePctValues = Enumerable.Range(4, 17).Select(i => i * 5).ToArray(); // 20..100 step 5
@@ -2918,6 +3036,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     public GeometryBase Geometry { get; }
     public ObjectAttributes Attributes { get; }
+    public List<DocObjectSnapshot> Components { get; } = [];
   }
 
   sealed class NotchHistoryRequest
@@ -3045,10 +3164,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       for (int i = 0; i < _typeButtons.Length; i++)
       {
         int typeIndex = i;
-        string typeName = s.NotchTypeValues[i];
         _typeButtons[i] = new Button
         {
-          ToolTip = $"{typeName} notch",
+          ToolTip = s.NotchTypeToolTips[i],
           BackgroundColor = Colors.Transparent,
           Width = 18,
           Height = 18,
@@ -3718,44 +3836,59 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       double top = center - height * 0.5;
       double bottom = center + height * 0.5;
 
-      var points = new System.Windows.Media.PointCollection();
-
-      switch ((notchType ?? "I").ToUpperInvariant())
+      var strokes = new List<System.Windows.Media.PointCollection>();
+      switch (CanonicalNotchType(notchType))
       {
         case "V":
-          points.Add(new System.Windows.Point(left, top));
-          points.Add(new System.Windows.Point(center, bottom));
-          points.Add(new System.Windows.Point(right, top));
+          strokes.Add([
+            new System.Windows.Point(left, top),
+            new System.Windows.Point(center, bottom),
+            new System.Windows.Point(right, top),
+          ]);
+          break;
+        case OpenVNotchType:
+          double openHalfFlat = width * 0.22;
+          strokes.Add([
+            new System.Windows.Point(left, top),
+            new System.Windows.Point(center - openHalfFlat, bottom),
+          ]);
+          strokes.Add([
+            new System.Windows.Point(center + openHalfFlat, bottom),
+            new System.Windows.Point(right, top),
+          ]);
           break;
         case "U":
           // Exaggerate the cap in the tiny icon so U remains distinguishable
           // from V even when the configured cap is proportionally very short.
           double halfFlat = width * 0.22;
-          points.Add(new System.Windows.Point(left, top));
-          points.Add(new System.Windows.Point(center - halfFlat, bottom));
-          points.Add(new System.Windows.Point(center + halfFlat, bottom));
-          points.Add(new System.Windows.Point(right, top));
+          strokes.Add([
+            new System.Windows.Point(left, top),
+            new System.Windows.Point(center - halfFlat, bottom),
+            new System.Windows.Point(center + halfFlat, bottom),
+            new System.Windows.Point(right, top),
+          ]);
+          break;
+        case "T":
+          strokes.Add([
+            new System.Windows.Point(center, top),
+            new System.Windows.Point(center, bottom),
+          ]);
+          strokes.Add([
+            new System.Windows.Point(left, bottom),
+            new System.Windows.Point(right, bottom),
+          ]);
           break;
         default:
-          points.Add(new System.Windows.Point(center, center - available * 0.5));
-          points.Add(new System.Windows.Point(center, center + available * 0.5));
+          strokes.Add([
+            new System.Windows.Point(center, center - available * 0.5),
+            new System.Windows.Point(center, center + available * 0.5),
+          ]);
           break;
       }
 
       var stroke = active
         ? System.Windows.SystemColors.ControlTextBrush //new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 120, 215))
         : System.Windows.SystemColors.GrayTextBrush;
-      var glyph = new System.Windows.Shapes.Polyline
-      {
-        Points = points,
-        Stroke = stroke,
-        StrokeThickness = active ? 1.5 : 1.5,
-        StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
-        StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
-        StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
-        SnapsToDevicePixels = true,
-        IsHitTestVisible = false,
-      };
       var canvas = new System.Windows.Controls.Canvas
       {
         Width = size,
@@ -3766,11 +3899,25 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
         VerticalAlignment = System.Windows.VerticalAlignment.Center,
       };
-      canvas.Children.Add(glyph);
+      foreach (var points in strokes)
+      {
+        canvas.Children.Add(new System.Windows.Shapes.Polyline
+        {
+          Points = points,
+          Stroke = stroke,
+          StrokeThickness = 1.5,
+          StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
+          StrokeStartLineCap = System.Windows.Media.PenLineCap.Round,
+          StrokeEndLineCap = System.Windows.Media.PenLineCap.Round,
+          SnapsToDevicePixels = true,
+          IsHitTestVisible = false,
+        });
+      }
 
       const double padding = 3.0;
       var content = new System.Windows.Controls.Grid
       {
+        Background = active ? System.Windows.SystemColors.ControlDarkBrush: System.Windows.Media.Brushes.Transparent,
         Width = size + (padding * 2.0),
         Height = size + (padding * 2.0),
         SnapsToDevicePixels = true,
@@ -3781,7 +3928,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         BorderBrush = new System.Windows.Media.SolidColorBrush(
           active ? System.Windows.Media.Color.FromRgb(0, 120, 215)
-                :  System.Windows.SystemColors.GrayTextColor),
+                  : System.Windows.SystemColors.ControlLightBrush.Color),
         BorderThickness = new System.Windows.Thickness(1.0),
         SnapsToDevicePixels = true,
         IsHitTestVisible = false,
@@ -3823,7 +3970,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         System.Windows.SystemColors.ControlTextBrush);
       outline.SetValue(
         System.Windows.Shapes.Shape.StrokeThicknessProperty,
-        1.0);
+        0.5);
       outline.SetValue(
         System.Windows.Shapes.Shape.StrokeDashArrayProperty,
         new System.Windows.Media.DoubleCollection { 1.0, 2.0 });

@@ -841,58 +841,77 @@ public sealed class vFacing : Command
       $"BuildFacingPieces size={size:F3} baseLen={baseJoined.GetLength():F3} " +
       $"baseChord={baseJoined.PointAtStart.DistanceTo(baseJoined.PointAtEnd):F3}");
 
-    Curve? s1Trimmed = null;
-    Curve? s2Trimmed = null;
-    Curve? offTrimmed = null;
-    var bestTargetDistance = double.MaxValue;
-    var sideCenter = (s1Joined.PointAtEnd + s2Joined.PointAtEnd) / 2.0;
-    var offsetCandidates = CreateOffsetCandidates(baseJoined, size, tol, cplane);
-    for (var i = 0; i < offsetCandidates.Count; i++)
+    if (!TrySelectOffsetByClosestPoints(
+          baseJoined, s1Joined, s2Joined, size, tol, cplane,
+          out var offsetCurve,
+          out var side1Pick, out var offset1Pick,
+          out var side2Pick, out var offset2Pick,
+          out var selectionFailure))
     {
-      var candidate = offsetCandidates[i];
-      var filleted = TryFilletFacingCandidate(
-        baseJoined, s1Joined, s2Joined, candidate.Curve, tol, angleTol,
-        out var candidateS1, out var candidateS2, out var candidateOffset);
-
-      Log.Write("vFacing",
-        $"  offsetCandidate[{i}] distance={candidate.SignedDistance:F3} " +
-        $"len={candidate.Curve.GetLength():F3} fillet={filleted}");
-
-      if (!filleted)
-        continue;
-
-      var targetDistance = DistanceToCurve(candidateOffset!, sideCenter);
-      if (targetDistance >= bestTargetDistance)
-        continue;
-
-      bestTargetDistance = targetDistance;
-      s1Trimmed = candidateS1;
-      s2Trimmed = candidateS2;
-      offTrimmed = candidateOffset;
-    }
-
-    if (s1Trimmed == null || s2Trimmed == null || offTrimmed == null)
-    {
-      RhinoApp.WriteLine("vFacing: could not fillet the offset to both sides.");
-      Log.Write("vFacing", $"  no usable zero-radius fillet among {offsetCandidates.Count} candidate(s)");
+      RhinoApp.WriteLine("vFacing: could not identify the interior offset.");
+      Log.Write("vFacing", $"  offset selection failed: {selectionFailure}");
       return false;
     }
 
+    var firstFillet = Curve.CreateFilletCurves(
+      s1Joined, side1Pick,
+      offsetCurve!, offset1Pick,
+      0.0, false, true, false, tol, angleTol);
+    if (firstFillet == null || firstFillet.Length < 2)
+    {
+      RhinoApp.WriteLine("vFacing: could not fillet the first side to the offset.");
+      Log.Write("vFacing", "  side1 zero-radius fillet returned no trimmed pair");
+      return false;
+    }
+
+    var s1Trimmed = OrientFromPoint(firstFillet[0], baseJoined.PointAtStart, tol);
+    if (s1Trimmed == null)
+    {
+      Log.Write("vFacing", "  side1 zero-radius fillet did not preserve its base junction");
+      return false;
+    }
+
+    var offsetAfterFirst = firstFillet[1];
+    var secondFillet = Curve.CreateFilletCurves(
+      s2Joined, side2Pick,
+      offsetAfterFirst, offset2Pick,
+      0.0, false, true, false, tol, angleTol);
+    if (secondFillet == null || secondFillet.Length < 2)
+    {
+      RhinoApp.WriteLine("vFacing: could not fillet the second side to the offset.");
+      Log.Write("vFacing", "  side2 zero-radius fillet returned no trimmed pair");
+      return false;
+    }
+
+    var s2Trimmed = OrientFromPoint(secondFillet[0], baseJoined.PointAtEnd, tol);
+    if (s2Trimmed == null)
+    {
+      Log.Write("vFacing", "  side2 zero-radius fillet did not preserve its base junction");
+      return false;
+    }
+
+    var offTrimmed = secondFillet[1].DuplicateCurve();
     if (offTrimmed.PointAtStart.DistanceTo(s2Trimmed.PointAtEnd) >
         offTrimmed.PointAtEnd.DistanceTo(s2Trimmed.PointAtEnd))
       offTrimmed.Reverse();
 
+    if (offTrimmed.PointAtStart.DistanceTo(s2Trimmed.PointAtEnd) > tol ||
+        offTrimmed.PointAtEnd.DistanceTo(s1Trimmed.PointAtEnd) > tol)
+    {
+      RhinoApp.WriteLine("vFacing: filleted boundary did not close.");
+      Log.Write("vFacing",
+        $"  filleted boundary gaps " +
+        $"side2={offTrimmed.PointAtStart.DistanceTo(s2Trimmed.PointAtEnd):F6} " +
+        $"side1={offTrimmed.PointAtEnd.DistanceTo(s1Trimmed.PointAtEnd):F6}");
+      return false;
+    }
+
     var s1Rev = s1Trimmed.DuplicateCurve();
     s1Rev.Reverse();
 
-    var clearanceRange = CurveClearanceRange(baseJoined, offTrimmed, 24);
-
     Log.Write("vFacing",
-      $"  result method=zero-radius-fillet " +
+      $"  result method=closest-point-zero-radius-fillet " +
       $"side1Span={s1Trimmed.GetLength():F3} side2Span={s2Trimmed.GetLength():F3} " +
-      $"clearance1={DistanceToCurve(baseJoined, s1Trimmed.PointAtEnd):F3} " +
-      $"clearance2={DistanceToCurve(baseJoined, s2Trimmed.PointAtEnd):F3} " +
-      $"clearanceRange=[{clearanceRange.Min:F3},{clearanceRange.Max:F3}] " +
       $"offsetLen={offTrimmed.GetLength():F3}");
 
     // Output pieces are ready; set them now so they are always returned on success.
@@ -907,74 +926,182 @@ public sealed class vFacing : Command
     // Joined boundary for CollectInsideObjects only.
     // Failure here is non-fatal — inside-object collection will be skipped.
     var bndPieces = new Curve[] { baseJoined, s2Trimmed!, offTrimmed!, s1Rev };
-    foreach (var joinTol in new[] { tol * 10, tol * 100, tol * 1000, _size })
+    var bnd = Curve.JoinCurves(bndPieces, tol);
+    if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
     {
-      var bnd = Curve.JoinCurves(bndPieces, joinTol);
-      if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
-      {
-        boundaryCurve = bnd[0];
-        break;
-      }
+      boundaryCurve = bnd[0];
     }
     // boundaryCurve may remain null; caller handles that gracefully.
     return true;
   }
 
-  private static bool TryFilletFacingCandidate(
-    Curve baseCurve, Curve side1, Curve side2, Curve offset,
-    double tol, double angleTol,
-    out Curve? side1Result, out Curve? side2Result, out Curve? offsetResult)
+  private static bool TrySelectOffsetByClosestPoints(
+    Curve baseCurve, Curve side1, Curve side2,
+    double size, double tol, Plane plane,
+    out Curve? offsetResult,
+    out Point3d side1Point, out Point3d offset1Point,
+    out Point3d side2Point, out Point3d offset2Point,
+    out string failure)
   {
-    side1Result = side2Result = offsetResult = null;
+    offsetResult = null;
+    side1Point = offset1Point = side2Point = offset2Point = Point3d.Unset;
+    failure = string.Empty;
 
-    var first = Curve.CreateFilletCurves(
-      side1, side1.PointAtStart,
-      offset, PointOnCurveNearest(offset, baseCurve.PointAtStart),
-      0.0, false, true, false, tol, angleTol);
-    if (first == null || first.Length < 2)
+    var validOffsets = new List<(
+      Curve Offset,
+      Point3d Side1Point,
+      Point3d Offset1Point,
+      Point3d Side2Point,
+      Point3d Offset2Point,
+      double SignedDistance)>();
+
+    foreach (var signedDistance in new[] { size, -size })
+    {
+      if (!TryCreateSingleOffset(
+            baseCurve, signedDistance, tol, plane,
+            out var offset, out var rawCount, out var normalizeFailure))
+      {
+        Log.Write("vFacing",
+          $"  offset distance={signedDistance:F3} rawCount={rawCount} " +
+          $"rejected={normalizeFailure}");
+        continue;
+      }
+
+      if (!TryGetClosestPointFilletPicks(
+            baseCurve, side1, side2, offset!,
+            out var candidateSide1Point, out var candidateOffset1Point,
+            out var candidateSide2Point, out var candidateOffset2Point,
+            out var pickFailure))
+      {
+        Log.Write("vFacing",
+          $"  offset distance={signedDistance:F3} rawCount={rawCount} " +
+          $"len={offset!.GetLength():F3} rejected={pickFailure}");
+        continue;
+      }
+
+      validOffsets.Add((
+        offset!,
+        candidateSide1Point, candidateOffset1Point,
+        candidateSide2Point, candidateOffset2Point,
+        signedDistance));
+
+      Log.Write("vFacing",
+        $"  offset distance={signedDistance:F3} rawCount={rawCount} " +
+        $"len={offset!.GetLength():F3} accepted");
+    }
+
+    if (validOffsets.Count != 1)
+    {
+      failure = validOffsets.Count == 0
+        ? "neither signed offset is between the sides"
+        : "both signed offsets are between the sides";
       return false;
+    }
 
-    var trimmedSide1 = OrientFromPoint(first[0], baseCurve.PointAtStart, tol);
-    if (trimmedSide1 == null)
+    var selected = validOffsets[0];
+    offsetResult = selected.Offset;
+    side1Point = selected.Side1Point;
+    offset1Point = selected.Offset1Point;
+    side2Point = selected.Side2Point;
+    offset2Point = selected.Offset2Point;
+    Log.Write("vFacing", $"  selected offset distance={selected.SignedDistance:F3}");
+    return true;
+  }
+
+  private static bool TryCreateSingleOffset(
+    Curve curve, double distance, double tol, Plane plane,
+    out Curve? offset, out int rawCount, out string failure)
+  {
+    offset = null;
+    failure = string.Empty;
+
+    var rawOffsets = curve.Offset(
+      plane, distance, tol, CurveOffsetCornerStyle.Sharp);
+    rawCount = rawOffsets?.Length ?? 0;
+    if (rawOffsets == null || rawOffsets.Length == 0)
+    {
+      failure = "offset returned no curve";
       return false;
+    }
 
-    var second = Curve.CreateFilletCurves(
-      side2, side2.PointAtStart,
-      offset, PointOnCurveNearest(offset, baseCurve.PointAtEnd),
-      0.0, false, true, false, tol, angleTol);
-    if (second == null || second.Length < 2)
+    if (rawOffsets.Length == 1)
+    {
+      offset = rawOffsets[0];
+      return true;
+    }
+
+    var joined = Curve.JoinCurves(rawOffsets, tol);
+    if (joined == null || joined.Length != 1)
+    {
+      failure = $"offset fragments did not join into one curve ({joined?.Length ?? 0} joined)";
       return false;
+    }
 
-    var trimmedSide2 = OrientFromPoint(second[0], baseCurve.PointAtEnd, tol);
-    if (trimmedSide2 == null)
+    offset = joined[0];
+    return true;
+  }
+
+  private static bool TryGetClosestPointFilletPicks(
+    Curve baseCurve, Curve side1, Curve side2, Curve offset,
+    out Point3d side1Point, out Point3d offset1Point,
+    out Point3d side2Point, out Point3d offset2Point,
+    out string failure)
+  {
+    side1Point = offset1Point = side2Point = offset2Point = Point3d.Unset;
+    failure = string.Empty;
+
+    if (!side1.ClosestPoints(offset, out side1Point, out offset1Point) ||
+        !side2.ClosestPoints(offset, out side2Point, out offset2Point))
+    {
+      failure = "could not find closest points between the offset and both sides";
       return false;
+    }
 
-    if (!offset.ClosestPoint(trimmedSide1.PointAtEnd, out var offsetAtSide1) ||
-        !offset.ClosestPoint(trimmedSide2.PointAtEnd, out var offsetAtSide2))
+    var baseMiddle = baseCurve.PointAtNormalizedLength(0.5);
+    if (!offset.ClosestPoint(offset1Point, out var offsetAtSide1) ||
+        !offset.ClosestPoint(offset2Point, out var offsetAtSide2) ||
+        !offset.ClosestPoint(baseMiddle, out var offsetAtMiddle))
+    {
+      failure = "could not locate closest points on the offset";
       return false;
+    }
 
-    var joinTol = tol * 10.0;
-    if (offset.PointAt(offsetAtSide1).DistanceTo(trimmedSide1.PointAtEnd) > joinTol ||
-        offset.PointAt(offsetAtSide2).DistanceTo(trimmedSide2.PointAtEnd) > joinTol)
+    var firstSideParameter = Math.Min(offsetAtSide1, offsetAtSide2);
+    var secondSideParameter = Math.Max(offsetAtSide1, offsetAtSide2);
+    if (!(offsetAtMiddle > firstSideParameter && offsetAtMiddle < secondSideParameter))
+    {
+      failure =
+        $"offset middle is outside side points " +
+        $"({offsetAtSide1:F6}, {offsetAtMiddle:F6}, {offsetAtSide2:F6})";
       return false;
+    }
 
-    var trimmedOffset = offset.Trim(
-      Math.Min(offsetAtSide1, offsetAtSide2),
-      Math.Max(offsetAtSide1, offsetAtSide2));
-    if (trimmedOffset == null)
+    var side1OffsetDistance = side1Point.DistanceTo(offset1Point);
+    var side1BaseDistance = DistanceToCurve(baseCurve, side1Point);
+    var side2OffsetDistance = side2Point.DistanceTo(offset2Point);
+    var side2BaseDistance = DistanceToCurve(baseCurve, side2Point);
+
+    if (!(side1OffsetDistance < side1BaseDistance))
+    {
+      failure =
+        $"side1 point is not closer to offset than base " +
+        $"({side1OffsetDistance:F6} vs {side1BaseDistance:F6})";
       return false;
+    }
 
-    if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) >
-        trimmedOffset.PointAtEnd.DistanceTo(trimmedSide2.PointAtEnd))
-      trimmedOffset.Reverse();
-
-    if (trimmedOffset.PointAtStart.DistanceTo(trimmedSide2.PointAtEnd) > joinTol ||
-        trimmedOffset.PointAtEnd.DistanceTo(trimmedSide1.PointAtEnd) > joinTol)
+    if (!(side2OffsetDistance < side2BaseDistance))
+    {
+      failure =
+        $"side2 point is not closer to offset than base " +
+        $"({side2OffsetDistance:F6} vs {side2BaseDistance:F6})";
       return false;
+    }
 
-    side1Result = trimmedSide1;
-    side2Result = trimmedSide2;
-    offsetResult = trimmedOffset;
+    Log.Write("vFacing",
+      $"  closest points offsetParameters=" +
+      $"[{offsetAtSide1:F6}, {offsetAtMiddle:F6}, {offsetAtSide2:F6}] " +
+      $"side1Distances=[offset:{side1OffsetDistance:F6},base:{side1BaseDistance:F6}] " +
+      $"side2Distances=[offset:{side2OffsetDistance:F6},base:{side2BaseDistance:F6}]");
     return true;
   }
 
@@ -985,65 +1112,12 @@ public sealed class vFacing : Command
       : double.NaN;
   }
 
-  private static (double Min, double Max) CurveClearanceRange(
-    Curve source, Curve offset, int sampleCount)
-  {
-    var min = double.MaxValue;
-    var max = double.MinValue;
-    for (var i = 0; i <= sampleCount; i++)
-    {
-      var point = offset.PointAtNormalizedLength(i / (double)sampleCount);
-      var distance = DistanceToCurve(source, point);
-      if (double.IsNaN(distance))
-        continue;
-      min = Math.Min(min, distance);
-      max = Math.Max(max, distance);
-    }
-
-    return min < double.MaxValue ? (min, max) : (double.NaN, double.NaN);
-  }
-
-  private static Point3d PointOnCurveNearest(Curve curve, Point3d point)
-  {
-    return curve.ClosestPoint(point, out var parameter)
-      ? curve.PointAt(parameter)
-      : curve.PointAtNormalizedLength(0.5);
-  }
-
   private static Curve? OrientFromPoint(Curve curve, Point3d startPoint, double tol)
   {
     var result = curve.DuplicateCurve();
     if (result.PointAtEnd.DistanceTo(startPoint) < result.PointAtStart.DistanceTo(startPoint))
       result.Reverse();
-    return result.PointAtStart.DistanceTo(startPoint) <= tol * 10.0 ? result : null;
-  }
-
-  private static List<(Curve Curve, double SignedDistance)> CreateOffsetCandidates(
-    Curve curve, double distance, double tol, Plane plane)
-  {
-    var result = new List<(Curve, double)>();
-
-    foreach (var d in new[] { distance, -distance })
-    {
-      var offsets = curve.Offset(plane, d, tol, CurveOffsetCornerStyle.Sharp);
-      if (offsets == null || offsets.Length == 0)
-        continue;
-
-      foreach (var c in offsets)
-        if (c != null)
-          result.Add((c, d));
-
-      if (offsets.Length > 1)
-      {
-        var joined = Curve.JoinCurves(offsets, tol * 10.0);
-        if (joined != null)
-          foreach (var c in joined)
-            if (c != null)
-              result.Add((c, d));
-      }
-    }
-
-    return result;
+    return result.PointAtStart.DistanceTo(startPoint) <= tol ? result : null;
   }
 
   // ── Inside-object collection (from vPart) ────────────────────────────────

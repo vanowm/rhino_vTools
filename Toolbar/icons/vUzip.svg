@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vUzip toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M8 7V27Q8 41 24 41Q40 41 40 27V7"/>
+    <path class="accent" d="M14 8V27Q14 35 24 35Q34 35 34 27V8"/>
+    <path d="M10 12H16M10 17H16M10 22H16M32 12H38M32 17H38M32 22H38"/>
+    <path class="accent-fill no-stroke" d="M20 24H28L26 31H22Z"/>
+  </g>
+</svg>

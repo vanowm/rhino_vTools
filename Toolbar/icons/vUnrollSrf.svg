@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vUnrollSrf toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 11Q21 6 24 19Q24 32 8 38Q16 26 5 11Z"/>
+    <path class="soft" d="M8 15Q18 13 18 23Q17 30 11 34"/>
+    <path class="accent" d="M22 15C29 10 35 12 39 17M39 17L33 15M39 17L37 23"/>
+    <path class="accent" d="M27 25H43V39H27Z"/>
+  </g>
+</svg>

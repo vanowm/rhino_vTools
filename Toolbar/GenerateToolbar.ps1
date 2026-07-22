@@ -1,6 +1,6 @@
 param(
-  [string]$IconDirectory = (Join-Path $PSScriptRoot "..\..\icons"),
-  [string]$OutputPath = (Join-Path $PSScriptRoot "..\vTools.rui")
+  [string]$IconDirectory = (Join-Path $PSScriptRoot "icons"),
+  [string]$OutputPath = (Join-Path $PSScriptRoot "vTools.rui")
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,25 +9,46 @@ $pluginId = "2607512e-a1fc-4cf9-9329-a293431437a0"
 $toolbarId = "f00df249-4c86-4080-9c11-3360fdf269ef"
 $buttons = @(
   @{
-    Name = "Isolate A"
+    Name = "vIsolate"
+    Set = $null
+    Id = "1119e14d-9a8e-40bc-a985-c2aacf2435d6"
+    ShowId = $null
+    Icon = "vIsolate.svg"
+  },
+  @{
+    Name = "vIsolate A"
     Set = "A"
     Id = "43aef707-2579-4959-9eea-a790dfb1a157"
     ShowId = "6dac69f7-798c-4280-8118-3578595b69f5"
-    Icon = "Isolate_A.svg"
+    Icon = "vIsolate_A.svg"
   },
   @{
-    Name = "Isolate B"
+    Name = "vIsolate B"
     Set = "B"
     Id = "b5c58f34-5a56-49fa-8d83-c57ba9c5e0cb"
     ShowId = "44397787-82f4-42ac-ac6e-6c2d13485759"
-    Icon = "Isolate_B.svg"
+    Icon = "vIsolate_B.svg"
   },
   @{
-    Name = "Isolate C"
+    Name = "vIsolate C"
     Set = "C"
     Id = "3991bed5-68c9-4858-ad7d-dd6db0c3dd90"
     ShowId = "7349c359-ffdf-400a-a79e-21ba69ec2071"
-    Icon = "Isolate_C.svg"
+    Icon = "vIsolate_C.svg"
+  },
+  @{
+    Name = "vIsolate D"
+    Set = "D"
+    Id = "3d3669d6-a07d-413b-ac7b-59ffc3e2490c"
+    ShowId = "8ac0f5df-8ec8-438e-8c62-8185246c5a1d"
+    Icon = "vIsolate_D.svg"
+  },
+  @{
+    Name = "vIsolate E"
+    Set = "E"
+    Id = "7e0dae8b-91a1-48b8-aaf3-ba3fa26069ad"
+    ShowId = "4af6fb26-2cb0-408c-9be2-80f4b1a775fe"
+    Icon = "vIsolate_E.svg"
   }
 )
 
@@ -38,6 +59,7 @@ function Get-SvgXml([string]$path) {
 
   $svg = New-Object System.Xml.XmlDocument
   $svg.PreserveWhitespace = $true
+  $svg.XmlResolver = $null
   $svg.Load($path)
   return $svg.DocumentElement.OuterXml
 }
@@ -113,7 +135,9 @@ try {
     $writer.WriteElementString("locale_1033", $button.Name)
     $writer.WriteEndElement()
     $writer.WriteElementString("left_macro_id", $button.Id)
-    $writer.WriteElementString("right_macro_id", $button.ShowId)
+    if ($button.ShowId) {
+      $writer.WriteElementString("right_macro_id", $button.ShowId)
+    }
     $writer.WriteEndElement()
   }
   $writer.WriteEndElement()
@@ -129,19 +153,27 @@ try {
       $writer.WriteElementString("locale_1033", $button.Name)
       $writer.WriteEndElement()
     }
-    $writer.WriteElementString("script", "'_vIsolate _$($button.Set)")
+    $leftScript = if ($button.Set) {
+      "'_vIsolate _$($button.Set)"
+    }
+    else {
+      "'_vIsolate"
+    }
+    $writer.WriteElementString("script", $leftScript)
     $writer.WriteEndElement()
 
-    $writer.WriteStartElement("macro_item")
-    $writer.WriteAttributeString("guid", $button.ShowId)
-    $writer.WriteAttributeString("bitmap_id", $button.Id)
-    foreach ($element in @("text", "tooltip", "help_text", "button_text", "menu_text")) {
-      $writer.WriteStartElement($element)
-      $writer.WriteElementString("locale_1033", "Show $($button.Set)")
+    if ($button.ShowId) {
+      $writer.WriteStartElement("macro_item")
+      $writer.WriteAttributeString("guid", $button.ShowId)
+      $writer.WriteAttributeString("bitmap_id", $button.Id)
+      foreach ($element in @("text", "tooltip", "help_text", "button_text", "menu_text")) {
+        $writer.WriteStartElement($element)
+        $writer.WriteElementString("locale_1033", "Show $($button.Set)")
+        $writer.WriteEndElement()
+      }
+      $writer.WriteElementString("script", "'_-Show `"$($button.Set)`"")
       $writer.WriteEndElement()
     }
-    $writer.WriteElementString("script", "'_-Show `"$($button.Set)`"")
-    $writer.WriteEndElement()
   }
   $writer.WriteEndElement()
 

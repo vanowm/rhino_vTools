@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vTextFlip toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M15 33L22 12L29 33M18 25H26"/>
+    <path class="accent" d="M9 15C4 23 7 35 17 40M9 15L6 22M9 15L16 16M39 33C44 25 41 13 31 8M39 33L42 26M39 33L32 32"/>
+    <path class="soft" d="M24 7V41"/>
+  </g>
+</svg>

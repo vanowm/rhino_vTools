@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vOffset toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 34C13 13 27 12 43 21"/>
+    <path class="accent" d="M5 25C14 5 29 5 43 13"/>
+    <path class="soft" d="M14 25L11 15M28 17L26 8"/>
+    <path class="accent-fill no-stroke" d="M8 16L13 10L15 18ZM23 9L28 4L29 12Z"/>
+  </g>
+</svg>

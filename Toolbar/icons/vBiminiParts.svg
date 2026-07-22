@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vBiminiParts toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M6 38L10 18Q12 9 24 7Q36 9 38 18L42 38Z"/>
+    <path d="M10 18Q24 23 38 18"/>
+    <path class="accent" d="M11 29H37M16 21V36M32 21V36"/>
+    <path class="accent-fill" d="M21 28H27V34H21Z"/>
+  </g>
+</svg>

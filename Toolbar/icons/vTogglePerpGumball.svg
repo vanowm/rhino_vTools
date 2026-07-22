@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vTogglePerpGumball toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 37C15 21 29 41 43 24"/>
+    <circle class="node" cx="25" cy="31" r="3"/>
+    <path class="axis-x" d="M25 31L41 35M41 35L36 37M41 35L37 31"/>
+    <path class="axis-y" d="M25 31L13 40M13 40L15 35M13 40L19 40"/>
+    <path class="axis-z" d="M25 31V9M25 9L21 15M25 9L29 15"/>
+    <path class="accent" d="M25 25H31V31"/>
+  </g>
+</svg>

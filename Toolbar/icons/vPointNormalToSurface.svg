@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vPointNormalToSurface toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 31L17 21L43 25L31 37Z"/>
+    <path class="soft" d="M12 31L37 27M18 23L30 35"/>
+    <path class="accent" d="M24 28V8"/>
+    <circle class="accent-fill" cx="24" cy="8" r="3.5"/>
+    <circle class="node" cx="24" cy="28" r="2.5"/>
+    <path class="accent" d="M24 23H29V28"/>
+  </g>
+</svg>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vOrient2pt toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M7 36L20 28"/>
+    <circle class="node" cx="7" cy="36" r="3"/>
+    <circle class="node" cx="20" cy="28" r="3"/>
+    <path class="accent" d="M28 20L41 8"/>
+    <circle class="accent-fill" cx="28" cy="20" r="3"/>
+    <circle class="accent-fill" cx="41" cy="8" r="3"/>
+    <path class="accent" d="M16 23C19 15 25 11 32 11M32 11L27 8M32 11L30 16"/>
+  </g>
+</svg>

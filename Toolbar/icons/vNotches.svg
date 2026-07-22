@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vNotches toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 31C16 23 31 34 43 23"/>
+    <path class="accent" d="M12 27L12 15M20 27L16 17L24 17L20 27M30 28L30 14M26 14H34M38 26L35 17L41 17Z"/>
+    <circle class="accent-fill" cx="12" cy="27" r="2"/>
+    <circle class="accent-fill" cx="30" cy="28" r="2"/>
+  </g>
+</svg>

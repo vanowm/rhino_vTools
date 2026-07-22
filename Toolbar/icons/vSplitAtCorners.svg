@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vSplitAtCorners toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <polyline points="5,36 14,14 25,31 42,9"/>
+    <circle class="accent-fill" cx="14" cy="14" r="3"/>
+    <circle class="accent-fill" cx="25" cy="31" r="3"/>
+    <path class="accent" d="M33 16L39 22M39 16L33 22"/>
+    <rect class="node" x="3" y="34" width="4" height="4"/>
+    <rect class="node" x="40" y="7" width="4" height="4"/>
+  </g>
+</svg>

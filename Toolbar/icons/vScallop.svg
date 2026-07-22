@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vScallop toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M6 32H42"/>
+    <path class="accent" d="M6 32Q24 5 42 32"/>
+    <rect class="node" x="3" y="29" width="6" height="6"/>
+    <rect class="node" x="39" y="29" width="6" height="6"/>
+    <path class="soft" d="M24 32V14"/>
+    <path class="accent-fill no-stroke" d="M20 19L24 12L28 19Z"/>
+  </g>
+</svg>

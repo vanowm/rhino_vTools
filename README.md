@@ -1,4 +1,4 @@
-Tools  ·  v26.7.22.1718
+Tools  ·  v26.7.22.1749
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -206,7 +206,7 @@ Options:
 1. Enter an optional Rhino hide-set name, or press Enter for no named set.
 1. Every other visible, unlocked normal object is hidden natively and the isolated objects remain selected.
 1. `vIsolate` is transparent and can run without cancelling the command already in progress.
-1. The packaged `vTools` toolbar includes a `vIsolate` tab with `Isolate A`, `Isolate B`, and `Isolate C` buttons. Left-click isolates into the matching named hide set; right-click shows that set.
+1. The packaged `vTools` toolbar and tab include general `vIsolate` and named `vIsolate A` through `vIsolate E` buttons. Named buttons isolate into the matching hide set on left-click and show that set on right-click.
 
 ### vLine flow
 

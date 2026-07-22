@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vCurveToSpline toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <polyline class="soft" points="5,36 14,11 26,32 42,9"/>
+    <path class="accent" d="M5 36C10 18 15 12 22 24S34 26 42 9"/>
+    <rect class="node" x="3" y="34" width="4" height="4"/>
+    <rect class="node" x="12" y="9" width="4" height="4"/>
+    <rect class="node" x="24" y="30" width="4" height="4"/>
+    <rect class="node" x="40" y="7" width="4" height="4"/>
+  </g>
+</svg>

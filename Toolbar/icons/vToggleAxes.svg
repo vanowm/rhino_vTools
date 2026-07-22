@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vToggleAxes toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <circle class="node" cx="22" cy="28" r="3"/>
+    <path class="axis-x" d="M22 28L42 35M42 35L36 36M42 35L38 30"/>
+    <path class="axis-y" d="M22 28L7 38M7 38L10 32M7 38L14 38"/>
+    <path class="axis-z" d="M22 28V6M22 6L18 12M22 6L26 12"/>
+    <path class="soft" d="M7 28L22 20L42 27L24 39Z"/>
+  </g>
+</svg>

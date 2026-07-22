@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vToggleControlPoints toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <polyline class="soft" points="5,35 13,9 29,38 43,12"/>
+    <path class="accent" d="M5 35C12 13 18 14 24 27S36 29 43 12"/>
+    <rect class="node" x="3" y="33" width="4" height="4"/>
+    <rect class="node" x="11" y="7" width="4" height="4"/>
+    <rect class="node" x="27" y="36" width="4" height="4"/>
+    <rect class="node" x="41" y="10" width="4" height="4"/>
+    <path class="accent" d="M17 7C21 4 27 4 31 8M31 8L26 8M31 8L30 13"/>
+  </g>
+</svg>

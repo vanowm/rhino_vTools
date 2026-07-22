@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" role="img" aria-labelledby="title">
+  <title id="title">vProjectToSurface toolbar icon</title>
+  <style>
+    .main{fill:none;stroke:#231f20;stroke-width:2.25;stroke-linecap:round;stroke-linejoin:round}
+    .accent{stroke:#122877}
+    .soft{opacity:.38}
+    .dash{stroke-dasharray:3 3}
+    .node{fill:#fff;stroke:#231f20}
+    .accent-node{fill:#fff;stroke:#122877}
+    .accent-fill{fill:#122877;stroke:#122877}
+    .no-stroke{stroke:none}
+    .axis-x{stroke:#c7352d}
+    .axis-y{stroke:#27854a}
+    .axis-z{stroke:#2d62b8}
+  </style>
+  <g class="main">
+    <path d="M5 31L17 23L43 27L31 39Z"/>
+    <path class="soft" d="M10 31L36 28M18 24L30 38"/>
+    <path d="M8 10C18 4 29 18 41 8"/>
+    <path class="accent" d="M11 31C20 26 29 35 38 28"/>
+    <path class="accent" d="M15 13V23M15 23L11 19M15 23L19 19M33 14V24M33 24L29 20M33 24L37 20"/>
+  </g>
+</svg>

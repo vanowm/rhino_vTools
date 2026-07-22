@@ -125,6 +125,8 @@ public sealed class vIsolate : Command
     var setAOption = getter.AddOption("A", "A", true);
     var setBOption = getter.AddOption("B", "B", true);
     var setCOption = getter.AddOption("C", "C", true);
+    var setDOption = getter.AddOption("D", "D", true);
+    var setEOption = getter.AddOption("E", "E", true);
 
     while (true)
     {
@@ -138,7 +140,9 @@ public sealed class vIsolate : Command
         var optionIndex = getter.Option().Index;
         requestedHideSetName = optionIndex == setAOption ? "A" :
           optionIndex == setBOption ? "B" :
-          optionIndex == setCOption ? "C" : requestedHideSetName;
+          optionIndex == setCOption ? "C" :
+          optionIndex == setDOption ? "D" :
+          optionIndex == setEOption ? "E" : requestedHideSetName;
         continue;
       }
 
@@ -172,7 +176,9 @@ public sealed class vIsolate : Command
       return null;
 
     var value = (getter.StringResult() ?? string.Empty).Trim();
-    return value is "_A" or "_B" or "_C" ? value[1..] : value;
+    return value is "_A" or "_B" or "_C" or "_D" or "_E"
+      ? value[1..]
+      : value;
   }
 
   private static IEnumerable<RhinoObject> VisibleNormalObjects(RhinoDoc doc)

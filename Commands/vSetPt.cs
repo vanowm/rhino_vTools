@@ -14,24 +14,36 @@ using Rhino.UI;
 namespace vTools.Commands;
 
 /// <summary>
-/// Previews the result of moving the cursor-nearest endpoint control point of
-/// every selected open curve to a cursor-driven target, then forwards those
-/// grips to the built-in -SetPt command so the user can set the final target.
+/// Previews the result of moving preselected control points, or otherwise the
+/// cursor-nearest endpoint control point of each selected open curve, to a
+/// cursor-driven target before forwarding those grips to the built-in -SetPt.
 ///
 /// Workflow:
 ///   1. Select curves, starting with any pre-selected curves, and freely
 ///      add or remove curves before accepting the selection.
-///   2. The command previews the curves with the cursor-nearest endpoint
-///      control points aligned at a target that follows the viewport cursor.
-///   3. Grips are turned on and the identified endpoint grips are selected.
+///   2. A preselected control point overrides endpoint detection for its
+///      curve; otherwise the endpoint nearest the viewport cursor is used.
+///      The resulting curves preview at a target that follows the cursor.
+///   3. Grips are turned on and the identified control-point grips are selected.
 ///   4. Control is transferred to -SetPt with the defaults
 ///      XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No.
 /// </summary>
 public sealed class vSetPt : Command
 {
+  private readonly record struct PreselectedControlPoint(
+    int GripIndex,
+    int[] ControlPointIndices,
+    Point3d Point);
+
+  private readonly record struct PendingCurvePick(
+    Guid Id,
+    bool IsStart,
+    PreselectedControlPoint[] ControlPoints,
+    bool GripsWereOn);
+
   private static bool _restartingAfterDelegate;
   private static EventHandler? _pendingIdleHandler;
-  private static (Guid id, bool isStart)[]? _pendingGripPicks;
+  private static PendingCurvePick[]? _pendingGripPicks;
   private static uint _pendingDocSerial;
 
   private const string Tag = "vSetPt";
@@ -50,6 +62,7 @@ public sealed class vSetPt : Command
 
     CancelPending();
     Log.Write(Tag, "--- run start ---");
+    var preselectedControlPoints = CapturePreselectedControlPoints(doc);
 
     // Accept pre-selected curves or prompt for selection.
     var go = new GetObject();
@@ -66,7 +79,8 @@ public sealed class vSetPt : Command
     go.AcceptNothing(true);
 
     var preview = new EndpointPreviewConduit { Enabled = true };
-    var cursorTracker = new EndpointCursorCallback(doc, preview) { Enabled = true };
+    var cursorTracker = new EndpointCursorCallback(
+      doc, preview, preselectedControlPoints) { Enabled = true };
     var preselectedWaitingForConfirmation = false;
 
     EventHandler<RhinoObjectSelectionEventArgs> onSelectionChanged = (_, e) =>
@@ -115,11 +129,15 @@ public sealed class vSetPt : Command
     }
 
     var curveData = new List<(Guid id, Curve c)>();
+    var originalGripStates = new Dictionary<Guid, bool>();
     var seenIds = new HashSet<Guid>();
     foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
     {
       if (obj?.Geometry is Curve c && !c.IsClosed && seenIds.Add(obj.Id))
+      {
         curveData.Add((obj.Id, c));
+        originalGripStates[obj.Id] = obj.GripsOn;
+      }
     }
 
     Log.Write(Tag, $"  open curves: {curveData.Count}");
@@ -132,7 +150,7 @@ public sealed class vSetPt : Command
 
     var cursorPicks = cursorTracker.SnapshotPicks();
     var fallbackPicks = BuildClosestClusterPicks(curveData);
-    var picks = new List<(Guid id, bool isStart)>();
+    var picks = new List<PendingCurvePick>();
     for (int i = 0; i < curveData.Count; i++)
     {
       var id = curveData[i].id;
@@ -140,8 +158,14 @@ public sealed class vSetPt : Command
         ? previewPick
         : fallbackPicks[id];
 
-      Log.Write(Tag, $"  curve[{i}] cursor pick={(chooseStart ? "start" : "end")}");
-      picks.Add((id, chooseStart));
+      var controlPoints = preselectedControlPoints.TryGetValue(id, out var selectedPoints)
+        ? selectedPoints
+        : Array.Empty<PreselectedControlPoint>();
+      Log.Write(Tag, controlPoints.Length > 0
+        ? $"  curve[{i}] preselected control points={controlPoints.Length}"
+        : $"  curve[{i}] cursor pick={(chooseStart ? "start" : "end")}");
+      picks.Add(new PendingCurvePick(
+        id, chooseStart, controlPoints, originalGripStates[id]));
     }
 
     if (picks.Count == 0)
@@ -180,15 +204,21 @@ public sealed class vSetPt : Command
   {
     private readonly RhinoDoc _doc;
     private readonly EndpointPreviewConduit _preview;
+    private readonly IReadOnlyDictionary<Guid, PreselectedControlPoint[]>
+      _preselectedControlPoints;
     private readonly Dictionary<Guid, (bool IsStart, Point3d Point)> _picks = new();
     private RhinoView? _view;
     private Point2d _cursor;
     private bool _hasCursor;
 
-    public EndpointCursorCallback(RhinoDoc doc, EndpointPreviewConduit preview)
+    public EndpointCursorCallback(
+      RhinoDoc doc,
+      EndpointPreviewConduit preview,
+      IReadOnlyDictionary<Guid, PreselectedControlPoint[]> preselectedControlPoints)
     {
       _doc = doc;
       _preview = preview;
+      _preselectedControlPoints = preselectedControlPoints;
     }
 
     public void InitializeFromCurrentCursor()
@@ -221,6 +251,14 @@ public sealed class vSetPt : Command
 
         try
         {
+          curves[obj.Id] = curve;
+          if (_preselectedControlPoints.TryGetValue(obj.Id, out var controlPoints) &&
+              controlPoints.Length > 0)
+          {
+            next[obj.Id] = (false, controlPoints[0].Point);
+            continue;
+          }
+
           var start = viewport.WorldToClient(curve.PointAtStart);
           var end = viewport.WorldToClient(curve.PointAtEnd);
           var startDx = start.X - _cursor.X;
@@ -233,7 +271,6 @@ public sealed class vSetPt : Command
           next[obj.Id] = (
             chooseStart,
             chooseStart ? curve.PointAtStart : curve.PointAtEnd);
-          curves[obj.Id] = curve;
         }
         catch
         {
@@ -247,20 +284,27 @@ public sealed class vSetPt : Command
       var previews = new List<Curve>();
       if (_picks.Count > 0)
       {
-        var x = 0.0;
-        var y = 0.0;
-        var z = 0.0;
-        foreach (var pick in _picks.Values)
+        var anchorPoints = new List<Point3d>();
+        foreach (var pair in _picks)
         {
-          x += pick.Point.X;
-          y += pick.Point.Y;
-          z += pick.Point.Z;
+          if (_preselectedControlPoints.TryGetValue(pair.Key, out var controlPoints) &&
+              controlPoints.Length > 0)
+          {
+            anchorPoints.AddRange(controlPoints.Select(point => point.Point));
+          }
+          else
+          {
+            anchorPoints.Add(pair.Value.Point);
+          }
         }
 
+        var x = anchorPoints.Sum(point => point.X);
+        var y = anchorPoints.Sum(point => point.Y);
+        var z = anchorPoints.Sum(point => point.Z);
         var anchor = new Point3d(
-          x / _picks.Count,
-          y / _picks.Count,
-          z / _picks.Count);
+          x / anchorPoints.Count,
+          y / anchorPoints.Count,
+          z / anchorPoints.Count);
         var target = anchor;
         var cursorRay = viewport.ClientToWorld(_cursor);
         var cursorPlane = new Plane(anchor, viewport.CameraDirection);
@@ -275,7 +319,10 @@ public sealed class vSetPt : Command
           if (!curves.TryGetValue(pair.Key, out var curve))
             continue;
 
-          var result = CreateSetPtPreview(curve, pair.Value.IsStart, target);
+          _preselectedControlPoints.TryGetValue(
+            pair.Key, out var selectedControlPoints);
+          var result = CreateSetPtPreview(
+            curve, pair.Value.IsStart, selectedControlPoints, target);
           if (result != null)
             previews.Add(result);
         }
@@ -302,17 +349,112 @@ public sealed class vSetPt : Command
     }
   }
 
-  private static Curve? CreateSetPtPreview(Curve curve, bool isStart, Point3d target)
+  private static Curve? CreateSetPtPreview(
+    Curve curve,
+    bool isStart,
+    IReadOnlyList<PreselectedControlPoint>? selectedControlPoints,
+    Point3d target)
   {
     var result = curve.ToNurbsCurve();
     if (result == null || result.Points.Count == 0)
       return null;
 
-    var index = isStart ? 0 : result.Points.Count - 1;
-    var controlPoint = result.Points[index];
-    return result.Points.SetPoint(index, target, controlPoint.Weight)
-      ? result
-      : null;
+    var indices = new HashSet<int>();
+    if (selectedControlPoints is { Count: > 0 })
+    {
+      foreach (var selectedPoint in selectedControlPoints)
+      {
+        var pointIndexAdded = false;
+        foreach (var index in selectedPoint.ControlPointIndices)
+        {
+          if (index >= 0 && index < result.Points.Count)
+          {
+            indices.Add(index);
+            pointIndexAdded = true;
+          }
+        }
+
+        if (!pointIndexAdded &&
+            selectedPoint.GripIndex >= 0 &&
+            selectedPoint.GripIndex < result.Points.Count)
+        {
+          indices.Add(selectedPoint.GripIndex);
+        }
+      }
+    }
+    else
+    {
+      indices.Add(isStart ? 0 : result.Points.Count - 1);
+    }
+
+    var changed = false;
+    foreach (var index in indices)
+    {
+      var controlPoint = result.Points[index];
+      changed |= result.Points.SetPoint(index, target, controlPoint.Weight);
+    }
+
+    return changed ? result : null;
+  }
+
+  private static Dictionary<Guid, PreselectedControlPoint[]>
+    CapturePreselectedControlPoints(RhinoDoc doc)
+  {
+    var pointsByOwner = new Dictionary<Guid, List<PreselectedControlPoint>>();
+    var capturedGrips = new List<GripObject>();
+    var selected = doc.Objects.GetSelectedObjects(false, true).ToList();
+
+    foreach (var selectedObject in selected)
+    {
+      if (selectedObject is not GripObject grip)
+        continue;
+
+      try
+      {
+        if (grip.GetCurveCVIndices(out var indices) <= 0 ||
+            indices == null ||
+            indices.Length == 0)
+        {
+          continue;
+        }
+
+        var owner = doc.Objects.FindId(grip.OwnerId);
+        if (owner?.Geometry is not Curve curve || curve.IsClosed)
+          continue;
+
+        if (!pointsByOwner.TryGetValue(grip.OwnerId, out var points))
+        {
+          points = new List<PreselectedControlPoint>();
+          pointsByOwner.Add(grip.OwnerId, points);
+        }
+
+        if (points.Any(point => point.GripIndex == grip.Index))
+          continue;
+
+        points.Add(new PreselectedControlPoint(
+          grip.Index,
+          indices.ToArray(),
+          grip.CurrentLocation));
+        capturedGrips.Add(grip);
+      }
+      catch
+      {
+      }
+    }
+
+    foreach (var grip in capturedGrips)
+      grip.Select(false);
+
+    foreach (var ownerId in pointsByOwner.Keys)
+      doc.Objects.FindId(ownerId)?.Select(true);
+
+    var result = pointsByOwner.ToDictionary(
+      pair => pair.Key,
+      pair => pair.Value.ToArray());
+    Log.Write(Tag,
+      $"  preselected control points: {result.Values.Sum(points => points.Length)}" +
+      $" on {result.Count} curve(s)");
+    return result;
   }
 
   private static Dictionary<Guid, bool> BuildClosestClusterPicks(
@@ -387,10 +529,11 @@ public sealed class vSetPt : Command
 
     doc.Objects.UnselectAll();
 
-    // Enable grips for each target curve and select the endpoint grip.
+    // Enable grips for each target curve and select the requested grips.
     int selectedCount = 0;
-    foreach (var (id, isStart) in picks)
+    foreach (var pick in picks)
     {
+      var id = pick.Id;
       var obj = doc.Objects.FindId(id);
       if (obj == null) continue;
 
@@ -404,22 +547,55 @@ public sealed class vSetPt : Command
       var curve = obj.Geometry as Curve;
       if (curve == null) continue;
 
-      // Find the grip nearest to the target endpoint position.
-      var targetPt = isStart ? curve.PointAtStart : curve.PointAtEnd;
-      GripObject? best = null;
+      if (pick.ControlPoints.Length > 0)
+      {
+        var selectedGripIndices = new HashSet<int>();
+        foreach (var selectedPoint in pick.ControlPoints)
+        {
+          var exactGrip = grips.FirstOrDefault(
+            grip => grip.Index == selectedPoint.GripIndex);
+          var bestDistance = exactGrip?.CurrentLocation.DistanceTo(selectedPoint.Point)
+            ?? double.MaxValue;
+          if (exactGrip == null)
+          {
+            foreach (var grip in grips)
+            {
+              var distance = grip.CurrentLocation.DistanceTo(selectedPoint.Point);
+              if (distance >= bestDistance)
+                continue;
+
+              bestDistance = distance;
+              exactGrip = grip;
+            }
+          }
+
+          if (exactGrip == null || !selectedGripIndices.Add(exactGrip.Index))
+            continue;
+
+          exactGrip.Select(true);
+          selectedCount++;
+          Log.Write(Tag,
+            $"  preselected grip restored: {id} index={exactGrip.Index}" +
+            $" gripDist={bestDistance:G4}");
+        }
+
+        continue;
+      }
+
+      var targetPt = pick.IsStart ? curve.PointAtStart : curve.PointAtEnd;
+      GripObject? endpointGrip = null;
       double bestD = double.MaxValue;
       foreach (var grip in grips)
       {
         var d = grip.CurrentLocation.DistanceTo(targetPt);
-        if (d < bestD) { bestD = d; best = grip; }
+        if (d < bestD) { bestD = d; endpointGrip = grip; }
       }
-
-      if (best == null) continue;
-      best.Select(true);
+      if (endpointGrip == null) continue;
+      endpointGrip.Select(true);
       selectedCount++;
 
       Log.Write(Tag,
-        $"  grip selected: {id} {( isStart ? "start" : "end" )} gripDist={bestD:G4}");
+        $"  grip selected: {id} {(pick.IsStart ? "start" : "end")} gripDist={bestD:G4}");
     }
 
     doc.Views.Redraw();
@@ -427,7 +603,10 @@ public sealed class vSetPt : Command
     if (selectedCount == 0)
     {
       Log.Write(Tag, "  no grips could be selected");
-      RhinoApp.WriteLine("vSetPt: failed to select endpoint grips.");
+      RhinoApp.WriteLine("vSetPt: failed to select control-point grips.");
+      doc.Objects.UnselectAll();
+      RestoreGripStates(doc, picks);
+      doc.Views.Redraw();
       return;
     }
 
@@ -436,17 +615,38 @@ public sealed class vSetPt : Command
     // Delegate to -SetPt; pre-selected grips bypass the "Select points" step
     // so the user only has to click the target location.
     // XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No are the desired defaults.
-    var ok = RhinoApp.RunScript(
-      "_-SetPt _XSet=_Yes _YSet=_Yes _ZSet=_Yes _Alignment=_World _Copy=_No", false);
-
-    Log.Write(Tag, $"  -SetPt result={ok}");
-
-    doc.Objects.UnselectAll();
-    doc.Views.Redraw();
+    var ok = false;
+    try
+    {
+      ok = RhinoApp.RunScript(
+        "_-SetPt _XSet=_Yes _YSet=_Yes _ZSet=_Yes _Alignment=_World _Copy=_No", false);
+      Log.Write(Tag, $"  -SetPt result={ok}");
+    }
+    finally
+    {
+      doc.Objects.UnselectAll();
+      RestoreGripStates(doc, picks);
+      doc.Views.Redraw();
+    }
 
     // Silently re-run vSetPt so pressing Enter repeats this command, not -SetPt.
     _restartingAfterDelegate = true;
     _ = RhinoApp.RunScript("_vSetPt", false);
     _restartingAfterDelegate = false;
+  }
+
+  private static void RestoreGripStates(
+    RhinoDoc doc,
+    IEnumerable<PendingCurvePick> picks)
+  {
+    foreach (var pick in picks)
+    {
+      var obj = doc.Objects.FindId(pick.Id);
+      if (obj == null || obj.GripsOn == pick.GripsWereOn)
+        continue;
+
+      obj.GripsOn = pick.GripsWereOn;
+      obj.CommitChanges();
+    }
   }
 }

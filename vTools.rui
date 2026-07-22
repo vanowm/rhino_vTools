@@ -5,12 +5,12 @@
   <tool_bar_groups>
     <tool_bar_group guid="f00df249-4c86-4080-9c11-3360fdf269ef" dock_bar_guid32="f00df249-4c86-4080-9c11-3360fdf269ef" dock_bar_guid64="f00df249-4c86-4080-9c11-3360fdf269ef" active_tool_bar_group="f00df249-4c86-4080-9c11-3360fdf269ef" single_file="False" hide_single_tab="True">
       <text>
-        <locale_1033>vTools Isolate</locale_1033>
+        <locale_1033>vTools</locale_1033>
       </text>
       <dock_bar_info visible="True" floating="True" />
       <tool_bar_group_item guid="f00df249-4c86-4080-9c11-3360fdf269ef" major_version="1" minor_version="1">
         <text>
-          <locale_1033>vTools Isolate</locale_1033>
+          <locale_1033>vTools</locale_1033>
         </text>
         <tool_bar_id>f00df249-4c86-4080-9c11-3360fdf269ef</tool_bar_id>
       </tool_bar_group_item>
@@ -19,7 +19,7 @@
   <tool_bars>
     <tool_bar guid="f00df249-4c86-4080-9c11-3360fdf269ef" bitmap_id="43aef707-2579-4959-9eea-a790dfb1a157" item_display_style="control_only">
       <text>
-        <locale_1033>vTools Isolate</locale_1033>
+        <locale_1033>vTools</locale_1033>
       </text>
       <tool_bar_item guid="43aef707-2579-4959-9eea-a790dfb1a157" button_display_mode="control_only" button_style="normal">
         <text>

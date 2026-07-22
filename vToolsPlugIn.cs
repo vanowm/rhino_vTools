@@ -1,4 +1,5 @@
 using Rhino;
+using Rhino.Commands;
 using Rhino.PlugIns;
 using System;
 using System.Collections.Generic;
@@ -42,22 +43,26 @@ public class vToolsPlugIn : PlugIn
     var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     try
     {
-      foreach (var t in GetType().Assembly.GetTypes())
+      foreach (var command in GetCommands())
       {
-        if (t == null || !t.IsClass || t.IsAbstract) continue;
-        if (!typeof(Rhino.Commands.Command).IsAssignableFrom(t)) continue;
-        try
-        {
-          if (Activator.CreateInstance(t) is Rhino.Commands.Command cmd)
-          {
-            var name = (cmd.EnglishName ?? string.Empty).Trim();
-            if (!string.IsNullOrEmpty(name)) names.Add(name);
-          }
-        }
-        catch { }
+        if (command == null || IsHiddenCommand(command))
+          continue;
+
+        var name = (command.EnglishName ?? string.Empty).Trim();
+        if (!string.IsNullOrEmpty(name))
+          names.Add(name);
       }
     }
     catch { }
     return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+  }
+
+  private static bool IsHiddenCommand(Command command)
+  {
+    var attribute = command.GetType()
+      .GetCustomAttributes(typeof(CommandStyleAttribute), false)
+      .OfType<CommandStyleAttribute>()
+      .FirstOrDefault();
+    return attribute != null && (attribute.Styles & Style.Hidden) != 0;
   }
 }

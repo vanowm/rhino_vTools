@@ -4,6 +4,7 @@ using Rhino.PlugIns;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using vTools.Commands;
 
 namespace vTools;
 
@@ -30,12 +31,19 @@ public class vToolsPlugIn : PlugIn
 
     Log.Initialize();
     Log.Write($"startup  version={version}  dll={asm.Location}");
+    HideSetState.StartPolling();
 
     var commandNames = CollectRegisteredCommandNames();
     Log.Write($"startup  commands ({commandNames.Count}): {string.Join(", ", commandNames)}");
 
     RhinoApp.WriteLine($"vTools v{version} loaded — {commandNames.Count} commands: {string.Join(", ", commandNames)}.");
     return LoadReturnCode.Success;
+  }
+
+  protected override void OnShutdown()
+  {
+    HideSetState.StopPolling();
+    base.OnShutdown();
   }
 
   private List<string> CollectRegisteredCommandNames()

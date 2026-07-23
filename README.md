@@ -1,4 +1,4 @@
-Tools  ·  v26.7.22.1959
+Tools  ·  v26.7.22.2005
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -454,7 +454,7 @@ Behavior:
 ### vShow flow
 
 1. Run `vShow` while another command is active or from the normal command prompt.
-1. Choose one of up to ten most-recent active set options, enter any set name directly, or press Enter to show every named hidden set while leaving ordinary unnamed hidden objects untouched.
+1. Choose one of up to ten most-recent active set options, enter any set name directly, or press Enter to show every named hidden set while leaving ordinary unnamed hidden objects untouched. Named sets created by Rhino's default `-Hide` command are polled into the same persistent list.
 1. Matching active set members are shown directly, their completed set membership is cleared, and the interrupted command remains active.
 1. The `vTools` toolbar passes A-E directly as set-name input when a named isolate button is right-clicked.
 

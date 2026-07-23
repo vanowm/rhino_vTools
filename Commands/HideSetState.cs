@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using Rhino;
+using Rhino.Commands;
 using Rhino.DocObjects;
 using Rhino.Runtime.InteropWrappers;
 
@@ -9,6 +11,17 @@ namespace vTools.Commands;
 
 internal static class HideSetState
 {
+  private sealed class HidePollContext
+  {
+    public HidePollContext(uint documentSerialNumber)
+    {
+      DocumentSerialNumber = documentSerialNumber;
+    }
+
+    public uint DocumentSerialNumber { get; }
+    public Dictionary<Guid, string> PreviousNativeNames { get; } = new();
+  }
+
   private const string Tag = "HideSetState";
   private const string TrackingKey = "vTools.HideSet";
   private const string TrackingOrderKey = "vTools.HideSetOrder";
@@ -31,10 +44,36 @@ internal static class HideSetState
       "CRhinoObject_RemoveHideName",
       BindingFlags.Static | BindingFlags.NonPublic);
 
+  private static bool _polling;
+  private static HidePollContext? _hidePollContext;
+
   public static bool NativeAccessAvailable =>
     ObjectPointerMethod != null &&
     GetNameMethod != null &&
     RemoveNameMethod != null;
+
+  public static void StartPolling()
+  {
+    if (_polling)
+      return;
+
+    Command.BeginCommand += OnBeginCommand;
+    Command.EndCommand += OnEndCommand;
+    RhinoDoc.ModifyObjectAttributes += OnModifyObjectAttributes;
+    _polling = true;
+  }
+
+  public static void StopPolling()
+  {
+    if (!_polling)
+      return;
+
+    Command.BeginCommand -= OnBeginCommand;
+    Command.EndCommand -= OnEndCommand;
+    RhinoDoc.ModifyObjectAttributes -= OnModifyObjectAttributes;
+    _hidePollContext = null;
+    _polling = false;
+  }
 
   public static string GetTrackedName(RhinoObject obj) =>
     (obj.Attributes.GetUserString(TrackingKey) ?? string.Empty).Trim();
@@ -147,5 +186,98 @@ internal static class HideSetState
       Log.Write(Tag, $"  pointer lookup failed object={obj.Id}: {ex.Message}");
       return false;
     }
+  }
+
+  private static void OnBeginCommand(object? sender, CommandEventArgs e)
+  {
+    if (!string.Equals(e.CommandEnglishName, "Hide", StringComparison.OrdinalIgnoreCase))
+      return;
+
+    var doc = e.Document;
+    var context = new HidePollContext(doc.RuntimeSerialNumber);
+    foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
+      CapturePreviousNativeName(context, obj);
+    _hidePollContext = context;
+    Log.Write(Tag,
+      $"  polling default Hide begin preselected={context.PreviousNativeNames.Count}");
+  }
+
+  private static void OnModifyObjectAttributes(
+    object? sender,
+    RhinoModifyObjectAttributesEventArgs e)
+  {
+    var context = _hidePollContext;
+    if (context == null ||
+        context.DocumentSerialNumber != e.Document.RuntimeSerialNumber ||
+        e.OldAttributes.Mode == ObjectMode.Hidden ||
+        e.NewAttributes.Mode != ObjectMode.Hidden)
+    {
+      return;
+    }
+
+    CapturePreviousNativeName(context, e.RhinoObject);
+  }
+
+  private static void OnEndCommand(object? sender, CommandEventArgs e)
+  {
+    if (!string.Equals(e.CommandEnglishName, "Hide", StringComparison.OrdinalIgnoreCase))
+      return;
+
+    var context = _hidePollContext;
+    _hidePollContext = null;
+    var doc = e.Document;
+    if (context == null ||
+        context.DocumentSerialNumber != doc.RuntimeSerialNumber)
+    {
+      return;
+    }
+
+    var order = DateTime.UtcNow.Ticks;
+    var namedCount = 0;
+    var unnamedCount = 0;
+    foreach (var entry in context.PreviousNativeNames)
+    {
+      var obj = doc.Objects.FindId(entry.Key);
+      if (obj == null || obj.Attributes.Mode != ObjectMode.Hidden)
+        continue;
+
+      var hasNativeName = TryGetNativeName(obj, out var nativeName);
+      var newlyNamed = hasNativeName &&
+        !string.Equals(
+          nativeName,
+          entry.Value,
+          StringComparison.OrdinalIgnoreCase);
+      if (newlyNamed)
+      {
+        if (SetTrackedName(doc, obj.Id, nativeName, order))
+          namedCount++;
+        continue;
+      }
+
+      SetTrackedName(doc, obj.Id, string.Empty);
+      if (hasNativeName)
+      {
+        var currentObject = doc.Objects.FindId(obj.Id);
+        if (currentObject != null)
+          RemoveNativeName(currentObject);
+      }
+      unnamedCount++;
+    }
+
+    Log.Write(Tag,
+      $"  polling default Hide end result={e.CommandResult}" +
+      $" affected={context.PreviousNativeNames.Count}" +
+      $" named={namedCount} unnamed={unnamedCount}");
+  }
+
+  private static void CapturePreviousNativeName(
+    HidePollContext context,
+    RhinoObject obj)
+  {
+    if (context.PreviousNativeNames.ContainsKey(obj.Id))
+      return;
+
+    context.PreviousNativeNames[obj.Id] =
+      TryGetNativeName(obj, out var name) ? name : string.Empty;
   }
 }

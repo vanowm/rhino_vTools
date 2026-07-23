@@ -189,7 +189,7 @@
     </Exec>
 
     <Exec
-      Command="git -C &quot;$(MSBuildProjectDirectory)&quot; push origin main"
+      Command="git -C &quot;$(MSBuildProjectDirectory)&quot; push origin master"
       IgnoreExitCode="true"
       Condition="'$(ShouldVersionCommit)' == 'true' and '$(VersionCommitExitCode)' == '0'">
       <Output TaskParameter="ExitCode" PropertyName="VersionPushExitCode" />
@@ -216,7 +216,7 @@
 
     <Message
       Importance="high"
-      Text="vTools version commit pushed to origin/main."
+      Text="vTools version commit pushed to origin/master."
       Condition="'$(ShouldVersionCommit)' == 'true' and '$(VersionCommitExitCode)' == '0' and '$(VersionPushExitCode)' == '0'" />
 
     <Message

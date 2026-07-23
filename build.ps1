@@ -174,14 +174,14 @@ if ($dllUpdated) {
         } else {
             Remove-Item $pendingFile -ErrorAction SilentlyContinue
             Write-Host "Committed: $commitMsg" -ForegroundColor Green
-            $pushOutput = git push origin main 2>&1
+            $pushOutput = git push origin master 2>&1
             $pushCode = $LASTEXITCODE
             if ($pushCode -eq 0) {
-                Write-Host "Pushed to origin/main." -ForegroundColor Green
+                Write-Host "Pushed to origin/master." -ForegroundColor Green
             } else {
                 Write-Host "WARNING: git push failed (exit $pushCode):" -ForegroundColor Yellow
                 Write-Host ($pushOutput | Out-String) -ForegroundColor Yellow
-                Write-Host "Commit was created locally. Run 'git push origin main' manually." -ForegroundColor Yellow
+                Write-Host "Commit was created locally. Run 'git push origin master' manually." -ForegroundColor Yellow
             }
         }
     }

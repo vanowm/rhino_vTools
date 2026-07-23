@@ -52,7 +52,7 @@ public sealed class vShow : Command
     var recentSets = activeSets
       .OrderByDescending(set => set.Order)
       .ThenBy(set => set.Name, StringComparer.OrdinalIgnoreCase)
-      .Take(10)
+      .Take(20)
       .ToList();
     Log.Write(Tag,
       $"  object-hidden candidates={objectHiddenCount}" +

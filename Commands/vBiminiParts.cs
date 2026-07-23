@@ -84,6 +84,8 @@ public sealed class vBiminiParts : Command
   private const string SectionName         = "vBiminiParts";
   private const string PipeSizeKey         = "pipeSizeIdx";
   private const string ToolsConfigFileName = "vTools.config.json";
+  private const string PocketDataKey       = "vBiminiPkt";
+  private const string PreviousSecondaryLengthKey = "previousSecondaryPocketLength";
 
   private static string _layerPlot      = "PLOT";
   private static string _layerCut1      = "CUT1";
@@ -503,6 +505,21 @@ public sealed class vBiminiParts : Command
 
     L($"mainPicks={mainPicks.Count}  secPicks={secPicks.Count}");
 
+    double? secondaryPocketLength = null;
+    if (secPicks.Count > 0)
+    {
+      var proposedLength = CalculateSecondaryPocketLength(secPicks, mainPicks);
+      if (!TryResolveSecondaryPocketLength(
+            doc,
+            proposedLength,
+            tol,
+            out var resolvedLength))
+      {
+        return CancelWithTempCleanup(doc, finTempIds, seamTempIds);
+      }
+      secondaryPocketLength = resolvedLength;
+    }
+
     // ── Stage 4: Facing parts (FacingP = port/left, FacingS = stbd/right) ───
 
     BuildFacingParts(doc, seamParts, centroid, cut1Idx, excludeInterior, tol);
@@ -519,8 +536,9 @@ public sealed class vBiminiParts : Command
 
     // ── Stage 6: Secondary pocket geometry ──────────────────────────────────────
 
-    if (secPicks.Count > 0)
-      BuildSecondaryPockets(doc, secPicks, mainPicks, seamParts, finParts, centroid, cut1Idx, tol, pocketExclude);
+    if (secPicks.Count > 0 && secondaryPocketLength.HasValue)
+      BuildSecondaryPockets(doc, secPicks, mainPicks, secondaryPocketLength.Value,
+                            seamParts, finParts, centroid, cut1Idx, tol, pocketExclude);
 
     // ── Stage 6.5: Collect all pocket center points; draw single center line ──
     {
@@ -1266,25 +1284,118 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
   // Pocket: seam segment (top) + straight side walls + inward-offset zipper (bottom),
   //         corners filleted at SecFilletR.  Moved outward by binary-search PktSeamClearance.
   // The ±halfInner stitch marks remain stationary on the finished (PLOT) curve.
+  private static double CalculateSecondaryPocketLength(
+    List<(Curve Curve, Point3d Center)> secPicks,
+    List<(Curve Curve, Point3d Center)> mainPicks)
+  {
+    var refCurve = mainPicks.Count > 0 ? mainPicks[0].Curve : secPicks[0].Curve;
+    var mainHalf = refCurve.GetLength() / 2.0;
+    var length = Math.Ceiling(mainHalf / 6.0) * 6.0;
+    if (length - mainHalf < 2.0)
+      length += 6.0;
+
+    L($"Secondary pocket proposed length: mainHalf={mainHalf:F3}" +
+      $" length={length:F3}");
+    return length;
+  }
+
+  private static bool TryResolveSecondaryPocketLength(
+    RhinoDoc doc,
+    double current,
+    double tolerance,
+    out double resolved)
+  {
+    resolved = current;
+    if (!TryFindPreviousSecondaryPocketLength(doc, out var previous) ||
+        Math.Abs(current - previous) <= tolerance)
+    {
+      return true;
+    }
+
+    var currentText = FormatSecondaryPocketLength(current);
+    var previousText = FormatSecondaryPocketLength(previous);
+    L($"Secondary pocket length differs: current={currentText}" +
+      $" previous={previousText}");
+    RhinoApp.WriteLine(
+      $"Secondary pocket current length: {currentText}; previous length: {previousText}.");
+
+    using var getter = new GetOption();
+    getter.EnableTransparentCommands(true);
+    getter.SetCommandPrompt(
+      $"Current length {currentText}; previous length {previousText}. Use previous length");
+    var yesOption = getter.AddOption("Yes");
+    var noOption = getter.AddOption("No");
+    while (true)
+    {
+      var result = getter.Get();
+      if (result == GetResult.Cancel)
+        return false;
+      if (result != GetResult.Option)
+        continue;
+
+      var optionIndex = getter.Option().Index;
+      if (optionIndex == yesOption)
+      {
+        resolved = previous;
+        L($"Secondary pocket length choice: previous={previousText}");
+        return true;
+      }
+      if (optionIndex == noOption)
+      {
+        L($"Secondary pocket length choice: current={currentText}");
+        return true;
+      }
+    }
+  }
+
+  private static bool TryFindPreviousSecondaryPocketLength(
+    RhinoDoc doc,
+    out double length)
+  {
+    var stored = doc.Strings.GetValue(SectionName, PreviousSecondaryLengthKey);
+    var found = double.TryParse(
+      stored,
+      NumberStyles.Float,
+      CultureInfo.InvariantCulture,
+      out length);
+    if (found)
+      L($"Previous secondary pocket length: {FormatSecondaryPocketLength(length)}");
+    return found;
+  }
+
+  private static string FormatSecondaryPocketLength(double length) =>
+    length.ToString("0.###", CultureInfo.InvariantCulture);
+
+  private static void StorePreviousSecondaryPocketLength(
+    RhinoDoc doc,
+    double length)
+  {
+    doc.Strings.SetString(
+      SectionName,
+      PreviousSecondaryLengthKey,
+      length.ToString("R", CultureInfo.InvariantCulture));
+    L($"Stored document secondary pocket length: " +
+      FormatSecondaryPocketLength(length));
+  }
+
   private static void BuildSecondaryPockets(
     RhinoDoc doc,
     List<(Curve Curve, Point3d Center)> secPicks,
     List<(Curve Curve, Point3d Center)> mainPicks,
+    double pocketLength,
     Parts seam, Parts fin,
     Point3d centroid, int cut1Idx,
     double tol, HashSet<Guid> globalExclude)
   {
     var refIdx   = EnsureLayer(doc, _layerRef,  _layerRefColor);
     var plotIdx  = EnsureLayer(doc, _layerPlot, _layerPlotColor);
-    var refCurve  = mainPicks.Count > 0 ? mainPicks[0].Curve : secPicks[0].Curve;
-    var mainHalf  = refCurve.GetLength() / 2.0;
-    var secondary = Math.Ceiling(mainHalf / 6.0) * 6.0;
-    if (secondary - mainHalf < 2.0) secondary += 6.0;
+    var secondary = pocketLength;
     var halfFull  = secondary / 2.0;          // cut edge: ±halfFull from center on seam
     var halfInner = halfFull - 1.0;           // stitch/fold mark: ±halfInner on finished curve
     var pktDepth  = _secPktDepth;
 
-    L($"BuildSecondaryPockets: mainHalf={mainHalf:F3}  secondary={secondary}  halfFull={halfFull}  halfInner={halfInner}  depth={pktDepth}");
+    L($"BuildSecondaryPockets: secondary={secondary}  halfFull={halfFull}" +
+      $" halfInner={halfInner}  depth={pktDepth}");
 
     foreach (var (secCrv, pickPt) in secPicks)
     {
@@ -1332,7 +1443,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
 
       var toDelete = new List<Guid>();
       foreach (var o in doc.Objects)
-        if (o.Attributes.GetUserString("vBiminiPkt") == seamKey)
+        if (o.Attributes.GetUserString(PocketDataKey) == seamKey)
           toDelete.Add(o.Id);
       foreach (var delId in toDelete) doc.Objects.Delete(delId, true);
       L($"  sc: seamKey={seamKey}  dedup={toDelete.Count}");
@@ -1498,7 +1609,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
       var addedIds = new List<Guid>();
 
       var outlineAttr = MakeAttr(cut1Idx);
-      outlineAttr.SetUserString("vBiminiPkt", seamKey);
+      outlineAttr.SetUserString(PocketDataKey, seamKey);
       AddCurveSegments(doc, ExplodeForOutput(pocketOutline), outlineAttr, addedIds, Transform.Identity);
 
       foreach (var (geom, geomAttr) in interiorObjects)
@@ -1506,7 +1617,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
         var copy = geom.Duplicate()!;
         copy.Transform(xf);
         geomAttr.RemoveFromAllGroups();
-        geomAttr.SetUserString("vBiminiPkt", seamKey);
+        geomAttr.SetUserString(PocketDataKey, seamKey);
         var id = AddObjectToDoc(doc, copy, geomAttr);
         if (id != Guid.Empty) addedIds.Add(id);
       }
@@ -1516,7 +1627,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
       {
         em.Transform(xf);
         var emAttr = MakeAttr(plotIdx);
-        emAttr.SetUserString("vBiminiPkt", seamKey);
+        emAttr.SetUserString(PocketDataKey, seamKey);
         var emId = doc.Objects.AddCurve(em, emAttr);
         if (emId != Guid.Empty) addedIds.Add(emId);
       }
@@ -1527,7 +1638,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
       if (!NearbyPointExists(doc, ptPktCtr, tol))
       {
         var pktPtAttr = MakeAttr(refIdx);
-        pktPtAttr.SetUserString("vBiminiPkt", seamKey);
+        pktPtAttr.SetUserString(PocketDataKey, seamKey);
         var pktPtId = doc.Objects.AddPoint(ptPktCtr, pktPtAttr);
         if (pktPtId != Guid.Empty) addedIds.Add(pktPtId);
         L($"  sc: pocket center point at {ptPktCtr}");
@@ -1567,7 +1678,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
         if (!NearbyPointExists(doc, ptSecCtr, tol))
         {
           var finPtAttr = MakeAttr(refIdx);
-          finPtAttr.SetUserString("vBiminiPkt", seamKey);
+          finPtAttr.SetUserString(PocketDataKey, seamKey);
           doc.Objects.AddPoint(ptSecCtr, finPtAttr);
           L($"    sc: finished center point at {ptSecCtr}");
         }
@@ -1575,6 +1686,8 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
       }
 
       L($"  sc: added {addedIds.Count} pocket objects for {seamKey}");
+      if (addedIds.Count > 0)
+        StorePreviousSecondaryPocketLength(doc, pocketLength);
     }
   }
 

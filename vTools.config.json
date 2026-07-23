@@ -5,6 +5,7 @@
     "join": false
   },
   "vCommandFailSound": {
+    "enabled": true,
     "sound": "Default",
     "audioFile": ""
   },

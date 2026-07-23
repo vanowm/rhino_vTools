@@ -31,6 +31,7 @@ public class vToolsPlugIn : PlugIn
 
     Log.Initialize();
     Log.Write($"startup  version={version}  dll={asm.Location}");
+    CommandFailSoundMonitor.Start();
     HideSetState.StartPolling();
 
     var commandNames = CollectRegisteredCommandNames();

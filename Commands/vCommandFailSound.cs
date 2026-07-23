@@ -28,6 +28,11 @@ public sealed class vCommandFailSound : Command
       getter.AcceptNothing(true);
       getter.SetCommandPrompt(CommandFailSoundMonitor.GetPrompt());
 
+      var enabledOption = new OptionToggle(
+        CommandFailSoundMonitor.Enabled,
+        "No",
+        "Yes");
+      var enabledOptionIndex = getter.AddOptionToggle("Enabled", ref enabledOption);
       var soundOptionIndex = getter.AddOptionList(
         "Sound",
         CommandFailSoundMonitor.SoundNames,
@@ -40,20 +45,17 @@ public sealed class vCommandFailSound : Command
         return Result.Cancel;
 
       if (getResult == GetResult.Nothing)
-      {
-        var enabled = CommandFailSoundMonitor.Toggle();
-        RhinoApp.WriteLine(
-          enabled
-            ? "Command failure sound: ON"
-            : "Command failure sound: OFF");
         return Result.Success;
-      }
 
       if (getResult != GetResult.Option || getter.Option() == null)
         return getter.CommandResult();
 
       var option = getter.Option()!;
-      if (option.Index == soundOptionIndex)
+      if (option.Index == enabledOptionIndex)
+      {
+        CommandFailSoundMonitor.SetEnabled(enabledOption.CurrentValue);
+      }
+      else if (option.Index == soundOptionIndex)
       {
         CommandFailSoundMonitor.SetSound(option.CurrentListOptionIndex);
       }
@@ -108,6 +110,7 @@ internal static class CommandFailSoundMonitor
 {
   private const string Tag = "vCommandFailSound";
   private const string SettingsSection = "vCommandFailSound";
+  private const string EnabledKey = "enabled";
   private const string SoundKey = "sound";
   private const string AudioFileKey = "audioFile";
 
@@ -122,11 +125,21 @@ internal static class CommandFailSoundMonitor
   };
 
   private static readonly object Sync = new();
-  private static bool _enabled;
+  private static bool _enabled = true;
+  private static bool _subscribed;
   private static bool _settingsLoaded;
   private static int _soundIndex;
   private static string _audioFile = string.Empty;
   private static MediaPlayer? _mediaPlayer;
+
+  internal static bool Enabled
+  {
+    get
+    {
+      lock (Sync)
+        return _enabled;
+    }
+  }
 
   internal static int SoundIndex
   {
@@ -157,8 +170,12 @@ internal static class CommandFailSoundMonitor
         SettingsSection,
         section =>
         {
+          var enabled = true;
           var soundIndex = 0;
           var audioFile = string.Empty;
+
+          if (ToolsOptionStore.TryGetBool(section, EnabledKey, out var persistedEnabled))
+            enabled = persistedEnabled;
 
           if (ToolsOptionStore.TryGetString(section, SoundKey, out var soundName))
           {
@@ -172,9 +189,10 @@ internal static class CommandFailSoundMonitor
           if (ToolsOptionStore.TryGetString(section, AudioFileKey, out var persistedFile))
             audioFile = persistedFile;
 
-          return (soundIndex, audioFile);
+          return (enabled, soundIndex, audioFile);
         });
 
+      _enabled = loaded.enabled;
       _soundIndex = loaded.soundIndex;
       _audioFile = loaded.audioFile;
       _settingsLoaded = true;
@@ -192,23 +210,36 @@ internal static class CommandFailSoundMonitor
       if (_soundIndex == SoundNames.Length - 1 && !string.IsNullOrWhiteSpace(_audioFile))
         sound += $": {Path.GetFileName(_audioFile)}";
 
-      return $"Command failure sound is {state} ({sound}). Press Enter to toggle";
+      return $"Command failure sound is {state} ({sound}). Press Enter when done";
     }
   }
 
-  internal static bool Toggle()
+  internal static void Start()
   {
     EnsureSettingsLoaded();
 
     lock (Sync)
     {
       if (_enabled)
-        Disable();
-      else
-        Enable();
-
-      return _enabled;
+        Subscribe();
     }
+  }
+
+  internal static void SetEnabled(bool enabled)
+  {
+    EnsureSettingsLoaded();
+
+    lock (Sync)
+    {
+      _enabled = enabled;
+      if (_enabled)
+        Subscribe();
+      else
+        Unsubscribe();
+    }
+
+    SaveSettings();
+    Log.Write(Tag, $"enabled -> {enabled}");
   }
 
   internal static void SetSound(int soundIndex)
@@ -246,28 +277,28 @@ internal static class CommandFailSoundMonitor
   {
     lock (Sync)
     {
-      Disable();
+      Unsubscribe();
       CloseMediaPlayer();
     }
   }
 
-  private static void Enable()
+  private static void Subscribe()
   {
-    if (_enabled)
+    if (_subscribed)
       return;
 
     Command.EndCommand -= OnCommandEnded;
     Command.EndCommand += OnCommandEnded;
-    _enabled = true;
+    _subscribed = true;
     Log.Write(Tag, "watcher enabled");
   }
 
-  private static void Disable()
+  private static void Unsubscribe()
   {
     Command.EndCommand -= OnCommandEnded;
-    if (_enabled)
+    if (_subscribed)
       Log.Write(Tag, "watcher disabled");
-    _enabled = false;
+    _subscribed = false;
   }
 
   private static void OnCommandEnded(object? sender, CommandEventArgs e)
@@ -428,6 +459,7 @@ internal static class CommandFailSoundMonitor
 
     var saved = ToolsOptionStore.Update(SettingsSection, section =>
     {
+      section[EnabledKey] = Enabled;
       section[SoundKey] = SoundNames[soundIndex];
       section[AudioFileKey] = audioFile;
     });

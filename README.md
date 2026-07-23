@@ -1,4 +1,4 @@
-Tools  ·  v26.7.23.051
+Tools  ·  v26.7.23.057
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -134,11 +134,11 @@ Notes:
 
 ### vCommandFailSound flow
 
-1. Run `vCommandFailSound` and press Enter to toggle the watcher on or off for the current Rhino session.
+1. Failure monitoring is enabled by default when the plug-in loads. Run `vCommandFailSound` and use `Enabled=Yes/No` to change it; the setting persists immediately.
 1. `Sound` selects the system default, Asterisk, Exclamation, Hand, Question, or a custom audio file; `AudioFile` opens a file picker and selects `Custom` automatically.
 1. `Preview` plays the current choice without changing the watcher state. Sound choices persist immediately in the shared `vTools.config.json`.
 1. While enabled, the selected sound plays whenever a Rhino command ends with any result other than `Success` or `Cancel`.
-1. The watcher detaches automatically when the plug-in shuts down.
+1. Press Enter to finish configuring the command. The watcher detaches automatically when the plug-in shuts down.
 
 ### vCurveToSpline flow
 

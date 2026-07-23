@@ -62,21 +62,17 @@ vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoComm
 From this folder:
 
 ```powershell
-dotnet build .\vTools.csproj -c Release
+.\build.ps1
 ```
+
+This standalone Release build does not require Git and never commits or pushes.
+Repository maintainers can use `.\build.ps1 -Publish` for the semantic-message,
+signed-commit, and push workflow used by the normal VS Code build task.
 
 Build behavior:
 
 1. Release builds fail fast if output files are locked (for example, if Rhino holds `vTools.dll`).
 2. After every successful Release build, a timestamped backup snapshot is created automatically.
-
-Compile command:
-
-1. Standard Release build:
-
-```powershell
-dotnet build d:/github/rhino/vTools/vTools.csproj -c Release
-```
 
 ## Output
 

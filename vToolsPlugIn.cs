@@ -30,7 +30,7 @@ public class vToolsPlugIn : PlugIn
       : null) ?? asm.GetName().Version?.ToString() ?? "unknown";
 
     Log.Initialize();
-    Log.Write($"startup  version={version}  dll={asm.Location}");
+    Log.Write($"startup  rhino={RhinoApp.Version}  version={version}  dll={asm.Location}");
     CommandFailSoundMonitor.Start();
     HideSetState.StartPolling();
 

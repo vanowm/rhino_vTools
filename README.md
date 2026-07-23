@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.23.1736
+# vTools  ·  v26.7.23.1803
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -49,7 +49,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vUzipCenter](#vuzipcenter-flow) *(26.5.1.1903)* — offsets a U-shape's three curves inward, fillets the inside corners, and produces a single joined open curve
   - [vUzipParts](#vuzipparts-flow) *(26.5.8.1249)* — creates U-zip parts from a center curve into labeled reference, plot, and cut output groups
 - Shared command configuration file: vTools.config.json
-- Runtime command diagnostics in a local logs folder
+- Runtime command diagnostics in `vTools.log` beside the loaded DLL
 
 ## Requirements
 
@@ -683,11 +683,11 @@ When the plug-in loads, Rhino's command history shows:
 vTools v26.7.3.HMM loaded — N commands: vBiminiParts, vChamfer, ...
 ```
 
-The same line plus the DLL path is written to `vTools.log` beside the loaded DLL.
+The plug-in version, Rhino version, and DLL path are written to `vTools.log` beside the loaded DLL.
 
 ## Logging
 
-- `vTools.log` beside the loaded DLL — cleared on every Rhino startup. First lines show version and command list. All commands write diagnostics here via `Log.Write(tag, message)`.
+- `vTools.log` beside the loaded DLL — cleared on every Rhino startup. First lines show the Rhino and plug-in versions plus the command list. All commands write diagnostics here via `Log.Write(tag, message)`.
 
 ## Versioning
 

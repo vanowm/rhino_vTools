@@ -196,7 +196,7 @@ public sealed class vShow : Command
     }
 
     return result == GetResult.String
-      ? (getter.StringResult() ?? string.Empty).Trim()
+      ? HideSetState.NormalizeInput(getter.StringResult())
       : null;
   }
 

@@ -150,15 +150,10 @@ public sealed class vIsolate : Command
     getter.SubObjectSelect = false;
     getter.GroupSelect = true;
     getter.AcceptNothing(false);
+    getter.AcceptString(true);
     getter.EnablePreSelect(true, true);
     getter.DeselectAllBeforePostSelect = false;
     getter.EnableTransparentCommands(true);
-
-    var setAOption = getter.AddOption("A", "A", true);
-    var setBOption = getter.AddOption("B", "B", true);
-    var setCOption = getter.AddOption("C", "C", true);
-    var setDOption = getter.AddOption("D", "D", true);
-    var setEOption = getter.AddOption("E", "E", true);
 
     while (true)
     {
@@ -167,14 +162,10 @@ public sealed class vIsolate : Command
       if (commandResult != Result.Success)
         return new List<Guid>();
 
-      if (getResult == GetResult.Option)
+      if (getResult == GetResult.String)
       {
-        var optionIndex = getter.Option().Index;
-        requestedHideSetName = optionIndex == setAOption ? "A" :
-          optionIndex == setBOption ? "B" :
-          optionIndex == setCOption ? "C" :
-          optionIndex == setDOption ? "D" :
-          optionIndex == setEOption ? "E" : requestedHideSetName;
+        requestedHideSetName = HideSetState.NormalizeInput(getter.StringResult());
+        Log.Write(Tag, $"  direct hide-set={requestedHideSetName}");
         continue;
       }
 
@@ -207,10 +198,7 @@ public sealed class vIsolate : Command
     if (getResult != GetResult.String)
       return null;
 
-    var value = (getter.StringResult() ?? string.Empty).Trim();
-    return value is "_A" or "_B" or "_C" or "_D" or "_E"
-      ? value[1..]
-      : value;
+    return HideSetState.NormalizeInput(getter.StringResult());
   }
 
   private static IEnumerable<RhinoObject> VisibleNormalObjects(RhinoDoc doc)

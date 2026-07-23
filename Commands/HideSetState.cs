@@ -87,6 +87,19 @@ internal static class HideSetState
       ? order
       : obj.RuntimeSerialNumber;
 
+  public static string NormalizeInput(string? input)
+  {
+    var value = (input ?? string.Empty).Trim();
+    if (value.Length >= 2 &&
+        ((value[0] == '"' && value[^1] == '"') ||
+         (value[0] == '\'' && value[^1] == '\'')))
+    {
+      value = value[1..^1].Trim();
+    }
+
+    return value;
+  }
+
   public static bool SetTrackedName(
     RhinoDoc doc,
     Guid objectId,

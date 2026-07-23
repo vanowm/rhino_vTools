@@ -63,10 +63,21 @@ foreach ($change in $changes) {
 
     if ($path -like 'Commands/*.cs') {
         $name = [System.IO.Path]::GetFileNameWithoutExtension($path)
-        if ($change.Status -eq '??' -or $change.Status -like 'A*') {
-            if (-not $commandAdds.Contains($name)) { [void]$commandAdds.Add($name) }
-        } elseif (-not $commandUpdates.Contains($name)) {
-            [void]$commandUpdates.Add($name)
+        $sourcePath = Join-Path $PSScriptRoot ($path -replace '/', '\')
+        $isCommand = -not (Test-Path -LiteralPath $sourcePath)
+        if (-not $isCommand) {
+            $sourceText = [System.IO.File]::ReadAllText($sourcePath)
+            $isCommand = $sourceText -match 'public\s+(?:sealed\s+)?class\s+\w+\s*:\s*Command\b'
+        }
+
+        if ($isCommand) {
+            if ($change.Status -eq '??' -or $change.Status -like 'A*') {
+                if (-not $commandAdds.Contains($name)) { [void]$commandAdds.Add($name) }
+            } elseif (-not $commandUpdates.Contains($name)) {
+                [void]$commandUpdates.Add($name)
+            }
+        } else {
+            $hasPluginCode = $true
         }
     } elseif ($path -like '*.cs' -and $path -ne 'Properties/AssemblyInfo.cs' -and
               $path -notlike 'obj/*' -and $path -notlike 'bin/*') {

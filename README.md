@@ -1,4 +1,4 @@
-Tools  ·  v26.7.23.137
+Tools  ·  v26.7.23.143
 
 vTools is a Rhino 8 plug-in project (C# / .NET 7) that provides native RhinoCommon commands for zipper, orient, trim/extend, gumball, curve, line, text, and tangent/perpendicular alignment workflows.
 
@@ -216,8 +216,8 @@ Options:
 1. Preselect objects to keep visible, or run `vIsolate` and select them. Prompted selection includes whole groups and excludes subobjects; a direct set name such as `vIsolate "A"` can be supplied before selecting objects.
 1. Enter an optional Rhino hide-set name, or press Enter for no named set.
 1. Every other visible, unlocked normal object is hidden natively and the isolated objects remain selected. Named isolation records active set membership; blank input clears any prior membership and uses Rhino's ordinary unnamed hide behavior, matching `_Isolate`.
-1. `vIsolate` is transparent and can run without cancelling the command already in progress.
-1. The packaged `vTools` toolbar and tab include a combined built-in `Isolate / Show` button using `!_*Isolate` on left-click and `!*_Show*` on right-click, plus general `vIsolate` and named `vIsolate A` through `vIsolate E` buttons. The named buttons isolate into the matching set on left-click and use transparent `vShow` to restore that set on right-click.
+1. `vIsolate` is transparent and can run without cancelling the command already in progress. When nested inside another command, it restores the selection that existed before isolation.
+1. The packaged `vTools` toolbar and tab include a combined built-in `Isolate / Show` button using `!_Isolate` on left-click and `!_Show` on right-click, plus general `vIsolate` and named `vIsolate A` through `vIsolate E` buttons. The named buttons isolate into the matching set on left-click and use transparent `vShow` to restore that set on right-click.
 
 ### vLine flow
 
@@ -465,7 +465,7 @@ Behavior:
 
 1. Run `vShow` while another command is active or from the normal command prompt.
 1. Choose one of up to twenty most-recent active set options, enter any set name directly, or press Enter to show every named hidden set while leaving ordinary unnamed hidden objects untouched. Named sets created by Rhino's default `-Hide` command are polled into the same persistent list.
-1. Matching active set members are shown directly, their completed set membership is cleared, and the interrupted command remains active.
+1. Matching active set members are shown directly, their completed set membership is cleared, and the interrupted command remains active with its prior selection restored.
 1. The `vTools` toolbar passes A-E directly as set-name input when a named isolate button is right-clicked.
 
 ### vSplit flow

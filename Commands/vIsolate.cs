@@ -24,6 +24,19 @@ public sealed class vIsolate : Command
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    var selectionSnapshot = HideSetState.CaptureNestedSelection(doc);
+    try
+    {
+      return RunCommandCore(doc);
+    }
+    finally
+    {
+      HideSetState.RestoreNestedSelection(doc, selectionSnapshot);
+    }
+  }
+
+  private static Result RunCommandCore(RhinoDoc doc)
+  {
     Log.Write(Tag, "--- run start ---");
 
     var isolateIds = GetObjectsToIsolate(

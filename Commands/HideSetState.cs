@@ -5,12 +5,38 @@ using System.Reflection;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
+using Rhino.Geometry;
 using Rhino.Runtime.InteropWrappers;
 
 namespace vTools.Commands;
 
 internal static class HideSetState
 {
+  internal sealed class SelectionSnapshot
+  {
+    internal List<SelectionEntry> Entries { get; } = new();
+  }
+
+  internal sealed class SelectionEntry
+  {
+    internal SelectionEntry(
+      RhinoObject obj,
+      bool wholeObject,
+      bool persistent,
+      ComponentIndex[] subObjects)
+    {
+      Object = obj;
+      WholeObject = wholeObject;
+      Persistent = persistent;
+      SubObjects = subObjects;
+    }
+
+    internal RhinoObject Object { get; }
+    internal bool WholeObject { get; }
+    internal bool Persistent { get; }
+    internal ComponentIndex[] SubObjects { get; }
+  }
+
   private sealed class HidePollContext
   {
     public HidePollContext(uint documentSerialNumber)
@@ -98,6 +124,59 @@ internal static class HideSetState
     }
 
     return value;
+  }
+
+  public static SelectionSnapshot? CaptureNestedSelection(RhinoDoc doc)
+  {
+    if (RhinoApp.InCommand <= 1)
+      return null;
+
+    var snapshot = new SelectionSnapshot();
+    foreach (var obj in doc.Objects.GetSelectedObjects(true, true))
+    {
+      var selectionState = obj.IsSelected(true);
+      if (selectionState == 0)
+        continue;
+
+      snapshot.Entries.Add(new SelectionEntry(
+        obj,
+        selectionState is 1 or 2,
+        selectionState == 2,
+        obj.GetSelectedSubObjects() ?? Array.Empty<ComponentIndex>()));
+    }
+
+    Log.Write(Tag, $"  captured nested selection count={snapshot.Entries.Count}");
+    return snapshot;
+  }
+
+  public static void RestoreNestedSelection(
+    RhinoDoc doc,
+    SelectionSnapshot? snapshot)
+  {
+    if (snapshot == null)
+      return;
+
+    doc.Objects.UnselectAll();
+    foreach (var entry in snapshot.Entries)
+    {
+      var obj = entry.Object;
+      if (entry.WholeObject)
+      {
+        obj.Select(
+          true,
+          true,
+          entry.Persistent,
+          true,
+          true,
+          true);
+      }
+
+      foreach (var componentIndex in entry.SubObjects)
+        obj.SelectSubObject(componentIndex, true, true, false);
+    }
+
+    doc.Views.Redraw();
+    Log.Write(Tag, $"  restored nested selection count={snapshot.Entries.Count}");
   }
 
   public static bool SetTrackedName(

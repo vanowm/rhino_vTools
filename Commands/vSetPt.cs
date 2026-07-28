@@ -115,7 +115,7 @@ public sealed class vSetPt : Command
     EventHandler<RhinoObjectSelectionEventArgs> onSelectionChanged = (_, e) =>
     {
       if (e.Document == doc)
-        cursorTracker.RefreshFromSelection();
+        cursorTracker.QueueSelectionRefresh();
     };
 
     RhinoDoc.SelectObjects   += onSelectionChanged;
@@ -142,8 +142,7 @@ public sealed class vSetPt : Command
           {
             _showPreview = showPreview;
             SavePersistedOptions();
-            preview.Enabled = showPreview;
-            doc.Views.Redraw();
+            cursorTracker.SetPreviewEnabled(showPreview);
           }
           continue;
         }
@@ -166,6 +165,7 @@ public sealed class vSetPt : Command
       RhinoDoc.SelectObjects   -= onSelectionChanged;
       RhinoDoc.DeselectObjects -= onSelectionChanged;
       cursorTracker.Enabled = false;
+      cursorTracker.Dispose();
       preview.Enabled = false;
       doc.Views.Redraw();
     }
@@ -191,14 +191,15 @@ public sealed class vSetPt : Command
     }
 
     var cursorPicks = cursorTracker.SnapshotPicks();
-    var fallbackPicks = BuildClosestClusterPicks(curveData);
     var picks = new List<PendingCurvePick>();
     for (int i = 0; i < curveData.Count; i++)
     {
       var id = curveData[i].id;
       var chooseStart = cursorPicks.TryGetValue(id, out var previewPick)
         ? previewPick
-        : fallbackPicks[id];
+        : cursorTracker.TryChooseStart(curveData[i].c, out var fallbackPick)
+          ? fallbackPick
+          : true;
 
       var grips = preselectedGrips.TryGetValue(id, out var selectedGrips)
         ? selectedGrips
@@ -242,16 +243,23 @@ public sealed class vSetPt : Command
     }
   }
 
-  private sealed class EndpointCursorCallback : MouseCallback
+  private sealed class EndpointCursorCallback : MouseCallback, IDisposable
   {
+    private const int PreviewIntervalMilliseconds = 24;
+    private const int SelectionDebounceMilliseconds = 24;
+
     private readonly RhinoDoc _doc;
     private readonly EndpointPreviewConduit _preview;
     private readonly IReadOnlyDictionary<Guid, PreselectedGrip[]>
       _preselectedGrips;
     private readonly Dictionary<Guid, (bool IsStart, Point3d Point)> _picks = new();
+    private readonly Dictionary<Guid, NurbsCurve> _previewSources = new();
+    private readonly System.Windows.Forms.Timer _previewTimer;
+    private readonly System.Windows.Forms.Timer _selectionTimer;
     private RhinoView? _view;
     private Point2d _cursor;
     private bool _hasCursor;
+    private long _lastPreviewMilliseconds;
 
     public EndpointCursorCallback(
       RhinoDoc doc,
@@ -261,6 +269,26 @@ public sealed class vSetPt : Command
       _doc = doc;
       _preview = preview;
       _preselectedGrips = preselectedGrips;
+
+      _previewTimer = new System.Windows.Forms.Timer
+      {
+        Interval = PreviewIntervalMilliseconds
+      };
+      _previewTimer.Tick += (_, _) =>
+      {
+        _previewTimer.Stop();
+        RefreshPreviewNow();
+      };
+
+      _selectionTimer = new System.Windows.Forms.Timer
+      {
+        Interval = SelectionDebounceMilliseconds
+      };
+      _selectionTimer.Tick += (_, _) =>
+      {
+        _selectionTimer.Stop();
+        RefreshFromSelection();
+      };
     }
 
     public void InitializeFromCurrentCursor()
@@ -270,7 +298,26 @@ public sealed class vSetPt : Command
         return;
 
       var client = view.ScreenToClient(System.Windows.Forms.Cursor.Position);
-      SetCursor(view, client.X, client.Y);
+      _view = view;
+      _cursor = new Point2d(client.X, client.Y);
+      _hasCursor = true;
+      RefreshFromSelection();
+    }
+
+    public void QueueSelectionRefresh()
+    {
+      _selectionTimer.Stop();
+      _selectionTimer.Start();
+    }
+
+    public void SetPreviewEnabled(bool enabled)
+    {
+      _preview.Enabled = enabled;
+      _previewTimer.Stop();
+      if (enabled)
+        RefreshFromSelection();
+      else
+        _view?.Redraw();
     }
 
     public Dictionary<Guid, bool> SnapshotPicks()
@@ -278,14 +325,33 @@ public sealed class vSetPt : Command
       return _picks.ToDictionary(pair => pair.Key, pair => pair.Value.IsStart);
     }
 
+    public bool TryChooseStart(Curve curve, out bool chooseStart)
+    {
+      chooseStart = true;
+      if (!_hasCursor || _view?.ActiveViewport == null)
+        return false;
+
+      var viewport = _view.ActiveViewport;
+      var start = viewport.WorldToClient(curve.PointAtStart);
+      var end = viewport.WorldToClient(curve.PointAtEnd);
+      var startDx = start.X - _cursor.X;
+      var startDy = start.Y - _cursor.Y;
+      var endDx = end.X - _cursor.X;
+      var endDy = end.Y - _cursor.Y;
+      chooseStart =
+        (startDx * startDx) + (startDy * startDy) <=
+        (endDx * endDx) + (endDy * endDy);
+      return true;
+    }
+
     public void RefreshFromSelection()
     {
+      _selectionTimer.Stop();
       if (!_hasCursor || _view?.ActiveViewport == null)
         return;
 
-      var viewport = _view.ActiveViewport;
       var next = new Dictionary<Guid, (bool IsStart, Point3d Point)>();
-      var curves = new Dictionary<Guid, Curve>();
+      var nextSources = new Dictionary<Guid, NurbsCurve>();
       foreach (var obj in _doc.Objects.GetSelectedObjects(false, false))
       {
         if (obj?.Geometry is not Curve curve || curve.IsClosed)
@@ -293,7 +359,14 @@ public sealed class vSetPt : Command
 
         try
         {
-          curves[obj.Id] = curve;
+          if (_preview.Enabled)
+          {
+            if (!_previewSources.TryGetValue(obj.Id, out var previewSource))
+              previewSource = curve.ToNurbsCurve();
+            if (previewSource != null)
+              nextSources[obj.Id] = previewSource;
+          }
+
           if (_preselectedGrips.TryGetValue(obj.Id, out var grips) &&
               grips.Length > 0)
           {
@@ -301,15 +374,15 @@ public sealed class vSetPt : Command
             continue;
           }
 
-          var start = viewport.WorldToClient(curve.PointAtStart);
-          var end = viewport.WorldToClient(curve.PointAtEnd);
-          var startDx = start.X - _cursor.X;
-          var startDy = start.Y - _cursor.Y;
-          var endDx = end.X - _cursor.X;
-          var endDy = end.Y - _cursor.Y;
-          var chooseStart =
-            (startDx * startDx) + (startDy * startDy) <=
-            (endDx * endDx) + (endDy * endDy);
+          if (_picks.TryGetValue(obj.Id, out var existingPick))
+          {
+            next[obj.Id] = existingPick;
+            continue;
+          }
+
+          if (!TryChooseStart(curve, out var chooseStart))
+            continue;
+
           next[obj.Id] = (
             chooseStart,
             chooseStart ? curve.PointAtStart : curve.PointAtEnd);
@@ -323,30 +396,78 @@ public sealed class vSetPt : Command
       foreach (var pair in next)
         _picks[pair.Key] = pair.Value;
 
-      var previews = new List<Curve>();
+      _previewSources.Clear();
+      foreach (var pair in nextSources)
+        _previewSources[pair.Key] = pair.Value;
+
+      RefreshPreviewNow();
+    }
+
+    private void QueuePreviewRefresh()
+    {
+      if (!_preview.Enabled)
+        return;
+
+      var elapsed = System.Environment.TickCount64 - _lastPreviewMilliseconds;
+      if (elapsed >= PreviewIntervalMilliseconds)
+      {
+        _previewTimer.Stop();
+        RefreshPreviewNow();
+        return;
+      }
+
+      if (!_previewTimer.Enabled)
+      {
+        _previewTimer.Interval = Math.Max(
+          1, PreviewIntervalMilliseconds - (int)Math.Max(0, elapsed));
+        _previewTimer.Start();
+      }
+    }
+
+    private void RefreshPreviewNow()
+    {
+      if (!_preview.Enabled || !_hasCursor || _view?.ActiveViewport == null)
+        return;
+
+      _lastPreviewMilliseconds = System.Environment.TickCount64;
+      var viewport = _view.ActiveViewport;
+
+      var previews = new List<Curve>(_picks.Count);
       if (_picks.Count > 0)
       {
-        var anchorPoints = new List<Point3d>();
+        var x = 0.0;
+        var y = 0.0;
+        var z = 0.0;
+        var anchorCount = 0;
         foreach (var pair in _picks)
         {
           if (_preselectedGrips.TryGetValue(pair.Key, out var grips) &&
               grips.Length > 0)
           {
-            anchorPoints.AddRange(grips.Select(grip => grip.Point));
+            foreach (var grip in grips)
+            {
+              x += grip.Point.X;
+              y += grip.Point.Y;
+              z += grip.Point.Z;
+              anchorCount++;
+            }
           }
           else
           {
-            anchorPoints.Add(pair.Value.Point);
+            x += pair.Value.Point.X;
+            y += pair.Value.Point.Y;
+            z += pair.Value.Point.Z;
+            anchorCount++;
           }
         }
 
-        var x = anchorPoints.Sum(point => point.X);
-        var y = anchorPoints.Sum(point => point.Y);
-        var z = anchorPoints.Sum(point => point.Z);
+        if (anchorCount == 0)
+          return;
+
         var anchor = new Point3d(
-          x / anchorPoints.Count,
-          y / anchorPoints.Count,
-          z / anchorPoints.Count);
+          x / anchorCount,
+          y / anchorCount,
+          z / anchorCount);
         var target = anchor;
         var cursorRay = viewport.ClientToWorld(_cursor);
         var cursorPlane = new Plane(anchor, viewport.CameraDirection);
@@ -358,19 +479,19 @@ public sealed class vSetPt : Command
 
         foreach (var pair in _picks)
         {
-          if (!curves.TryGetValue(pair.Key, out var curve))
+          if (!_previewSources.TryGetValue(pair.Key, out var previewSource))
             continue;
 
           _preselectedGrips.TryGetValue(pair.Key, out var selectedGrips);
           var result = CreateSetPtPreview(
-            curve, pair.Value.IsStart, selectedGrips, target);
+            previewSource, pair.Value.IsStart, selectedGrips, target);
           if (result != null)
             previews.Add(result);
         }
       }
 
       _preview.SetCurves(previews);
-      _doc.Views.Redraw();
+      _view.Redraw();
     }
 
     protected override void OnMouseMove(MouseCallbackEventArgs e)
@@ -386,17 +507,25 @@ public sealed class vSetPt : Command
       _view = view;
       _cursor = new Point2d(x, y);
       _hasCursor = true;
-      RefreshFromSelection();
+      QueuePreviewRefresh();
+    }
+
+    public void Dispose()
+    {
+      _previewTimer.Stop();
+      _selectionTimer.Stop();
+      _previewTimer.Dispose();
+      _selectionTimer.Dispose();
     }
   }
 
   private static Curve? CreateSetPtPreview(
-    Curve curve,
+    NurbsCurve curve,
     bool isStart,
     IReadOnlyList<PreselectedGrip>? selectedGrips,
     Point3d target)
   {
-    var result = curve.ToNurbsCurve();
+    var result = curve.DuplicateCurve() as NurbsCurve;
     if (result == null || result.Points.Count == 0)
       return null;
 
@@ -638,46 +767,6 @@ public sealed class vSetPt : Command
       $"  ambiguous preselected grip: {owner.Id} index={selectedGrip.Index}" +
       $" resolved={resolved}");
     return resolved;
-  }
-
-  private static Dictionary<Guid, bool> BuildClosestClusterPicks(
-    List<(Guid id, Curve c)> curveData)
-  {
-    var endpoints = new List<(int CurveIndex, Point3d Point)>();
-    for (var i = 0; i < curveData.Count; i++)
-    {
-      endpoints.Add((i, curveData[i].c.PointAtStart));
-      endpoints.Add((i, curveData[i].c.PointAtEnd));
-    }
-
-    var bestA = 0;
-    var bestB = 1;
-    var bestDistance = double.MaxValue;
-    for (var a = 0; a < endpoints.Count; a++)
-    for (var b = a + 1; b < endpoints.Count; b++)
-    {
-      if (endpoints[a].CurveIndex == endpoints[b].CurveIndex)
-        continue;
-
-      var distance = endpoints[a].Point.DistanceTo(endpoints[b].Point);
-      if (distance >= bestDistance)
-        continue;
-
-      bestDistance = distance;
-      bestA = a;
-      bestB = b;
-    }
-
-    var meetingPoint = endpoints[bestA].Point +
-      ((endpoints[bestB].Point - endpoints[bestA].Point) * 0.5);
-    var result = new Dictionary<Guid, bool>();
-    foreach (var (id, curve) in curveData)
-    {
-      result[id] = meetingPoint.DistanceTo(curve.PointAtStart) <=
-                   meetingPoint.DistanceTo(curve.PointAtEnd);
-    }
-
-    return result;
   }
 
   private static void CancelPending()

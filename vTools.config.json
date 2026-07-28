@@ -41,7 +41,8 @@
     "length": 0,
     "angleLock": false,
     "angle": 0,
-    "angleRelative": false
+    "angleRelative": false,
+    "layer": "*Current*"
   },
   "vLineLength": {
     "desiredLength": 10.0,

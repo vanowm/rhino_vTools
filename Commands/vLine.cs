@@ -23,6 +23,8 @@ public sealed class vLine : Command
   private const string AngleLockKey = "angleLock";
   private const string AngleKey = "angle";
   private const string AngleRelativeKey = "angleRelative";
+  private const string LayerKey = "layer";
+  private const string CurrentLayerOption = "*Current*";
 
   private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" };
   private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" };
@@ -44,6 +46,7 @@ public sealed class vLine : Command
   private static bool _angleLock;
   private static double _angle;
   private static bool _angleRelative;
+  private static string _layer = CurrentLayerOption;
 
   private static string? _pendingNativeLineMode;
   private static EventHandler? _pendingNativeLineLaunchIdleHandler;
@@ -67,8 +70,10 @@ public sealed class vLine : Command
     }
     _pendingNativeLineMode = null;
     LoadPersistedOptions();
+    var layerSession = new LineLayerSession(doc, _layer);
 
-    var startResult = ResolveFirstPoint(doc, initialBothSides: false, initialChainMode: _chainMode);
+    var startResult = ResolveFirstPoint(
+      doc, layerSession, initialBothSides: false, initialChainMode: _chainMode);
     _chainMode = startResult.ChainMode;
     if (startResult.DelegatedToNative)
     {
@@ -122,6 +127,7 @@ public sealed class vLine : Command
         angleState,
         angleRelativeState,
         lastSegmentVector,
+        layerSession,
         canUndo,
         canRedo);
 
@@ -154,7 +160,8 @@ public sealed class vLine : Command
           DeleteObjectIfValid(doc, tempPolylineId);
           if (polylinePoints.Count >= 2)
           {
-            tempPolylineId = doc.Objects.AddPolyline(new Polyline(polylinePoints));
+            tempPolylineId = doc.Objects.AddPolyline(
+              new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
           }
           else
           {
@@ -180,7 +187,8 @@ public sealed class vLine : Command
         DeleteObjectIfValid(doc, tempPolylineId);
         if (polylinePoints.Count >= 2)
         {
-          tempPolylineId = doc.Objects.AddPolyline(new Polyline(polylinePoints));
+          tempPolylineId = doc.Objects.AddPolyline(
+            new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
           lastSegmentVector = polylinePoints[^1] - polylinePoints[^2];
         }
         doc.Views.Redraw();
@@ -209,7 +217,8 @@ public sealed class vLine : Command
         polylinePoints.Add(endPoint);
 
         DeleteObjectIfValid(doc, tempPolylineId);
-        tempPolylineId = doc.Objects.AddPolyline(new Polyline(polylinePoints));
+        tempPolylineId = doc.Objects.AddPolyline(
+          new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
 
         if (polylinePoints.Count >= 2)
           lastSegmentVector = polylinePoints[^1] - polylinePoints[^2];
@@ -231,11 +240,13 @@ public sealed class vLine : Command
 
           var startA = currentStart - vec;
           var startB = currentStart + vec;
-          lineId = doc.Objects.AddLine(startA, startB);
+          lineId = doc.Objects.AddLine(
+            startA, startB, layerSession.CreateAttributes(doc));
         }
         else
         {
-          lineId = doc.Objects.AddLine(currentStart, endPoint);
+          lineId = doc.Objects.AddLine(
+            currentStart, endPoint, layerSession.CreateAttributes(doc));
         }
 
         lastSegmentVector = endPoint - currentStart;
@@ -247,7 +258,8 @@ public sealed class vLine : Command
       {
         while (true)
         {
-          var newStartResult = ResolveFirstPoint(doc, initialBothSides, selectedChainMode);
+          var newStartResult = ResolveFirstPoint(
+            doc, layerSession, initialBothSides, selectedChainMode);
 
           if (newStartResult.DelegatedToNative)
           {
@@ -283,7 +295,8 @@ public sealed class vLine : Command
     }
 
     if (polylinePoints is { Count: > 1 } && (tempPolylineId == Guid.Empty || doc.Objects.FindId(tempPolylineId) == null))
-      _ = doc.Objects.AddPolyline(new Polyline(polylinePoints));
+      _ = doc.Objects.AddPolyline(
+        new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
 
     doc.Views.Redraw();
     return Result.Success;
@@ -302,6 +315,7 @@ public sealed class vLine : Command
         var angleLock = _angleLock;
         var angle = _angle;
         var angleRelative = _angleRelative;
+        var layer = _layer;
 
         if (ToolsOptionStore.TryGetDouble(section, ChainModeKey, out var persistedChain))
           chainMode = ClampIndex((int)Math.Round(persistedChain, MidpointRounding.AwayFromZero), ChainModeValues.Length);
@@ -317,8 +331,10 @@ public sealed class vLine : Command
           angle = persistedAngle;
         if (ToolsOptionStore.TryGetBool(section, AngleRelativeKey, out var persistedAngleRelative))
           angleRelative = persistedAngleRelative;
+        if (ToolsOptionStore.TryGetString(section, LayerKey, out var persistedLayer))
+          layer = NormalizeLayerOption(persistedLayer);
 
-        return (chainMode, priority, persistConstraint, length, angleLock, angle, angleRelative);
+        return (chainMode, priority, persistConstraint, length, angleLock, angle, angleRelative, layer);
       });
 
     _chainMode = ClampIndex(values.chainMode, ChainModeValues.Length);
@@ -328,6 +344,7 @@ public sealed class vLine : Command
     _angleLock = values.angleLock;
     _angle = values.angle;
     _angleRelative = values.angleRelative;
+    _layer = NormalizeLayerOption(values.layer);
   }
 
   private static void SavePersistedOptions()
@@ -343,10 +360,107 @@ public sealed class vLine : Command
         section[AngleLockKey] = _angleLock;
         section[AngleKey] = _angle;
         section[AngleRelativeKey] = _angleRelative;
+        section[LayerKey] = _layer;
       });
   }
 
-  private static FirstPointResult ResolveFirstPoint(RhinoDoc doc, bool initialBothSides, int initialChainMode)
+  private static void PromptForLayer(
+    RhinoDoc doc,
+    LineLayerSession layerSession)
+  {
+    var getString = new GetString();
+    getString.EnableTransparentCommands(true);
+    getString.SetCommandPrompt(
+      $"Target layer name or {CurrentLayerOption}");
+    getString.SetDefaultString(layerSession.OptionLayerName);
+    getString.AcceptNothing(true);
+    getString.GetLiteralString();
+    if (getString.CommandResult() == Result.Cancel)
+      return;
+
+    var requested = getString.StringResult()?.Trim();
+    if (string.IsNullOrWhiteSpace(requested))
+      return;
+
+    if (!TryResolveLayerOption(doc, requested, out var resolvedLayer))
+    {
+      RhinoApp.WriteLine(
+        $"vLine: layer '{requested}' was not found or is ambiguous. " +
+        $"Enter an existing full layer path or {CurrentLayerOption}.");
+      return;
+    }
+
+    _layer = resolvedLayer;
+    layerSession.ApplyOption(doc, resolvedLayer);
+    SavePersistedOptions();
+  }
+
+  private static string NormalizeLayerOption(string? layerName)
+  {
+    var value = layerName?.Trim();
+    if (string.IsNullOrWhiteSpace(value) ||
+        string.Equals(value, CurrentLayerOption, StringComparison.OrdinalIgnoreCase) ||
+        value == "." || value == "*")
+    {
+      return CurrentLayerOption;
+    }
+
+    return value;
+  }
+
+  private static bool TryResolveLayerOption(
+    RhinoDoc doc,
+    string requested,
+    out string resolvedLayer)
+  {
+    resolvedLayer = NormalizeLayerOption(requested);
+    if (resolvedLayer == CurrentLayerOption)
+      return true;
+
+    var fullPathIndex = doc.Layers.FindByFullPath(
+      resolvedLayer, RhinoMath.UnsetIntIndex);
+    if (IsUsableLayer(doc, fullPathIndex))
+    {
+      resolvedLayer = doc.Layers[fullPathIndex].FullPath;
+      return true;
+    }
+
+    var matchedIndex = RhinoMath.UnsetIntIndex;
+    foreach (var layer in doc.Layers)
+    {
+      if (layer == null || layer.IsDeleted ||
+          !string.Equals(layer.Name, resolvedLayer, StringComparison.OrdinalIgnoreCase))
+      {
+        continue;
+      }
+
+      if (matchedIndex != RhinoMath.UnsetIntIndex)
+        return false;
+
+      matchedIndex = layer.Index;
+    }
+
+    if (!IsUsableLayer(doc, matchedIndex))
+      return false;
+
+    resolvedLayer = doc.Layers[matchedIndex].FullPath;
+    return true;
+  }
+
+  private static bool IsUsableLayer(RhinoDoc doc, int layerIndex)
+  {
+    if (layerIndex < 0 || layerIndex >= doc.Layers.Count)
+      return false;
+
+    var layer = doc.Layers[layerIndex];
+    return layer != null && !layer.IsDeleted;
+  }
+
+  private static FirstPointResult ResolveFirstPoint(
+    RhinoDoc doc,
+    LineLayerSession layerSession,
+    bool initialBothSides,
+    int initialChainMode)
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
@@ -354,34 +468,40 @@ public sealed class vLine : Command
     getPoint.AcceptNothing(true);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
     var chainModeIndex = ClampIndex(initialChainMode, ChainModeValues.Length);
-    var chainModeOptionIndex = getPoint.AddOptionList("Mode", ChainModeValues, chainModeIndex);
-    getPoint.AddOptionToggle("BothSides", ref bothSides);
-
-    var idxNormal = getPoint.AddOption("Normal");
-    var idxAngled = getPoint.AddOption("Angled");
-    var idxVertical = getPoint.AddOption("Vertical");
-    var idxFourPoint = getPoint.AddOption("FourPoint");
-    var idxBisector = getPoint.AddOption("Bisector");
-    var idxPerp = getPoint.AddOption("Perpendicular");
-    var idxTangent = getPoint.AddOption("Tangent");
-    var idxBiTangent = getPoint.AddOption("BiTangent");
-    var idxExtension = getPoint.AddOption("Extension");
-
-    var delegatedModes = new Dictionary<int, string>
-    {
-      [idxNormal] = "Normal",
-      [idxAngled] = "Angled",
-      [idxVertical] = "Vertical",
-      [idxFourPoint] = "FourPoint",
-      [idxBisector] = "Bisector",
-      [idxPerp] = "Perpendicular",
-      [idxTangent] = "Tangent",
-      [idxExtension] = "Extension"
-    };
 
     while (true)
     {
+      getPoint.ClearCommandOptions();
+      var chainModeOptionIndex = getPoint.AddOptionList(
+        "Mode", ChainModeValues, chainModeIndex);
+      getPoint.AddOptionToggle("BothSides", ref bothSides);
+      var layerOptionIndex = getPoint.AddOption(
+        "Layer", layerSession.OptionLayerName);
+
+      var idxNormal = getPoint.AddOption("Normal");
+      var idxAngled = getPoint.AddOption("Angled");
+      var idxVertical = getPoint.AddOption("Vertical");
+      var idxFourPoint = getPoint.AddOption("FourPoint");
+      var idxBisector = getPoint.AddOption("Bisector");
+      var idxPerp = getPoint.AddOption("Perpendicular");
+      var idxTangent = getPoint.AddOption("Tangent");
+      var idxBiTangent = getPoint.AddOption("BiTangent");
+      var idxExtension = getPoint.AddOption("Extension");
+
+      var delegatedModes = new Dictionary<int, string>
+      {
+        [idxNormal] = "Normal",
+        [idxAngled] = "Angled",
+        [idxVertical] = "Vertical",
+        [idxFourPoint] = "FourPoint",
+        [idxBisector] = "Bisector",
+        [idxPerp] = "Perpendicular",
+        [idxTangent] = "Tangent",
+        [idxExtension] = "Extension"
+      };
+
       var result = getPoint.Get();
+      layerSession.ObserveCurrentLayer(doc);
 
       if (result == GetResult.Point)
       {
@@ -398,10 +518,16 @@ public sealed class vLine : Command
         if (option == null)
           continue;
 
+        if (option.Index == layerOptionIndex)
+        {
+          PromptForLayer(doc, layerSession);
+          continue;
+        }
+
         if (option.Index == idxBiTangent)
         {
           _chainMode = chainModeIndex;
-          return RunBiTangent(doc)
+          return RunBiTangent(doc, layerSession)
             ? FirstPointResult.Delegated(bothSides.CurrentValue, chainModeIndex)
             : FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
         }
@@ -439,6 +565,7 @@ public sealed class vLine : Command
     double initialAngle,
     bool initialAngleRelative,
     Vector3d? referenceVector,
+    LineLayerSession layerSession,
     bool canUndo = false,
     bool canRedo = false)
   {
@@ -457,24 +584,7 @@ public sealed class vLine : Command
     var persistConstraint = new OptionToggle(initialPersistConstraint, "No", "Yes");
     var angleLock = new OptionToggle(initialAngleLock, "No", "Yes");
     var angleRelative = new OptionToggle(initialAngleRelative, "Absolute", "Relative");
-
-    var idxChainMode = getPoint.AddOptionList("Mode", ChainModeValues, chainModeIndex);
-    getPoint.AddOptionToggle("BothSides", ref bothSides);
-    var idxPerp = getPoint.AddOption("Perp");
-    var idxTan = getPoint.AddOption("Tangent");
-    var idxPerpNear = getPoint.AddOption("PerpNear");
-    var idxTanNear = getPoint.AddOption("TanNear");
-    var idxAuto = getPoint.AddOption("Auto");
-    var idxParallel = getPoint.AddOption("Parallel");
-    var idxProjectTo = getPoint.AddOption("ProjectTo");
-    var idxPriority = getPoint.AddOptionList("Priority", PriorityValues, priorityIndex);
-    getPoint.AddOptionToggle("PersistConstraint", ref persistConstraint);
-    var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
-    getPoint.AddOptionToggle("AngleLock", ref angleLock);
-    var idxAngle = getPoint.AddOptionDouble("Angle", ref angleOption);
-    getPoint.AddOptionToggle("AngleRef", ref angleRelative);
     var debugToggle = new OptionToggle(_debugMode, "Off", "On");
-    getPoint.AddOptionToggle("Debug", ref debugToggle);
     if (canUndo) getPoint.AcceptUndo(true);
     if (canRedo) getPoint.AcceptString(true);
 
@@ -747,15 +857,7 @@ public sealed class vLine : Command
 
     Color CurrentPreviewColor()
     {
-      var baseColor = Color.White;
-      try
-      {
-        baseColor = doc.Layers.CurrentLayer?.Color ?? Color.White;
-      }
-      catch
-      {
-      }
-
+      var baseColor = layerSession.ResolveColor(doc);
       return Color.FromArgb(120, baseColor.R, baseColor.G, baseColor.B);
     }
 
@@ -807,6 +909,27 @@ public sealed class vLine : Command
     {
       while (true)
       {
+        getPoint.ClearCommandOptions();
+        var idxChainMode = getPoint.AddOptionList(
+          "Mode", ChainModeValues, chainModeIndex);
+        getPoint.AddOptionToggle("BothSides", ref bothSides);
+        var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
+        var idxPerp = getPoint.AddOption("Perp");
+        var idxTan = getPoint.AddOption("Tangent");
+        var idxPerpNear = getPoint.AddOption("PerpNear");
+        var idxTanNear = getPoint.AddOption("TanNear");
+        var idxAuto = getPoint.AddOption("Auto");
+        var idxParallel = getPoint.AddOption("Parallel");
+        var idxProjectTo = getPoint.AddOption("ProjectTo");
+        var idxPriority = getPoint.AddOptionList(
+          "Priority", PriorityValues, priorityIndex);
+        getPoint.AddOptionToggle("PersistConstraint", ref persistConstraint);
+        var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
+        getPoint.AddOptionToggle("AngleLock", ref angleLock);
+        var idxAngle = getPoint.AddOptionDouble("Angle", ref angleOption);
+        getPoint.AddOptionToggle("AngleRef", ref angleRelative);
+        getPoint.AddOptionToggle("Debug", ref debugToggle);
+
         if (debugToggle.CurrentValue && !_debugMode)
         {
           _debugMode = true;
@@ -820,6 +943,7 @@ public sealed class vLine : Command
         }
 
         var result = getPoint.Get();
+        layerSession.ObserveCurrentLayer(doc);
 
         if (result == GetResult.Undo)
         {
@@ -867,6 +991,12 @@ public sealed class vLine : Command
           var option = getPoint.Option();
           if (option == null)
             continue;
+
+          if (option.Index == idxLayer)
+          {
+            PromptForLayer(doc, layerSession);
+            continue;
+          }
 
           if (option.Index == idxPerp)
           {
@@ -1065,6 +1195,7 @@ public sealed class vLine : Command
             angleOption.CurrentValue,
             angleRelative.CurrentValue,
             referenceVector,
+            layerSession,
             canUndo,
             canRedo);
         }
@@ -1670,7 +1801,9 @@ public sealed class vLine : Command
     return valid[0].Point;
   }
 
-  private static bool RunBiTangent(RhinoDoc doc)
+  private static bool RunBiTangent(
+    RhinoDoc doc,
+    LineLayerSession layerSession)
   {
     var first = PickCurveWithPoint("Select first tangent curve");
     if (first == null)
@@ -1689,7 +1822,7 @@ public sealed class vLine : Command
       return false;
     }
 
-    _ = doc.Objects.AddLine(line);
+    _ = doc.Objects.AddLine(line, layerSession.CreateAttributes(doc));
     doc.Views.Redraw();
     return true;
   }
@@ -2099,6 +2232,82 @@ public sealed class vLine : Command
     if (value < 0)
       return 0;
     return value >= count ? count - 1 : value;
+  }
+
+  private sealed class LineLayerSession
+  {
+    private int _observedCurrentLayerIndex;
+    private int? _externalLayerOverride;
+
+    public LineLayerSession(RhinoDoc doc, string optionLayerName)
+    {
+      OptionLayerName = NormalizeLayerOption(optionLayerName);
+      _observedCurrentLayerIndex = doc.Layers.CurrentLayerIndex;
+    }
+
+    public string OptionLayerName { get; private set; }
+
+    public void ApplyOption(RhinoDoc doc, string optionLayerName)
+    {
+      OptionLayerName = NormalizeLayerOption(optionLayerName);
+      _externalLayerOverride = null;
+      _observedCurrentLayerIndex = doc.Layers.CurrentLayerIndex;
+    }
+
+    public void ObserveCurrentLayer(RhinoDoc doc)
+    {
+      var currentLayerIndex = doc.Layers.CurrentLayerIndex;
+      if (currentLayerIndex == _observedCurrentLayerIndex)
+        return;
+
+      _observedCurrentLayerIndex = currentLayerIndex;
+      _externalLayerOverride = IsUsableLayer(doc, currentLayerIndex)
+        ? currentLayerIndex
+        : null;
+
+      var layerName = _externalLayerOverride.HasValue
+        ? doc.Layers[_externalLayerOverride.Value].FullPath
+        : "<invalid>";
+      Log.Write("vLine",
+        $"  current layer changed externally; session target={layerName}");
+    }
+
+    public ObjectAttributes CreateAttributes(RhinoDoc doc)
+    {
+      return new ObjectAttributes { LayerIndex = ResolveLayerIndex(doc) };
+    }
+
+    public Color ResolveColor(RhinoDoc doc)
+    {
+      var layerIndex = ResolveLayerIndex(doc);
+      return IsUsableLayer(doc, layerIndex)
+        ? doc.Layers[layerIndex].Color
+        : Color.White;
+    }
+
+    private int ResolveLayerIndex(RhinoDoc doc)
+    {
+      ObserveCurrentLayer(doc);
+
+      if (_externalLayerOverride.HasValue &&
+          IsUsableLayer(doc, _externalLayerOverride.Value))
+      {
+        return _externalLayerOverride.Value;
+      }
+
+      if (OptionLayerName != CurrentLayerOption)
+      {
+        var configuredIndex = doc.Layers.FindByFullPath(
+          OptionLayerName, RhinoMath.UnsetIntIndex);
+        if (IsUsableLayer(doc, configuredIndex))
+          return configuredIndex;
+      }
+
+      var currentLayerIndex = doc.Layers.CurrentLayerIndex;
+      return IsUsableLayer(doc, currentLayerIndex)
+        ? currentLayerIndex
+        : 0;
+    }
   }
 
   private sealed class CurveCacheState

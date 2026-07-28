@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.28.1117
+# vTools  ·  v26.7.28.1454
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -232,6 +232,7 @@ Options:
       - `Chained`: each next segment starts at the previous end point.
       - `Polyline`: build/update one polyline as you add vertices.
     - `BothSides`: creates a symmetric line centered on the picked start point.
+    - `Layer`: sends new vLine geometry to an existing layer, or uses `*Current*`. The choice persists. If Rhino's current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.
     - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `BiTangent`, `Extension`: delegates to Rhino native line variants.
 
 1. Pick the end point.
@@ -252,7 +253,7 @@ Options:
     - `AngleLock`: locks direction by angle.
     - `Angle`: angle value used by `AngleLock`.
     - `AngleRef`: `Absolute` uses CPlane X-axis; `Relative` uses previous segment direction.
-    - `Mode` and `BothSides`: also available while placing the end point.
+    - `Mode`, `BothSides`, and `Layer`: also available while placing the end point.
 
 ### vLineLength flow
 
@@ -456,7 +457,7 @@ Behavior:
 
 ### vSetPt flow
 
-1. Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.
+1. Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Each curve keeps the end nearest the cursor when that curve is selected, even if its other end is nearer the eventual common target; deselecting and reselecting the curve captures a new end. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.
 1. Use `Preview=On/Off` during curve selection to show or hide the live result; the setting persists. When enabled, thin cyan temporary curves show each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moving to a common target that follows the cursor at the selected points' view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.
 1. Grips are enabled temporarily and the identified grips are selected automatically. Each curve's original grip visibility is restored when SetPt finishes or is cancelled.
 1. The built-in `-SetPt` command launches with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No`; click the target location to commit.

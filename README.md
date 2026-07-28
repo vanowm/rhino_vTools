@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.23.1803
+# vTools  ·  v26.7.28.1117
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -457,7 +457,7 @@ Behavior:
 ### vSetPt flow
 
 1. Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.
-1. Cyan temporary curves preview the SetPt result: each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moves to a common target that follows the cursor at the selected points' view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.
+1. Use `Preview=On/Off` during curve selection to show or hide the live result; the setting persists. When enabled, thin cyan temporary curves show each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moving to a common target that follows the cursor at the selected points' view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.
 1. Grips are enabled temporarily and the identified grips are selected automatically. Each curve's original grip visibility is restored when SetPt finishes or is cancelled.
 1. The built-in `-SetPt` command launches with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No`; click the target location to commit.
 1. Press Enter to repeat `vSetPt`.

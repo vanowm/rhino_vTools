@@ -55,8 +55,26 @@ public sealed class vSetPt : Command
   private static uint _pendingDocSerial;
 
   private const string Tag = "vSetPt";
+  private const string OptionsSectionName = "vSetPt";
+  private const string PreviewKey = "preview";
+  private static bool _showPreview = true;
 
   public override string EnglishName => Tag;
+
+  private static void LoadPersistedOptions()
+  {
+    _showPreview = ToolsOptionStore.Read(
+      OptionsSectionName,
+      section => ToolsOptionStore.TryGetBool(
+        section, PreviewKey, out var preview) ? preview : true);
+  }
+
+  private static void SavePersistedOptions()
+  {
+    _ = ToolsOptionStore.Update(
+      OptionsSectionName,
+      section => section[PreviewKey] = _showPreview);
+  }
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
@@ -70,6 +88,7 @@ public sealed class vSetPt : Command
 
     CancelPending();
     Log.Write(Tag, "--- run start ---");
+    LoadPersistedOptions();
     var preselectedGrips = CapturePreselectedGrips(doc);
 
     // Accept pre-selected curves or prompt for selection.
@@ -86,7 +105,9 @@ public sealed class vSetPt : Command
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(true);
 
-    var preview = new EndpointPreviewConduit { Enabled = true };
+    var previewToggle = new OptionToggle(_showPreview, "Off", "On");
+    go.AddOptionToggle("Preview", ref previewToggle);
+    var preview = new EndpointPreviewConduit { Enabled = _showPreview };
     var cursorTracker = new EndpointCursorCallback(
       doc, preview, preselectedGrips) { Enabled = true };
     var preselectedWaitingForConfirmation = false;
@@ -112,6 +133,19 @@ public sealed class vSetPt : Command
         {
           Log.Write(Tag, "selection cancelled");
           return go.CommandResult();
+        }
+
+        if (getResult == GetResult.Option)
+        {
+          var showPreview = previewToggle.CurrentValue;
+          if (_showPreview != showPreview)
+          {
+            _showPreview = showPreview;
+            SavePersistedOptions();
+            preview.Enabled = showPreview;
+            doc.Views.Redraw();
+          }
+          continue;
         }
 
         if (getResult == GetResult.Object &&
@@ -204,7 +238,7 @@ public sealed class vSetPt : Command
     protected override void DrawOverlay(DrawEventArgs e)
     {
       foreach (var curve in _curves)
-        e.Display.DrawCurve(curve, Color.Cyan, e.Display.DefaultCurveThickness);
+        e.Display.DrawCurve(curve, Color.Cyan, 1);
     }
   }
 

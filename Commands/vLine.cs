@@ -73,7 +73,7 @@ public sealed class vLine : Command
     var layerSession = new LineLayerSession(doc, _layer);
 
     var startResult = ResolveFirstPoint(
-      doc, layerSession, initialBothSides: false, initialChainMode: _chainMode);
+      doc, layerSession, initialBothSides: false, initialChainMode: _chainMode, mode);
     _chainMode = startResult.ChainMode;
     if (startResult.DelegatedToNative)
     {
@@ -128,6 +128,7 @@ public sealed class vLine : Command
         angleRelativeState,
         lastSegmentVector,
         layerSession,
+        mode,
         canUndo,
         canRedo);
 
@@ -259,7 +260,7 @@ public sealed class vLine : Command
         while (true)
         {
           var newStartResult = ResolveFirstPoint(
-            doc, layerSession, initialBothSides, selectedChainMode);
+            doc, layerSession, initialBothSides, selectedChainMode, mode);
 
           if (newStartResult.DelegatedToNative)
           {
@@ -366,29 +367,18 @@ public sealed class vLine : Command
 
   private static void PromptForLayer(
     RhinoDoc doc,
-    LineLayerSession layerSession)
+    LineLayerSession layerSession,
+    RunMode runMode)
   {
-    var getString = new GetString();
-    getString.EnableTransparentCommands(true);
-    getString.SetCommandPrompt(
-      $"Target layer name or {CurrentLayerOption}");
-    getString.SetDefaultString(layerSession.OptionLayerName);
-    getString.AcceptNothing(true);
-    getString.GetLiteralString();
-    if (getString.CommandResult() == Result.Cancel)
+    if (!LayerSelector.TrySelect(
+          doc,
+          layerSession.OptionLayerName,
+          CurrentLayerOption,
+          "vLine target layer",
+          runMode,
+          allowNewLayer: false,
+          out var resolvedLayer))
       return;
-
-    var requested = getString.StringResult()?.Trim();
-    if (string.IsNullOrWhiteSpace(requested))
-      return;
-
-    if (!TryResolveLayerOption(doc, requested, out var resolvedLayer))
-    {
-      RhinoApp.WriteLine(
-        $"vLine: layer '{requested}' was not found or is ambiguous. " +
-        $"Enter an existing full layer path or {CurrentLayerOption}.");
-      return;
-    }
 
     _layer = resolvedLayer;
     layerSession.ApplyOption(doc, resolvedLayer);
@@ -408,45 +398,6 @@ public sealed class vLine : Command
     return value;
   }
 
-  private static bool TryResolveLayerOption(
-    RhinoDoc doc,
-    string requested,
-    out string resolvedLayer)
-  {
-    resolvedLayer = NormalizeLayerOption(requested);
-    if (resolvedLayer == CurrentLayerOption)
-      return true;
-
-    var fullPathIndex = doc.Layers.FindByFullPath(
-      resolvedLayer, RhinoMath.UnsetIntIndex);
-    if (IsUsableLayer(doc, fullPathIndex))
-    {
-      resolvedLayer = doc.Layers[fullPathIndex].FullPath;
-      return true;
-    }
-
-    var matchedIndex = RhinoMath.UnsetIntIndex;
-    foreach (var layer in doc.Layers)
-    {
-      if (layer == null || layer.IsDeleted ||
-          !string.Equals(layer.Name, resolvedLayer, StringComparison.OrdinalIgnoreCase))
-      {
-        continue;
-      }
-
-      if (matchedIndex != RhinoMath.UnsetIntIndex)
-        return false;
-
-      matchedIndex = layer.Index;
-    }
-
-    if (!IsUsableLayer(doc, matchedIndex))
-      return false;
-
-    resolvedLayer = doc.Layers[matchedIndex].FullPath;
-    return true;
-  }
-
   private static bool IsUsableLayer(RhinoDoc doc, int layerIndex)
   {
     if (layerIndex < 0 || layerIndex >= doc.Layers.Count)
@@ -460,7 +411,8 @@ public sealed class vLine : Command
     RhinoDoc doc,
     LineLayerSession layerSession,
     bool initialBothSides,
-    int initialChainMode)
+    int initialChainMode,
+    RunMode runMode)
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
@@ -520,7 +472,7 @@ public sealed class vLine : Command
 
         if (option.Index == layerOptionIndex)
         {
-          PromptForLayer(doc, layerSession);
+          PromptForLayer(doc, layerSession, runMode);
           continue;
         }
 
@@ -566,6 +518,7 @@ public sealed class vLine : Command
     bool initialAngleRelative,
     Vector3d? referenceVector,
     LineLayerSession layerSession,
+    RunMode runMode,
     bool canUndo = false,
     bool canRedo = false)
   {
@@ -994,7 +947,7 @@ public sealed class vLine : Command
 
           if (option.Index == idxLayer)
           {
-            PromptForLayer(doc, layerSession);
+            PromptForLayer(doc, layerSession, runMode);
             continue;
           }
 
@@ -1196,6 +1149,7 @@ public sealed class vLine : Command
             angleRelative.CurrentValue,
             referenceVector,
             layerSession,
+            runMode,
             canUndo,
             canRedo);
         }

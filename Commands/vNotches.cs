@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -3113,9 +3113,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     readonly NotchSession _s;
     bool _suppress;
     bool _updatingMultipleControls;
-    int _notchLayerRevision;
-    int _labelLayerRevision;
-
     // Controls
     readonly Button[] _typeButtons;
     readonly NumericStepper _lengthStepper, _offsetStepper, _widthStepper;
@@ -3194,28 +3191,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         refreshTypeIcons: true);
 
       // Notch layer dropdown
-      _notchLayerDrop = new DropDown();
-      ConfigureLayerDropDown(_notchLayerDrop);
-      _notchLayerDrop.Load += (_, __) => ConfigureLayerDropDown(_notchLayerDrop);
-      PopulateLayerDropDown(_notchLayerDrop, doc, s.NotchLayerName, true);
-      _notchLayerRevision = LayerDropDownRevision(doc, s.NotchLayerName, true);
+      _notchLayerDrop = LayerSelector.CreateDropDown(
+        doc, s.NotchLayerName, SpecialLayerCurrent);
       _notchLayerDrop.SelectedIndexChanged += (_, __) =>
       {
-        if (_suppress) return;
-        s.NotchLayerName = GetDropDownLayerName(_notchLayerDrop, s.NotchLayerName);
-        _notchLayerRevision = LayerDropDownRevision(doc, s.NotchLayerName, true);
+        if (_suppress || LayerSelector.IsDropDownUpdating(_notchLayerDrop)) return;
+        s.NotchLayerName = LayerSelector.GetDropDownValue(
+          _notchLayerDrop, s.NotchLayerName);
         Redraw();
         Persist();
-      };
-      _notchLayerDrop.DropDownOpening += (_, __) =>
-      {
-        _suppress = true;
-        try
-        {
-          _notchLayerRevision = RefreshLayerDropDownIfChanged(
-            _notchLayerDrop, doc, s.NotchLayerName, true, _notchLayerRevision);
-        }
-        finally { _suppress = false; }
       };
 
       _notchCheck = new CheckBox { Text = "", Checked = s.NotchToggle.CurrentValue };
@@ -3270,28 +3254,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _sideFlipCheck.CheckedChanged += (_, __) =>
       { if (_suppress) return; s.LabelSideFlip = _sideFlipCheck.Checked == true; Redraw(); Persist(); };
 
-      _labelLayerDrop = new DropDown();
-      ConfigureLayerDropDown(_labelLayerDrop);
-      _labelLayerDrop.Load += (_, __) => ConfigureLayerDropDown(_labelLayerDrop);
-      PopulateLayerDropDown(_labelLayerDrop, doc, s.LabelLayerName, false);
-      _labelLayerRevision = LayerDropDownRevision(doc, s.LabelLayerName, false);
+      _labelLayerDrop = LayerSelector.CreateDropDown(doc, s.LabelLayerName);
       _labelLayerDrop.SelectedIndexChanged += (_, __) =>
       {
-        if (_suppress) return;
-        s.LabelLayerName = GetDropDownLayerName(_labelLayerDrop, s.LabelLayerName);
-        _labelLayerRevision = LayerDropDownRevision(doc, s.LabelLayerName, false);
+        if (_suppress || LayerSelector.IsDropDownUpdating(_labelLayerDrop)) return;
+        s.LabelLayerName = LayerSelector.GetDropDownValue(
+          _labelLayerDrop, s.LabelLayerName);
         Redraw();
         Persist();
-      };
-      _labelLayerDrop.DropDownOpening += (_, __) =>
-      {
-        _suppress = true;
-        try
-        {
-          _labelLayerRevision = RefreshLayerDropDownIfChanged(
-            _labelLayerDrop, doc, s.LabelLayerName, false, _labelLayerRevision);
-        }
-        finally { _suppress = false; }
       };
 
       _labelSizeStepper = MakeNumberStepper(s.ManualLabelSize, 0.0, 1e9, 0.1);
@@ -4441,176 +4411,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       }
     }
 
-    static System.Drawing.Color ResolveLayerDisplayColor(RhinoDoc doc, Layer layer)
-    {
-      try
-      {
-        var activeView = doc.Views.ActiveView;
-        if (activeView != null)
-        {
-          var viewportColor = layer.PerViewportColor(activeView.ActiveViewportID);
-          if (viewportColor != System.Drawing.Color.Empty)
-            return viewportColor;
-        }
-      }
-      catch { }
-      return layer.Color;
-    }
-
-    sealed class LayerDropItem
-    {
-      public LayerDropItem(string name, string displayText, Eto.Drawing.Color color)
-      {
-        Name = name;
-        DisplayText = displayText;
-        Swatch = CreateColorSwatch(color);
-      }
-
-      public string Name { get; }
-      public string DisplayText { get; }
-      public Image Swatch { get; }
-      public override string ToString() => Name;
-
-      static Bitmap CreateColorSwatch(Eto.Drawing.Color color)
-      {
-        var bitmap = new Bitmap(18, 18, PixelFormat.Format32bppRgba);
-        using var graphics = new Graphics(bitmap);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(242, 242, 242), 0, 0, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(191, 191, 191), 9, 0, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(191, 191, 191), 0, 9, 9, 9);
-        graphics.FillRectangle(Eto.Drawing.Color.FromArgb(242, 242, 242), 9, 9, 9, 9);
-        graphics.FillRectangle(color, 0, 0, 18, 18);
-        graphics.DrawRectangle(Colors.Black, 0, 0, 17, 17);
-        return bitmap;
-      }
-    }
-
-    static int LayerDropDownRevision(
-      RhinoDoc doc, string currentName, bool includeCurrentSpecial)
-    {
-      var hash = new HashCode();
-      hash.Add(currentName, StringComparer.Ordinal);
-      hash.Add(includeCurrentSpecial);
-      hash.Add(doc.Layers.CurrentLayerIndex);
-
-      var activeView = doc.Views.ActiveView;
-      hash.Add(activeView?.ActiveViewportID ?? Guid.Empty);
-
-      foreach (var layer in doc.Layers)
-      {
-        if (layer == null)
-          continue;
-
-        hash.Add(layer.Id);
-        hash.Add(layer.Index);
-        hash.Add(layer.ParentLayerId);
-        hash.Add(layer.SortIndex);
-        hash.Add(layer.IsDeleted);
-        hash.Add(layer.FullPath, StringComparer.Ordinal);
-        hash.Add(ResolveLayerDisplayColor(doc, layer).ToArgb());
-      }
-
-      return hash.ToHashCode();
-    }
-
-    static int RefreshLayerDropDownIfChanged(
-      DropDown drop,
-      RhinoDoc doc,
-      string currentName,
-      bool includeCurrentSpecial,
-      int knownRevision)
-    {
-      var revision = LayerDropDownRevision(doc, currentName, includeCurrentSpecial);
-      if (revision == knownRevision)
-        return knownRevision;
-
-      PopulateLayerDropDown(drop, doc, currentName, includeCurrentSpecial);
-      return revision;
-    }
-
-    static void ConfigureLayerDropDown(DropDown drop)
-    {
-      if (drop.ControlObject is not System.Windows.Controls.ComboBox combo)
-        return;
-
-      System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(combo, true);
-      System.Windows.Controls.VirtualizingPanel.SetVirtualizationMode(
-        combo, System.Windows.Controls.VirtualizationMode.Recycling);
-      System.Windows.Controls.ScrollViewer.SetCanContentScroll(combo, true);
-
-      var itemPanel = new System.Windows.FrameworkElementFactory(
-        typeof(System.Windows.Controls.VirtualizingStackPanel));
-      itemPanel.SetValue(
-        System.Windows.Controls.VirtualizingPanel.IsVirtualizingProperty, true);
-      itemPanel.SetValue(
-        System.Windows.Controls.VirtualizingPanel.VirtualizationModeProperty,
-        System.Windows.Controls.VirtualizationMode.Recycling);
-      combo.ItemsPanel = new System.Windows.Controls.ItemsPanelTemplate(itemPanel);
-    }
-
-    static void PopulateLayerDropDown(DropDown drop, RhinoDoc doc, string currentName, bool includeCurrentSpecial)
-    {
-      var items = new List<LayerDropItem>();
-      static Eto.Drawing.Color ToEtoColor(System.Drawing.Color color) =>
-        Eto.Drawing.Color.FromArgb(color.ToArgb());
-
-      if (includeCurrentSpecial)
-      {
-        var currentLayer = doc.Layers.CurrentLayer;
-        var currentColor = currentLayer == null
-          ? Colors.White
-          : ToEtoColor(ResolveLayerDisplayColor(doc, currentLayer));
-        items.Add(new LayerDropItem(SpecialLayerCurrent, SpecialLayerCurrent, currentColor));
-      }
-
-      var allLayers = doc.Layers.Cast<Layer>()
-        .Where(layer => layer != null && !layer.IsDeleted && !string.IsNullOrWhiteSpace(layer.FullPath))
-        .OrderBy(layer => layer.SortIndex)
-        .ToList();
-      var byParent = new Dictionary<Guid, List<Layer>>();
-      foreach (var layer in allLayers)
-      {
-        if (!byParent.TryGetValue(layer.ParentLayerId, out var children))
-        {
-          children = [];
-          byParent[layer.ParentLayerId] = children;
-        }
-        children.Add(layer);
-      }
-
-      void AddChildren(Guid parentId, int depth)
-      {
-        if (!byParent.TryGetValue(parentId, out var children))
-          return;
-        foreach (var layer in children.OrderBy(child => child.SortIndex))
-        {
-          string indent = depth <= 0 ? string.Empty : new string(' ', depth * 2);
-          items.Add(new LayerDropItem(
-            layer.FullPath, indent + layer.Name,
-            ToEtoColor(ResolveLayerDisplayColor(doc, layer))));
-          AddChildren(layer.Id, depth + 1);
-        }
-      }
-      AddChildren(Guid.Empty, 0);
-
-      if (!items.Any(item => string.Equals(item.Name, currentName, StringComparison.Ordinal)))
-        items.Insert(0, new LayerDropItem(currentName, currentName, Colors.White));
-
-      drop.DataStore = items;
-      drop.ItemTextBinding = Binding.Property<LayerDropItem, string>(item => item.DisplayText);
-      drop.ItemImageBinding = Binding.Property<LayerDropItem, Image>(item => item.Swatch);
-      int sel = items.FindIndex(item => string.Equals(item.Name, currentName, StringComparison.Ordinal));
-      drop.SelectedIndex = sel >= 0 ? sel : 0;
-    }
-
-    static string GetDropDownLayerName(DropDown drop, string fallback)
-    {
-      if (drop.SelectedIndex < 0) return fallback;
-      var items = drop.DataStore?.Cast<LayerDropItem>().ToList();
-      if (items == null || drop.SelectedIndex >= items.Count) return fallback;
-      return items[drop.SelectedIndex].Name;
-    }
-
     public void SyncFromSession()
     {
       _suppress = true;
@@ -4660,7 +4460,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _s.NotchLengthOpt.CurrentValue = RoundPanelNumber(_lengthStepper.Value);
       _s.NotchOffsetOpt.CurrentValue = RoundPanelNumber(_offsetStepper.Value);
       _s.NotchWidthOpt.CurrentValue = RoundPanelNumber(_widthStepper.Value);
-      _s.NotchLayerName = GetDropDownLayerName(_notchLayerDrop, _s.NotchLayerName);
+      _s.NotchLayerName = LayerSelector.GetDropDownValue(
+        _notchLayerDrop, _s.NotchLayerName);
       _s.NotchToggle.CurrentValue = _notchCheck.Checked == true;
       _s.PercentToggle.CurrentValue = _percentCheck.Checked == true;
       _s.GroupToggle.CurrentValue = _groupCheck.Checked == true;
@@ -4670,7 +4471,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _s.LabelValueText = _labelValueBox.Text;
       _s.LabelAutoAdv = _autoAdvCheck.Checked == true;
       _s.LabelSideFlip = _sideFlipCheck.Checked == true;
-      _s.LabelLayerName = GetDropDownLayerName(_labelLayerDrop, _s.LabelLayerName);
+      _s.LabelLayerName = LayerSelector.GetDropDownValue(
+        _labelLayerDrop, _s.LabelLayerName);
       _s.ManualLabelSize = Math.Max(0, RoundPanelNumber(_labelSizeStepper.Value));
       _s.LabelSizeAutoToggle.CurrentValue = _labelSizeAutoCheck.Checked == true;
       int labelPct = Math.Clamp((int)Math.Round(_labelSizePctStepper.Value / 5.0) * 5, 20, 100);

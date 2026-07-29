@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.28.1454
+# vTools  ·  v26.7.28.1708
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -232,7 +232,7 @@ Options:
       - `Chained`: each next segment starts at the previous end point.
       - `Polyline`: build/update one polyline as you add vertices.
     - `BothSides`: creates a symmetric line centered on the picked start point.
-    - `Layer`: sends new vLine geometry to an existing layer, or uses `*Current*`. The choice persists. If Rhino's current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.
+    - `Layer`: opens the shared searchable layer selector with `*Current*` as the first item. Choosing `*Current*` follows the document's current layer dynamically; choosing another layer stores its full path. `-vLine` accepts the layer name or full path directly instead. The choice persists. If Rhino's current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.
     - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `BiTangent`, `Extension`: delegates to Rhino native line variants.
 
 1. Pick the end point.
@@ -544,7 +544,7 @@ Behavior:
     - `Size`: text height.
     - `Padding`: percentage of text height added as padding on each side of the bounding box.
     - `Box`: `Yes/No` — draw a padded bounding rectangle around the text.
-    - `Layer`: target layer. Use `.` or `*` for the current layer; default is `Reference`.
+    - `Layer`: opens the shared searchable layer selector. Use `*Current*` to follow the current layer; `-vTitle` accepts a layer name or full path directly. Default is `Reference`.
 
 1. Press Enter to confirm, Esc to cancel.
 
@@ -618,7 +618,7 @@ Notes:
     - `Parts`: `Yes/No` — enable the parts-output pipeline.
     - `Label` *(when Parts=Yes)*: text label for generated part groups.
     - `Tail` *(when Parts=Yes)*: tail length for end curves.
-    - `Options`: opens the full options dialog for layer names, colors, and additional offset values.
+    - `Options`: opens the full options dialog with shared hierarchical layer dropdowns and color swatches, plus additional offset values.
 
 1. A cyan preview of the computed center curve is shown live.
 1. When `Parts=No`: press Enter to accept, or click a boundary curve to trim/extend the ends.
@@ -641,6 +641,7 @@ Notes:
 1. While previewing, adjust the same options to recompute live.
 1. Click any existing curve to set or replace the boundary: the result is trimmed or extended to meet it.
 1. Press Enter to accept and add the result curve to the document.
+1. `Options` uses the shared hierarchical layer dropdowns with color swatches for center, glass, and vis output layers.
 1. Options are saved to `vTools.config.json` under the `vUzipCenter` section.
 
 ### vUzipParts flow

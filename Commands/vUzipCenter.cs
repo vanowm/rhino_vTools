@@ -563,7 +563,6 @@ public sealed class vUzipCenter : Command
     readonly Eto.Forms.TextBox  _glassOffBox;
     readonly Eto.Forms.DropDown _visDrop;
     readonly Eto.Forms.TextBox  _visOffBox;
-    readonly List<(string Name, System.Drawing.Color Col)> _docLayers;
 
     public OptionsDialog(RhinoDoc doc, UzipCenterSettings s)
     {
@@ -571,73 +570,22 @@ public sealed class vUzipCenter : Command
       Resizable = false;
       Result    = false;
 
-      _docLayers = doc.Layers
-        .Where(l => !l.IsDeleted)
-        .Select(l => (Name: l.FullPath, Col: l.Color))
-        .ToList();
-
-      Eto.Forms.DropDown MakeDrop(string current)
-      {
-        var d = new Eto.Forms.DropDown { Width = 220 };
-        bool found = false;
-        foreach (var (name, _) in _docLayers)
-        {
-          d.Items.Add(new Eto.Forms.ListItem { Text = name, Key = name });
-          if (string.Equals(name, current, StringComparison.OrdinalIgnoreCase)) found = true;
-        }
-        if (!found && !string.IsNullOrWhiteSpace(current))
-          d.Items.Insert(0, new Eto.Forms.ListItem { Text = current + " (not in doc)", Key = current });
-        d.SelectedKey = current;
-        if (d.SelectedIndex < 0) d.SelectedIndex = 0;
-        return d;
-      }
-
-      Eto.Forms.Drawable MakeSwatch(Eto.Forms.DropDown drop)
-      {
-        var sw = new Eto.Forms.Drawable { Size = new Eto.Drawing.Size(16, 16) };
-        sw.Paint += (_, pe) =>
-        {
-          var key = drop.SelectedKey ?? "";
-          var hit = _docLayers.FirstOrDefault(l =>
-            string.Equals(l.Name, key, StringComparison.OrdinalIgnoreCase));
-          var sc  = hit.Name != null ? hit.Col : System.Drawing.Color.Gray;
-          pe.Graphics.FillRectangle(
-            new Eto.Drawing.Color(sc.R / 255f, sc.G / 255f, sc.B / 255f),
-            new Eto.Drawing.RectangleF(0, 0, 16, 16));
-        };
-        drop.SelectedIndexChanged += (_, _) => sw.Invalidate();
-        return sw;
-      }
-
-      Eto.Forms.StackLayout SwatchRow(Eto.Forms.Drawable sw, Eto.Forms.DropDown dd) =>
-        new Eto.Forms.StackLayout
-        {
-          Orientation = Eto.Forms.Orientation.Horizontal,
-          Spacing = 4,
-          VerticalContentAlignment = Eto.Forms.VerticalAlignment.Center,
-          Items = { sw, new Eto.Forms.StackLayoutItem(dd, true) },
-        };
-
       static Eto.Forms.Label Lbl(string t) =>
         new Eto.Forms.Label { Text = t, VerticalAlignment = Eto.Forms.VerticalAlignment.Center };
 
-      _centerDrop  = MakeDrop(s.CenterLayer);
-      _glassDrop   = MakeDrop(s.GlassLayer);
+      _centerDrop  = LayerSelector.CreateDropDown(doc, s.CenterLayer, width: 220);
+      _glassDrop   = LayerSelector.CreateDropDown(doc, s.GlassLayer, width: 220);
       _glassOffBox = new Eto.Forms.TextBox
       {
         Text  = s.GlassOffset.ToString(CultureInfo.InvariantCulture),
         Width = 80,
       };
-      _visDrop     = MakeDrop(s.VisLayer);
+      _visDrop     = LayerSelector.CreateDropDown(doc, s.VisLayer, width: 220);
       _visOffBox   = new Eto.Forms.TextBox
       {
         Text  = s.VisOffset.ToString(CultureInfo.InvariantCulture),
         Width = 80,
       };
-
-      var centerSwatch = MakeSwatch(_centerDrop);
-      var glassSwatch  = MakeSwatch(_glassDrop);
-      var visSwatch    = MakeSwatch(_visDrop);
 
       var resetBtn  = new Eto.Forms.Button { Text = "Reset to Defaults" };
       var okBtn     = new Eto.Forms.Button { Text = "OK",     Width = 80 };
@@ -648,14 +596,11 @@ public sealed class vUzipCenter : Command
       resetBtn.Click += (_, _) =>
       {
         var d = new UzipCenterSettings();
-        _centerDrop.SelectedKey  = d.CenterLayer;
-        _glassDrop.SelectedKey   = d.GlassLayer;
+        LayerSelector.SetDropDownValue(_centerDrop, d.CenterLayer);
+        LayerSelector.SetDropDownValue(_glassDrop, d.GlassLayer);
         _glassOffBox.Text        = d.GlassOffset.ToString(CultureInfo.InvariantCulture);
-        _visDrop.SelectedKey     = d.VisLayer;
+        LayerSelector.SetDropDownValue(_visDrop, d.VisLayer);
         _visOffBox.Text          = d.VisOffset.ToString(CultureInfo.InvariantCulture);
-        centerSwatch.Invalidate();
-        glassSwatch.Invalidate();
-        visSwatch.Invalidate();
       };
       okBtn.Click     += (_, _) => Close(true);
       cancelBtn.Click += (_, _) => Close(false);
@@ -666,15 +611,15 @@ public sealed class vUzipCenter : Command
         Rows =
         {
           new Eto.Forms.TableRow(Lbl("Center layer:"),
-            new Eto.Forms.TableCell(SwatchRow(centerSwatch, _centerDrop), true)),
+            new Eto.Forms.TableCell(_centerDrop, true)),
           new Eto.Forms.TableRow(Lbl("Glass offset:"),
             new Eto.Forms.TableCell(_glassOffBox)),
           new Eto.Forms.TableRow(Lbl("Glass layer:"),
-            new Eto.Forms.TableCell(SwatchRow(glassSwatch, _glassDrop), true)),
+            new Eto.Forms.TableCell(_glassDrop, true)),
           new Eto.Forms.TableRow(Lbl("Vis offset:"),
             new Eto.Forms.TableCell(_visOffBox)),
           new Eto.Forms.TableRow(Lbl("Vis layer:"),
-            new Eto.Forms.TableCell(SwatchRow(visSwatch, _visDrop), true)),
+            new Eto.Forms.TableCell(_visDrop, true)),
         },
       };
 
@@ -705,11 +650,11 @@ public sealed class vUzipCenter : Command
 
     public void ApplyTo(UzipCenterSettings s)
     {
-      if (!string.IsNullOrEmpty(_centerDrop.SelectedKey)) s.CenterLayer = _centerDrop.SelectedKey;
-      if (!string.IsNullOrEmpty(_glassDrop.SelectedKey))  s.GlassLayer  = _glassDrop.SelectedKey;
+      s.CenterLayer = LayerSelector.GetDropDownValue(_centerDrop, s.CenterLayer);
+      s.GlassLayer  = LayerSelector.GetDropDownValue(_glassDrop, s.GlassLayer);
       if (double.TryParse(_glassOffBox.Text, NumberStyles.Float,
           CultureInfo.InvariantCulture, out var go) && go >= 0) s.GlassOffset = go;
-      if (!string.IsNullOrEmpty(_visDrop.SelectedKey))    s.VisLayer    = _visDrop.SelectedKey;
+      s.VisLayer = LayerSelector.GetDropDownValue(_visDrop, s.VisLayer);
       if (double.TryParse(_visOffBox.Text, NumberStyles.Float,
           CultureInfo.InvariantCulture, out var vo) && vo >= 0) s.VisOffset   = vo;
     }

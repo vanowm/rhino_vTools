@@ -22,6 +22,7 @@ public sealed class vTitle : Command
   private static double _padding = 50.0;   // percent per side
   private static bool   _box     = true;
   private static string _layer   = "Reference";
+  private const string CurrentLayerOption = "*Current*";
 
   // ── Active placement tracking (for live update) ───────────────────────
   private static Guid _activeTextId  = Guid.Empty;
@@ -135,17 +136,18 @@ public sealed class vTitle : Command
 
         if (opt.Index == idxLayer)
         {
-          var gs = new GetString();
-          gs.SetCommandPrompt("Layer name  (. or * = current layer)");
-          gs.SetDefaultString(_layer);
-          gs.AcceptNothing(true);
-          gs.GetLiteralString();
-          if (gs.CommandResult() != Result.Cancel)
+          if (LayerSelector.TrySelect(
+                doc,
+                _layer,
+                CurrentLayerOption,
+                "vTitle target layer",
+                mode,
+                allowNewLayer: true,
+                out var selectedLayer))
           {
-            string s = gs.StringResult()?.Trim() ?? "";
-            if (!string.IsNullOrEmpty(s)) _layer = s;
+            _layer = NormalizeLayerOption(selectedLayer);
+            SaveSettings();
           }
-          SaveSettings();
           continue;
         }
 
@@ -626,7 +628,8 @@ public sealed class vTitle : Command
 
   private static int GetTargetLayerIndex(RhinoDoc doc)
   {
-    if (_layer == "." || _layer == "*")
+    if (_layer == "." || _layer == "*" ||
+        string.Equals(_layer, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
       return doc.Layers.CurrentLayerIndex;
     int idx = doc.Layers.FindByFullPath(_layer, -1);
     if (idx >= 0) return idx;
@@ -658,9 +661,18 @@ public sealed class vTitle : Command
       if (ToolsOptionStore.TryGetDouble(s, KeySize,    out var v)) _size    = v;
       if (ToolsOptionStore.TryGetDouble(s, KeyPadding, out v))     _padding = v;
       if (ToolsOptionStore.TryGetBool  (s, KeyBox,     out var b)) _box     = b;
-      if (ToolsOptionStore.TryGetString(s, KeyLayer,   out var l)) _layer   = l;
+      if (ToolsOptionStore.TryGetString(s, KeyLayer,   out var l)) _layer   = NormalizeLayerOption(l);
       return 0;
     });
+  }
+
+  private static string NormalizeLayerOption(string? value)
+  {
+    var layer = value?.Trim() ?? string.Empty;
+    return layer == "." || layer == "*" ||
+           string.Equals(layer, CurrentLayerOption, StringComparison.OrdinalIgnoreCase)
+      ? CurrentLayerOption
+      : layer;
   }
 
   private static void SaveSettings()

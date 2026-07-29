@@ -799,7 +799,7 @@ public sealed class vSetPt : Command
     var doc = RhinoDoc.ActiveDoc;
     if (doc == null || doc.RuntimeSerialNumber != docSerial) return;
 
-    doc.Objects.UnselectAll();
+    UnselectObjectsAndGrips(doc);
 
     // Enable grips for each target curve and select the requested grips.
     int selectedCount = 0;
@@ -828,22 +828,8 @@ public sealed class vSetPt : Command
         var selectedGripIndices = new HashSet<int>();
         foreach (var selectedPoint in pick.Grips)
         {
-          var exactGrip = grips.FirstOrDefault(
-            grip => grip.Index == selectedPoint.GripIndex);
-          var bestDistance = exactGrip?.CurrentLocation.DistanceTo(selectedPoint.Point)
-            ?? double.MaxValue;
-          if (exactGrip == null)
-          {
-            foreach (var grip in grips)
-            {
-              var distance = grip.CurrentLocation.DistanceTo(selectedPoint.Point);
-              if (distance >= bestDistance)
-                continue;
-
-              bestDistance = distance;
-              exactGrip = grip;
-            }
-          }
+          var exactGrip = FindGripForPreselectedPoint(
+            grips, selectedPoint, out var bestDistance);
 
           if (exactGrip == null || !selectedGripIndices.Add(exactGrip.Index))
             continue;
@@ -881,7 +867,7 @@ public sealed class vSetPt : Command
     {
       Log.Write(Tag, "  no grips could be selected");
       RhinoApp.WriteLine("vSetPt: failed to select control-point grips.");
-      doc.Objects.UnselectAll();
+      UnselectObjectsAndGrips(doc);
       RestoreGripStates(doc, picks);
       doc.Views.Redraw();
       return;
@@ -901,8 +887,9 @@ public sealed class vSetPt : Command
     }
     finally
     {
-      doc.Objects.UnselectAll();
+      UnselectObjectsAndGrips(doc);
       RestoreGripStates(doc, picks);
+      SelectUsedPreselectedGrips(doc, picks);
       doc.Views.Redraw();
     }
 
@@ -910,6 +897,77 @@ public sealed class vSetPt : Command
     _restartingAfterDelegate = true;
     _ = RhinoApp.RunScript("_vSetPt", false);
     _restartingAfterDelegate = false;
+  }
+
+  private static void UnselectObjectsAndGrips(RhinoDoc doc)
+  {
+    foreach (var selectedObject in doc.Objects.GetSelectedObjects(false, true).ToList())
+    {
+      if (selectedObject is GripObject grip)
+        grip.Select(false);
+      else
+        selectedObject.Select(false);
+    }
+
+    doc.Objects.UnselectAll();
+  }
+
+  private static void SelectUsedPreselectedGrips(
+    RhinoDoc doc,
+    IEnumerable<PendingCurvePick> picks)
+  {
+    var selectedCount = 0;
+    foreach (var pick in picks)
+    {
+      if (pick.Grips.Length == 0)
+        continue;
+
+      var obj = doc.Objects.FindId(pick.Id);
+      if (obj == null || !obj.GripsOn)
+        continue;
+
+      var grips = obj.GetGrips();
+      if (grips == null || grips.Length == 0)
+        continue;
+
+      var selectedGripIndices = new HashSet<int>();
+      foreach (var selectedPoint in pick.Grips)
+      {
+        var grip = FindGripForPreselectedPoint(grips, selectedPoint, out _);
+        if (grip == null || !selectedGripIndices.Add(grip.Index))
+          continue;
+
+        grip.Select(true);
+        selectedCount++;
+      }
+    }
+
+    Log.Write(Tag, $"  restored used preselected grips: {selectedCount}");
+  }
+
+  private static GripObject? FindGripForPreselectedPoint(
+    GripObject[] grips,
+    PreselectedGrip selectedPoint,
+    out double bestDistance)
+  {
+    var exactGrip = grips.FirstOrDefault(
+      grip => grip.Index == selectedPoint.GripIndex);
+    bestDistance = exactGrip?.CurrentLocation.DistanceTo(selectedPoint.Point)
+      ?? double.MaxValue;
+    if (exactGrip != null)
+      return exactGrip;
+
+    foreach (var grip in grips)
+    {
+      var distance = grip.CurrentLocation.DistanceTo(selectedPoint.Point);
+      if (distance >= bestDistance)
+        continue;
+
+      bestDistance = distance;
+      exactGrip = grip;
+    }
+
+    return exactGrip;
   }
 
   private static void RestoreGripStates(

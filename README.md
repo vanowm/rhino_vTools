@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.28.1708
+# vTools  ·  v26.7.29.1210
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 

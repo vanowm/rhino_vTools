@@ -27,6 +27,8 @@ namespace vTools.Commands;
 ///   3. Grips are turned on and the identified grips are selected.
 ///   4. Control is transferred to -SetPt with the defaults
 ///      XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No.
+///   5. After a successful SetPt, the used grips remain visible and selected
+///      so Rhino displays the gumball.
 /// </summary>
 public sealed class vSetPt : Command
 {
@@ -800,6 +802,7 @@ public sealed class vSetPt : Command
     if (doc == null || doc.RuntimeSerialNumber != docSerial) return;
 
     UnselectObjectsAndGrips(doc);
+    EnableEditPointsForHiddenEndpointPicks(doc, picks);
 
     // Enable grips for each target curve and select the requested grips.
     int selectedCount = 0;
@@ -809,15 +812,16 @@ public sealed class vSetPt : Command
       var obj = doc.Objects.FindId(id);
       if (obj == null) continue;
 
-      // Preserve an existing edit-point grip mode; hidden curves need endpoint
-      // control points enabled for the fallback path.
-      if (!obj.GripsOn)
+      // Preserve an existing edit-point mode. Use control points only when
+      // neither edit-point nor control-point grips could be made visible.
+      var grips = obj.GetGrips();
+      if (grips == null || grips.Length == 0)
       {
         obj.GripsOn = true;
         obj.CommitChanges();
+        grips = obj.GetGrips();
       }
 
-      var grips = obj.GetGrips();
       if (grips == null || grips.Length == 0) continue;
 
       var curve = obj.Geometry as Curve;
@@ -888,8 +892,15 @@ public sealed class vSetPt : Command
     finally
     {
       UnselectObjectsAndGrips(doc);
-      RestoreGripStates(doc, picks);
-      SelectUsedPreselectedGrips(doc, picks);
+      if (ok)
+      {
+        SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
+      }
+      else
+      {
+        RestoreGripStates(doc, picks);
+        SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
+      }
       doc.Views.Redraw();
     }
 
@@ -912,37 +923,78 @@ public sealed class vSetPt : Command
     doc.Objects.UnselectAll();
   }
 
-  private static void SelectUsedPreselectedGrips(
+  private static void EnableEditPointsForHiddenEndpointPicks(
     RhinoDoc doc,
     IEnumerable<PendingCurvePick> picks)
+  {
+    var objectIds = picks
+      .Where(pick => pick.Grips.Length == 0 && !pick.GripsWereOn)
+      .Select(pick => pick.Id)
+      .Distinct()
+      .ToArray();
+    if (objectIds.Length == 0)
+      return;
+
+    foreach (var id in objectIds)
+      doc.Objects.FindId(id)?.Select(true);
+
+    var editPointsOn = RhinoApp.RunScript("_EditPtOn _Enter", false);
+    Log.Write(Tag,
+      $"  edit points for hidden endpoint picks: objects={objectIds.Length}" +
+      $" result={editPointsOn}");
+
+    foreach (var id in objectIds)
+      doc.Objects.FindId(id)?.Select(false);
+  }
+
+  private static void SelectUsedGrips(
+    RhinoDoc doc,
+    IEnumerable<PendingCurvePick> picks,
+    bool includeDetectedEndpoints)
   {
     var selectedCount = 0;
     foreach (var pick in picks)
     {
-      if (pick.Grips.Length == 0)
-        continue;
-
       var obj = doc.Objects.FindId(pick.Id);
-      if (obj == null || !obj.GripsOn)
+      if (obj?.Geometry is not Curve curve)
         continue;
 
       var grips = obj.GetGrips();
       if (grips == null || grips.Length == 0)
         continue;
 
-      var selectedGripIndices = new HashSet<int>();
-      foreach (var selectedPoint in pick.Grips)
+      if (pick.Grips.Length > 0)
       {
-        var grip = FindGripForPreselectedPoint(grips, selectedPoint, out _);
-        if (grip == null || !selectedGripIndices.Add(grip.Index))
-          continue;
+        var selectedGripIndices = new HashSet<int>();
+        foreach (var selectedPoint in pick.Grips)
+        {
+          var grip = FindGripForPreselectedPoint(grips, selectedPoint, out _);
+          if (grip == null || !selectedGripIndices.Add(grip.Index))
+            continue;
 
-        grip.Select(true);
+          grip.Select(true);
+          selectedCount++;
+        }
+        continue;
+      }
+
+      if (!includeDetectedEndpoints)
+        continue;
+
+      var endpoint = pick.IsStart ? curve.PointAtStart : curve.PointAtEnd;
+      var usedGrip = grips
+        .OrderBy(grip => grip.CurrentLocation.DistanceTo(endpoint))
+        .FirstOrDefault();
+      if (usedGrip != null)
+      {
+        usedGrip.Select(true);
         selectedCount++;
       }
     }
 
-    Log.Write(Tag, $"  restored used preselected grips: {selectedCount}");
+    Log.Write(Tag,
+      $"  selected used grips after SetPt: {selectedCount}" +
+      $" includeDetectedEndpoints={includeDetectedEndpoints}");
   }
 
   private static GripObject? FindGripForPreselectedPoint(

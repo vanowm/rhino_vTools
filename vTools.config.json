@@ -29,6 +29,10 @@
   "vFacing": {
     "size": 3.0
   },
+  "vFilterExec": {
+    "command": "",
+    "filter": "Curves"
+  },
   "vFitBox": {
     "angleStepDeg": 5.0,
     "rotate": false,

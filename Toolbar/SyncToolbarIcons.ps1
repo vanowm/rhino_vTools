@@ -4,6 +4,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$pluginId = "2607512e-a1fc-4cf9-9329-a293431437a0"
+$supportedVersions = @("8.0", "9.0")
 
 if (Get-Process Rhino -ErrorAction SilentlyContinue) {
   throw "Close Rhino before synchronizing toolbar icons."
@@ -15,16 +17,33 @@ if (-not (Test-Path -LiteralPath $SourceRui -PathType Leaf)) {
 
 if (-not $TargetRui -or $TargetRui.Count -eq 0) {
   $profilesRoot = Join-Path $env:APPDATA "McNeel\Rhinoceros"
+  $discoveredTargets = New-Object System.Collections.Generic.List[string]
+
+  foreach ($version in $supportedVersions) {
+    $defaultRui = Join-Path $profilesRoot "$version\UI\default.rui"
+    if (Test-Path -LiteralPath $defaultRui -PathType Leaf) {
+      $discoveredTargets.Add($defaultRui)
+    }
+
+    $pluginKey = "HKCU:\Software\McNeel\Rhinoceros\$version\Plug-Ins\$pluginId"
+    if (Test-Path -LiteralPath $pluginKey) {
+      $registeredRui = (Get-ItemProperty -LiteralPath $pluginKey -Name RuiFile -ErrorAction SilentlyContinue).RuiFile
+      if (-not [string]::IsNullOrWhiteSpace($registeredRui) -and
+          (Test-Path -LiteralPath $registeredRui -PathType Leaf)) {
+        $discoveredTargets.Add($registeredRui)
+      }
+    }
+  }
+
   $TargetRui = @(
-    Get-ChildItem -LiteralPath $profilesRoot -Directory -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -match '^\d+\.\d+$' } |
-      ForEach-Object { Join-Path $_.FullName "UI\default.rui" } |
-      Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+    $discoveredTargets |
+      ForEach-Object { [System.IO.Path]::GetFullPath($_) } |
+      Sort-Object -Unique
   )
 }
 
 if (-not $TargetRui -or $TargetRui.Count -eq 0) {
-  throw "No active Rhino default.rui files were found."
+  throw "No active Rhino 8 or Rhino 9 toolbar files were found."
 }
 
 function Read-Rui([string]$Path) {

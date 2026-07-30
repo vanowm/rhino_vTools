@@ -44,6 +44,7 @@ public class vToolsPlugIn : PlugIn
 
   protected override void OnShutdown()
   {
+    vFilterExec.StopPending();
     FpsDisplay.Stop();
     CommandFailSoundMonitor.Stop();
     HideSetState.StopPolling();

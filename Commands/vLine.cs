@@ -2152,7 +2152,21 @@ public sealed class vLine : Command
 
   private static void LaunchNativeLineMode()
   {
-    // Cancel any previously queued idle handler
+    if (_pendingNativeLineLaunchIdleHandler != null)
+    {
+      RhinoApp.Idle -= _pendingNativeLineLaunchIdleHandler;
+      _pendingNativeLineLaunchIdleHandler = null;
+    }
+
+    if (string.IsNullOrWhiteSpace(_pendingNativeLineMode))
+      return;
+
+    _pendingNativeLineLaunchIdleHandler = OnLaunchNativeLineModeOnIdle;
+    RhinoApp.Idle += _pendingNativeLineLaunchIdleHandler;
+  }
+
+  private static void OnLaunchNativeLineModeOnIdle(object? sender, EventArgs e)
+  {
     if (_pendingNativeLineLaunchIdleHandler != null)
     {
       RhinoApp.Idle -= _pendingNativeLineLaunchIdleHandler;
@@ -2161,13 +2175,12 @@ public sealed class vLine : Command
 
     var mode = _pendingNativeLineMode;
     _pendingNativeLineMode = null;
-    if (mode == null)
+    if (string.IsNullOrWhiteSpace(mode))
       return;
 
-    // SendKeystrokes posts to Rhino's input queue — processed after RunCommand returns,
-    // no re-entrancy issue, no idle timing dependency.
-    string script = $"_Line _{mode}";
-    RhinoApp.SendKeystrokes(script, true);
+    var script = $"_Line _{mode}";
+    Log.Write("vLine.Native", $"launching {script}");
+    _ = RhinoApp.RunScript(script, false);
   }
 
   private static void DeleteObjectIfValid(RhinoDoc doc, Guid id)

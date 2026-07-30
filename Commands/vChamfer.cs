@@ -14,17 +14,17 @@ namespace vTools.Commands;
 /// <summary>
 /// Adds a chamfer line perpendicular to the angle bisector at a specified cut
 /// length across a corner formed by two curves. The virtual corner is the
-/// intersection of the tangent extensions from each curve's nearest endpoint â€”
+/// intersection of the tangent extensions from each curve's nearest endpoint -
 /// works even when curves were previously chamfered and no longer share a point.
 /// If a curve is too short to reach the chamfer point it is extended first.
 ///
 /// Option Trim:
-///   No  â€” only the chamfer line is added; curves are not modified.
-///   Yes â€” both curves are trimmed to the chamfer points and the line is added.
+///   No  - only the chamfer line is added; curves are not modified.
+///   Yes - both curves are trimmed to the chamfer points and the line is added.
 ///
 /// Workflow:
-///   Pick curve 1 â€” near the corner.
-///   Pick curve 2 â€” near the same corner.
+///   Pick curve 1 - near the corner.
+///   Pick curve 2 - near the same corner.
 ///   Length and Trim options are available at every prompt.
 ///   Press Enter to apply.
 /// </summary>
@@ -137,7 +137,7 @@ public sealed class vChamfer : Command
 
   /// <summary>
   /// Finds the closest endpoint pair and computes a virtual corner as the
-  /// intersection of the tangent extensions â€” correct even when the curves do
+  /// intersection of the tangent extensions - correct even when the curves do
   /// not share an endpoint (e.g. previously chamfered).
   /// </summary>
   private static (bool C1AtStart, bool C2AtStart, Point3d VirtualCorner) FindCorner(
@@ -171,7 +171,7 @@ public sealed class vChamfer : Command
       return (bestC1s, bestC2s, vc);
     }
 
-    // Parallel tangents — fall back to endpoint midpoint.
+    // Parallel tangents - fall back to endpoint midpoint.
     var mid = (ep1 + ep2) * 0.5;
     Log.Write("vChamfer", $"FindCorner  parallel tangents fallback  ep1={P(ep1)}  ep2={P(ep2)}  mid={P(mid)}");
     return (bestC1s, bestC2s, mid);
@@ -232,13 +232,19 @@ public sealed class vChamfer : Command
   }
 
   // Two-step gap measurement perpendicular to the MIDDLE curve (average tangents):
-  // step 1 — c1-perp hit gives c2 tangent; step 2 — re-shoot along average tangent.
+  // step 1 - c1-perp hit gives c2 tangent; step 2 - re-shoot along average tangent.
   // Step 1 uses ClosestPoint fallback so short-curve geometries don't silently fail.
   private static (double Gap, double TB, Point3d PtB) EquidistantGap(
-    Point3d ptA, Vector3d tanA, Curve c2)
+    Point3d ptA,
+    Vector3d tanA,
+    bool c1AtStart,
+    Curve c2,
+    bool c2AtStart)
   {
+    var awayTanA = c1AtStart ? tanA : -tanA;
+
     // Step 1: c1-perp, with ClosestPoint fallback for curves where the ray misses c2.
-    var (g1, tB1, ptB1) = NormalRayHit(ptA, tanA, c2);
+    var (g1, tB1, ptB1) = NormalRayHit(ptA, awayTanA, c2);
     if (double.IsNaN(g1) || !ptB1.IsValid)
     {
       // Fallback: use ClosestPoint as the initial ptB estimate.
@@ -247,9 +253,11 @@ public sealed class vChamfer : Command
       g1   = ptA.DistanceTo(ptB1);
     }
 
-    var tanB = c2.TangentAt(tB1);
-    if (tanB * tanA < 0.0) tanB = -tanB;
-    var avgTan = tanA + tanB;
+    var awayTanB = c2.TangentAt(tB1);
+    if (!c2AtStart)
+      awayTanB = -awayTanB;
+
+    var avgTan = awayTanA + awayTanB;
     if (!avgTan.Unitize()) return (g1, tB1, ptB1);
 
     var (g2, tB2, ptB2) = NormalRayHit(ptA, avgTan, c2);
@@ -261,7 +269,7 @@ public sealed class vChamfer : Command
   // then places ptB at exactly targetGap in the middle-curve-perpendicular direction.
   private static bool ComputeChamfer(
     Curve c1, bool c1AtStart,
-    Curve c2,
+    Curve c2, bool c2AtStart,
     double targetGap,
     out Point3d ptA, out Point3d ptB,
     out double  tA,  out double  tB)
@@ -292,7 +300,8 @@ public sealed class vChamfer : Command
       if (!c1.LengthParameter(seg, out double tMid)) break;
       var ptMid  = c1.PointAt(tMid);
       var tanMid = c1.TangentAt(tMid);
-      var (gap, _, _) = EquidistantGap(ptMid, tanMid, c2);
+      var (gap, _, _) = EquidistantGap(
+        ptMid, tanMid, c1AtStart, c2, c2AtStart);
       if (double.IsNaN(gap)) { hi = s; continue; }
       if (gap < targetGap) lo = s; else hi = s;
       if (hi - lo < 1e-9) break;
@@ -305,7 +314,8 @@ public sealed class vChamfer : Command
     if (!ptA.IsValid) return false;
 
     var tanA = c1.TangentAt(tA);
-    var (finalGap, tBfinal, ptBfinal) = EquidistantGap(ptA, tanA, c2);
+    var (finalGap, tBfinal, ptBfinal) = EquidistantGap(
+      ptA, tanA, c1AtStart, c2, c2AtStart);
     if (double.IsNaN(tBfinal) || !ptBfinal.IsValid)
     {
       Log.Write("vChamfer", $"ComputeChamfer  no c2 hit  sA={sA:G4}");
@@ -342,13 +352,13 @@ public sealed class vChamfer : Command
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
-      // Extension stubs that survive trimming (cyan — part of the kept curve)
+      // Extension stubs that survive trimming (cyan - part of the kept curve)
       if (Ext1 is { } ext1)
         e.Display.DrawLine(ext1, Color.Cyan, 2);
       if (Ext2 is { } ext2)
         e.Display.DrawLine(ext2, Color.Cyan, 2);
 
-      // Corner pieces removed by trim — red
+      // Corner pieces removed by trim - red
       if (ShowTrim)
       {
         if (CutOff1 != null)
@@ -357,7 +367,7 @@ public sealed class vChamfer : Command
           e.Display.DrawCurve(CutOff2, Color.Red, 2);
       }
 
-      // Chamfer line — cyan, drawn on top
+      // Chamfer line - cyan, drawn on top
       if (ChamferLine is { } line)
         e.Display.DrawLine(line, Color.Cyan, 2);
     }
@@ -404,9 +414,9 @@ public sealed class vChamfer : Command
     }
 
     // Extension lines:
-    //   Trim=No : show full extension (crv1End ? virtual corner) — it will be added to the doc
-    //   Trim=Yes, ptA in extension zone (CutOff==null): show stub crv1End?ptA — it stays in result
-    //   Trim=Yes, ptA in original body  (CutOff!=null): hide — extension is trimmed off
+    //   Trim=No : show full extension (crv1End ? virtual corner) - it will be added to the doc
+    //   Trim=Yes, ptA in extension zone (CutOff==null): show stub crv1End?ptA - it stays in result
+    //   Trim=Yes, ptA in original body  (CutOff!=null): hide - extension is trimmed off
     var crv1End  = c1AtStart ? crv1.PointAtStart : crv1.PointAtEnd;
     var work1End = c1AtStart ? work1.PointAtStart : work1.PointAtEnd;
     conduit.Ext1 = crv1End.DistanceTo(work1End) > 1e-6
@@ -463,7 +473,7 @@ public sealed class vChamfer : Command
     double runLength = _length;
     Log.Write("vChamfer", $"RunCommand  runLength={runLength:G4}");
 
-    ComputeChamfer(work1, c1AtStart, work2, runLength,
+    ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
       out var ptA, out var ptB, out var tA, out var tB);
 
     var conduit = new ChamferPreviewConduit();
@@ -472,7 +482,7 @@ public sealed class vChamfer : Command
     else
     {
       conduit.ShowTrim = _trim;
-      RhinoApp.WriteLine("vChamfer: length too large — adjust the Length option.");
+      RhinoApp.WriteLine("vChamfer: length too large - adjust the Length option.");
     }
     conduit.Enabled = true;
     doc.Views.Redraw();
@@ -487,7 +497,7 @@ public sealed class vChamfer : Command
         var get = new GetPoint();
         get.EnableTransparentCommands(true);
         get.SetCommandPrompt(pointActive
-          ? "Chamfer placed at point — Enter to apply"
+          ? "Chamfer placed at point - Enter to apply"
           : "Press Enter to apply chamfer; pick a point to place at Length distance from point");
         get.AcceptNothing(true);
         get.AcceptNumber(true, true);
@@ -527,7 +537,8 @@ public sealed class vChamfer : Command
             if (!work1.LengthParameter(seg, out double tS)) break;
             var ptS  = work1.PointAt(tS);
             var tanS = work1.TangentAt(tS);
-            var (gS, _, ptBS) = EquidistantGap(ptS, tanS, work2);
+            var (gS, _, ptBS) = EquidistantGap(
+              ptS, tanS, c1AtStart, work2, c2AtStart);
             if (double.IsNaN(gS) || !ptBS.IsValid) { ppHi = s; continue; }
             var midS = (ptS + ptBS) * 0.5;
             double dist = pickedPt.DistanceTo(midS);
@@ -543,7 +554,8 @@ public sealed class vChamfer : Command
           }
           var ppPtA  = work1.PointAt(ppTA);
           var ppTanA = work1.TangentAt(ppTA);
-          var (ppGap, ppTBfinal, ppPtBfinal) = EquidistantGap(ppPtA, ppTanA, work2);
+          var (ppGap, ppTBfinal, ppPtBfinal) = EquidistantGap(
+            ppPtA, ppTanA, c1AtStart, work2, c2AtStart);
           if (double.IsNaN(ppGap) || !ppPtBfinal.IsValid)
           {
             RhinoApp.WriteLine("vChamfer: cannot find chamfer at that point.");
@@ -566,7 +578,7 @@ public sealed class vChamfer : Command
         {
           if (!ptA.IsValid || !ptB.IsValid)
           {
-            RhinoApp.WriteLine("vChamfer: no valid chamfer — adjust Length first.");
+            RhinoApp.WriteLine("vChamfer: no valid chamfer - adjust Length first.");
             continue;
           }
           break;
@@ -576,7 +588,7 @@ public sealed class vChamfer : Command
         {
           pointActive = false;
           pickedGap = double.NaN;
-          if (ComputeChamfer(work1, c1AtStart, work2, runLength,
+          if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -614,7 +626,7 @@ public sealed class vChamfer : Command
           // If offset point is active, Length changed ? re-place chamfer at same ptA with new gap.
           if (pointActive && !double.IsNaN(pickedGap))
           {
-            if (ComputeChamfer(work1, c1AtStart, work2, pickedGap,
+            if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, pickedGap,
                                out ptA, out ptB, out tA, out tB))
             {
               UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
@@ -625,7 +637,7 @@ public sealed class vChamfer : Command
 
           if (!recomputed)
           {
-            if (ComputeChamfer(work1, c1AtStart, work2, runLength,
+            if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
                   out ptA, out ptB, out tA, out tB))
               UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
             else

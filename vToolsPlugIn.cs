@@ -31,6 +31,7 @@ public class vToolsPlugIn : PlugIn
 
     Log.Initialize();
     Log.Write($"startup  rhino={RhinoApp.Version}  version={version}  dll={asm.Location}");
+    FpsDisplay.Start();
     CommandFailSoundMonitor.Start();
     HideSetState.StartPolling();
 
@@ -43,6 +44,7 @@ public class vToolsPlugIn : PlugIn
 
   protected override void OnShutdown()
   {
+    FpsDisplay.Stop();
     CommandFailSoundMonitor.Stop();
     HideSetState.StopPolling();
     base.OnShutdown();

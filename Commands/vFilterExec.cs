@@ -42,6 +42,8 @@ public sealed class vFilterExec : Command
   private static readonly Dictionary<string, FilterDefinition> FilterLookup = BuildFilterLookup();
 
   private static PendingLaunch? _pendingLaunch;
+  private static PendingLaunch? _lastLaunch;
+  private static ActiveExecution? _activeExecution;
   private static EventHandler? _launchIdleHandler;
   private static EventHandler? _repeatIdleHandler;
   private static bool _registeringRepeat;
@@ -50,9 +52,6 @@ public sealed class vFilterExec : Command
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    if (_registeringRepeat)
-      return Result.Success;
-
     CancelPendingLaunch();
     CancelRepeatRegistration();
 
@@ -70,7 +69,25 @@ public sealed class vFilterExec : Command
   {
     CancelPendingLaunch();
     CancelRepeatRegistration();
+    CompleteActiveExecution(false, "plug-in shutdown");
     _registeringRepeat = false;
+  }
+
+  internal static Result RepeatLast()
+  {
+    if (_registeringRepeat)
+      return Result.Success;
+
+    var launch = _lastLaunch;
+    if (launch == null)
+      return Result.Nothing;
+
+    CancelPendingLaunch();
+    CancelRepeatRegistration();
+    Log.Write(Tag,
+      $"repeat command={launch.Command} filter={launch.Filter.CanonicalSpec}");
+    QueueLaunch(launch);
+    return Result.Success;
   }
 
   private static bool TryGetCommand(
@@ -218,6 +235,7 @@ public sealed class vFilterExec : Command
 
   private static void QueueLaunch(PendingLaunch launch)
   {
+    _lastLaunch = launch;
     _pendingLaunch = launch;
     _launchIdleHandler = OnLaunchOnIdle;
     RhinoApp.Idle += _launchIdleHandler;
@@ -241,6 +259,7 @@ public sealed class vFilterExec : Command
     SelectionFilterSettingsState? previousState = null;
     try
     {
+      CompleteActiveExecution(false, "replaced by another launch");
       previousState = SelectionFilterSettings.GetCurrentState();
       var temporaryState = SelectionFilterSettings.GetCurrentState();
       temporaryState.GlobalGeometryFilter = launch.Filter.Mask;
@@ -249,30 +268,87 @@ public sealed class vFilterExec : Command
       temporaryState.SubObjectSelect = launch.Filter.RequiresSubObjects;
       SelectionFilterSettings.UpdateFromState(temporaryState);
 
+      _activeExecution = new ActiveExecution(previousState);
+      Command.BeginCommand += OnDelegatedCommandBegin;
+      Command.EndCommand += OnDelegatedCommandEnd;
+
       Log.Write(Tag, $"launch command={launch.Command} filter={launch.Filter.CanonicalSpec}");
       _ = RhinoApp.RunScript(launch.Command, false);
+
+      if (_activeExecution is { HasStarted: false })
+        CompleteActiveExecution(true, "delegated command did not start");
     }
     catch (Exception ex)
     {
       Log.Write(Tag, $"launch failed: {ex.Message}");
       RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
-    }
-    finally
-    {
-      if (previousState != null)
+      if (_activeExecution != null)
+        CompleteActiveExecution(true, "launch failed");
+      else if (previousState != null)
       {
-        try
-        {
-          SelectionFilterSettings.UpdateFromState(previousState);
-        }
-        catch (Exception ex)
-        {
-          Log.Write(Tag, $"filter restore failed: {ex.Message}");
-          RhinoApp.WriteLine("vFilterExec: could not restore the previous selection filter.");
-        }
+        RestoreFilter(previousState);
+        QueueRepeatRegistration();
       }
+      else
+        QueueRepeatRegistration();
+    }
+  }
 
+  private static void OnDelegatedCommandBegin(object? sender, CommandEventArgs e)
+  {
+    var execution = _activeExecution;
+    if (execution == null || execution.HasStarted)
+      return;
+
+    execution.HasStarted = true;
+    execution.CommandId = e.CommandId;
+    execution.DocumentSerialNumber = e.Document.RuntimeSerialNumber;
+    Log.Write(Tag,
+      $"delegated begin command={e.CommandEnglishName} id={e.CommandId}");
+  }
+
+  private static void OnDelegatedCommandEnd(object? sender, CommandEventArgs e)
+  {
+    var execution = _activeExecution;
+    if (execution == null ||
+        !execution.HasStarted ||
+        execution.CommandId != e.CommandId ||
+        execution.DocumentSerialNumber != e.Document.RuntimeSerialNumber)
+    {
+      return;
+    }
+
+    CompleteActiveExecution(
+      true,
+      $"delegated end command={e.CommandEnglishName} result={e.CommandResult}");
+  }
+
+  private static void CompleteActiveExecution(bool queueRepeat, string reason)
+  {
+    var execution = _activeExecution;
+    if (execution == null)
+      return;
+
+    _activeExecution = null;
+    Command.BeginCommand -= OnDelegatedCommandBegin;
+    Command.EndCommand -= OnDelegatedCommandEnd;
+    RestoreFilter(execution.PreviousState);
+    Log.Write(Tag, $"filter restored reason={reason}");
+
+    if (queueRepeat)
       QueueRepeatRegistration();
+  }
+
+  private static void RestoreFilter(SelectionFilterSettingsState state)
+  {
+    try
+    {
+      SelectionFilterSettings.UpdateFromState(state);
+    }
+    catch (Exception ex)
+    {
+      Log.Write(Tag, $"filter restore failed: {ex.Message}");
+      RhinoApp.WriteLine("vFilterExec: could not restore the previous selection filter.");
     }
   }
 
@@ -299,7 +375,7 @@ public sealed class vFilterExec : Command
     _registeringRepeat = true;
     try
     {
-      _ = RhinoApp.RunScript("_vFilterExec", false);
+      _ = RhinoApp.RunScript("_vFilterExecRepeat", false);
     }
     finally
     {
@@ -315,8 +391,30 @@ public sealed class vFilterExec : Command
 
   private sealed record PendingLaunch(string Command, FilterSelection Filter);
 
+  private sealed class ActiveExecution
+  {
+    public ActiveExecution(SelectionFilterSettingsState previousState)
+    {
+      PreviousState = previousState;
+    }
+
+    public SelectionFilterSettingsState PreviousState { get; }
+    public bool HasStarted { get; set; }
+    public Guid CommandId { get; set; }
+    public uint DocumentSerialNumber { get; set; }
+  }
+
   private readonly record struct FilterSelection(
     ObjectType Mask,
     bool RequiresSubObjects,
     string CanonicalSpec);
+}
+
+[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable)]
+public sealed class vFilterExecRepeat : Command
+{
+  public override string EnglishName => "vFilterExecRepeat";
+
+  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+    vFilterExec.RepeatLast();
 }

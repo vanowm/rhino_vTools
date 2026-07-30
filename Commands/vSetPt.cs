@@ -120,8 +120,17 @@ public sealed class vSetPt : Command
         cursorTracker.QueueSelectionRefresh();
     };
 
+    EventHandler<RhinoObjectSelectionEventArgs> onObjectsDeselected = (_, e) =>
+    {
+      if (e.Document != doc)
+        return;
+
+      cursorTracker.RemovePreselectedOverrides(e.RhinoObjects);
+      cursorTracker.QueueSelectionRefresh();
+    };
+
     RhinoDoc.SelectObjects   += onSelectionChanged;
-    RhinoDoc.DeselectObjects += onSelectionChanged;
+    RhinoDoc.DeselectObjects += onObjectsDeselected;
     cursorTracker.InitializeFromCurrentCursor();
 
     try
@@ -165,7 +174,7 @@ public sealed class vSetPt : Command
     finally
     {
       RhinoDoc.SelectObjects   -= onSelectionChanged;
-      RhinoDoc.DeselectObjects -= onSelectionChanged;
+      RhinoDoc.DeselectObjects -= onObjectsDeselected;
       cursorTracker.Enabled = false;
       cursorTracker.Dispose();
       preview.Enabled = false;
@@ -252,7 +261,7 @@ public sealed class vSetPt : Command
 
     private readonly RhinoDoc _doc;
     private readonly EndpointPreviewConduit _preview;
-    private readonly IReadOnlyDictionary<Guid, PreselectedGrip[]>
+    private readonly Dictionary<Guid, PreselectedGrip[]>
       _preselectedGrips;
     private readonly Dictionary<Guid, (bool IsStart, Point3d Point)> _picks = new();
     private readonly Dictionary<Guid, NurbsCurve> _previewSources = new();
@@ -266,7 +275,7 @@ public sealed class vSetPt : Command
     public EndpointCursorCallback(
       RhinoDoc doc,
       EndpointPreviewConduit preview,
-      IReadOnlyDictionary<Guid, PreselectedGrip[]> preselectedGrips)
+      Dictionary<Guid, PreselectedGrip[]> preselectedGrips)
     {
       _doc = doc;
       _preview = preview;
@@ -310,6 +319,27 @@ public sealed class vSetPt : Command
     {
       _selectionTimer.Stop();
       _selectionTimer.Start();
+    }
+
+    public void RemovePreselectedOverrides(
+      IEnumerable<RhinoObject>? deselectedObjects)
+    {
+      if (deselectedObjects == null)
+        return;
+
+      var removed = 0;
+      foreach (var obj in deselectedObjects)
+      {
+        var ownerId = obj is GripObject grip ? grip.OwnerId : obj.Id;
+        if (ownerId == Guid.Empty || !_preselectedGrips.Remove(ownerId))
+          continue;
+
+        _picks.Remove(ownerId);
+        removed++;
+      }
+
+      if (removed > 0)
+        Log.Write(Tag, $"  cleared preselected grip overrides: {removed}");
     }
 
     public void SetPreviewEnabled(bool enabled)

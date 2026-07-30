@@ -17,7 +17,7 @@ using Rhino.Input.Custom;
 // Modified 2026.06.30 13:04:31: label up helper now stays on the same Brep face using local UV tangent stepping, avoiding upside-down flat labels from ClosestPoint jumping to another face/edge.
 // Modified 2026.06.30 17:08:45: hidden same-face orientation curves are unrolled for the label frame, reducing 180-degree flat-text direction ambiguity from standalone helper points.
 // Modified 2026.06.30 17:17:28: unrolled flat text keeps the raw unrolled up direction but forces the text plane normal to World +Z, preventing mirrored text while preserving orientation-marker direction.
-// Modified 2026.07.01: per-part label height with TextHeightScale multiplier; ResolveOrientationCurves with strict 15% length + shared-dist filter; edge mate dots (M## markers on shared edges) with EdgeDots option; flat label boundary fallback.
+// Modified 2026.07.01: per-part label height, edge mate dots, and flat label boundary fallback.
 
 namespace vTools.Commands
 {
@@ -34,6 +34,7 @@ namespace vTools.Commands
     private const string OriginalGroupPrefix = "MultiUnroll_Original";
     private const string FailureMarkerText = "X";
     private const string LabelHelperDotPrefix = "__vTools_vUnrollSrf_LabelHelper__";
+    private const string EdgeMateHelperDotPrefix = "__vTools_vUnrollSrf_EdgeHelper__";
 
     private const string TextFont = "Arial";
     private const double TextHeightScale = 1.5;
@@ -204,23 +205,20 @@ namespace vTools.Commands
           foreach (var curve in curves)
             unroller.AddFollowingGeometry(curve);
 
-          int labelUpCurveIndex = -1;
-          int labelRightCurveIndex = -1;
-          if (frame != null)
+          // Edge-mate positions use uniquely named hidden dots. Their names survive
+          // unrolling, unlike curve output order, so they cannot be confused with
+          // label helpers or similarly sized boundary curves.
+          var edgeMateRecords = (edgePairs != null && i < edgePairs.Count)
+            ? edgePairs[i]
+            : new List<EdgeMateRecord>();
+          var edgeMateHelperDots = new Dictionary<string, EdgeMateRecord>(StringComparer.Ordinal);
+          foreach (var rec in UniqueEdgeMateRecords(edgeMateRecords))
           {
-            // Curves keep start/end direction more reliably than independent helper points.
-            // These two hidden same-face curves define the flattened label frame.
-            labelUpCurveIndex = curves.Count;
-            unroller.AddFollowingGeometry(new LineCurve(frame.Point, frame.UpPoint));
-            labelRightCurveIndex = curves.Count + 1;
-            unroller.AddFollowingGeometry(new LineCurve(frame.Point, frame.RightPoint));
+            string helperText = EdgeMateHelperDotText(src.Id, rec);
+            edgeMateHelperDots[helperText] = rec;
+            unroller.AddFollowingGeometry(new TextDot(helperText, rec.Marker));
           }
-
-          // Edge-mate curves — added after orientation helpers, before user points
-          int orientCrvCount = frame != null ? 2 : 0;
-          var edgeMateInfos = (edgePairs != null && i < edgePairs.Count)
-            ? AddEdgeMateCurves(unroller, edgePairs[i], curves.Count + orientCrvCount)
-            : new List<EdgeMateInfo>();
+          Dbg($"part={number} edge_mates records={edgeMateRecords.Count} helpers={edgeMateHelperDots.Count}");
 
           foreach (var point in points)
             unroller.AddFollowingGeometry(point.Location);
@@ -230,9 +228,8 @@ namespace vTools.Commands
           string? labelRightDotText = null;
           if (frame != null)
           {
-            // Dot fallback only. The hidden curves above are preferred for orientation.
-            // Keep these out of unrolledPoints because Rhino can reorder point output,
-            // which made selected user points get hidden or replaced by label helpers.
+            // Named dots keep label helpers separate from selected user points and
+            // cannot leak visible helper geometry into the flattened output.
             labelPointDotText = LabelHelperDotText(src.Id, number, "point");
             labelUpDotText = LabelHelperDotText(src.Id, number, "up");
             labelRightDotText = LabelHelperDotText(src.Id, number, "right");
@@ -278,67 +275,18 @@ namespace vTools.Commands
           foreach (var brep in finalBreps)
             AddValid(outputIds, doc.Objects.AddBrep(brep));
 
-          Point3d? curveLabelPoint = null;
-          Point3d? curveLabelUp = null;
-          Point3d? curveLabelRight = null;
-          var hiddenCurveIndexes = new HashSet<int>();
-          Dictionary<(string, int, int), Point3d>? edgeFlatPoints = null;
+          var edgeFlatPoints = new Dictionary<(string, int, int), Point3d>();
           if (unrolledCurves != null)
           {
-            // Use shared-endpoint + length filter to reliably identify orientation curves
-            // regardless of Rhino output reordering.
-            int orientUpIdx = -1, orientRightIdx = -1;
-            Point3d orientCtr = Point3d.Unset, orientUp = Point3d.Unset, orientRt = Point3d.Unset;
-            bool orientOk = frame != null && ResolveOrientationCurves(unrolledCurves, frame, tol,
-                  out orientUpIdx, out orientRightIdx, out orientCtr, out orientUp, out orientRt);
-            if (orientOk)
-            {
-              Dbg($"part={number} orientation_match up_idx={orientUpIdx} right_idx={orientRightIdx} center={P(orientCtr)} up_end={P(orientUp)} right_end={P(orientRt)}");
-              curveLabelPoint = orientCtr;
-              curveLabelUp    = orientUp;
-              curveLabelRight = orientRt;
-              hiddenCurveIndexes.Add(orientUpIdx);
-              hiddenCurveIndexes.Add(orientRightIdx);
-            }
-            else
-            {
-              Dbg($"part={number} orientation_match FAILED curves={unrolledCurves.Length}");
-            }
-
-            // Match edge mate curves by length scan (Rhino does not guarantee output order).
-            // Also hides the matched edge curve indices inside hiddenCurveIndexes.
-            edgeFlatPoints = MatchEdgeCurveOutputs(unrolledCurves, edgeMateInfos, hiddenCurveIndexes, tol);
-
-            // Cleanup pass: hide any remaining orientation helper curves not caught by
-            // ResolveOrientationCurves (e.g. when only one was returned by Rhino).
-            // Check against both chord lengths (up/right) AND arc-length step — mirrors Python.
-            if (frame != null && orientCrvCount > 0)
-            {
-              double upLen  = frame.Point.DistanceTo(frame.UpPoint);
-              double rtLen  = frame.Point.DistanceTo(frame.RightPoint);
-              double stp    = frame.Step;
-              for (int ci = 0; ci < unrolledCurves.Length; ci++)
-              {
-                if (hiddenCurveIndexes.Contains(ci) || unrolledCurves[ci] == null) continue;
-                double cl = unrolledCurves[ci].GetLength();
-                if ((upLen > tol && Math.Abs(cl - upLen) / upLen < 0.15) ||
-                    (rtLen > tol && Math.Abs(cl - rtLen) / rtLen < 0.15) ||
-                    (stp   > tol && Math.Abs(cl - stp)   / stp   < 0.15))
-                  hiddenCurveIndexes.Add(ci);
-              }
-            }
-
-            for (int ci = 0; ci < unrolledCurves.Length; ci++)
-            {
-              if (!hiddenCurveIndexes.Contains(ci))
-                AddValid(outputIds, doc.Objects.AddCurve(unrolledCurves[ci]));
-            }
+            foreach (var curve in unrolledCurves)
+              AddValid(outputIds, doc.Objects.AddCurve(curve));
+            Dbg($"part={number} following_curve_output selected={curves.Count}" +
+                $" returned={unrolledCurves.Length} added={unrolledCurves.Length}");
           }
 
-          // Use curveLabelPoint (from ResolveOrientationCurves) as preferred label anchor
-          var labelPoint = curveLabelPoint;
-          var labelUp    = curveLabelUp;
-          var labelRight = curveLabelRight;
+          Point3d? labelPoint = null;
+          Point3d? labelUp = null;
+          Point3d? labelRight = null;
           if (unrolledPoints != null)
           {
             for (int p = 0; p < unrolledPoints.Length; p++)
@@ -363,22 +311,23 @@ namespace vTools.Commands
                 continue;
               }
 
+              if (edgeMateHelperDots.TryGetValue(dotText, out var edgeRecord))
+              {
+                var key = (edgeRecord.MateId, edgeRecord.EdgeIndex, edgeRecord.MatePartIndex);
+                edgeFlatPoints[key] = dot.Point;
+                Dbg($"part={number} edge_marker id={edgeRecord.MateId}" +
+                    $" edge={edgeRecord.EdgeIndex} mate_part={edgeRecord.MatePartNumber}" +
+                    $" point={P(dot.Point)}");
+                continue;
+              }
+
               AddValid(outputIds, doc.Objects.AddTextDot(dot));
             }
           }
 
           Vector3d unrolledY = Vector3d.YAxis;
           Vector3d? unrolledX = null;
-          // curveY: from orientation curves, projected onto Z-plane and normalized (matches Python)
-          Vector3d? curveY = null;
-          if (curveLabelPoint.HasValue && curveLabelUp.HasValue)
-          {
-            var raw = new Vector3d(
-              curveLabelUp.Value.X - curveLabelPoint.Value.X,
-              curveLabelUp.Value.Y - curveLabelPoint.Value.Y, 0.0);
-            if (raw.Unitize()) curveY = raw;
-          }
-          // pointY: from unrolled frame points, projected onto Z-plane and normalized
+          // The named unrolled frame dots define the flat label direction.
           Vector3d? pointY = null;
           if (labelPoint.HasValue && labelUp.HasValue)
           {
@@ -393,28 +342,24 @@ namespace vTools.Commands
             if (pointY.Value.Length > RhinoMath.ZeroTolerance)
             { var tmp = pointY.Value; tmp.Unitize(); pointY = tmp; }
           }
-          // use curveY if valid, else pointY; final result projected onto Z-plane
           Vector3d chosen = Vector3d.YAxis;
-          if (curveY.HasValue && curveY.Value.Length > RhinoMath.ZeroTolerance)
-            chosen = curveY.Value;
-          else if (pointY.HasValue && pointY.Value.Length > RhinoMath.ZeroTolerance)
+          if (pointY.HasValue && pointY.Value.Length > RhinoMath.ZeroTolerance)
             chosen = pointY.Value;
           unrolledY = chosen;
 
-          // Also capture fallback label pt/up for logging (from unrolled points, before labelPoint override)
-          Point3d? fallbackLabelPt  = (labelPoint.HasValue && !curveLabelPoint.HasValue) ? labelPoint : null;
-          Point3d? fallbackLabelUp  = (labelUp.HasValue   && !curveLabelUp.HasValue)    ? labelUp    : null;
-
           Dbg($"part={number} label_unrolled" +
-              $" curve_pt={P(curveLabelPoint)} curve_up={P(curveLabelUp)} curve_right={P(curveLabelRight)}" +
-              $" fallback_pt={P(fallbackLabelPt)} fallback_up={P(fallbackLabelUp)}" +
-              $" curve_y={V(curveY)} point_y={V(pointY)} chosen_y={V(unrolledY)}" +
+              $" point={P(labelPoint)} up={P(labelUp)} right={P(labelRight)}" +
+              $" point_y={V(pointY)} chosen_y={V(unrolledY)}" +
               $" label_pt={P(labelPoint)}");
 
-          if (curveLabelPoint.HasValue && curveLabelRight.HasValue)
-            unrolledX = curveLabelRight.Value - curveLabelPoint.Value;
-          else if (labelPoint.HasValue && labelRight.HasValue)
+          if (labelPoint.HasValue && labelRight.HasValue)
             unrolledX = labelRight.Value - labelPoint.Value;
+
+          if (unrolledX.HasValue)
+          {
+            double handedness = Vector3d.CrossProduct(unrolledX.Value, unrolledY).Z;
+            Dbg($"part={number} flat_frame handedness={handedness:G6}");
+          }
 
           var unrolledLabelIds = new List<Guid>();
           if (frame != null && labelPoint.HasValue)
@@ -453,14 +398,14 @@ namespace vTools.Commands
           }
 
           // Place edge mate dots on flat output
-          if (edgeFlatPoints != null && edgeFlatPoints.Count > 0)
+          if (edgeFlatPoints.Count > 0)
           {
             int refLayerIdx = ReferenceLayerIndex(doc);
-            foreach (var info in UniqueEdgeMateInfos(edgeMateInfos))
+            foreach (var rec in UniqueEdgeMateRecords(edgeMateRecords))
             {
-              var key = (info.Record.MateId, info.Record.EdgeIndex, info.Record.MatePartIndex);
+              var key = (rec.MateId, rec.EdgeIndex, rec.MatePartIndex);
               if (!edgeFlatPoints.TryGetValue(key, out var flatPt)) continue;
-              var dotId = AddEdgeMateDot(doc, info.Record, flatPt, number, refLayerIdx);
+              var dotId = AddEdgeMateDot(doc, rec, flatPt, number, refLayerIdx);
               if (IsValidId(dotId))
                 outputIds.Add(dotId);
             }
@@ -1476,6 +1421,12 @@ namespace vTools.Commands
       return $"{LabelHelperDotPrefix}{partNumber}:{sourceId:N}:{kind}";
     }
 
+    private static string EdgeMateHelperDotText(Guid sourceId, EdgeMateRecord record)
+    {
+      return $"{EdgeMateHelperDotPrefix}{sourceId:N}:{record.MateId}:" +
+             $"{record.EdgeIndex}:{record.MatePartIndex}";
+    }
+
     private static double? AngleToPageUp(Vector3d vector, double tol)
     {
       var v = new Vector3d(vector.X, vector.Y, 0.0);
@@ -1572,84 +1523,6 @@ namespace vTools.Commands
     }
 
     // ── Orientation curve resolution ───────────────────────────────────────────
-    /// <summary>
-    /// Identifies the two orientation helper curves among the unrolled curves.
-    /// Uses shared-endpoint detection (15% length filter + 1% shared-dist threshold)
-    /// to find the correct pair regardless of Rhino output index reordering.
-    /// </summary>
-    private static bool ResolveOrientationCurves(
-      Curve[] curves, LabelFrame frame, double tol,
-      out int upIdx, out int rightIdx,
-      out Point3d center, out Point3d upEnd, out Point3d rightEnd)
-    {
-      upIdx = rightIdx = -1;
-      center = upEnd = rightEnd = Point3d.Unset;
-      if (curves == null || frame == null) return false;
-
-      // Use the 3D chord lengths separately for up and right (matches Python's approach).
-      // On curved surfaces the up and right chords can differ substantially, so a single
-      // arc-length step is a poor filter for the shorter curve.
-      double upLen    = frame.Point.DistanceTo(frame.UpPoint);
-      double rightLen = frame.Point.DistanceTo(frame.RightPoint);
-      const double lenTol = 0.15;
-
-      int    bI = -1, bJ = -1;
-      double bScore = double.MaxValue;
-      Point3d bCenter = Point3d.Unset, bUp = Point3d.Unset, bRight = Point3d.Unset;
-
-      for (int i = 0; i < curves.Length; i++)
-      {
-        var ci = curves[i]; if (ci == null) continue;
-        double li = ci.GetLength();
-        if (upLen > tol && Math.Abs(li - upLen) / upLen > lenTol) continue;
-
-        for (int j = 0; j < curves.Length; j++)
-        {
-          if (i == j) continue;
-          var cj = curves[j]; if (cj == null) continue;
-          double lj = cj.GetLength();
-          if (rightLen > tol && Math.Abs(lj - rightLen) / rightLen > lenTol) continue;
-
-          var (sd, ctr, ue, re) = EndpointPairDistance(ci, cj);
-          double sharedMax = Math.Max(Math.Max(upLen, rightLen), tol * 100.0) * 0.01;
-          if (sd > sharedMax) continue;
-
-          double lenScore = 0.0;
-          if (upLen    > tol) lenScore += Math.Abs(li - upLen)    / upLen;
-          if (rightLen > tol) lenScore += Math.Abs(lj - rightLen) / rightLen;
-          double scale = Math.Max(Math.Max(upLen, rightLen), tol * 100.0);
-          double score = lenScore + sd / scale * 10.0;
-          if (score < bScore)
-          {
-            bScore = score; bI = i; bJ = j;
-            bCenter = ctr; bUp = ue; bRight = re;
-          }
-        }
-      }
-
-      if (bI < 0) return false;
-      upIdx = bI; rightIdx = bJ;
-      center = bCenter; upEnd = bUp; rightEnd = bRight;
-      return true;
-    }
-
-    /// <summary>Returns (sharedDist, sharedPtOnC1, otherEndOfC1, otherEndOfC2).</summary>
-    private static (double dist, Point3d ctr, Point3d upEnd, Point3d rightEnd)
-      EndpointPairDistance(Curve c1, Curve c2)
-    {
-      var s1 = c1.PointAtStart; var e1 = c1.PointAtEnd;
-      var s2 = c2.PointAtStart; var e2 = c2.PointAtEnd;
-      var pairs = new (double d, Point3d ctr, Point3d up, Point3d rt)[]
-      {
-        (s1.DistanceTo(s2), s1, e1, e2),
-        (s1.DistanceTo(e2), s1, e1, s2),
-        (e1.DistanceTo(s2), e1, s1, e2),
-        (e1.DistanceTo(e2), e1, s1, s2),
-      };
-      var best = pairs.OrderBy(p => p.d).First();
-      return (best.d, best.ctr, best.up, best.rt);
-    }
-
     // ── Edge mate data types ───────────────────────────────────────────────────
     private class EdgeMateRecord
     {
@@ -1661,13 +1534,6 @@ namespace vTools.Commands
       public int     MatePartNumber;
       public int     MateEdgeIndex;
       public bool    Reversed;
-    }
-
-    private class EdgeMateInfo
-    {
-      public EdgeMateRecord Record          = new EdgeMateRecord();
-      public int            CurveOutputIndex;
-      public bool           Shared;
     }
 
     private class EdgePairResult
@@ -1740,6 +1606,10 @@ namespace vTools.Commands
 
         counter++;
         string mateId = $"{EdgeMatePrefix}{counter:D2}";
+        Dbg($"edge_mate choose id={mateId} part={i + 1} edge={ei}" +
+            $" mate_part={j + 1} mate_edge={ej} max={score.MaxDist:G6}" +
+            $" avg={score.AvgDist:G6} full={score.Full} reversed={score.Reversed}" +
+            $" point1={P(score.Point1)} point2={P(score.Point2)}");
         var edgeCi = allEdges[i].First(x => x.idx == ei).c;
         var edgeCj = allEdges[j].First(x => x.idx == ej).c;
         result[i].Add(new EdgeMateRecord
@@ -1838,101 +1708,15 @@ namespace vTools.Commands
       return c.PointAt(c.Domain.Mid);
     }
 
-    /// <summary>
-    /// Adds edge mate curves to the unroller. Deduplicates by EdgeIndex so each
-    /// physical edge is added only once; later records sharing the same edge reuse
-    /// the same output curve index.
-    /// </summary>
-    private static List<EdgeMateInfo> AddEdgeMateCurves(
-      Unroller unroller, List<EdgeMateRecord> records, int startIdx)
-    {
-      var infos   = new List<EdgeMateInfo>();
-      var seenEdge = new Dictionary<int, int>(); // edge_index → curveOutputIndex
-      int offset  = 0;
-      foreach (var rec in records)
-      {
-        if (seenEdge.TryGetValue(rec.EdgeIndex, out int existing))
-        {
-          infos.Add(new EdgeMateInfo { Record = rec, CurveOutputIndex = existing, Shared = true });
-        }
-        else
-        {
-          int idx = startIdx + offset++;
-          if (rec.Curve != null) unroller.AddFollowingGeometry(rec.Curve);
-          seenEdge[rec.EdgeIndex] = idx;
-          infos.Add(new EdgeMateInfo { Record = rec, CurveOutputIndex = idx, Shared = false });
-        }
-      }
-      return infos;
-    }
-
-    /// <summary>
-    /// Matches edge mate output curves back to flat positions by scanning all unrolled curves
-    /// for the best length match (Rhino does not preserve AddFollowingGeometry order).
-    /// Hides matched curve indices in <paramref name="hiddenIdxs"/>.
-    /// </summary>
-    private static Dictionary<(string, int, int), Point3d> MatchEdgeCurveOutputs(
-      Curve[]? curves, List<EdgeMateInfo> infos, HashSet<int> hiddenIdxs, double tol)
-    {
-      var result      = new Dictionary<(string, int, int), Point3d>();
-      var matchedByEdge = new Dictionary<int, (int idx, Curve crv)>(); // edge_index → (outputIdx, curve)
-      var usedIdxs    = new HashSet<int>(hiddenIdxs);
-
-      foreach (var info in infos)
-      {
-        var rec = info.Record;
-        if (rec.Curve == null) continue;
-        double srcLen = rec.Curve.GetLength();
-        if (srcLen <= tol) continue;
-
-        int outIdx; Curve outCrv;
-
-        if (matchedByEdge.TryGetValue(rec.EdgeIndex, out var existing))
-        {
-          outIdx = existing.idx;
-          outCrv = existing.crv;
-        }
-        else
-        {
-          // Scan all unrolled curves (length-based — order not guaranteed by Rhino)
-          int bestIdx = -1; Curve? bestCrv = null; double bestScore = double.MaxValue;
-          if (curves != null)
-          {
-            for (int ci = 0; ci < curves.Length; ci++)
-            {
-              if (usedIdxs.Contains(ci) || curves[ci] == null) continue;
-              double s = Math.Abs(curves[ci].GetLength() - srcLen) / Math.Max(srcLen, tol);
-              if (s < bestScore) { bestScore = s; bestIdx = ci; bestCrv = curves[ci]; }
-            }
-          }
-          if (bestIdx < 0 || bestScore > 0.20) continue;
-          outIdx = bestIdx; outCrv = bestCrv!;
-          usedIdxs.Add(outIdx);
-          hiddenIdxs.Add(outIdx);
-          matchedByEdge[rec.EdgeIndex] = (outIdx, outCrv);
-        }
-
-        // Map 3D marker position to its fractional parameter on the source curve,
-        // then sample the same fraction on the unrolled curve for the flat position.
-        double fraction = CurveFractionOfPoint(rec.Curve, rec.Marker, tol);
-        result[(rec.MateId, rec.EdgeIndex, rec.MatePartIndex)] =
-          outCrv.PointAt(outCrv.Domain.ParameterAt(fraction));
-      }
-      return result;
-    }
-
-    private static double CurveFractionOfPoint(Curve c, Point3d pt, double tol)
-    {
-      if (!c.ClosestPoint(pt, out double t)) return 0.5;
-      return c.Domain.NormalizedParameterAt(t);
-    }
-
-    private static IEnumerable<EdgeMateInfo> UniqueEdgeMateInfos(List<EdgeMateInfo> infos)
+    private static IEnumerable<EdgeMateRecord> UniqueEdgeMateRecords(
+      IEnumerable<EdgeMateRecord> records)
     {
       var seen = new HashSet<(string, int, int)>();
-      foreach (var info in infos)
-        if (seen.Add((info.Record.MateId, info.Record.EdgeIndex, info.Record.MatePartIndex)))
-          yield return info;
+      foreach (var record in records)
+      {
+        if (seen.Add((record.MateId, record.EdgeIndex, record.MatePartIndex)))
+          yield return record;
+      }
     }
 
     private static Guid AddEdgeMateDot(

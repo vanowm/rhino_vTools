@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
+using Rhino.Display;
 using Rhino.Geometry;
 using Rhino.Input;
 using Rhino.Input.Custom;
@@ -39,6 +41,12 @@ namespace vTools.Commands
 
     private static readonly Random _rng = new Random();
 
+    private const double EdgeHoverRadiusPixels = 12.0;
+    private static readonly Color SourceEdgeHighlightColor = Color.Orange;
+    private static readonly Color SourceDotHighlightColor = Color.Gold;
+    private static readonly Color MateDotHighlightColor = Color.Magenta;
+    private static readonly Color MatePartHighlightColor = Color.Cyan;
+
     public override string EnglishName => "vMatch";
 
     // ── Dot record ─────────────────────────────────────────────────────────
@@ -52,12 +60,117 @@ namespace vTools.Commands
       { Id = id; Position = pos; MateId = mateId; PartNum = partNum; }
     }
 
+    private sealed class MateEdge
+    {
+      public Curve Curve { get; }
+      public Point3d[] Samples { get; }
+      public List<Dot> Dots { get; } = new List<Dot>();
+
+      public MateEdge(Curve curve)
+      {
+        Curve = curve;
+        Samples = CurveScreenSamples(curve);
+      }
+    }
+
+    private sealed class MatchMove
+    {
+      public List<Guid> ObjectIds { get; set; }
+      public Transform Forward { get; }
+      public Transform Reverse { get; }
+
+      public MatchMove(IEnumerable<Guid> objectIds, Transform forward, Transform reverse)
+      {
+        ObjectIds = objectIds.ToList();
+        Forward = forward;
+        Reverse = reverse;
+      }
+    }
+
+    private sealed class MatchHistoryRequest
+    {
+      public bool Redo { get; }
+      public MatchHistoryRequest(bool redo) { Redo = redo; }
+    }
+
+    private sealed class MateEdgePicker : GetPoint
+    {
+      private readonly RhinoDoc _doc;
+      private readonly IReadOnlyList<Dot> _dots;
+      private readonly IReadOnlyList<MateEdge> _edges;
+      private MateEdge? _activeEdge;
+
+      public MateEdgePicker(
+        RhinoDoc doc,
+        IReadOnlyList<Dot> dots,
+        IReadOnlyList<MateEdge> edges)
+      {
+        _doc = doc;
+        _dots = dots;
+        _edges = edges;
+        PermitObjectSnap(false);
+        EnableObjectSnapCursors(false);
+        PermitOrthoSnap(false);
+        PermitTabMode(false);
+      }
+
+      public Dot? SourceDot { get; private set; }
+      public Dot? MateDot { get; private set; }
+
+      public void ReleaseSnap()
+      {
+        ClearConstraints();
+        ClearSnapPoints();
+        _activeEdge = null;
+        SourceDot = null;
+        MateDot = null;
+      }
+
+      protected override void OnMouseMove(GetPointMouseEventArgs e)
+      {
+        var nextEdge = FindHoveredEdge(
+          _edges, e.Viewport, e.WindowPoint.X, e.WindowPoint.Y, out var edgePoint);
+
+        if (!ReferenceEquals(nextEdge, _activeEdge))
+        {
+          ClearConstraints();
+          _activeEdge = nextEdge;
+          if (_activeEdge != null)
+            Constrain(_activeEdge.Curve, true);
+        }
+
+        SourceDot = _activeEdge?.Dots
+          .OrderBy(dot => dot.Position.DistanceToSquared(edgePoint))
+          .FirstOrDefault();
+        MateDot = SourceDot == null
+          ? null
+          : _dots.FirstOrDefault(dot =>
+              dot.Id != SourceDot.Id &&
+              string.Equals(dot.MateId, SourceDot.MateId, StringComparison.Ordinal));
+
+        if (MateDot == null)
+          SourceDot = null;
+
+        base.OnMouseMove(e);
+      }
+
+      protected override void OnDynamicDraw(GetPointDrawEventArgs e)
+      {
+        if (_activeEdge != null && SourceDot != null && MateDot != null)
+        {
+          DrawMateHighlight(_doc, e.Display, MateDot);
+          e.Display.DrawCurve(_activeEdge.Curve, SourceEdgeHighlightColor, 3);
+          DrawDotHighlight(_doc, e.Display, SourceDot, SourceDotHighlightColor);
+        }
+
+        base.OnDynamicDraw(e);
+      }
+    }
+
     // ── Entry point ────────────────────────────────────────────────────────
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
       LoadSettings();
-      double tol     = doc.ModelAbsoluteTolerance;
-      double pickTol = Math.Max(5.0, Math.Min(100.0, tol * 5000.0));
 
       var dots = ScanDots(doc);
       if (dots.Count == 0)
@@ -66,17 +179,33 @@ namespace vTools.Commands
         return Result.Nothing;
       }
 
+      var undoMoves = new Stack<MatchMove>();
+      var redoMoves = new Stack<MatchMove>();
       while (true)
       {
-        var gp = new GetPoint();
+        var mateEdges = BuildMateEdges(doc, dots);
+        var gp = new MateEdgePicker(doc, dots, mateEdges);
         gp.EnableTransparentCommands(true);
-        gp.SetCommandPrompt("Click near an edge mate dot");
+        gp.SetCommandPrompt("Click a highlighted edge to match its part");
         int idxDist = gp.AddOption("Distance", $"{_distance:G}");
         int idxAuto = gp.AddOption("Auto");
-        gp.AcceptNumber(true, false);
+        int idxRedo = gp.AddOption("Redo", string.Empty, true);
+        gp.AcceptNumber(true, true);
         gp.AcceptNothing(false);
+        gp.AcceptUndo(true);
 
         var res = gp.Get();
+        var src = gp.SourceDot;
+        var mate = gp.MateDot;
+        gp.ReleaseSnap();
+
+        if (res == GetResult.Undo)
+        {
+          ApplyMatchHistory(doc, undoMoves, redoMoves, false);
+          dots = ScanDots(doc);
+          continue;
+        }
+
         if (gp.CommandResult() == Result.Cancel) break;
 
         if (res == GetResult.Number)
@@ -89,9 +218,17 @@ namespace vTools.Commands
         if (res == GetResult.Option)
         {
           var opt = gp.Option();
+          if (opt != null && opt.Index == idxRedo)
+          {
+            ApplyMatchHistory(doc, undoMoves, redoMoves, true);
+            dots = ScanDots(doc);
+            continue;
+          }
           if (opt != null && opt.Index == idxAuto)
           {
             dots = AutoAlign(doc, dots, _distance);
+            undoMoves.Clear();
+            redoMoves.Clear();
             continue;
           }
           // Distance — sub-prompt (memory rule: no AddOptionDouble)
@@ -112,14 +249,8 @@ namespace vTools.Commands
 
         if (gp.CommandResult() != Result.Success) break;
 
-        var pickPt = gp.Point();
         SaveSettings();
-
-        var src = dots.OrderBy(d => d.Position.DistanceTo(pickPt)).FirstOrDefault();
-        if (src == null || src.Position.DistanceTo(pickPt) > pickTol) continue;
-
-        var mate = dots.FirstOrDefault(d => d.MateId == src.MateId && d.Id != src.Id);
-        if (mate == null) continue;
+        if (src == null || mate == null) continue;
 
         int srcGrp  = GrpOf(doc, src.Id);
         int mateGrp = GrpOf(doc, mate.Id);
@@ -139,17 +270,65 @@ namespace vTools.Commands
 
         var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
                              mate.Position, mateTang.Value, mateObjs);
-        if (!xf.HasValue) continue;
+        if (!xf.HasValue || !xf.Value.TryGetInverse(out var inverse)) continue;
 
-        doc.Views.RedrawEnabled = false;
-        try   { foreach (var id in mateObjs) doc.Objects.Transform(id, xf.Value, true); }
-        finally { doc.Views.RedrawEnabled = true; }
-
-        doc.Views.Redraw();
+        var move = new MatchMove(mateObjs, xf.Value, inverse);
+        if (!ApplyMatchMove(doc, move, true)) continue;
+        undoMoves.Push(move);
+        redoMoves.Clear();
         dots = ScanDots(doc);
       }
 
       return Result.Success;
+    }
+
+    private static bool ApplyMatchHistory(
+      RhinoDoc doc,
+      Stack<MatchMove> undoMoves,
+      Stack<MatchMove> redoMoves,
+      bool redo)
+    {
+      var source = redo ? redoMoves : undoMoves;
+      var destination = redo ? undoMoves : redoMoves;
+      if (!source.TryPop(out var move))
+        return false;
+
+      if (!ApplyMatchMove(doc, move, redo))
+      {
+        source.Push(move);
+        return false;
+      }
+
+      destination.Push(move);
+      return true;
+    }
+
+    private static bool ApplyMatchMove(RhinoDoc doc, MatchMove move, bool forward)
+    {
+      var transform = forward ? move.Forward : move.Reverse;
+      var transformedIds = new List<Guid>(move.ObjectIds.Count);
+
+      doc.Views.RedrawEnabled = false;
+      try
+      {
+        foreach (var id in move.ObjectIds)
+        {
+          var transformedId = doc.Objects.Transform(id, transform, true);
+          if (transformedId != Guid.Empty)
+            transformedIds.Add(transformedId);
+        }
+      }
+      finally
+      {
+        doc.Views.RedrawEnabled = true;
+      }
+
+      if (transformedIds.Count == 0)
+        return false;
+
+      move.ObjectIds = transformedIds;
+      doc.Views.Redraw();
+      return true;
     }
 
     // ── Auto sub-mode — inner loop with persistent multi-selection ─────────
@@ -193,7 +372,7 @@ namespace vTools.Commands
         int idxDist = go.AddOption("Distance", $"{_distance:G}");
         go.AddOptionToggle("RandStart", ref optRs);
         go.AddOptionToggle("RandNext",  ref optRn);
-        go.AcceptNumber(true, false);
+        go.AcceptNumber(true, true);
 
         bool goBack = false;
         while (true)
@@ -377,6 +556,217 @@ namespace vTools.Commands
           result.Add(new Dot(obj.Id, td.Point, mateId, partNum));
       }
       return result;
+    }
+
+    private static List<MateEdge> BuildMateEdges(RhinoDoc doc, IReadOnlyList<Dot> dots)
+    {
+      var validDots = dots
+        .Where(dot => dots.Any(other =>
+          other.Id != dot.Id &&
+          string.Equals(other.MateId, dot.MateId, StringComparison.Ordinal)))
+        .ToList();
+      var result = new List<MateEdge>();
+      double associationTolerance = Math.Max(doc.ModelAbsoluteTolerance * 100.0, 0.05);
+
+      foreach (var group in validDots.GroupBy(dot => GrpOf(doc, dot.Id)))
+      {
+        if (group.Key < 0)
+          continue;
+
+        var edges = NakedEdges(doc, ObjsInGrp(doc, group.Key))
+          .Select(curve => new MateEdge(curve))
+          .Where(edge => edge.Samples.Length >= 2)
+          .ToList();
+
+        foreach (var dot in group)
+        {
+          MateEdge? closest = null;
+          double closestDistance = double.PositiveInfinity;
+          foreach (var edge in edges)
+          {
+            if (!edge.Curve.ClosestPoint(dot.Position, out double parameter))
+              continue;
+            double distance = dot.Position.DistanceTo(edge.Curve.PointAt(parameter));
+            if (distance < closestDistance)
+            {
+              closestDistance = distance;
+              closest = edge;
+            }
+          }
+
+          if (closest != null && closestDistance <= associationTolerance)
+            closest.Dots.Add(dot);
+        }
+
+        result.AddRange(edges.Where(edge => edge.Dots.Count > 0));
+      }
+
+      return result;
+    }
+
+    private static Point3d[] CurveScreenSamples(Curve curve)
+    {
+      if (curve.TryGetPolyline(out var polyline) && polyline.Count >= 2)
+        return polyline.ToArray();
+
+      try
+      {
+        var parameters = curve.DivideByCount(96, true);
+        if (parameters != null && parameters.Length >= 2)
+          return parameters.Select(curve.PointAt).ToArray();
+      }
+      catch
+      {
+      }
+
+      return new[] { curve.PointAtStart, curve.PointAtEnd };
+    }
+
+    private static MateEdge? FindHoveredEdge(
+      IReadOnlyList<MateEdge> edges,
+      RhinoViewport viewport,
+      int clientX,
+      int clientY,
+      out Point3d edgePoint)
+    {
+      MateEdge? bestEdge = null;
+      edgePoint = Point3d.Unset;
+      double bestDistanceSquared = EdgeHoverRadiusPixels * EdgeHoverRadiusPixels;
+
+      foreach (var edge in edges)
+      {
+        if (!TryScreenCurvePoint(
+              viewport, edge.Samples, clientX, clientY,
+              out var candidatePoint, out var distanceSquared) ||
+            distanceSquared > bestDistanceSquared)
+          continue;
+
+        bestDistanceSquared = distanceSquared;
+        bestEdge = edge;
+        edgePoint = candidatePoint;
+      }
+
+      return bestEdge;
+    }
+
+    private static bool TryScreenCurvePoint(
+      RhinoViewport viewport,
+      IReadOnlyList<Point3d> samples,
+      int clientX,
+      int clientY,
+      out Point3d edgePoint,
+      out double distanceSquared)
+    {
+      edgePoint = Point3d.Unset;
+      distanceSquared = double.PositiveInfinity;
+      if (samples.Count < 2)
+        return false;
+
+      Point2d previousClient;
+      try { previousClient = viewport.WorldToClient(samples[0]); }
+      catch { return false; }
+
+      for (int i = 1; i < samples.Count; i++)
+      {
+        Point2d currentClient;
+        try { currentClient = viewport.WorldToClient(samples[i]); }
+        catch
+        {
+          try { previousClient = viewport.WorldToClient(samples[i]); }
+          catch { }
+          continue;
+        }
+
+        double segmentX = currentClient.X - previousClient.X;
+        double segmentY = currentClient.Y - previousClient.Y;
+        double segmentLengthSquared = (segmentX * segmentX) + (segmentY * segmentY);
+        double u = segmentLengthSquared <= 1.0e-12
+          ? 0.0
+          : (((clientX - previousClient.X) * segmentX) +
+             ((clientY - previousClient.Y) * segmentY)) / segmentLengthSquared;
+        u = Math.Max(0.0, Math.Min(1.0, u));
+
+        double projectedX = previousClient.X + (segmentX * u);
+        double projectedY = previousClient.Y + (segmentY * u);
+        double dx = clientX - projectedX;
+        double dy = clientY - projectedY;
+        double candidateDistanceSquared = (dx * dx) + (dy * dy);
+        if (candidateDistanceSquared < distanceSquared)
+        {
+          distanceSquared = candidateDistanceSquared;
+          edgePoint = samples[i - 1] + ((samples[i] - samples[i - 1]) * u);
+        }
+
+        previousClient = currentClient;
+      }
+
+      return edgePoint.IsValid;
+    }
+
+    private static void DrawMateHighlight(
+      RhinoDoc doc,
+      DisplayPipeline display,
+      Dot mate)
+    {
+      int groupIndex = GrpOf(doc, mate.Id);
+      if (groupIndex >= 0)
+      {
+        var material = new DisplayMaterial(MatePartHighlightColor)
+        {
+          Transparency = 0.55,
+          BackTransparency = 0.55
+        };
+
+        foreach (var id in ObjsInGrp(doc, groupIndex))
+        {
+          if (id == mate.Id)
+            continue;
+
+          var geometry = doc.Objects.FindId(id)?.Geometry;
+          switch (geometry)
+          {
+            case Brep brep:
+              display.DrawBrepShaded(brep, material);
+              display.DrawBrepWires(brep, MatePartHighlightColor, 2);
+              break;
+            case Extrusion extrusion:
+              var extrusionBrep = extrusion.ToBrep();
+              if (extrusionBrep != null)
+              {
+                display.DrawBrepShaded(extrusionBrep, material);
+                display.DrawBrepWires(extrusionBrep, MatePartHighlightColor, 2);
+              }
+              break;
+            case Surface surface:
+              var surfaceBrep = surface.ToBrep();
+              if (surfaceBrep != null)
+              {
+                display.DrawBrepShaded(surfaceBrep, material);
+                display.DrawBrepWires(surfaceBrep, MatePartHighlightColor, 2);
+              }
+              break;
+            case Mesh mesh:
+              display.DrawMeshShaded(mesh, material);
+              display.DrawMeshWires(mesh, MatePartHighlightColor, 2);
+              break;
+            case Curve curve:
+              display.DrawCurve(curve, MatePartHighlightColor, 2);
+              break;
+          }
+        }
+      }
+
+      DrawDotHighlight(doc, display, mate, MateDotHighlightColor);
+    }
+
+    private static void DrawDotHighlight(
+      RhinoDoc doc,
+      DisplayPipeline display,
+      Dot dot,
+      Color color)
+    {
+      if (doc.Objects.FindId(dot.Id)?.Geometry is TextDot textDot)
+        display.DrawDot(textDot, Color.Black, color, color);
     }
 
     private static int GrpOf(RhinoDoc doc, Guid id)

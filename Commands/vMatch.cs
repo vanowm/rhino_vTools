@@ -40,6 +40,8 @@ namespace vTools.Commands
     private static bool   _randNext   = false;
 
     private static readonly Random _rng = new Random();
+    private static RhinoDoc? _activeHistoryDocument;
+    private static GetPoint? _activeHistoryGetter;
 
     private const double EdgeHoverRadiusPixels = 12.0;
     private static readonly Color SourceEdgeHighlightColor = Color.Orange;
@@ -48,6 +50,16 @@ namespace vTools.Commands
     private static readonly Color MatePartHighlightColor = Color.Cyan;
 
     public override string EnglishName => "vMatch";
+
+    internal static Result RunLocalHistory(RhinoDoc doc, bool redo)
+    {
+      if (_activeHistoryDocument != doc || _activeHistoryGetter == null)
+        return Result.Nothing;
+
+      GetBaseClass.PostCustomMessage(new MatchHistoryRequest(redo));
+      vTools.Log.Write("vMatch", $"shortcut {(redo ? "redo" : "undo")} requested");
+      return Result.Success;
+    }
 
     // ── Dot record ─────────────────────────────────────────────────────────
     private sealed class Dot
@@ -91,6 +103,61 @@ namespace vTools.Commands
     {
       public bool Redo { get; }
       public MatchHistoryRequest(bool redo) { Redo = redo; }
+    }
+
+    private sealed class MatchShortcutSession : IDisposable
+    {
+      private readonly string _undoMacro;
+      private readonly string _redoMacro;
+      private readonly string _alternateRedoMacro;
+      private bool _restoreNeeded;
+
+      public MatchShortcutSession()
+      {
+        _undoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlZ) ?? string.Empty;
+        _redoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
+        _alternateRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
+
+        try
+        {
+          _restoreNeeded = true;
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.CtrlZ, "'_vMatchUndo");
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vMatchRedo");
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vMatchRedo");
+          vTools.Log.Write("vMatch", "installed temporary history shortcuts");
+        }
+        catch (Exception ex)
+        {
+          vTools.Log.Write("vMatch", $"failed to install history shortcuts: {ex.Message}");
+          Dispose();
+        }
+      }
+
+      public void Dispose()
+      {
+        if (!_restoreNeeded) return;
+        _restoreNeeded = false;
+        try
+        {
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.CtrlZ, _undoMacro);
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.CtrlY, _redoMacro);
+          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+            Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, _alternateRedoMacro);
+          vTools.Log.Write("vMatch", "restored history shortcuts");
+        }
+        catch (Exception ex)
+        {
+          vTools.Log.Write("vMatch", $"failed to restore history shortcuts: {ex.Message}");
+        }
+      }
     }
 
     private sealed class MateEdgePicker : GetPoint
@@ -181,102 +248,123 @@ namespace vTools.Commands
 
       var undoMoves = new Stack<MatchMove>();
       var redoMoves = new Stack<MatchMove>();
-      while (true)
+      _activeHistoryDocument = doc;
+      using var shortcutSession = new MatchShortcutSession();
+      try
       {
-        var mateEdges = BuildMateEdges(doc, dots);
-        var gp = new MateEdgePicker(doc, dots, mateEdges);
-        gp.EnableTransparentCommands(true);
-        gp.SetCommandPrompt("Click a highlighted edge to match its part");
-        int idxDist = gp.AddOption("Distance", $"{_distance:G}");
-        int idxAuto = gp.AddOption("Auto");
-        int idxRedo = gp.AddOption("Redo", string.Empty, true);
-        gp.AcceptNumber(true, true);
-        gp.AcceptNothing(false);
-        gp.AcceptUndo(true);
-
-        var res = gp.Get();
-        var src = gp.SourceDot;
-        var mate = gp.MateDot;
-        gp.ReleaseSnap();
-
-        if (res == GetResult.Undo)
+        while (true)
         {
-          ApplyMatchHistory(doc, undoMoves, redoMoves, false);
-          dots = ScanDots(doc);
-          continue;
-        }
+          var mateEdges = BuildMateEdges(doc, dots);
+          var gp = new MateEdgePicker(doc, dots, mateEdges);
+          gp.EnableTransparentCommands(true);
+          gp.SetCommandPrompt("Click a highlighted edge to match its part");
+          int idxDist = gp.AddOption("Distance", $"{_distance:G}");
+          int idxAuto = gp.AddOption("Auto");
+          int idxRedo = gp.AddOption("Redo", string.Empty, true);
+          gp.AcceptNumber(true, true);
+          gp.AcceptNothing(false);
+          gp.AcceptUndo(true);
+          gp.AcceptCustomMessage(true);
 
-        if (gp.CommandResult() == Result.Cancel) break;
+          _activeHistoryGetter = gp;
+          var res = gp.Get();
+          _activeHistoryGetter = null;
+          var src = gp.SourceDot;
+          var mate = gp.MateDot;
+          gp.ReleaseSnap();
 
-        if (res == GetResult.Number)
-        {
-          double v = gp.Number();
-          if (v >= 0.0) { _distance = v; SaveSettings(); }
-          continue;
-        }
-
-        if (res == GetResult.Option)
-        {
-          var opt = gp.Option();
-          if (opt != null && opt.Index == idxRedo)
+          if (res == GetResult.CustomMessage &&
+              gp.CustomMessage() is MatchHistoryRequest historyRequest)
           {
-            ApplyMatchHistory(doc, undoMoves, redoMoves, true);
+            ApplyMatchHistory(doc, undoMoves, redoMoves, historyRequest.Redo);
             dots = ScanDots(doc);
             continue;
           }
-          if (opt != null && opt.Index == idxAuto)
+
+          if (res == GetResult.Undo)
           {
-            dots = AutoAlign(doc, dots, _distance);
-            undoMoves.Clear();
-            redoMoves.Clear();
+            ApplyMatchHistory(doc, undoMoves, redoMoves, false);
+            dots = ScanDots(doc);
             continue;
           }
-          // Distance — sub-prompt (memory rule: no AddOptionDouble)
-          var gs = new GetString();
-          gs.SetCommandPrompt($"Gap distance");
-          gs.SetDefaultString($"{_distance:G}");
-          gs.AcceptNothing(true);
-          if (gs.Get() == GetResult.String &&
-              double.TryParse(gs.StringResult().Trim(),
-                              NumberStyles.Any, CultureInfo.InvariantCulture, out double v)
-              && v >= 0.0)
+
+          if (gp.CommandResult() == Result.Cancel) break;
+
+          if (res == GetResult.Number)
           {
-            _distance = v;
-            SaveSettings();
+            double v = gp.Number();
+            if (v >= 0.0) { _distance = v; SaveSettings(); }
+            continue;
           }
-          continue;
+
+          if (res == GetResult.Option)
+          {
+            var opt = gp.Option();
+            if (opt != null && opt.Index == idxRedo)
+            {
+              ApplyMatchHistory(doc, undoMoves, redoMoves, true);
+              dots = ScanDots(doc);
+              continue;
+            }
+            if (opt != null && opt.Index == idxAuto)
+            {
+              dots = AutoAlign(doc, dots, _distance);
+              undoMoves.Clear();
+              redoMoves.Clear();
+              continue;
+            }
+            // Distance — sub-prompt (memory rule: no AddOptionDouble)
+            var gs = new GetString();
+            gs.SetCommandPrompt($"Gap distance");
+            gs.SetDefaultString($"{_distance:G}");
+            gs.AcceptNothing(true);
+            if (gs.Get() == GetResult.String &&
+                double.TryParse(gs.StringResult().Trim(),
+                                NumberStyles.Any, CultureInfo.InvariantCulture, out double v)
+                && v >= 0.0)
+            {
+              _distance = v;
+              SaveSettings();
+            }
+            continue;
+          }
+
+          if (gp.CommandResult() != Result.Success) break;
+
+          SaveSettings();
+          if (src == null || mate == null) continue;
+
+          int srcGrp  = GrpOf(doc, src.Id);
+          int mateGrp = GrpOf(doc, mate.Id);
+          if (mateGrp < 0) continue;
+
+          var srcObjs  = srcGrp >= 0 ? ObjsInGrp(doc, srcGrp) : new List<Guid>();
+          var mateObjs = ObjsInGrp(doc, mateGrp);
+          if (mateObjs.Count == 0) continue;
+
+          var srcTang  = Tang2d(src.Position,  NakedEdges(doc, srcObjs));
+          var mateTang = Tang2d(mate.Position, NakedEdges(doc, mateObjs));
+          if (srcTang == null || mateTang == null) continue;
+
+          var srcOut = Outward2d(doc, src.Position, srcTang.Value, srcObjs);
+          var target = new Point3d(src.Position.X + srcOut.X * _distance,
+                                   src.Position.Y + srcOut.Y * _distance, 0.0);
+
+          var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
+                               mate.Position, mateTang.Value, mateObjs);
+          if (!xf.HasValue || !xf.Value.TryGetInverse(out var inverse)) continue;
+
+          var move = new MatchMove(mateObjs, xf.Value, inverse);
+          if (!ApplyMatchMove(doc, move, true)) continue;
+          undoMoves.Push(move);
+          redoMoves.Clear();
+          dots = ScanDots(doc);
         }
-
-        if (gp.CommandResult() != Result.Success) break;
-
-        SaveSettings();
-        if (src == null || mate == null) continue;
-
-        int srcGrp  = GrpOf(doc, src.Id);
-        int mateGrp = GrpOf(doc, mate.Id);
-        if (mateGrp < 0) continue;
-
-        var srcObjs  = srcGrp >= 0 ? ObjsInGrp(doc, srcGrp) : new List<Guid>();
-        var mateObjs = ObjsInGrp(doc, mateGrp);
-        if (mateObjs.Count == 0) continue;
-
-        var srcTang  = Tang2d(src.Position,  NakedEdges(doc, srcObjs));
-        var mateTang = Tang2d(mate.Position, NakedEdges(doc, mateObjs));
-        if (srcTang == null || mateTang == null) continue;
-
-        var srcOut = Outward2d(doc, src.Position, srcTang.Value, srcObjs);
-        var target = new Point3d(src.Position.X + srcOut.X * _distance,
-                                 src.Position.Y + srcOut.Y * _distance, 0.0);
-
-        var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
-                             mate.Position, mateTang.Value, mateObjs);
-        if (!xf.HasValue || !xf.Value.TryGetInverse(out var inverse)) continue;
-
-        var move = new MatchMove(mateObjs, xf.Value, inverse);
-        if (!ApplyMatchMove(doc, move, true)) continue;
-        undoMoves.Push(move);
-        redoMoves.Clear();
-        dots = ScanDots(doc);
+      }
+      finally
+      {
+        _activeHistoryGetter = null;
+        _activeHistoryDocument = null;
       }
 
       return Result.Success;
@@ -980,5 +1068,23 @@ namespace vTools.Commands
       if (!saved)
         RhinoApp.WriteLine($"vMatch: failed to save options: {ToolsOptionStore.LastError}");
     }
+  }
+
+  [CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
+  public sealed class vMatchUndo : Command
+  {
+    public override string EnglishName => "vMatchUndo";
+
+    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+      vMatch.RunLocalHistory(doc, redo: false);
+  }
+
+  [CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
+  public sealed class vMatchRedo : Command
+  {
+    public override string EnglishName => "vMatchRedo";
+
+    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+      vMatch.RunLocalHistory(doc, redo: true);
   }
 }

@@ -456,16 +456,25 @@ namespace vTools.Commands
             }
           }
 
+          if (_rotateFlatParts && frame != null && labelPoint.HasValue)
+            RotateObjectsToTextUp(doc, outputIds, labelPoint.Value, unrolledY);
+
+          bool keptPriorPlacement = false;
+          if (priorOutput != null && !options.PlacementSpecified)
+          {
+            keptPriorPlacement = TryRestorePriorFlatPlacement(
+              doc, priorOutput, outputIds, out string placementMethod);
+            Dbg($"part={number} placement=prior restored={keptPriorPlacement}" +
+                $" method={placementMethod}");
+          }
+
           if (priorOutput != null)
             ReplacePriorFlatGroup(doc, priorOutput, outputIds, number);
           else
             GroupObjects(doc, outputIds, FlatGroupPrefix, number);
 
-          if (_rotateFlatParts && frame != null && labelPoint.HasValue)
-            RotateObjectsToTextUp(doc, outputIds, labelPoint.Value, unrolledY);
-
           var bbox = BoundingBoxOfObjects(doc, outputIds);
-          if (bbox.HasValue && bbox.Value.IsValid)
+          if (!keptPriorPlacement && bbox.HasValue && bbox.Value.IsValid)
           {
             var box = bbox.Value;
             double width = box.Max.X - box.Min.X;
@@ -625,6 +634,7 @@ namespace vTools.Commands
       gp.AcceptNothing(true);
 
       var point = Point3d.Origin;
+      bool placementSpecified = false;
       while (true)
       {
         var rc = gp.Get();
@@ -636,6 +646,7 @@ namespace vTools.Commands
         if (rc == GetResult.Point)
         {
           point = gp.Point();
+          placementSpecified = true;
           break;
         }
         if (rc == GetResult.Option)
@@ -646,6 +657,7 @@ namespace vTools.Commands
       return new LayoutOptions
       {
         StartPoint     = point,
+        PlacementSpecified = placementSpecified,
         LabelMode      = _labelMode,
         RotateFlatParts= _rotateFlatParts,
         Explode        = _explode,
@@ -1384,6 +1396,241 @@ namespace vTools.Commands
       }
 
       return best;
+    }
+
+    private static bool TryRestorePriorFlatPlacement(
+      RhinoDoc doc,
+      PriorFlatOutput priorOutput,
+      IEnumerable<Guid> outputIds,
+      out string method)
+    {
+      method = "none";
+      var oldIds = priorOutput.MemberIds
+        .Where(id => doc.Objects.FindId(id) != null)
+        .ToList();
+      var newIds = Unique(outputIds)
+        .Where(id => doc.Objects.FindId(id) != null)
+        .ToList();
+      if (oldIds.Count == 0 || newIds.Count == 0)
+        return false;
+
+      if (TryMarkerPlacementTransform(doc, oldIds, newIds, out var transform, out int markerCount))
+      {
+        TransformObjects(doc, newIds, transform);
+        method = $"markers:{markerCount}";
+        return true;
+      }
+
+      if (TryTextPlacementTransform(doc, oldIds, newIds, out transform))
+      {
+        TransformObjects(doc, newIds, transform);
+        method = "text";
+        return true;
+      }
+
+      if (TryGeometryPlacementTransform(doc, oldIds, newIds, out transform))
+      {
+        TransformObjects(doc, newIds, transform);
+        method = "geometry";
+        return true;
+      }
+
+      var oldBox = BoundingBoxOfObjects(doc, oldIds);
+      var newBox = BoundingBoxOfObjects(doc, newIds);
+      if (!oldBox.HasValue || !oldBox.Value.IsValid ||
+          !newBox.HasValue || !newBox.Value.IsValid)
+        return false;
+
+      TransformObjects(doc, newIds,
+        Transform.Translation(oldBox.Value.Center - newBox.Value.Center));
+      method = "center";
+      return true;
+    }
+
+    private static bool TryMarkerPlacementTransform(
+      RhinoDoc doc,
+      IReadOnlyList<Guid> oldIds,
+      IReadOnlyList<Guid> newIds,
+      out Transform transform,
+      out int markerCount)
+    {
+      transform = Transform.Identity;
+      markerCount = 0;
+      var oldMarkers = PlacementMarkers(doc, oldIds);
+      var newMarkers = PlacementMarkers(doc, newIds);
+      var pairs = oldMarkers.Keys
+        .Where(newMarkers.ContainsKey)
+        .Select(key => (Old: oldMarkers[key], New: newMarkers[key]))
+        .ToList();
+      markerCount = pairs.Count;
+      if (pairs.Count < 2)
+        return false;
+
+      var oldCenter = new Point3d(
+        pairs.Average(pair => pair.Old.X),
+        pairs.Average(pair => pair.Old.Y),
+        pairs.Average(pair => pair.Old.Z));
+      var newCenter = new Point3d(
+        pairs.Average(pair => pair.New.X),
+        pairs.Average(pair => pair.New.Y),
+        pairs.Average(pair => pair.New.Z));
+
+      double dot = 0.0;
+      double cross = 0.0;
+      foreach (var pair in pairs)
+      {
+        double sx = pair.New.X - newCenter.X;
+        double sy = pair.New.Y - newCenter.Y;
+        double tx = pair.Old.X - oldCenter.X;
+        double ty = pair.Old.Y - oldCenter.Y;
+        dot += sx * tx + sy * ty;
+        cross += sx * ty - sy * tx;
+      }
+
+      if (Math.Abs(dot) + Math.Abs(cross) <= RhinoMath.ZeroTolerance)
+        return false;
+
+      double angle = Math.Atan2(cross, dot);
+      transform = Transform.Translation(oldCenter - newCenter) *
+                  Transform.Rotation(angle, Vector3d.ZAxis, newCenter);
+      return transform.IsValid;
+    }
+
+    private static Dictionary<string, Point3d> PlacementMarkers(
+      RhinoDoc doc,
+      IEnumerable<Guid> ids)
+    {
+      var markers = new Dictionary<string, Point3d>(StringComparer.OrdinalIgnoreCase);
+      foreach (var id in ids)
+      {
+        var obj = doc.Objects.FindId(id);
+        if (obj == null)
+          continue;
+
+        if (obj.Attributes.Name == EdgeMateName && obj.Geometry is TextDot edgeDot)
+        {
+          string mateId = obj.Attributes.GetUserString(EdgeMateIdKey) ?? edgeDot.Text ?? string.Empty;
+          if (!string.IsNullOrWhiteSpace(mateId))
+            markers[$"edge:{mateId}"] = edgeDot.Point;
+        }
+        else if (obj.Attributes.Name == TextObjectName)
+        {
+          if (obj.Geometry is TextEntity text)
+            markers["label"] = text.Plane.Origin;
+          else if (obj.Geometry is TextDot labelDot)
+            markers["label"] = labelDot.Point;
+        }
+      }
+      return markers;
+    }
+
+    private static bool TryTextPlacementTransform(
+      RhinoDoc doc,
+      IEnumerable<Guid> oldIds,
+      IEnumerable<Guid> newIds,
+      out Transform transform)
+    {
+      transform = Transform.Identity;
+      var oldText = oldIds
+        .Select(doc.Objects.FindId)
+        .FirstOrDefault(obj => obj?.Attributes.Name == TextObjectName && obj.Geometry is TextEntity)
+        ?.Geometry as TextEntity;
+      var newText = newIds
+        .Select(doc.Objects.FindId)
+        .FirstOrDefault(obj => obj?.Attributes.Name == TextObjectName && obj.Geometry is TextEntity)
+        ?.Geometry as TextEntity;
+      if (oldText == null || newText == null ||
+          !TryPlanarAngle(newText.Plane.YAxis, oldText.Plane.YAxis, out double angle))
+        return false;
+
+      transform = Transform.Translation(oldText.Plane.Origin - newText.Plane.Origin) *
+                  Transform.Rotation(angle, Vector3d.ZAxis, newText.Plane.Origin);
+      return transform.IsValid;
+    }
+
+    private static bool TryGeometryPlacementTransform(
+      RhinoDoc doc,
+      IReadOnlyList<Guid> oldIds,
+      IReadOnlyList<Guid> newIds,
+      out Transform transform)
+    {
+      transform = Transform.Identity;
+      if (!TryGeometryPlacementFrame(doc, oldIds, out var oldAnchor, out var oldDirection, out var oldCenter) ||
+          !TryGeometryPlacementFrame(doc, newIds, out var newAnchor, out var newDirection, out var newCenter) ||
+          !TryPlanarAngle(newDirection, oldDirection, out double angle))
+        return false;
+
+      var oldRadial = oldCenter - oldAnchor;
+      var newRadial = newCenter - newAnchor;
+      oldRadial.Z = 0.0;
+      newRadial.Z = 0.0;
+      if (oldRadial.Unitize() && newRadial.Unitize())
+      {
+        var rotated = newRadial;
+        rotated.Rotate(angle, Vector3d.ZAxis);
+        var reversed = -rotated;
+        if (reversed * oldRadial > rotated * oldRadial)
+          angle += Math.PI;
+      }
+
+      transform = Transform.Translation(oldAnchor - newAnchor) *
+                  Transform.Rotation(angle, Vector3d.ZAxis, newAnchor);
+      return transform.IsValid;
+    }
+
+    private static bool TryGeometryPlacementFrame(
+      RhinoDoc doc,
+      IReadOnlyList<Guid> ids,
+      out Point3d anchor,
+      out Vector3d direction,
+      out Point3d center)
+    {
+      anchor = Point3d.Unset;
+      direction = Vector3d.Unset;
+      center = Point3d.Unset;
+      Curve? longest = null;
+      double longestLength = 0.0;
+      foreach (var id in ids)
+      {
+        var obj = doc.Objects.FindId(id);
+        if (obj == null || !IsSurfaceLike(obj.ObjectType))
+          continue;
+        var brep = BrepFromGeometry(obj.Geometry);
+        if (brep == null)
+          continue;
+        foreach (var edge in brep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
+        {
+          double length = edge.GetLength();
+          if (length > longestLength)
+          {
+            longestLength = length;
+            longest = edge;
+          }
+        }
+      }
+
+      var box = BoundingBoxOfObjects(doc, ids);
+      if (longest == null || !box.HasValue || !box.Value.IsValid)
+        return false;
+
+      double parameter = longest.Domain.Mid;
+      longest.LengthParameter(longestLength * 0.5, out parameter);
+      anchor = longest.PointAt(parameter);
+      direction = longest.TangentAt(parameter);
+      direction.Z = 0.0;
+      center = box.Value.Center;
+      return anchor.IsValid && direction.Unitize() && center.IsValid;
+    }
+
+    private static bool TryPlanarAngle(Vector3d from, Vector3d to, out double angle)
+    {
+      angle = 0.0;
+      from.Z = 0.0;
+      to.Z = 0.0;
+      if (!from.Unitize() || !to.Unitize())
+        return false;
+      angle = Math.Atan2(from.X * to.Y - from.Y * to.X, from.X * to.X + from.Y * to.Y);
+      return true;
     }
 
     private static bool GroupNameMatches(string? name, string prefix, int partNumber)
@@ -2472,6 +2719,7 @@ namespace vTools.Commands
     private class LayoutOptions
     {
       public Point3d StartPoint;
+      public bool PlacementSpecified;
       public LabelMode LabelMode;
       public bool RotateFlatParts;
       public bool Explode;

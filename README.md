@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.31.1752
+# vTools  ·  v26.7.31.1803
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -629,7 +629,7 @@ Notes:
 1. Select surfaces, polysurfaces, or extrusions to unroll, then optionally select curves, points, or dots that should follow their nearest surface.
 1. Choose the output start point and adjust label, rotation, explode, split-face, property, spacing, and extents options.
 1. Flat parts receive matching labels and shared-edge `M###` dots for use with `vMatch`. Planar single-face parts are mapped exactly, ruled single-face parts retain their original UV control structure, and unsupported forms use RhinoCommon's tolerance-based unroller.
-1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds.
+1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds. Pressing Enter at placement keeps each replacement in its prior flat-part position and orientation; specifying a point lays out the results from that point.
 
 ### vUzip flow
 

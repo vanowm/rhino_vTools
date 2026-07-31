@@ -72,6 +72,8 @@ namespace vTools.Commands
     private const string EdgePartNumKey      = vMatch.EdgePartNumKey;
     private const string EdgeMatePartNumKey  = vMatch.EdgeMatePartNumKey;
     private const string EdgeMateReversedKey = vMatch.EdgeMateReversedKey;
+    private const string EdgeIndexKey        = "MultiUnrollEdgeIndex";
+    private const string MateEdgeIndexKey    = "MultiUnrollMateEdgeIndex";
     private const string EdgeMatePrefix      = "M";
     private const int    EdgeMateDotSize     = 10;
     private const double EdgeMateTolFactor   = 25.0;
@@ -128,7 +130,7 @@ namespace vTools.Commands
         var brep = BrepFromGeometry(rhObj.Geometry);
         if (brep == null)
           continue;
-        sources.Add(new SourceSurface(id, rhObj.Geometry, brep));
+        sources.Add(new SourceSurface(id, rhObj.Geometry, brep, PartNumberOf(rhObj)));
       }
 
       if (sources.Count == 0)
@@ -145,10 +147,16 @@ namespace vTools.Commands
         foreach (var src in sources)
         {
           if (src.Brep.Faces.Count <= 1) { split.Add(src); continue; }
+          bool keepExistingNumber = true;
           foreach (var face in src.Brep.Faces)
           {
             var fb = face.DuplicateFace(false);
-            if (fb != null) split.Add(new SourceSurface(src.Id, src.Geometry, fb));
+            if (fb != null)
+            {
+              split.Add(new SourceSurface(src.Id, src.Geometry, fb,
+                keepExistingNumber ? src.PreferredPartNumber : null));
+              keepExistingNumber = false;
+            }
           }
         }
         sources = split;
@@ -162,10 +170,12 @@ namespace vTools.Commands
       var assignment = followingItems.Count > 0 ? AssignFollowing(doc, followingItems, sources) : new AssignmentResult(sources.Count);
 
       double tol = doc.ModelAbsoluteTolerance;
+      var partNumbers = AssignPartNumbers(doc, sources);
+      var priorOutputs = partNumbers.Select(number => FindPriorFlatOutput(doc, number)).ToList();
 
       // Build edge-mate pairs before unrolling (once for all source surfaces)
       var edgePairs = _edgeDots
-        ? BuildEdgeMates(sources, tol)
+        ? BuildEdgeMates(doc, sources, partNumbers, tol)
         : (List<List<EdgeMateRecord>>?)null;
       double xLimit = _xExtents;
       double xOrigin = options.StartPoint.X;
@@ -183,9 +193,16 @@ namespace vTools.Commands
         for (int i = 0; i < sources.Count; i++)
         {
           var src = sources[i];
-          var unroller = new Unroller(src.Brep) { ExplodeOutput = _explode };
+          var unroller = new Unroller(src.Brep)
+          {
+            ExplodeOutput = _explode,
+            AbsoluteTolerance = doc.ModelAbsoluteTolerance,
+            RelativeTolerance = doc.ModelRelativeTolerance
+          };
+          bool usePlanarTransform = TryGetSingleFacePlanarTransform(src.Brep, tol, out var planarTransform);
 
-          int number = done + 1;
+          int number = partNumbers[i];
+          var priorOutput = priorOutputs[i];
           string display = LabelText(number);
           var frame = (addLabels || _rotateFlatParts)
             ? SurfaceLabelFrame(doc, src.Id, ItemTextHeight(doc, src.Id, display, src.Brep), src.Brep)
@@ -212,11 +229,14 @@ namespace vTools.Commands
             ? edgePairs[i]
             : new List<EdgeMateRecord>();
           var edgeMateHelperDots = new Dictionary<string, EdgeMateRecord>(StringComparer.Ordinal);
+          var followingDots = new List<TextDot>();
           foreach (var rec in UniqueEdgeMateRecords(edgeMateRecords))
           {
             string helperText = EdgeMateHelperDotText(src.Id, rec);
             edgeMateHelperDots[helperText] = rec;
-            unroller.AddFollowingGeometry(new TextDot(helperText, rec.Marker));
+            var helperDot = new TextDot(helperText, rec.Marker);
+            followingDots.Add(helperDot);
+            unroller.AddFollowingGeometry(helperDot);
           }
           Dbg($"part={number} edge_mates records={edgeMateRecords.Count} helpers={edgeMateHelperDots.Count}");
 
@@ -233,13 +253,22 @@ namespace vTools.Commands
             labelPointDotText = LabelHelperDotText(src.Id, number, "point");
             labelUpDotText = LabelHelperDotText(src.Id, number, "up");
             labelRightDotText = LabelHelperDotText(src.Id, number, "right");
-            unroller.AddFollowingGeometry(new TextDot(labelPointDotText, frame.Point));
-            unroller.AddFollowingGeometry(new TextDot(labelUpDotText, frame.UpPoint));
-            unroller.AddFollowingGeometry(new TextDot(labelRightDotText, frame.RightPoint));
+            var pointDot = new TextDot(labelPointDotText, frame.Point);
+            var upDot = new TextDot(labelUpDotText, frame.UpPoint);
+            var rightDot = new TextDot(labelRightDotText, frame.RightPoint);
+            followingDots.Add(pointDot);
+            followingDots.Add(upDot);
+            followingDots.Add(rightDot);
+            unroller.AddFollowingGeometry(pointDot);
+            unroller.AddFollowingGeometry(upDot);
+            unroller.AddFollowingGeometry(rightDot);
           }
 
           foreach (var dot in dots)
+          {
+            followingDots.Add(dot);
             unroller.AddFollowingGeometry(dot);
+          }
 
           Curve[] unrolledCurves;
           Point3d[] unrolledPoints;
@@ -247,7 +276,28 @@ namespace vTools.Commands
           Brep[] unrolledBreps;
           try
           {
-            unrolledBreps = unroller.PerformUnroll(out unrolledCurves, out unrolledPoints, out unrolledDots);
+            if (usePlanarTransform)
+            {
+              var flatBrep = src.Brep.DuplicateBrep();
+              flatBrep.Transform(planarTransform);
+              unrolledBreps = new[] { flatBrep };
+              unrolledCurves = curves.Select(curve => TransformCurveCopy(curve, planarTransform)).ToArray();
+              unrolledPoints = points.Select(point => TransformPoint(point.Location, planarTransform)).ToArray();
+              unrolledDots = followingDots.Select(dot => TransformTextDotCopy(dot, planarTransform)).ToArray();
+              Dbg($"part={number} unroll_method=planar_exact");
+            }
+            else if (TryPerformRuledUvUnroll(
+              src.Brep, curves, points, followingDots, tol,
+              out unrolledBreps, out unrolledCurves, out unrolledPoints, out unrolledDots,
+              out string uvDetails))
+            {
+              Dbg($"part={number} unroll_method=ruled_uv {uvDetails}");
+            }
+            else
+            {
+              unrolledBreps = unroller.PerformUnroll(out unrolledCurves, out unrolledPoints, out unrolledDots);
+              Dbg($"part={number} unroll_method=rhino_unroller");
+            }
           }
           catch (Exception ex)
           {
@@ -271,7 +321,9 @@ namespace vTools.Commands
           done++;
 
           var outputIds = new List<Guid>();
-          var finalBreps = _explode ? unrolledBreps : (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps);
+          var finalBreps = !_explode && unrolledBreps.Length > 1
+            ? (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps)
+            : unrolledBreps;
           foreach (var brep in finalBreps)
             AddValid(outputIds, doc.Objects.AddBrep(brep));
 
@@ -385,16 +437,9 @@ namespace vTools.Commands
             PutOnReferenceLayer(doc, unrolledLabelIds);
           }
 
-          if (addLabels && frame != null)
+          if (addLabels && frame != null && (priorOutput == null || !priorOutput.MemberIds.Contains(src.Id)))
           {
-            Guid originalLabelId = Guid.Empty;
-            if (addText)
-              originalLabelId = AddFlatText(doc, display, frame.Point, frame.Y, frame.Normal, frame.Height, src.Id, _keepProperties);
-            else if (addDots)
-              originalLabelId = AddDot(doc, display, frame.Point, src.Id, _keepProperties);
-
-            if (IsValidId(originalLabelId))
-              GroupObjects(doc, new[] { src.Id, originalLabelId }, OriginalGroupPrefix, number);
+            EnsureOriginalLabel(doc, src.Id, number, display, frame, addText, addDots, _keepProperties);
           }
 
           // Place edge mate dots on flat output
@@ -411,7 +456,10 @@ namespace vTools.Commands
             }
           }
 
-          GroupObjects(doc, outputIds, FlatGroupPrefix, number);
+          if (priorOutput != null)
+            ReplacePriorFlatGroup(doc, priorOutput, outputIds, number);
+          else
+            GroupObjects(doc, outputIds, FlatGroupPrefix, number);
 
           if (_rotateFlatParts && frame != null && labelPoint.HasValue)
             RotateObjectsToTextUp(doc, outputIds, labelPoint.Value, unrolledY);
@@ -1260,6 +1308,178 @@ namespace vTools.Commands
       }
     }
 
+    private static int? PartNumberOf(RhinoObject? obj)
+    {
+      if (obj == null)
+        return null;
+
+      var text = obj.Attributes.GetUserString(LabelNumberKey);
+      if (string.IsNullOrWhiteSpace(text))
+        text = obj.Attributes.GetUserString(EdgePartNumKey);
+      return int.TryParse(BaseNumber(text), out int number) && number > 0 ? number : (int?)null;
+    }
+
+    private static List<int> AssignPartNumbers(RhinoDoc doc, IReadOnlyList<SourceSurface> sources)
+    {
+      var documentNumbers = new HashSet<int>(doc.Objects
+        .Select(PartNumberOf)
+        .Where(number => number.HasValue)
+        .Select(number => number!.Value));
+      var assigned = new HashSet<int>();
+      int next = documentNumbers.Count > 0 ? documentNumbers.Max() + 1 : 1;
+      var result = new List<int>(sources.Count);
+
+      foreach (var source in sources)
+      {
+        int number;
+        if (source.PreferredPartNumber.HasValue && source.PreferredPartNumber.Value > 0 &&
+            assigned.Add(source.PreferredPartNumber.Value))
+        {
+          number = source.PreferredPartNumber.Value;
+        }
+        else
+        {
+          while (documentNumbers.Contains(next) || assigned.Contains(next))
+            next++;
+          number = next++;
+          assigned.Add(number);
+        }
+        result.Add(number);
+      }
+
+      Dbg($"part_numbers={string.Join(",", result)}");
+      return result;
+    }
+
+    private static PriorFlatOutput? FindPriorFlatOutput(RhinoDoc doc, int partNumber)
+    {
+      PriorFlatOutput? best = null;
+      int bestScore = int.MinValue;
+
+      for (int groupIndex = 0; groupIndex < doc.Groups.Count; groupIndex++)
+      {
+        var group = doc.Groups.FindIndex(groupIndex);
+        if (group == null || group.IsDeleted)
+          continue;
+
+        var matchingMembers = (doc.Groups.GroupMembers(groupIndex) ?? Array.Empty<RhinoObject>())
+          .Where(obj => PartNumberOf(obj) == partNumber)
+          .ToList();
+        if (!matchingMembers.Any(obj => IsSurfaceLike(obj.ObjectType)))
+          continue;
+
+        bool namedFlatGroup = GroupNameMatches(group.Name, FlatGroupPrefix, partNumber);
+        bool hasEdgeDots = matchingMembers.Any(obj => obj.Attributes.Name == EdgeMateName);
+        bool hasFlatLabel = matchingMembers.Any(obj => obj.Attributes.Name == TextObjectName);
+        if (!namedFlatGroup && !hasEdgeDots)
+          continue;
+
+        int score = groupIndex * 1000 + (namedFlatGroup ? 100 : 0) +
+                    (hasEdgeDots ? 10 : 0) + (hasFlatLabel ? 1 : 0);
+        if (score <= bestScore)
+          continue;
+
+        bestScore = score;
+        best = new PriorFlatOutput(groupIndex, matchingMembers.Select(obj => obj.Id));
+      }
+
+      return best;
+    }
+
+    private static bool GroupNameMatches(string? name, string prefix, int partNumber)
+    {
+      if (string.IsNullOrWhiteSpace(name))
+        return false;
+      string baseName = $"{prefix}_{partNumber}";
+      return string.Equals(name, baseName, StringComparison.Ordinal) ||
+             name.StartsWith(baseName + "_", StringComparison.Ordinal);
+    }
+
+    private static int FindOriginalGroupIndex(RhinoDoc doc, Guid sourceId, int partNumber)
+    {
+      var source = doc.Objects.FindId(sourceId);
+      foreach (int groupIndex in source?.Attributes.GetGroupList() ?? Array.Empty<int>())
+      {
+        var group = doc.Groups.FindIndex(groupIndex);
+        if (group != null && !group.IsDeleted && GroupNameMatches(group.Name, OriginalGroupPrefix, partNumber))
+          return groupIndex;
+      }
+      return -1;
+    }
+
+    private static void EnsureOriginalLabel(
+      RhinoDoc doc,
+      Guid sourceId,
+      int partNumber,
+      string display,
+      LabelFrame frame,
+      bool addText,
+      bool addDots,
+      bool transferProperties)
+    {
+      int groupIndex = FindOriginalGroupIndex(doc, sourceId, partNumber);
+      if (groupIndex >= 0)
+      {
+        bool hasLabel = (doc.Groups.GroupMembers(groupIndex) ?? Array.Empty<RhinoObject>())
+          .Any(obj => obj.Attributes.Name == TextObjectName && PartNumberOf(obj) == partNumber);
+        if (hasLabel)
+        {
+          Dbg($"part={partNumber} original_group reused group={groupIndex} label=reused");
+          return;
+        }
+      }
+
+      Guid labelId = Guid.Empty;
+      if (addText)
+        labelId = AddFlatText(doc, display, frame.Point, frame.Y, frame.Normal, frame.Height, sourceId, transferProperties);
+      else if (addDots)
+        labelId = AddDot(doc, display, frame.Point, sourceId, transferProperties);
+      if (!IsValidId(labelId))
+        return;
+
+      if (groupIndex >= 0)
+      {
+        SetMatchNumber(doc, new[] { sourceId, labelId }, partNumber);
+        doc.Groups.AddToGroup(groupIndex, labelId);
+        Dbg($"part={partNumber} original_group reused group={groupIndex} label=created");
+      }
+      else
+      {
+        GroupObjects(doc, new[] { sourceId, labelId }, OriginalGroupPrefix, partNumber);
+      }
+    }
+
+    private static void ReplacePriorFlatGroup(
+      RhinoDoc doc,
+      PriorFlatOutput priorOutput,
+      IEnumerable<Guid> outputIds,
+      int partNumber)
+    {
+      var newIds = Unique(outputIds).Where(IsValidId).ToList();
+      SetMatchNumber(doc, newIds, partNumber);
+      doc.Groups.AddToGroup(priorOutput.GroupIndex, newIds);
+      bool allGrouped = newIds.All(id =>
+        (doc.Objects.FindId(id)?.Attributes.GetGroupList() ?? Array.Empty<int>())
+          .Contains(priorOutput.GroupIndex));
+      if (!allGrouped)
+      {
+        GroupObjects(doc, newIds, FlatGroupPrefix, partNumber);
+        Dbg($"part={partNumber} flat_group reuse failed group={priorOutput.GroupIndex}");
+        return;
+      }
+
+      int removed = 0;
+      foreach (var oldId in priorOutput.MemberIds)
+      {
+        if (newIds.Contains(oldId) || doc.Objects.FindId(oldId) == null)
+          continue;
+        if (doc.Objects.Delete(oldId, true))
+          removed++;
+      }
+      Dbg($"part={partNumber} flat_group reused group={priorOutput.GroupIndex}" +
+          $" removed={removed} added={newIds.Count}");
+    }
+
     private static string UniqueGroupName(RhinoDoc doc, string prefix, object? number)
     {
       string baseName = $"{prefix}_{BaseNumber(number)}";
@@ -1445,6 +1665,307 @@ namespace vTools.Commands
       TransformObjects(doc, ids, Transform.Rotation(angle.Value, Vector3d.ZAxis, center));
     }
 
+    private static bool TryGetSingleFacePlanarTransform(Brep brep, double tolerance, out Transform transform)
+    {
+      transform = Transform.Identity;
+      if (brep == null || brep.Faces.Count != 1 ||
+          !brep.Faces[0].TryGetPlane(out var plane, tolerance) || !plane.IsValid)
+        return false;
+
+      if (brep.Faces[0].OrientationIsReversed)
+        plane.Flip();
+
+      transform = Transform.PlaneToPlane(plane, Plane.WorldXY);
+      return transform.IsValid;
+    }
+
+    private static bool TryPerformRuledUvUnroll(
+      Brep sourceBrep,
+      IReadOnlyList<Curve> curves,
+      IReadOnlyList<Point> points,
+      IReadOnlyList<TextDot> dots,
+      double tolerance,
+      out Brep[] unrolledBreps,
+      out Curve[] unrolledCurves,
+      out Point3d[] unrolledPoints,
+      out TextDot[] unrolledDots,
+      out string details)
+    {
+      unrolledBreps = Array.Empty<Brep>();
+      unrolledCurves = Array.Empty<Curve>();
+      unrolledPoints = Array.Empty<Point3d>();
+      unrolledDots = Array.Empty<TextDot>();
+      details = string.Empty;
+
+      if (sourceBrep == null || sourceBrep.Faces.Count != 1)
+        return false;
+
+      var sourceFace = sourceBrep.Faces[0];
+      var sourceSurface = sourceFace.UnderlyingSurface().ToNurbsSurface();
+      if (sourceSurface == null ||
+          !TryFlattenRuledControlNet(sourceSurface, tolerance, out var flatSurface, out int linearDirection))
+        return false;
+
+      Brep? flatBrep = sourceBrep.IsSurface
+        ? Brep.CreateFromSurface(flatSurface)
+        : Brep.CreateTrimmedSurface(sourceFace, flatSurface, tolerance);
+      if (flatBrep == null || !flatBrep.IsValid || flatBrep.Faces.Count != 1)
+        return false;
+
+      if (flatBrep.Faces[0].OrientationIsReversed != sourceFace.OrientationIsReversed)
+        flatBrep.Flip();
+
+      var mappedCurves = new List<Curve>(curves.Count);
+      foreach (var curve in curves)
+      {
+        var uvCurve = sourceFace.Pullback(curve, tolerance);
+        if (uvCurve == null)
+          return false;
+        var mapped = flatSurface.Pushup(uvCurve, tolerance);
+        if (mapped == null || !mapped.IsValid)
+          return false;
+        mappedCurves.Add(mapped);
+      }
+
+      var mappedPoints = new List<Point3d>(points.Count);
+      foreach (var point in points)
+      {
+        if (!TryMapUvPoint(sourceFace, flatSurface, point.Location, out var mapped))
+          return false;
+        mappedPoints.Add(mapped);
+      }
+
+      var mappedDots = new List<TextDot>(dots.Count);
+      foreach (var dot in dots)
+      {
+        if (!TryMapUvPoint(sourceFace, flatSurface, dot.Point, out var mapped))
+          return false;
+        var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? string.Empty, mapped);
+        copy.Point = mapped;
+        mappedDots.Add(copy);
+      }
+
+      unrolledBreps = new[] { flatBrep };
+      unrolledCurves = mappedCurves.ToArray();
+      unrolledPoints = mappedPoints.ToArray();
+      unrolledDots = mappedDots.ToArray();
+      details = $"linear={(linearDirection == 0 ? "U" : "V")}" +
+                $" cvs={sourceSurface.Points.CountU}x{sourceSurface.Points.CountV}";
+      return true;
+    }
+
+    private static bool TryFlattenRuledControlNet(
+      NurbsSurface source,
+      double tolerance,
+      out NurbsSurface flat,
+      out int linearDirection)
+    {
+      flat = null!;
+      linearDirection = -1;
+
+      if (source.OrderU == 2 && source.Points.CountU == 2)
+        linearDirection = 0;
+      else if (source.OrderV == 2 && source.Points.CountV == 2)
+        linearDirection = 1;
+      else
+        return false;
+
+      int curvedCount = linearDirection == 0 ? source.Points.CountV : source.Points.CountU;
+      if (curvedCount < 2)
+        return false;
+
+      var sourcePoints = new Point3d[curvedCount, 2];
+      var weights = new double[curvedCount, 2];
+      for (int i = 0; i < curvedCount; i++)
+      {
+        for (int side = 0; side < 2; side++)
+        {
+          int u = linearDirection == 0 ? side : i;
+          int v = linearDirection == 0 ? i : side;
+          var controlPoint = source.Points.GetControlPoint(u, v);
+          sourcePoints[i, side] = controlPoint.Location;
+          weights[i, side] = controlPoint.Weight;
+          if (!sourcePoints[i, side].IsValid || !RhinoMath.IsValidDouble(weights[i, side]))
+            return false;
+        }
+      }
+
+      double firstWidth = sourcePoints[0, 0].DistanceTo(sourcePoints[0, 1]);
+      if (firstWidth <= Math.Max(tolerance, RhinoMath.ZeroTolerance))
+        return false;
+
+      var flatPoints = new Point2d[curvedCount, 2];
+      flatPoints[0, 0] = Point2d.Origin;
+      flatPoints[0, 1] = new Point2d(firstWidth, 0.0);
+
+      for (int i = 1; i < curvedCount; i++)
+      {
+        var previousA = flatPoints[i - 1, 0];
+        var previousB = flatPoints[i - 1, 1];
+        if (!TryCircleIntersections(
+              previousA,
+              sourcePoints[i - 1, 0].DistanceTo(sourcePoints[i, 0]),
+              previousB,
+              sourcePoints[i - 1, 1].DistanceTo(sourcePoints[i, 0]),
+              tolerance,
+              out var a0,
+              out var a1))
+          return false;
+
+        Point2d currentA;
+        if (i == 1)
+          currentA = linearDirection == 0
+            ? (a0.Y >= a1.Y ? a0 : a1)
+            : (a0.Y <= a1.Y ? a0 : a1);
+        else
+          currentA = NearestPoint(a0, a1, Extrapolate(flatPoints[i - 2, 0], previousA));
+        flatPoints[i, 0] = currentA;
+
+        if (!TryCircleIntersections(
+              currentA,
+              sourcePoints[i, 0].DistanceTo(sourcePoints[i, 1]),
+              previousB,
+              sourcePoints[i - 1, 1].DistanceTo(sourcePoints[i, 1]),
+              tolerance,
+              out var b0,
+              out var b1))
+          return false;
+
+        var translatedPrediction = Add(previousB, Subtract(currentA, previousA));
+        var prediction = i == 1
+          ? translatedPrediction
+          : Midpoint(translatedPrediction, Extrapolate(flatPoints[i - 2, 1], previousB));
+        flatPoints[i, 1] = NearestPoint(b0, b1, prediction);
+      }
+
+      flat = NurbsSurface.Create(
+        3,
+        source.IsRational,
+        source.OrderU,
+        source.OrderV,
+        source.Points.CountU,
+        source.Points.CountV);
+      if (flat == null)
+        return false;
+
+      for (int i = 0; i < source.KnotsU.Count; i++)
+        flat.KnotsU[i] = source.KnotsU[i];
+      for (int i = 0; i < source.KnotsV.Count; i++)
+        flat.KnotsV[i] = source.KnotsV[i];
+
+      for (int i = 0; i < curvedCount; i++)
+      {
+        for (int side = 0; side < 2; side++)
+        {
+          int u = linearDirection == 0 ? side : i;
+          int v = linearDirection == 0 ? i : side;
+          var point = flatPoints[i, side];
+          if (!flat.Points.SetControlPoint(
+                u, v, new ControlPoint(new Point3d(point.X, point.Y, 0.0), weights[i, side])))
+            return false;
+        }
+      }
+
+      return flat.IsValid;
+    }
+
+    private static bool TryMapUvPoint(
+      BrepFace sourceFace,
+      Surface flatSurface,
+      Point3d sourcePoint,
+      out Point3d mappedPoint)
+    {
+      mappedPoint = Point3d.Unset;
+      if (!sourceFace.ClosestPoint(sourcePoint, out double u, out double v))
+        return false;
+      mappedPoint = flatSurface.PointAt(u, v);
+      return mappedPoint.IsValid;
+    }
+
+    private static bool TryCircleIntersections(
+      Point2d center0,
+      double radius0,
+      Point2d center1,
+      double radius1,
+      double tolerance,
+      out Point2d point0,
+      out Point2d point1)
+    {
+      point0 = Point2d.Unset;
+      point1 = Point2d.Unset;
+      double dx = center1.X - center0.X;
+      double dy = center1.Y - center0.Y;
+      double distance = Math.Sqrt(dx * dx + dy * dy);
+      if (distance <= Math.Max(tolerance, RhinoMath.ZeroTolerance) || radius0 < 0.0 || radius1 < 0.0)
+        return false;
+
+      double along = (radius0 * radius0 - radius1 * radius1 + distance * distance) / (2.0 * distance);
+      double heightSquared = radius0 * radius0 - along * along;
+      double scale = Math.Max(Math.Max(radius0, radius1), distance);
+      if (heightSquared < -Math.Max(tolerance * tolerance, scale * scale * 1.0e-12))
+        return false;
+      double height = Math.Sqrt(Math.Max(0.0, heightSquared));
+      double ux = dx / distance;
+      double uy = dy / distance;
+      double baseX = center0.X + along * ux;
+      double baseY = center0.Y + along * uy;
+      point0 = new Point2d(baseX - height * uy, baseY + height * ux);
+      point1 = new Point2d(baseX + height * uy, baseY - height * ux);
+      return point0.IsValid && point1.IsValid;
+    }
+
+    private static Point2d NearestPoint(Point2d a, Point2d b, Point2d target)
+    {
+      return DistanceSquared(a, target) <= DistanceSquared(b, target) ? a : b;
+    }
+
+    private static double DistanceSquared(Point2d a, Point2d b)
+    {
+      double dx = a.X - b.X;
+      double dy = a.Y - b.Y;
+      return dx * dx + dy * dy;
+    }
+
+    private static Point2d Add(Point2d point, Vector2d vector)
+    {
+      return new Point2d(point.X + vector.X, point.Y + vector.Y);
+    }
+
+    private static Vector2d Subtract(Point2d a, Point2d b)
+    {
+      return new Vector2d(a.X - b.X, a.Y - b.Y);
+    }
+
+    private static Point2d Midpoint(Point2d a, Point2d b)
+    {
+      return new Point2d((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5);
+    }
+
+    private static Point2d Extrapolate(Point2d before, Point2d current)
+    {
+      return new Point2d(current.X * 2.0 - before.X, current.Y * 2.0 - before.Y);
+    }
+
+    private static Curve TransformCurveCopy(Curve curve, Transform transform)
+    {
+      var copy = curve.DuplicateCurve();
+      copy.Transform(transform);
+      return copy;
+    }
+
+    private static Point3d TransformPoint(Point3d point, Transform transform)
+    {
+      point.Transform(transform);
+      return point;
+    }
+
+    private static TextDot TransformTextDotCopy(TextDot dot, Transform transform)
+    {
+      var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? string.Empty, dot.Point);
+      copy.Transform(transform);
+      return copy;
+    }
+
     private static void TransformObjects(RhinoDoc doc, IEnumerable<Guid> ids, Transform transform)
     {
       foreach (var id in Unique(ids))
@@ -1541,19 +2062,229 @@ namespace vTools.Commands
       public double  MaxDist;
       public double  AvgDist;
       public bool    Reversed;
-      public bool    Full;        // length_ratio >= 0.90
+      public bool    Full;        // edge lengths are equal within matching tolerance
       public bool    ShortFirst;  // ea is the shorter curve
       public Point3d Point1;
       public Point3d Point2;
     }
 
     // ── Edge mate system ───────────────────────────────────────────────────────
+    private class ExistingEdgeMate
+    {
+      public string MateId = "";
+      public int PartNumber;
+      public int MatePartNumber;
+      public int? EdgeIndex;
+      public int? MateEdgeIndex;
+      public bool Reversed;
+      public uint RuntimeSerialNumber;
+    }
+
+    private static List<ExistingEdgeMate> ExistingEdgeMates(RhinoDoc doc)
+    {
+      var result = new List<ExistingEdgeMate>();
+      foreach (var obj in doc.Objects)
+      {
+        if (obj.Attributes.Name != EdgeMateName)
+          continue;
+
+        string mateId = obj.Attributes.GetUserString(EdgeMateIdKey) ?? "";
+        if (string.IsNullOrWhiteSpace(mateId) && obj.Geometry is TextDot dot)
+          mateId = dot.Text ?? "";
+        if (string.IsNullOrWhiteSpace(mateId) ||
+            !TryAttributeInt(obj.Attributes, EdgePartNumKey, out int partNumber) ||
+            !TryAttributeInt(obj.Attributes, EdgeMatePartNumKey, out int matePartNumber))
+          continue;
+
+        result.Add(new ExistingEdgeMate
+        {
+          MateId = mateId,
+          PartNumber = partNumber,
+          MatePartNumber = matePartNumber,
+          EdgeIndex = TryAttributeInt(obj.Attributes, EdgeIndexKey, out int edgeIndex) ? edgeIndex : (int?)null,
+          MateEdgeIndex = TryAttributeInt(obj.Attributes, MateEdgeIndexKey, out int mateEdgeIndex) ? mateEdgeIndex : (int?)null,
+          Reversed = string.Equals(obj.Attributes.GetUserString(EdgeMateReversedKey), "true", StringComparison.OrdinalIgnoreCase),
+          RuntimeSerialNumber = obj.RuntimeSerialNumber
+        });
+      }
+      return result;
+    }
+
+    private static bool TryAttributeInt(ObjectAttributes attributes, string key, out int value)
+    {
+      return int.TryParse(attributes.GetUserString(key), out value);
+    }
+
+    private static int MateSequence(string mateId)
+    {
+      if (mateId.StartsWith(EdgeMatePrefix, StringComparison.OrdinalIgnoreCase) &&
+          int.TryParse(mateId.Substring(EdgeMatePrefix.Length), out int sequence))
+        return sequence;
+      return 0;
+    }
+
+    private static string? ReusableMateId(
+      IEnumerable<ExistingEdgeMate> existing,
+      int partNumber,
+      int edgeIndex,
+      int matePartNumber,
+      int mateEdgeIndex,
+      HashSet<string> usedMateIds)
+    {
+      return existing
+        .Where(mate => !usedMateIds.Contains(mate.MateId) &&
+          ((mate.PartNumber == partNumber && mate.MatePartNumber == matePartNumber) ||
+           (mate.PartNumber == matePartNumber && mate.MatePartNumber == partNumber)))
+        .GroupBy(mate => mate.MateId, StringComparer.OrdinalIgnoreCase)
+        .Select(group => new
+        {
+          MateId = group.Key,
+          Exact = group.Any(mate =>
+            mate.PartNumber == partNumber && mate.MatePartNumber == matePartNumber &&
+            mate.EdgeIndex == edgeIndex && mate.MateEdgeIndex == mateEdgeIndex) ||
+            group.Any(mate =>
+              mate.PartNumber == matePartNumber && mate.MatePartNumber == partNumber &&
+              mate.EdgeIndex == mateEdgeIndex && mate.MateEdgeIndex == edgeIndex),
+          Serial = group.Max(mate => mate.RuntimeSerialNumber)
+        })
+        .OrderByDescending(candidate => candidate.Exact)
+        .ThenByDescending(candidate => candidate.Serial)
+        .ThenBy(candidate => MateSequence(candidate.MateId))
+        .Select(candidate => candidate.MateId)
+        .FirstOrDefault();
+    }
+
+    private static ExistingEdgeMate NormalizeMateForPart(ExistingEdgeMate mate, int partNumber)
+    {
+      if (mate.PartNumber == partNumber)
+        return mate;
+      return new ExistingEdgeMate
+      {
+        MateId = mate.MateId,
+        PartNumber = partNumber,
+        MatePartNumber = mate.PartNumber,
+        EdgeIndex = mate.MateEdgeIndex,
+        MateEdgeIndex = mate.EdgeIndex,
+        Reversed = !mate.Reversed,
+        RuntimeSerialNumber = mate.RuntimeSerialNumber
+      };
+    }
+
+    private static void RecoverExistingMatesFromUnselectedParts(
+      RhinoDoc doc,
+      IReadOnlyList<SourceSurface> sources,
+      IReadOnlyList<int> partNumbers,
+      IReadOnlyList<(int idx, Curve c)[]> allEdges,
+      IReadOnlyList<List<EdgeMateRecord>> result,
+      IReadOnlyList<ExistingEdgeMate> existingMates,
+      HashSet<string> usedMateIds,
+      double tolerance)
+    {
+      var selectedPartNumbers = new HashSet<int>(partNumbers);
+      var selectedIds = new HashSet<Guid>(sources.Select(source => source.Id));
+
+      for (int i = 0; i < sources.Count; i++)
+      {
+        int partNumber = partNumbers[i];
+        var priorMates = existingMates
+          .Where(mate => mate.PartNumber == partNumber || mate.MatePartNumber == partNumber)
+          .Select(mate => NormalizeMateForPart(mate, partNumber))
+          .GroupBy(mate => mate.MateId, StringComparer.OrdinalIgnoreCase)
+          .Select(group => group.OrderByDescending(mate => mate.RuntimeSerialNumber).First())
+          .OrderBy(mate => MateSequence(mate.MateId))
+          .ToList();
+
+        foreach (var priorMate in priorMates)
+        {
+          if (usedMateIds.Contains(priorMate.MateId) ||
+              selectedPartNumbers.Contains(priorMate.MatePartNumber))
+            continue;
+
+          var mateBrep = FindOriginalBrepForPart(doc, priorMate.MatePartNumber, selectedIds);
+          if (mateBrep == null)
+            continue;
+          var mateEdges = (mateBrep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
+            .Select((curve, index) => (idx: index, c: curve))
+            .Where(item => item.c != null && item.c.GetLength() > tolerance)
+            .ToArray();
+
+          (int edgeIndex, Curve edge, int mateEdgeIndex, EdgePairResult score)? best = null;
+          foreach (var sourceEdge in allEdges[i])
+          {
+            if (priorMate.EdgeIndex.HasValue && priorMate.EdgeIndex.Value != sourceEdge.idx)
+              continue;
+            foreach (var mateEdge in mateEdges)
+            {
+              if (priorMate.MateEdgeIndex.HasValue && priorMate.MateEdgeIndex.Value != mateEdge.idx)
+                continue;
+              var score = TestEdgePair(sourceEdge.c, mateEdge.c, tolerance);
+              if (score == null)
+                continue;
+              if (!best.HasValue || score.MaxDist < best.Value.score.MaxDist ||
+                  (Math.Abs(score.MaxDist - best.Value.score.MaxDist) <= RhinoMath.ZeroTolerance &&
+                   score.AvgDist < best.Value.score.AvgDist))
+                best = (sourceEdge.idx, sourceEdge.c, mateEdge.idx, score);
+            }
+          }
+
+          if (!best.HasValue)
+            continue;
+
+          result[i].Add(new EdgeMateRecord
+          {
+            MateId = priorMate.MateId,
+            EdgeIndex = best.Value.edgeIndex,
+            Curve = best.Value.edge,
+            Marker = best.Value.score.Point1,
+            MatePartIndex = -priorMate.MatePartNumber - 1,
+            MatePartNumber = priorMate.MatePartNumber,
+            MateEdgeIndex = best.Value.mateEdgeIndex,
+            Reversed = best.Value.score.Reversed
+          });
+          usedMateIds.Add(priorMate.MateId);
+          Dbg($"edge_mate reuse id={priorMate.MateId} part={partNumber}" +
+              $" edge={best.Value.edgeIndex} mate_part={priorMate.MatePartNumber}" +
+              $" mate_edge={best.Value.mateEdgeIndex}");
+        }
+      }
+    }
+
+    private static Brep? FindOriginalBrepForPart(
+      RhinoDoc doc, int partNumber, HashSet<Guid> excludedIds)
+    {
+      foreach (var obj in doc.Objects)
+      {
+        if (excludedIds.Contains(obj.Id) || PartNumberOf(obj) != partNumber ||
+            !IsSurfaceLike(obj.ObjectType))
+          continue;
+
+        bool inOriginalGroup = (obj.Attributes.GetGroupList() ?? Array.Empty<int>())
+          .Select(groupIndex => doc.Groups.FindIndex(groupIndex))
+          .Any(group => group != null && !group.IsDeleted &&
+                        GroupNameMatches(group.Name, OriginalGroupPrefix, partNumber));
+        if (!inOriginalGroup)
+          continue;
+
+        var brep = BrepFromGeometry(obj.Geometry);
+        if (brep != null)
+          return brep;
+      }
+      return null;
+    }
+
     private static List<List<EdgeMateRecord>> BuildEdgeMates(
-      List<SourceSurface> sources, double tol)
+      RhinoDoc doc, List<SourceSurface> sources, IReadOnlyList<int> partNumbers, double tol)
     {
       var result = new List<List<EdgeMateRecord>>(sources.Count);
       for (int i = 0; i < sources.Count; i++)
         result.Add(new List<EdgeMateRecord>());
+
+      var existingMates = ExistingEdgeMates(doc);
+      var usedMateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      int nextMateSequence = existingMates
+        .Select(mate => MateSequence(mate.MateId))
+        .DefaultIfEmpty(0)
+        .Max() + 1;
 
       // Collect naked edges per source, filtering out degenerate ones
       var allEdges = sources
@@ -1583,8 +2314,6 @@ namespace vTools.Commands
 
       var usedFull  = new HashSet<(int, int)>();
       var usedShort = new HashSet<(int, int)>();
-      int counter = 0;
-
       foreach (var (_, __, i, ei, j, ej, score) in candidates)
       {
         var key1     = (i, ei);
@@ -1604,10 +2333,12 @@ namespace vTools.Commands
           usedShort.Add(shortKey);
         }
 
-        counter++;
-        string mateId = $"{EdgeMatePrefix}{counter:D2}";
-        Dbg($"edge_mate choose id={mateId} part={i + 1} edge={ei}" +
-            $" mate_part={j + 1} mate_edge={ej} max={score.MaxDist:G6}" +
+        string? mateId = ReusableMateId(
+          existingMates, partNumbers[i], ei, partNumbers[j], ej, usedMateIds);
+        mateId ??= $"{EdgeMatePrefix}{nextMateSequence++:D2}";
+        usedMateIds.Add(mateId);
+        Dbg($"edge_mate choose id={mateId} part={partNumbers[i]} edge={ei}" +
+            $" mate_part={partNumbers[j]} mate_edge={ej} max={score.MaxDist:G6}" +
             $" avg={score.AvgDist:G6} full={score.Full} reversed={score.Reversed}" +
             $" point1={P(score.Point1)} point2={P(score.Point2)}");
         var edgeCi = allEdges[i].First(x => x.idx == ei).c;
@@ -1615,14 +2346,17 @@ namespace vTools.Commands
         result[i].Add(new EdgeMateRecord
         {
           MateId = mateId, EdgeIndex = ei, Curve = edgeCi, Marker = score.Point1,
-          MatePartIndex = j, MatePartNumber = j + 1, MateEdgeIndex = ej, Reversed = score.Reversed
+          MatePartIndex = j, MatePartNumber = partNumbers[j], MateEdgeIndex = ej, Reversed = score.Reversed
         });
         result[j].Add(new EdgeMateRecord
         {
           MateId = mateId, EdgeIndex = ej, Curve = edgeCj, Marker = score.Point2,
-          MatePartIndex = i, MatePartNumber = i + 1, MateEdgeIndex = ei, Reversed = !score.Reversed
+          MatePartIndex = i, MatePartNumber = partNumbers[i], MateEdgeIndex = ei, Reversed = !score.Reversed
         });
       }
+
+      RecoverExistingMatesFromUnselectedParts(
+        doc, sources, partNumbers, allEdges, result, existingMates, usedMateIds, tol);
       return result;
     }
 
@@ -1641,10 +2375,10 @@ namespace vTools.Commands
       var    longCrv    = shortFirst ? eb : ea;
       double shortLen   = Math.Min(lenA, lenB);
       double longLen    = Math.Max(lenA, lenB);
-      double ratio      = shortLen / longLen;
 
       double matchTol = Math.Max(absTol * EdgeMateTolFactor,
                                  Math.Max(longLen, shortLen) * EdgeMateDiagFactor);
+      bool full = Math.Abs(longLen - shortLen) <= matchTol * 2.0;
 
       var distances = new List<double>(EdgeMateSamples * 2);
 
@@ -1656,7 +2390,7 @@ namespace vTools.Commands
         distances.Add(p.DistanceTo(longCrv.PointAt(tl)));
       }
       // For full-length pairs, also sample LONG → project onto SHORT
-      if (ratio >= 0.90)
+      if (full)
       {
         for (int k = 0; k < EdgeMateSamples; k++)
         {
@@ -1696,7 +2430,7 @@ namespace vTools.Commands
       return new EdgePairResult
       {
         MaxDist = maxD, AvgDist = avgD, Reversed = reversed,
-        Full = ratio >= 0.90, ShortFirst = shortFirst,
+        Full = full, ShortFirst = shortFirst,
         Point1 = pt1, Point2 = pt2
       };
     }
@@ -1730,6 +2464,8 @@ namespace vTools.Commands
       attr.SetUserString(EdgePartNumKey,      partNumber.ToString());
       attr.SetUserString(EdgeMatePartNumKey,  rec.MatePartNumber.ToString());
       attr.SetUserString(EdgeMateReversedKey, rec.Reversed ? "true" : "false");
+      attr.SetUserString(EdgeIndexKey,         rec.EdgeIndex.ToString());
+      attr.SetUserString(MateEdgeIndexKey,     rec.MateEdgeIndex.ToString());
       return doc.Objects.AddTextDot(dot, attr);
     }
 
@@ -1750,12 +2486,26 @@ namespace vTools.Commands
       public Guid Id { get; }
       public GeometryBase Geometry { get; }
       public Brep Brep { get; }
+      public int? PreferredPartNumber { get; }
 
-      public SourceSurface(Guid id, GeometryBase geometry, Brep brep)
+      public SourceSurface(Guid id, GeometryBase geometry, Brep brep, int? preferredPartNumber)
       {
         Id = id;
         Geometry = geometry;
         Brep = brep;
+        PreferredPartNumber = preferredPartNumber;
+      }
+    }
+
+    private class PriorFlatOutput
+    {
+      public int GroupIndex { get; }
+      public HashSet<Guid> MemberIds { get; }
+
+      public PriorFlatOutput(int groupIndex, IEnumerable<Guid> memberIds)
+      {
+        GroupIndex = groupIndex;
+        MemberIds = new HashSet<Guid>(memberIds);
       }
     }
 

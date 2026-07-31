@@ -52,6 +52,9 @@
     "extendWithLine": false,
     "mode": 0
   },
+  "vJoin": {
+    "copy": true
+  },
   "vMatch": {
     "distance": 2.0,
     "randStart": false,

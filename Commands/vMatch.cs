@@ -74,12 +74,14 @@ namespace vTools.Commands
 
     private sealed class MateEdge
     {
+      public int GroupIndex { get; }
       public Curve Curve { get; }
       public Point3d[] Samples { get; }
       public List<Dot> Dots { get; } = new List<Dot>();
 
-      public MateEdge(Curve curve)
+      public MateEdge(int groupIndex, Curve curve)
       {
+        GroupIndex = groupIndex;
         Curve = curve;
         Samples = CurveScreenSamples(curve);
       }
@@ -248,13 +250,13 @@ namespace vTools.Commands
 
       var undoMoves = new Stack<MatchMove>();
       var redoMoves = new Stack<MatchMove>();
+      var mateEdges = BuildMateEdges(doc, dots);
       _activeHistoryDocument = doc;
       using var shortcutSession = new MatchShortcutSession();
       try
       {
         while (true)
         {
-          var mateEdges = BuildMateEdges(doc, dots);
           var gp = new MateEdgePicker(doc, dots, mateEdges);
           gp.EnableTransparentCommands(true);
           gp.SetCommandPrompt("Click a highlighted edge to match its part");
@@ -276,15 +278,21 @@ namespace vTools.Commands
           if (res == GetResult.CustomMessage &&
               gp.CustomMessage() is MatchHistoryRequest historyRequest)
           {
-            ApplyMatchHistory(doc, undoMoves, redoMoves, historyRequest.Redo);
-            dots = ScanDots(doc);
+            if (ApplyMatchHistory(doc, undoMoves, redoMoves, historyRequest.Redo, out int changedGroup))
+            {
+              dots = ScanDots(doc);
+              RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+            }
             continue;
           }
 
           if (res == GetResult.Undo)
           {
-            ApplyMatchHistory(doc, undoMoves, redoMoves, false);
-            dots = ScanDots(doc);
+            if (ApplyMatchHistory(doc, undoMoves, redoMoves, false, out int changedGroup))
+            {
+              dots = ScanDots(doc);
+              RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+            }
             continue;
           }
 
@@ -302,13 +310,17 @@ namespace vTools.Commands
             var opt = gp.Option();
             if (opt != null && opt.Index == idxRedo)
             {
-              ApplyMatchHistory(doc, undoMoves, redoMoves, true);
-              dots = ScanDots(doc);
+              if (ApplyMatchHistory(doc, undoMoves, redoMoves, true, out int changedGroup))
+              {
+                dots = ScanDots(doc);
+                RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+              }
               continue;
             }
             if (opt != null && opt.Index == idxAuto)
             {
               dots = AutoAlign(doc, dots, _distance);
+              mateEdges = BuildMateEdges(doc, dots);
               undoMoves.Clear();
               redoMoves.Clear();
               continue;
@@ -359,6 +371,7 @@ namespace vTools.Commands
           undoMoves.Push(move);
           redoMoves.Clear();
           dots = ScanDots(doc);
+          RefreshMateEdges(doc, dots, mateEdges, mateGrp);
         }
       }
       finally
@@ -374,8 +387,10 @@ namespace vTools.Commands
       RhinoDoc doc,
       Stack<MatchMove> undoMoves,
       Stack<MatchMove> redoMoves,
-      bool redo)
+      bool redo,
+      out int changedGroup)
     {
+      changedGroup = -1;
       var source = redo ? redoMoves : undoMoves;
       var destination = redo ? undoMoves : redoMoves;
       if (!source.TryPop(out var move))
@@ -388,6 +403,8 @@ namespace vTools.Commands
       }
 
       destination.Push(move);
+      if (move.ObjectIds.Count > 0)
+        changedGroup = GrpOf(doc, move.ObjectIds[0]);
       return true;
     }
 
@@ -646,7 +663,10 @@ namespace vTools.Commands
       return result;
     }
 
-    private static List<MateEdge> BuildMateEdges(RhinoDoc doc, IReadOnlyList<Dot> dots)
+    private static List<MateEdge> BuildMateEdges(
+      RhinoDoc doc,
+      IReadOnlyList<Dot> dots,
+      ISet<int>? groupFilter = null)
     {
       var validDots = dots
         .Where(dot => dots.Any(other =>
@@ -658,11 +678,11 @@ namespace vTools.Commands
 
       foreach (var group in validDots.GroupBy(dot => GrpOf(doc, dot.Id)))
       {
-        if (group.Key < 0)
+        if (group.Key < 0 || (groupFilter != null && !groupFilter.Contains(group.Key)))
           continue;
 
         var edges = NakedEdges(doc, ObjsInGrp(doc, group.Key))
-          .Select(curve => new MateEdge(curve))
+          .Select(curve => new MateEdge(group.Key, curve))
           .Where(edge => edge.Samples.Length >= 2)
           .ToList();
 
@@ -690,6 +710,19 @@ namespace vTools.Commands
       }
 
       return result;
+    }
+
+    private static void RefreshMateEdges(
+      RhinoDoc doc,
+      IReadOnlyList<Dot> dots,
+      List<MateEdge> mateEdges,
+      int groupIndex)
+    {
+      if (groupIndex < 0)
+        return;
+
+      mateEdges.RemoveAll(edge => edge.GroupIndex == groupIndex);
+      mateEdges.AddRange(BuildMateEdges(doc, dots, new HashSet<int> { groupIndex }));
     }
 
     private static Point3d[] CurveScreenSamples(Curve curve)
@@ -865,14 +898,9 @@ namespace vTools.Commands
 
     private static List<Guid> ObjsInGrp(RhinoDoc doc, int grpIdx)
     {
-      var ids = new List<Guid>();
-      foreach (var obj in doc.Objects)
-      {
-        var grps = obj.Attributes.GetGroupList();
-        if (grps != null && Array.IndexOf(grps, grpIdx) >= 0)
-          ids.Add(obj.Id);
-      }
-      return ids;
+      return (doc.Groups.GroupMembers(grpIdx) ?? Array.Empty<RhinoObject>())
+        .Select(obj => obj.Id)
+        .ToList();
     }
 
     private static List<Curve> NakedEdges(RhinoDoc doc, IEnumerable<Guid> ids)

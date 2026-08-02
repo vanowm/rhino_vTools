@@ -28,6 +28,8 @@ public sealed class vLine : Command
 
   private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" };
   private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" };
+  private static readonly Color SourceFeedbackColor = Color.Orange;
+  private static readonly Color HoverFeedbackColor = Color.Orange;
 
   private const int ModeSingle = 0;
   private const int ModeMultiple = 1;
@@ -48,9 +50,6 @@ public sealed class vLine : Command
   private static bool _angleRelative;
   private static string _layer = CurrentLayerOption;
 
-  private static string? _pendingNativeLineMode;
-  private static EventHandler? _pendingNativeLineLaunchIdleHandler;
-
   private static bool _debugMode = false;
 
   /// <summary>
@@ -63,23 +62,19 @@ public sealed class vLine : Command
   /// </summary>
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    if (_pendingNativeLineLaunchIdleHandler != null)
-    {
-      RhinoApp.Idle -= _pendingNativeLineLaunchIdleHandler;
-      _pendingNativeLineLaunchIdleHandler = null;
-    }
-    _pendingNativeLineMode = null;
+    Log.Write("vLine", "begin");
     LoadPersistedOptions();
     var layerSession = new LineLayerSession(doc, _layer);
 
     var startResult = ResolveFirstPoint(
       doc, layerSession, initialBothSides: false, initialChainMode: _chainMode, mode);
     _chainMode = startResult.ChainMode;
-    if (startResult.DelegatedToNative)
-    {
-      LaunchNativeLineMode();
+    Log.Write("vLine",
+      $"start hasPoint={startResult.HasPoint} completed={startResult.Completed} " +
+      $"constraint={startResult.Constraint?.Kind.ToString() ?? "none"} " +
+      $"direction={startResult.Direction.HasValue}");
+    if (startResult.Completed)
       return Result.Success;
-    }
     if (!startResult.HasPoint)
     {
       SavePersistedOptions();
@@ -87,6 +82,8 @@ public sealed class vLine : Command
     }
 
     var currentStart = startResult.Point;
+    var startConstraintState = startResult.Constraint;
+    var startDirectionState = startResult.Direction;
     var firstSegment = true;
     var chainModeState = startResult.ChainMode;
     var initialBothSides = startResult.BothSides;
@@ -127,6 +124,9 @@ public sealed class vLine : Command
         angleState,
         angleRelativeState,
         lastSegmentVector,
+        startConstraintState,
+        startDirectionState,
+        false,
         layerSession,
         mode,
         canUndo,
@@ -207,19 +207,26 @@ public sealed class vLine : Command
       }
 
       var endPoint = secondResult.Point;
+      var segmentStart = secondResult.StartPoint;
       var bothSides = secondResult.BothSides;
       var selectedChainMode = secondResult.ChainMode;
 
       if (selectedChainMode == ModePolyline)
       {
         redoStack.Clear();
-        polylinePoints ??= new List<Point3d> { currentStart };
+        polylinePoints ??= new List<Point3d> { segmentStart };
         var prevPoints = new List<Point3d>(polylinePoints);
         polylinePoints.Add(endPoint);
 
         DeleteObjectIfValid(doc, tempPolylineId);
         tempPolylineId = doc.Objects.AddPolyline(
           new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
+        if (tempPolylineId == Guid.Empty)
+        {
+          Log.Write("vLine", "failed to add polyline");
+          RhinoApp.WriteLine("vLine: failed to add the polyline to the document.");
+          return Result.Failure;
+        }
 
         if (polylinePoints.Count >= 2)
           lastSegmentVector = polylinePoints[^1] - polylinePoints[^2];
@@ -235,24 +242,47 @@ public sealed class vLine : Command
         Guid lineId;
         if (bothSides)
         {
-          var vec = endPoint - currentStart;
+          var vec = endPoint - segmentStart;
           if (vec.IsTiny())
             return Result.Cancel;
 
-          var startA = currentStart - vec;
-          var startB = currentStart + vec;
+          var startA = segmentStart - vec;
+          var startB = segmentStart + vec;
           lineId = doc.Objects.AddLine(
             startA, startB, layerSession.CreateAttributes(doc));
         }
         else
         {
           lineId = doc.Objects.AddLine(
-            currentStart, endPoint, layerSession.CreateAttributes(doc));
+            segmentStart, endPoint, layerSession.CreateAttributes(doc));
         }
 
-        lastSegmentVector = endPoint - currentStart;
+        if (lineId == Guid.Empty)
+        {
+          Log.Write("vLine", "failed to add line");
+          RhinoApp.WriteLine("vLine: failed to add the line to the document.");
+          return Result.Failure;
+        }
+
+        var addedLine = doc.Objects.FindId(lineId);
+        var addedLayer = addedLine != null && IsUsableLayer(doc, addedLine.Attributes.LayerIndex)
+          ? doc.Layers[addedLine.Attributes.LayerIndex]
+          : null;
+        Log.Write(
+          "vLine",
+          $"added line id={lineId} visible={addedLine?.Visible.ToString() ?? "unknown"} " +
+          $"layer={addedLayer?.FullPath ?? "unknown"} " +
+          $"layerVisible={addedLayer?.IsVisible.ToString() ?? "unknown"} " +
+          $"layerLocked={addedLayer?.IsLocked.ToString() ?? "unknown"}");
+        if (addedLine?.Visible == false)
+        {
+          RhinoApp.WriteLine(
+            $"vLine: line created on hidden layer \"{addedLayer?.FullPath ?? "unknown"}\".");
+        }
+        lastSegmentVector = endPoint - segmentStart;
       }
 
+      doc.Views.Redraw();
       firstSegment = false;
 
       if (selectedChainMode == ModeMultiple)
@@ -262,11 +292,8 @@ public sealed class vLine : Command
           var newStartResult = ResolveFirstPoint(
             doc, layerSession, initialBothSides, selectedChainMode, mode);
 
-          if (newStartResult.DelegatedToNative)
-          {
-            LaunchNativeLineMode();
+          if (newStartResult.Completed)
             return Result.Success;
-          }
 
           if (!newStartResult.HasPoint)
           {
@@ -275,6 +302,8 @@ public sealed class vLine : Command
           }
 
           currentStart = newStartResult.Point;
+          startConstraintState = newStartResult.Constraint;
+          startDirectionState = newStartResult.Direction;
           chainModeState = newStartResult.ChainMode;
           firstSegment = true;
           lastSegmentVector = null;
@@ -287,6 +316,8 @@ public sealed class vLine : Command
       }
 
       currentStart = endPoint;
+      startConstraintState = null;
+      startDirectionState = null;
       chainModeState = selectedChainMode;
       if (!persistConstraintState)
         constraintModeState = null;
@@ -416,19 +447,20 @@ public sealed class vLine : Command
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
-    getPoint.SetCommandPrompt("Start of line");
     getPoint.AcceptNothing(true);
+    getPoint.DynamicDraw += (_, e) =>
+      DrawHiddenLayerWarning(e, doc, layerSession);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
     var chainModeIndex = ClampIndex(initialChainMode, ChainModeValues.Length);
 
     while (true)
     {
+      getPoint.SetCommandPrompt(
+        layerSession.DecoratePrompt(doc, "Start of line"));
       getPoint.ClearCommandOptions();
       var chainModeOptionIndex = getPoint.AddOptionList(
         "Mode", ChainModeValues, chainModeIndex);
       getPoint.AddOptionToggle("BothSides", ref bothSides);
-      var layerOptionIndex = getPoint.AddOption(
-        "Layer", layerSession.OptionLayerName);
 
       var idxNormal = getPoint.AddOption("Normal");
       var idxAngled = getPoint.AddOption("Angled");
@@ -439,18 +471,9 @@ public sealed class vLine : Command
       var idxTangent = getPoint.AddOption("Tangent");
       var idxBiTangent = getPoint.AddOption("BiTangent");
       var idxExtension = getPoint.AddOption("Extension");
-
-      var delegatedModes = new Dictionary<int, string>
-      {
-        [idxNormal] = "Normal",
-        [idxAngled] = "Angled",
-        [idxVertical] = "Vertical",
-        [idxFourPoint] = "FourPoint",
-        [idxBisector] = "Bisector",
-        [idxPerp] = "Perpendicular",
-        [idxTangent] = "Tangent",
-        [idxExtension] = "Extension"
-      };
+      var idxParallel = getPoint.AddOption("Parallel");
+      var layerOptionIndex = getPoint.AddOption(
+        "Layer", layerSession.OptionLayerName);
 
       var result = getPoint.Get();
       layerSession.ObserveCurrentLayer(doc);
@@ -480,14 +503,70 @@ public sealed class vLine : Command
         {
           _chainMode = chainModeIndex;
           return RunBiTangent(doc, layerSession)
-            ? FirstPointResult.Delegated(bothSides.CurrentValue, chainModeIndex)
+            ? FirstPointResult.CompletedResult(bothSides.CurrentValue, chainModeIndex)
             : FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
         }
 
-        if (delegatedModes.TryGetValue(option.Index, out var modeKeyword))
+        if (option.Index == idxPerp || option.Index == idxTangent)
         {
-          _pendingNativeLineMode = modeKeyword;
-          return FirstPointResult.Delegated(bothSides.CurrentValue, chainModeIndex);
+          var constraintKind = option.Index == idxPerp
+            ? EndpointConstraintKind.Perpendicular
+            : EndpointConstraintKind.Tangent;
+          var picked = PickCurveWithPoint(
+            constraintKind == EndpointConstraintKind.Perpendicular
+              ? "Select curve near perpendicular start"
+              : "Select curve near tangent start",
+            layerSession,
+            constraintKind);
+          if (picked == null)
+            return FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
+
+          var curve = picked.Value.Curve;
+          var hintPoint = picked.Value.PickPoint;
+          if (!curve.ClosestPoint(hintPoint, out var seedParameter))
+            seedParameter = curve.Domain.Mid;
+
+          Log.Write(
+            "vLine",
+            $"selected {constraintKind} start hint={hintPoint} seed={seedParameter:R}");
+
+          _chainMode = chainModeIndex;
+          return FirstPointResult.WithConstraint(
+            curve.PointAt(seedParameter),
+            bothSides.CurrentValue,
+            chainModeIndex,
+            new EndpointConstraint(
+              curve,
+              seedParameter,
+              hintPoint,
+              constraintKind,
+              picked.Value.ObjectId,
+              picked.Value.ComponentIndex));
+        }
+
+        string? directionMode = null;
+        if (option.Index == idxNormal) directionMode = "Normal";
+        else if (option.Index == idxAngled) directionMode = "Angled";
+        else if (option.Index == idxVertical) directionMode = "Vertical";
+        else if (option.Index == idxFourPoint) directionMode = "FourPoint";
+        else if (option.Index == idxBisector) directionMode = "Bisector";
+        else if (option.Index == idxExtension) directionMode = "Extension";
+        else if (option.Index == idxParallel) directionMode = "Parallel";
+
+        if (directionMode != null)
+        {
+          if (!TryGetStartDirectionDefinition(doc, directionMode, out var origin, out var direction))
+            return FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
+
+          Log.Write(
+            "vLine",
+            $"start direction mode={directionMode} origin={origin} direction={direction}");
+          _chainMode = chainModeIndex;
+          return FirstPointResult.WithDirection(
+            origin,
+            direction,
+            bothSides.CurrentValue,
+            chainModeIndex);
         }
 
         if (option.Index == chainModeOptionIndex)
@@ -504,6 +583,257 @@ public sealed class vLine : Command
     }
   }
 
+  private static bool TryGetStartDirectionDefinition(
+    RhinoDoc doc,
+    string modeName,
+    out Point3d origin,
+    out Vector3d direction)
+  {
+    origin = Point3d.Unset;
+    direction = Vector3d.Unset;
+    var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+
+    switch (modeName)
+    {
+      case "Normal":
+        return TryPickNormalDefinition(doc, cplane, out origin, out direction);
+
+      case "Angled":
+      {
+        if (!TryGetPoint("Start of reference line", null, out var referenceStart) ||
+            !TryGetPoint("End of reference line", referenceStart, out var referenceEnd))
+          return false;
+
+        var reference = referenceEnd - referenceStart;
+        if (reference.IsTiny())
+          return false;
+
+        var angle = _angle;
+        if (RhinoGet.GetNumber("Angle", true, ref angle) != Result.Success)
+          return false;
+        _angle = angle;
+        SavePersistedOptions();
+
+        direction = reference;
+        direction.Transform(Transform.Rotation(
+          RhinoMath.ToRadians(angle),
+          cplane.ZAxis,
+          Point3d.Origin));
+        origin = referenceStart;
+        break;
+      }
+
+      case "Vertical":
+        if (!TryGetPoint("Start of vertical line", null, out origin))
+          return false;
+        direction = cplane.ZAxis;
+        break;
+
+      case "FourPoint":
+      {
+        if (!TryGetPoint("Start of reference direction", null, out var referenceStart) ||
+            !TryGetPoint("End of reference direction", referenceStart, out var referenceEnd) ||
+            !TryGetPoint("Start of line", null, out origin))
+          return false;
+        direction = referenceEnd - referenceStart;
+        break;
+      }
+
+      case "Parallel":
+      {
+        if (!TryGetPoint("Start of reference direction", null, out var referenceStart) ||
+            !TryGetPoint("End of reference direction", referenceStart, out var referenceEnd) ||
+            !TryGetPoint("Start of line", null, out origin))
+          return false;
+        direction = referenceEnd - referenceStart;
+        break;
+      }
+
+      case "Bisector":
+      {
+        if (!TryGetPoint("Start of bisector line", null, out origin) ||
+            !TryGetPoint("First side of angle", origin, out var firstSide) ||
+            !TryGetPoint("Second side of angle", origin, out var secondSide))
+          return false;
+
+        var first = firstSide - origin;
+        var second = secondSide - origin;
+        if (!first.Unitize() || !second.Unitize())
+          return false;
+        direction = first + second;
+        if (direction.IsTiny())
+        {
+          RhinoApp.WriteLine("vLine: the selected angle has no stable bisector.");
+          return false;
+        }
+        break;
+      }
+
+      case "Extension":
+        return TryPickExtensionDefinition(out origin, out direction);
+
+      default:
+        return false;
+    }
+
+    if (!direction.Unitize())
+      return false;
+    return origin.IsValid;
+  }
+
+  private static bool TryGetPoint(
+    string prompt,
+    Point3d? basePoint,
+    out Point3d point)
+  {
+    point = Point3d.Unset;
+    var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
+    getPoint.SetCommandPrompt(prompt);
+    if (basePoint.HasValue)
+    {
+      getPoint.SetBasePoint(basePoint.Value, true);
+      getPoint.DrawLineFromPoint(basePoint.Value, true);
+    }
+
+    if (getPoint.Get() != GetResult.Point)
+      return false;
+    point = getPoint.Point();
+    return point.IsValid;
+  }
+
+  private static bool TryPickNormalDefinition(
+    RhinoDoc doc,
+    Plane cplane,
+    out Point3d origin,
+    out Vector3d direction)
+  {
+    origin = Point3d.Unset;
+    direction = Vector3d.Unset;
+    var picked = PickGeometryWithPoint(
+      "Select curve or surface near normal origin",
+      ObjectType.Curve | ObjectType.Surface | ObjectType.Brep,
+      subObjects: true);
+    if (!picked.HasValue)
+      return false;
+
+    using var pickedGeometry = picked.Value.Geometry;
+    var selectionPoint = picked.Value.PickPoint;
+    var curve = pickedGeometry as Curve;
+    if (curve != null)
+    {
+      if (!curve.ClosestPoint(selectionPoint, out var t))
+        return false;
+      origin = curve.PointAt(t);
+      var tangent = curve.TangentAt(t);
+      direction = Vector3d.CrossProduct(cplane.ZAxis, tangent);
+      return direction.Unitize();
+    }
+
+    var surface = pickedGeometry as Surface;
+    if (surface == null && pickedGeometry is Brep brep && brep.Faces.Count == 1)
+      surface = brep.Faces[0];
+    if (surface == null)
+      return false;
+
+    if (!surface.ClosestPoint(selectionPoint, out var u, out var v))
+      return false;
+
+    origin = surface.PointAt(u, v);
+    direction = surface.NormalAt(u, v);
+    if (!direction.Unitize())
+      return false;
+
+    var viewDirection = doc.Views.ActiveView?.ActiveViewport.CameraDirection ?? Vector3d.Unset;
+    if (viewDirection.IsValid && direction * viewDirection > 0.0)
+      direction = -direction;
+    return true;
+  }
+
+  private static bool TryPickExtensionDefinition(
+    out Point3d origin,
+    out Vector3d direction)
+  {
+    origin = Point3d.Unset;
+    direction = Vector3d.Unset;
+    var picked = PickCurveWithPoint("Select curve near end to extend");
+    if (picked == null || picked.Value.Curve.IsClosed)
+      return false;
+
+    var curve = picked.Value.Curve;
+    var pickPoint = picked.Value.PickPoint;
+    var useStart = pickPoint.DistanceToSquared(curve.PointAtStart) <=
+                   pickPoint.DistanceToSquared(curve.PointAtEnd);
+    origin = useStart ? curve.PointAtStart : curve.PointAtEnd;
+    direction = useStart ? -curve.TangentAtStart : curve.TangentAtEnd;
+    return direction.Unitize();
+  }
+
+  private static bool TryGetEndDirectionDefinition(
+    RhinoDoc doc,
+    string modeName,
+    Point3d lineStart,
+    out Vector3d direction)
+  {
+    direction = Vector3d.Unset;
+    var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+
+    switch (modeName)
+    {
+      case "Angled":
+      {
+        if (!TryGetPoint("Start of reference line", null, out var referenceStart) ||
+            !TryGetPoint("End of reference line", referenceStart, out var referenceEnd))
+          return false;
+        direction = referenceEnd - referenceStart;
+        if (direction.IsTiny())
+          return false;
+
+        var angle = _angle;
+        if (RhinoGet.GetNumber("Angle", true, ref angle) != Result.Success)
+          return false;
+        _angle = angle;
+        SavePersistedOptions();
+        direction.Transform(Transform.Rotation(
+          RhinoMath.ToRadians(angle),
+          cplane.ZAxis,
+          Point3d.Origin));
+        break;
+      }
+
+      case "Vertical":
+        direction = cplane.ZAxis;
+        break;
+
+      case "FourPoint":
+      {
+        if (!TryGetPoint("Start of reference direction", null, out var referenceStart) ||
+            !TryGetPoint("End of reference direction", referenceStart, out var referenceEnd))
+          return false;
+        direction = referenceEnd - referenceStart;
+        break;
+      }
+
+      case "Bisector":
+      {
+        if (!TryGetPoint("First side of angle", lineStart, out var firstSide) ||
+            !TryGetPoint("Second side of angle", lineStart, out var secondSide))
+          return false;
+        var first = firstSide - lineStart;
+        var second = secondSide - lineStart;
+        if (!first.Unitize() || !second.Unitize())
+          return false;
+        direction = first + second;
+        break;
+      }
+
+      default:
+        return false;
+    }
+
+    return direction.Unitize();
+  }
+
   private static SecondPointResult ResolveSecondPoint(
     RhinoDoc doc,
     Point3d startPoint,
@@ -517,6 +847,9 @@ public sealed class vLine : Command
     double initialAngle,
     bool initialAngleRelative,
     Vector3d? referenceVector,
+    EndpointConstraint? startConstraint,
+    Vector3d? startDirection,
+    bool initialFromFirstPoint,
     LineLayerSession layerSession,
     RunMode runMode,
     bool canUndo = false,
@@ -542,37 +875,142 @@ public sealed class vLine : Command
     if (canRedo) getPoint.AcceptString(true);
 
     var mode = initialMode;
-    Vector3d? parallelDir = null;
-    Curve? perpLockedCurve = null;
-    Vector3d? perpLockedDir = null;
+    var fromFirstPoint = initialFromFirstPoint;
+    Vector3d? parallelDir = startDirection;
     GeometryBase? projectToGeometry = null;
+    EndAnchor? endAnchor = null;
+    EndpointConstraint? activeEndConstraint = null;
+    string? lastPreviewException = null;
 
     var cacheState = new CurveCacheState(CollectCurveCache(doc), DateTime.UtcNow.AddMilliseconds(500));
     string? lastAutoChoice = null;
     var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+    ScreenCurvePick? hoveredConstraintPick = null;
+    System.Drawing.Point constraintHoverHitWindow = System.Drawing.Point.Empty;
+    var constraintHoverLogged = false;
+    var constraintHoverMoveCount = 0;
+    Guid constraintHoverLoggedId = Guid.Empty;
+    var constraintHoverLoggedComponent = ComponentIndex.Unset;
+    string? lastResolveFailure = null;
+
+    using var sourceHighlight = startConstraint.HasValue
+      ? TemporaryGeometryHighlight.Create(
+          doc,
+          startConstraint.Value.Curve,
+          SourceFeedbackColor)
+      : null;
+    TemporaryGeometryHighlight? projectTargetHighlight = null;
+
+    Curve? HoveredConstraintCurve()
+      => hoveredConstraintPick.HasValue
+        ? CurveFromScreenPick(doc, hoveredConstraintPick.Value)
+        : null;
+
+    Point3d HoveredConstraintPoint(Point3d fallback)
+      => hoveredConstraintPick.HasValue
+        ? hoveredConstraintPick.Value.PickPoint
+        : fallback;
+
+    EventHandler<GetPointMouseEventArgs> trackConstraintHover = (_, e) =>
+    {
+      if (mode is not ("perp" or "tangent"))
+      {
+        hoveredConstraintPick = null;
+        return;
+      }
+
+      constraintHoverMoveCount++;
+      var nextPick = PickCurveAtScreenPoint(
+        doc,
+        e.Viewport,
+        e.WindowPoint,
+        out var diagnostic);
+      if (nextPick.HasValue)
+      {
+        hoveredConstraintPick = nextPick;
+        constraintHoverHitWindow = e.WindowPoint;
+      }
+      else if (hoveredConstraintPick.HasValue &&
+               ScreenDistanceSquared(e.WindowPoint, constraintHoverHitWindow) <= 100)
+      {
+        diagnostic += $" retained={hoveredConstraintPick.Value.ObjectId}";
+      }
+      else
+      {
+        hoveredConstraintPick = null;
+      }
+      var hoveredId = hoveredConstraintPick?.ObjectId ?? Guid.Empty;
+      var hoveredComponent = hoveredConstraintPick?.ComponentIndex ?? ComponentIndex.Unset;
+      if (!constraintHoverLogged ||
+          hoveredId != constraintHoverLoggedId ||
+          hoveredComponent != constraintHoverLoggedComponent)
+      {
+        constraintHoverLogged = true;
+        constraintHoverLoggedId = hoveredId;
+        constraintHoverLoggedComponent = hoveredComponent;
+        Log.Write(
+          "vLine.Hover",
+          $"mode={mode} move={constraintHoverMoveCount} window={e.WindowPoint} " +
+          $"world={e.Point} result={diagnostic}");
+      }
+    };
+    getPoint.MouseMove += trackConstraintHover;
+
+    void ApplyNativeDirectionConstraint()
+    {
+      getPoint.ClearConstraints();
+
+      // Without a native 3-D constraint, CPlane Z projects back onto the
+      // CPlane and collapses a vertical preview to the start point.
+      if (startConstraint.HasValue || mode is not (null or "parallel"))
+        return;
+
+      var activeDirection = startDirection ?? parallelDir;
+      if (!activeDirection.HasValue)
+        return;
+
+      var direction = activeDirection.Value;
+      if (!direction.Unitize())
+        return;
+
+      getPoint.Constrain(startPoint, startPoint + direction);
+    }
 
     void ApplyModePrompt()
     {
+      ApplyNativeDirectionConstraint();
+      if (mode != "project_to")
+      {
+        projectTargetHighlight?.Dispose();
+        projectTargetHighlight = null;
+      }
+
+      string Prompt(string value)
+      {
+        var lockSuffix = fromFirstPoint ? " [FromFirstPoint]" : string.Empty;
+        return layerSession.DecoratePrompt(doc, value + lockSuffix);
+      }
+
       if (mode == "perp")
-        getPoint.SetCommandPrompt(perpLockedDir.HasValue
-          ? "End point of line (Perp: perpendicular to curve at start point)"
-          : perpLockedCurve != null
-            ? "End point of line (Perp: locked to selected curve)"
-            : "End point of line (Perp)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (Perpendicular mode: hover near curve, click to accept)"));
       else if (mode == "tangent")
-        getPoint.SetCommandPrompt("End point of line (Tangent mode: hover near curve, click to accept)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (Tangent mode: hover near curve, click to accept)"));
       else if (mode == "perp_any")
-        getPoint.SetCommandPrompt("End point of line (PerpNear mode: solves against nearest curve)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (PerpNear mode: solves against nearest curve)"));
       else if (mode == "tangent_any")
-        getPoint.SetCommandPrompt("End point of line (TanNear mode: solves against nearest curve)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (TanNear mode: solves against nearest curve)"));
       else if (mode == "auto")
-        getPoint.SetCommandPrompt("End point of line (Auto mode: priority chooses Perp/Tangent)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (Auto mode: priority chooses Perp/Tangent)"));
       else if (mode == "parallel")
-        getPoint.SetCommandPrompt("End point of line (Parallel)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (Parallel)"));
       else if (mode == "project_to")
-        getPoint.SetCommandPrompt("End point of line (ProjectTo: endpoint snaps to nearest point on target geometry)");
+        getPoint.SetCommandPrompt(Prompt("End point of line (ProjectTo: endpoint snaps to nearest point on target geometry)"));
+      else if (mode == "end_anchor")
+        getPoint.SetCommandPrompt(Prompt("Click to accept constrained end point"));
+      else if (startDirection.HasValue)
+        getPoint.SetCommandPrompt(Prompt("End point of line (start direction constrained)"));
       else
-        getPoint.SetCommandPrompt("End point of line");
+        getPoint.SetCommandPrompt(Prompt("End point of line"));
     }
 
     void MaybeRefreshCurveCache(bool force)
@@ -585,7 +1023,7 @@ public sealed class vLine : Command
       cacheState.NextRefreshUtc = now.AddMilliseconds(500);
     }
 
-    Point3d ApplyAnglePointFromCurrent(Point3d currentPoint)
+    Point3d ApplyAnglePointFromCurrent(Point3d segmentStart, Point3d currentPoint)
     {
       if (!angleLock.CurrentValue)
         return currentPoint;
@@ -613,23 +1051,29 @@ public sealed class vLine : Command
       if (dir3.IsTiny())
         return currentPoint;
 
-      var toCursor = currentPoint - startPoint;
+      var toCursor = currentPoint - segmentStart;
       var dist = toCursor.Length;
       if (dist < doc.ModelAbsoluteTolerance)
         dist = doc.ModelAbsoluteTolerance;
 
       var sign = Vector3d.Multiply(toCursor, dir3) < 0.0 ? -1.0 : 1.0;
-      return startPoint + (dir3 * (dist * sign));
+      return segmentStart + (dir3 * (dist * sign));
     }
 
-    Point3d PreviewEndFromCurrent(Point3d currentPoint)
+    Point3d PreviewEndFromCurrent(
+      Point3d segmentStart,
+      Point3d currentPoint,
+      bool preserveEndConstraint,
+      bool applyAngle)
     {
-      var endPoint = ApplyAnglePointFromCurrent(currentPoint);
-      if (Math.Abs(lengthOption.CurrentValue) > doc.ModelAbsoluteTolerance)
+      var endPoint = applyAngle
+        ? ApplyAnglePointFromCurrent(segmentStart, currentPoint)
+        : currentPoint;
+      if (!preserveEndConstraint && Math.Abs(lengthOption.CurrentValue) > doc.ModelAbsoluteTolerance)
       {
-        var direction = endPoint - startPoint;
+        var direction = endPoint - segmentStart;
         if (direction.Unitize())
-          endPoint = startPoint + direction * lengthOption.CurrentValue;
+          endPoint = segmentStart + direction * lengthOption.CurrentValue;
       }
 
       return endPoint;
@@ -665,31 +1109,6 @@ public sealed class vLine : Command
       if (modeName == "project_to")
         return projectToGeometry != null ? ProjectClosestPoint(projectToGeometry, cursorPoint, cplane) : null;
 
-      // Perp (explicit selection): use locked direction or locked curve, no cache needed.
-      if (modeName == "perp")
-      {
-        if (perpLockedDir.HasValue)
-        {
-          var proj = Vector3d.Multiply(cursorPoint - startPoint, perpLockedDir.Value);
-          return startPoint + (perpLockedDir.Value * proj);
-        }
-        if (perpLockedCurve != null)
-        {
-          DebugLog($"Perp: locked curve hint=({cursorPoint.X:F3},{cursorPoint.Y:F3},{cursorPoint.Z:F3}) preview={preview}");
-          var pt = PerpPointFromStartWithHint(startPoint, perpLockedCurve, cursorPoint, preview ? 80 : 240, preview ? 8 : 18);
-          if (pt.HasValue)
-          {
-            DebugLog($"Perp: found ({pt.Value.X:F3},{pt.Value.Y:F3},{pt.Value.Z:F3})");
-            return pt.Value;
-          }
-          DebugLog("Perp: PerpPointFromStartWithHint null -> trying fallback");
-          var fb = PerpFallbackToPointedSegment(startPoint, perpLockedCurve, cursorPoint, preview);
-          DebugLog($"Perp: fallback={(fb.HasValue ? $"({fb.Value.X:F3},{fb.Value.Y:F3},{fb.Value.Z:F3})" : "null")}");
-          return fb;
-        }
-        return null;
-      }
-
       MaybeRefreshCurveCache(false);
       var curveCache = cacheState.CurveCache;
 
@@ -699,15 +1118,14 @@ public sealed class vLine : Command
         return null;
       }
 
-      // "tangent" snaps when hovering near a curve; "perp_any" / "tangent_any" always use nearest.
+      // Direct endpoint constraints resolve only against the curve under the cursor.
       Curve? curve;
-      if (modeName == "tangent")
+      if (modeName is "perp" or "tangent")
       {
-        var captureTol = doc.ModelAbsoluteTolerance * 100.0;
-        curve = CurveAtCursorPoint(cursorPoint, curveCache, captureTol);
+        curve = HoveredConstraintCurve();
         if (curve == null)
         {
-          DebugLog($"EndpointForMode({modeName}): cursor not within capture tol of any curve");
+          DebugLog($"EndpointForMode({modeName}): no curve under cursor");
           return null;
         }
       }
@@ -722,23 +1140,27 @@ public sealed class vLine : Command
         return null;
       }
 
-      if (modeName == "perp_any")
+      var curveHint = modeName is "perp" or "tangent"
+        ? HoveredConstraintPoint(cursorPoint)
+        : cursorPoint;
+
+      if (modeName is "perp" or "perp_any")
       {
-        DebugLog($"PerpNear: hint=({cursorPoint.X:F3},{cursorPoint.Y:F3},{cursorPoint.Z:F3}) curve={curve.GetType().Name} preview={preview}");
-        var pt = PerpPointFromStartWithHint(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 8 : 18);
+        DebugLog($"PerpNear: hint=({curveHint.X:F3},{curveHint.Y:F3},{curveHint.Z:F3}) curve={curve.GetType().Name} preview={preview}");
+        var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 8 : 18);
         if (pt.HasValue)
         {
           DebugLog($"PerpNear: found ({pt.Value.X:F3},{pt.Value.Y:F3},{pt.Value.Z:F3})");
           return pt.Value;
         }
         DebugLog("PerpNear: null -> trying fallback");
-        var fb = PerpFallbackToPointedSegment(startPoint, curve, cursorPoint, preview);
+        var fb = PerpFallbackToPointedSegment(startPoint, curve, curveHint, preview);
         DebugLog($"PerpNear: fallback={(fb.HasValue ? $"({fb.Value.X:F3},{fb.Value.Y:F3},{fb.Value.Z:F3})" : "null")}");
         return fb;
       }
 
       if (modeName is "tangent" or "tangent_any")
-        return TangentPointFromStart(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 8 : 18);
+        return TangentPointFromStart(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 8 : 18);
 
       if (modeName == "auto")
       {
@@ -808,6 +1230,327 @@ public sealed class vLine : Command
       return null;
     }
 
+    EndpointConstraint? EndConstraintForDisplay(
+      string? modeName,
+      Point3d solvedEnd,
+      Point3d cursorPoint)
+    {
+      EndpointConstraintKind kind;
+      Curve? curve;
+      if (modeName is "perp" or "tangent")
+      {
+        kind = modeName == "perp"
+          ? EndpointConstraintKind.Perpendicular
+          : EndpointConstraintKind.Tangent;
+        curve = HoveredConstraintCurve();
+      }
+      else if (modeName is "perp_any" or "tangent_any" or "auto")
+      {
+        kind = modeName == "perp_any" || lastAutoChoice == "perp"
+          ? EndpointConstraintKind.Perpendicular
+          : EndpointConstraintKind.Tangent;
+        curve = NearestCurveToPoint(cursorPoint, cacheState.CurveCache);
+      }
+      else
+      {
+        return null;
+      }
+
+      if (curve == null || !curve.ClosestPoint(solvedEnd, out var seed))
+        return null;
+      return new EndpointConstraint(curve, seed, cursorPoint, kind);
+    }
+
+    bool TryResolveSegment(
+      Point3d cursorPoint,
+      bool preview,
+      out Point3d resolvedStart,
+      out Point3d resolvedEnd)
+    {
+      resolvedStart = startPoint;
+      resolvedEnd = Point3d.Unset;
+      activeEndConstraint = null;
+      lastResolveFailure = null;
+
+      var activeDirection = startDirection ?? (mode == "parallel" ? parallelDir : null);
+
+      if (endAnchor.HasValue)
+      {
+        var anchor = endAnchor.Value;
+        if (startConstraint.HasValue)
+        {
+          if (fromFirstPoint)
+          {
+            resolvedStart = startConstraint.Value.Curve.PointAt(
+              startConstraint.Value.SeedParameter);
+          }
+          else if (!TryResolveConstraintToPoint(
+                     startConstraint.Value,
+                     anchor.Point,
+                     preview,
+                     out resolvedStart))
+          {
+            return false;
+          }
+        }
+
+        resolvedEnd = anchor.Point;
+        var lineDirection = resolvedEnd - resolvedStart;
+        if (startConstraint.HasValue &&
+            fromFirstPoint &&
+            !DirectionMatchesConstraintAtSeed(startConstraint.Value, lineDirection))
+          return false;
+        if (!DirectionsAreParallel(lineDirection, anchor.Direction, 0.02))
+          return false;
+        if (activeDirection.HasValue &&
+            !DirectionsAreParallel(lineDirection, activeDirection.Value, 0.02))
+          return false;
+        return lineDirection.Length > doc.ModelAbsoluteTolerance;
+      }
+
+      if (!startConstraint.HasValue)
+      {
+        var rawEnd = cursorPoint;
+        if (!string.IsNullOrWhiteSpace(mode))
+        {
+          var endpointForMode = EndpointForMode(mode, cursorPoint, preview);
+          if (!endpointForMode.HasValue)
+            return false;
+          rawEnd = endpointForMode.Value;
+          activeEndConstraint = EndConstraintForDisplay(mode, rawEnd, cursorPoint);
+        }
+
+        if (activeDirection.HasValue)
+        {
+          var direction = activeDirection.Value;
+          if (!direction.Unitize())
+            return false;
+
+          if (string.IsNullOrWhiteSpace(mode) || mode == "parallel")
+          {
+            var distance = Vector3d.Multiply(cursorPoint - resolvedStart, direction);
+            rawEnd = resolvedStart + (direction * distance);
+          }
+          else
+          {
+            var lineDirection = rawEnd - resolvedStart;
+            if (!DirectionsAreParallel(lineDirection, direction, 0.02))
+              return false;
+          }
+        }
+
+        resolvedEnd = PreviewEndFromCurrent(
+          resolvedStart,
+          rawEnd,
+          preserveEndConstraint: false,
+          applyAngle: !activeDirection.HasValue);
+        return resolvedEnd.IsValid;
+      }
+
+      var firstConstraint = startConstraint.Value;
+      if (string.IsNullOrWhiteSpace(mode) || mode == "project_to")
+      {
+        var rawEnd = mode == "project_to"
+          ? projectToGeometry != null
+            ? ProjectClosestPoint(projectToGeometry, cursorPoint, cplane)
+            : null
+          : cursorPoint;
+        if (!rawEnd.HasValue)
+          return false;
+
+        if (fromFirstPoint)
+        {
+          resolvedStart = firstConstraint.Curve.PointAt(firstConstraint.SeedParameter);
+          if (string.IsNullOrWhiteSpace(mode))
+          {
+            if (!TryConstrainEndpointFromFixedStart(
+                  firstConstraint,
+                  resolvedStart,
+                  rawEnd.Value,
+                  out var fixedEnd))
+              return false;
+            rawEnd = fixedEnd;
+          }
+          else if (!DirectionMatchesConstraintAtSeed(
+                     firstConstraint,
+                     rawEnd.Value - resolvedStart))
+          {
+            return false;
+          }
+        }
+        else if (!TryResolveConstraintToPoint(
+                   firstConstraint,
+                   rawEnd.Value,
+                   preview,
+                   out resolvedStart))
+        {
+          return false;
+        }
+
+        resolvedEnd = PreviewEndFromCurrent(
+          resolvedStart,
+          rawEnd.Value,
+          preserveEndConstraint: false,
+          applyAngle: false);
+        return resolvedEnd.IsValid;
+      }
+
+      if (activeDirection.HasValue && (string.IsNullOrWhiteSpace(mode) || mode == "parallel"))
+      {
+        var direction = activeDirection.Value;
+        if (!direction.Unitize())
+          return false;
+
+        if (fromFirstPoint)
+        {
+          resolvedStart = firstConstraint.Curve.PointAt(firstConstraint.SeedParameter);
+          if (!DirectionMatchesConstraintAtSeed(firstConstraint, direction))
+            return false;
+        }
+        else if (!TryResolveConstraintToDirection(
+                   firstConstraint,
+                   direction,
+                   preview,
+                   out resolvedStart))
+        {
+          return false;
+        }
+
+        var distance = Vector3d.Multiply(cursorPoint - resolvedStart, direction);
+        resolvedEnd = PreviewEndFromCurrent(
+          resolvedStart,
+          resolvedStart + (direction * distance),
+          preserveEndConstraint: false,
+          applyAngle: false);
+        return resolvedEnd.IsValid;
+      }
+
+      MaybeRefreshCurveCache(false);
+      Curve? endCurve = null;
+      if (mode is "perp" or "tangent")
+      {
+        endCurve = HoveredConstraintCurve();
+      }
+      else if (mode is "perp_any" or "tangent_any" or "auto")
+      {
+        endCurve = NearestCurveToPoint(cursorPoint, cacheState.CurveCache);
+      }
+
+      var endSearchPoint = mode is "perp" or "tangent"
+        ? HoveredConstraintPoint(cursorPoint)
+        : cursorPoint;
+      if (endCurve == null)
+      {
+        lastResolveFailure =
+          $"no endpoint curve mode={mode} hoverMoves={constraintHoverMoveCount} " +
+          $"hoverId={hoveredConstraintPick?.ObjectId.ToString() ?? "none"}";
+        return false;
+      }
+
+      if (!endCurve.ClosestPoint(endSearchPoint, out var endSeed))
+      {
+        lastResolveFailure = $"endpoint curve ClosestPoint failed mode={mode} hint={endSearchPoint}";
+        return false;
+      }
+
+      var endHint = endCurve.PointAt(endSeed);
+      bool TryPair(EndpointConstraintKind kind, out Line solvedLine)
+      {
+        var endConstraint = new EndpointConstraint(
+          endCurve,
+          endSeed,
+          endHint,
+          kind);
+        return fromFirstPoint
+          ? TryResolveFixedStartConstraintPair(
+              firstConstraint,
+              endConstraint,
+              preview,
+              out solvedLine)
+          : TryResolveConstraintPair(
+              firstConstraint,
+              endConstraint,
+              preview,
+              out solvedLine);
+      }
+
+      Line line;
+      EndpointConstraintKind selectedEndKind;
+      if (mode == "auto")
+      {
+        var hasPerp = TryPair(EndpointConstraintKind.Perpendicular, out var perpLine);
+        var hasTangent = TryPair(EndpointConstraintKind.Tangent, out var tangentLine);
+        if (!hasPerp && !hasTangent)
+          return false;
+
+        if (priorityIndex == PriorityPerpFirst && hasPerp)
+        {
+          line = perpLine;
+          selectedEndKind = EndpointConstraintKind.Perpendicular;
+          lastAutoChoice = "perp";
+        }
+        else if (priorityIndex == PriorityTanFirst && hasTangent)
+        {
+          line = tangentLine;
+          selectedEndKind = EndpointConstraintKind.Tangent;
+          lastAutoChoice = "tangent";
+        }
+        else if (priorityIndex == PriorityKeepCurrent && lastAutoChoice == "perp" && hasPerp)
+        {
+          line = perpLine;
+          selectedEndKind = EndpointConstraintKind.Perpendicular;
+        }
+        else if (priorityIndex == PriorityKeepCurrent && lastAutoChoice == "tangent" && hasTangent)
+        {
+          line = tangentLine;
+          selectedEndKind = EndpointConstraintKind.Tangent;
+        }
+        else if (!hasTangent ||
+                 (hasPerp && perpLine.To.DistanceToSquared(cursorPoint) <= tangentLine.To.DistanceToSquared(cursorPoint)))
+        {
+          line = perpLine;
+          selectedEndKind = EndpointConstraintKind.Perpendicular;
+          lastAutoChoice = "perp";
+        }
+        else
+        {
+          line = tangentLine;
+          selectedEndKind = EndpointConstraintKind.Tangent;
+          lastAutoChoice = "tangent";
+        }
+      }
+      else
+      {
+        var endKind = mode is "perp" or "perp_any"
+          ? EndpointConstraintKind.Perpendicular
+          : EndpointConstraintKind.Tangent;
+        if (!TryPair(endKind, out line))
+        {
+          lastResolveFailure =
+            $"pair solver failed start={firstConstraint.Kind} end={endKind} " +
+            $"startHint={firstConstraint.HintPoint} endHint={endHint}";
+          return false;
+        }
+        selectedEndKind = endKind;
+      }
+
+      resolvedStart = line.From;
+      resolvedEnd = PreviewEndFromCurrent(
+        resolvedStart,
+        line.To,
+        preserveEndConstraint: true,
+        applyAngle: false);
+      if (activeDirection.HasValue &&
+          !DirectionsAreParallel(resolvedEnd - resolvedStart, activeDirection.Value, 0.02))
+        return false;
+      activeEndConstraint = new EndpointConstraint(
+        endCurve,
+        endSeed,
+        cursorPoint,
+        selectedEndKind);
+      return resolvedStart.IsValid && resolvedEnd.IsValid;
+    }
+
     Color CurrentPreviewColor()
     {
       var baseColor = layerSession.ResolveColor(doc);
@@ -816,43 +1559,60 @@ public sealed class vLine : Command
 
     EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
     {
-      var previewColor = CurrentPreviewColor();
-      Point3d? endPoint;
-
-      if (!string.IsNullOrWhiteSpace(mode))
+      try
       {
-        var endpointForMode = EndpointForMode(mode, e.CurrentPoint, preview: true);
-        if (!endpointForMode.HasValue)
+        DrawHiddenLayerWarning(e, doc, layerSession);
+
+        var previewColor = CurrentPreviewColor();
+        if (mode is "perp" or "tangent")
+        {
+          var hoveredCurve = HoveredConstraintCurve();
+          if (hoveredCurve != null)
+          {
+            e.Display.DrawCurve(
+              hoveredCurve,
+              HoverFeedbackColor,
+              3);
+          }
+        }
+
+        if (!TryResolveSegment(e.CurrentPoint, preview: true, out var previewStart, out var ep))
           return;
+        if (bothSides.CurrentValue)
+        {
+          var vec = ep - previewStart;
+          if (vec.IsTiny())
+            return;
 
-        endPoint = PreviewEndFromCurrent(endpointForMode.Value);
+          var a = previewStart - vec;
+          var b = previewStart + vec;
+          e.Display.DrawLine(a, b, previewColor, 1);
+          e.Display.DrawDottedLine(a, b, previewColor);
+        }
+        else
+        {
+          e.Display.DrawLine(previewStart, ep, previewColor, 1);
+          e.Display.DrawDottedLine(previewStart, ep, previewColor);
+        }
+
+        if (startConstraint.HasValue)
+          DrawCurveConstraintHelper(e.Display, doc, startConstraint.Value, previewStart);
+        if (activeEndConstraint.HasValue)
+          DrawCurveConstraintHelper(e.Display, doc, activeEndConstraint.Value, ep);
+        e.Display.DrawPoint(ep, Rhino.Display.PointStyle.RoundSimple, 2, previewColor);
+        if (mode == "project_to")
+          e.Display.DrawPoint(ep, Rhino.Display.PointStyle.X, 6, Color.Cyan);
+        lastPreviewException = null;
       }
-      else
+      catch (Exception ex)
       {
-        endPoint = PreviewEndFromCurrent(e.CurrentPoint);
+        var details = ex.ToString();
+        if (!string.Equals(details, lastPreviewException, StringComparison.Ordinal))
+        {
+          lastPreviewException = details;
+          Log.Write("vLine.Preview", details);
+        }
       }
-
-      var ep = endPoint.Value;
-      if (bothSides.CurrentValue)
-      {
-        var vec = ep - startPoint;
-        if (vec.IsTiny())
-          return;
-
-        var a = startPoint - vec;
-        var b = startPoint + vec;
-        e.Display.DrawLine(a, b, previewColor, 1);
-        e.Display.DrawDottedLine(a, b, previewColor);
-      }
-      else
-      {
-        e.Display.DrawLine(startPoint, ep, previewColor, 1);
-        e.Display.DrawDottedLine(startPoint, ep, previewColor);
-      }
-
-      e.Display.DrawPoint(ep, Rhino.Display.PointStyle.RoundSimple, 2, previewColor);
-      if (mode == "project_to")
-        e.Display.DrawPoint(ep, Rhino.Display.PointStyle.X, 6, Color.Cyan);
     };
 
     getPoint.DynamicDraw += drawPreview;
@@ -866,22 +1626,39 @@ public sealed class vLine : Command
         var idxChainMode = getPoint.AddOptionList(
           "Mode", ChainModeValues, chainModeIndex);
         getPoint.AddOptionToggle("BothSides", ref bothSides);
-        var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
-        var idxPerp = getPoint.AddOption("Perp");
+        var allowDirectionMode = !startDirection.HasValue;
+        var idxNormal = getPoint.AddOption("Normal");
+        var idxAngled = allowDirectionMode ? getPoint.AddOption("Angled") : -1;
+        var idxVertical = allowDirectionMode ? getPoint.AddOption("Vertical") : -1;
+        var idxFourPoint = allowDirectionMode ? getPoint.AddOption("FourPoint") : -1;
         var idxTan = getPoint.AddOption("Tangent");
+        var idxBiTangent = getPoint.AddOption("BiTangent");
         var idxPerpNear = getPoint.AddOption("PerpNear");
-        var idxTanNear = getPoint.AddOption("TanNear");
-        var idxAuto = getPoint.AddOption("Auto");
-        var idxParallel = getPoint.AddOption("Parallel");
-        var idxProjectTo = getPoint.AddOption("ProjectTo");
+        var idxParallel = allowDirectionMode ? getPoint.AddOption("Parallel") : -1;
         var idxPriority = getPoint.AddOptionList(
           "Priority", PriorityValues, priorityIndex);
-        getPoint.AddOptionToggle("PersistConstraint", ref persistConstraint);
+        var idxFromFirstPoint = startConstraint.HasValue && !fromFirstPoint
+          ? getPoint.AddOption("FromFirstPoint")
+          : -1;
+        var idxTanNear = getPoint.AddOption("TanNear");
+        var idxBisector = allowDirectionMode ? getPoint.AddOption("Bisector") : -1;
+        var idxPerp = getPoint.AddOption("Perpendicular");
+        var idxExtension = getPoint.AddOption("Extension");
+        var idxAuto = getPoint.AddOption("Auto");
+        var idxProjectTo = getPoint.AddOption("ProjectTo");
+        getPoint.AddOptionToggle("AngleRef", ref angleRelative);
+        var idxAngle = getPoint.AddOptionDouble("Angle", ref angleOption);
         var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
         getPoint.AddOptionToggle("AngleLock", ref angleLock);
-        var idxAngle = getPoint.AddOptionDouble("Angle", ref angleOption);
-        getPoint.AddOptionToggle("AngleRef", ref angleRelative);
-        getPoint.AddOptionToggle("Debug", ref debugToggle);
+        var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
+        var idxPersistConstraint = getPoint.AddOption(
+          "PersistConstraint",
+          persistConstraint.CurrentValue ? "Yes" : "No",
+          true);
+        var idxDebug = getPoint.AddOption(
+          "Debug",
+          debugToggle.CurrentValue ? "On" : "Off",
+          true);
 
         if (debugToggle.CurrentValue && !_debugMode)
         {
@@ -917,26 +1694,60 @@ public sealed class vLine : Command
         if (result == GetResult.Point)
         {
           var clickedRaw = getPoint.Point();
-          DebugLog($"Click: cursor=({clickedRaw.X:F3},{clickedRaw.Y:F3},{clickedRaw.Z:F3}) mode={mode ?? "free"}");
-          Point3d endPoint;
-          if (!string.IsNullOrWhiteSpace(mode))
+          if (mode is "perp" or "tangent")
           {
-            var endpointForMode = EndpointForMode(mode, clickedRaw, preview: false);
-            if (!endpointForMode.HasValue)
+            var pointObject = getPoint.PointOnObject();
+            var pointCurve = pointObject?.Curve();
+            var pointObjectId = pointCurve != null
+              ? pointObject!.ObjectId
+              : Guid.Empty;
+            Log.Write(
+              "vLine.Accept",
+              $"mode={mode} click={clickedRaw} hoverId={hoveredConstraintPick?.ObjectId.ToString() ?? "none"} " +
+              $"hoverComponent={hoveredConstraintPick?.ComponentIndex.ToString() ?? "none"} " +
+              $"pointOnObject={pointObjectId} type={pointCurve?.GetType().Name ?? "none"}");
+
+            if (!hoveredConstraintPick.HasValue && pointCurve != null)
             {
-              RhinoApp.WriteLine($"vLine: no valid {mode} solution found on nearby curves at this cursor location.");
+              var pointHint = pointObject!.SelectionPoint();
+              if (!pointHint.IsValid)
+                pointHint = clickedRaw;
+              hoveredConstraintPick = new ScreenCurvePick(
+                pointObjectId,
+                pointObject!.GeometryComponentIndex,
+                pointHint);
+              Log.Write(
+                "vLine.Accept",
+                $"using PointOnObject fallback id={pointObjectId} " +
+                $"component={pointObject.GeometryComponentIndex} hint={pointHint}");
+            }
+          }
+
+          DebugLog($"Click: cursor=({clickedRaw.X:F3},{clickedRaw.Y:F3},{clickedRaw.Z:F3}) mode={mode ?? "free"}");
+          Point3d resolvedStart;
+          Point3d endPoint;
+          try
+          {
+            if (!TryResolveSegment(clickedRaw, preview: false, out resolvedStart, out endPoint))
+            {
+              Log.Write(
+                "vLine",
+                $"accept failed mode={mode ?? "free"} point={clickedRaw} " +
+                $"reason={lastResolveFailure ?? "unspecified"}");
+              RhinoApp.WriteLine($"vLine: no valid {mode ?? "endpoint"} solution found at this cursor location.");
               continue;
             }
-
-            endPoint = PreviewEndFromCurrent(endpointForMode.Value);
           }
-          else
+          catch (Exception ex)
           {
-            endPoint = PreviewEndFromCurrent(clickedRaw);
+            Log.Write("vLine.Accept", ex.ToString());
+            RhinoApp.WriteLine("vLine: failed to resolve the selected endpoint. See vTools.log.");
+            continue;
           }
 
+          Log.Write("vLine", $"accept mode={mode ?? "free"} start={resolvedStart} end={endPoint}");
           var state = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
-          return SecondPointResult.WithPoint(endPoint, bothSides.CurrentValue, chainModeIndex, state);
+          return SecondPointResult.WithPoint(resolvedStart, endPoint, bothSides.CurrentValue, chainModeIndex, state);
         }
 
         if (result == GetResult.Option)
@@ -945,92 +1756,124 @@ public sealed class vLine : Command
           if (option == null)
             continue;
 
+          if (option.Index == idxFromFirstPoint)
+          {
+            fromFirstPoint = true;
+            Log.Write(
+              "vLine",
+              $"FromFirstPoint activated start={startPoint} " +
+              $"constraint={startConstraint?.Kind.ToString() ?? "none"}");
+            ApplyModePrompt();
+            continue;
+          }
+
+          if (option.Index == idxPersistConstraint)
+          {
+            persistConstraint.CurrentValue = !persistConstraint.CurrentValue;
+            _persistConstraint = persistConstraint.CurrentValue;
+            SavePersistedOptions();
+            continue;
+          }
+
+          if (option.Index == idxDebug)
+          {
+            debugToggle.CurrentValue = !debugToggle.CurrentValue;
+            continue;
+          }
+
           if (option.Index == idxLayer)
           {
             PromptForLayer(doc, layerSession, runMode);
+            ApplyModePrompt();
+            continue;
+          }
+
+          if (option.Index == idxNormal)
+          {
+            if (TryPickNormalDefinition(doc, cplane, out var anchorPoint, out var anchorDirection))
+            {
+              endAnchor = new EndAnchor(anchorPoint, anchorDirection);
+              mode = "end_anchor";
+              ApplyModePrompt();
+            }
+            continue;
+          }
+
+          if (option.Index == idxAngled ||
+              option.Index == idxVertical ||
+              option.Index == idxFourPoint ||
+              option.Index == idxBisector)
+          {
+            var directionMode = option.Index == idxAngled
+              ? "Angled"
+              : option.Index == idxVertical
+                ? "Vertical"
+                : option.Index == idxFourPoint
+                  ? "FourPoint"
+                  : "Bisector";
+            if (TryGetEndDirectionDefinition(doc, directionMode, startPoint, out var direction))
+            {
+              parallelDir = direction;
+              endAnchor = null;
+              mode = "parallel";
+              Log.Write(
+                "vLine",
+                $"endpoint direction mode={directionMode} start={startPoint} direction={direction}");
+              ApplyModePrompt();
+            }
+            continue;
+          }
+
+          if (option.Index == idxBiTangent)
+          {
+            if (RunBiTangent(doc, layerSession))
+            {
+              var completedState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
+              return SecondPointResult.None(bothSides.CurrentValue, ModeSingle, completedState);
+            }
+            continue;
+          }
+
+          if (option.Index == idxExtension)
+          {
+            if (TryPickExtensionDefinition(out var anchorPoint, out var anchorDirection))
+            {
+              endAnchor = new EndAnchor(anchorPoint, anchorDirection);
+              mode = "end_anchor";
+              ApplyModePrompt();
+            }
             continue;
           }
 
           if (option.Index == idxPerp)
           {
-            var go = new GetObject();
-            go.EnableTransparentCommands(true);
-            go.SetCommandPrompt("Select curve for perpendicular");
-            go.GeometryFilter = Rhino.DocObjects.ObjectType.Curve;
-            var goResult = go.Get();
-            if (goResult != GetResult.Object)
-            {
-              perpLockedCurve = null;
-              perpLockedDir = null;
-              mode = null;
-              ApplyModePrompt();
-              continue;
-            }
-            var picked = go.Object(0);
-            var pickedCurve = picked.Curve();
-            if (pickedCurve == null) continue;
-            var pickPoint = picked.SelectionPoint();
-
-            pickedCurve.ClosestPoint(startPoint, out var paramAtStart);
-            var ptOnCurve = pickedCurve.PointAt(paramAtStart);
-
-            if (ptOnCurve.DistanceTo(startPoint) <= doc.ModelAbsoluteTolerance * 10.0)
-            {
-              // Start is on the curve — lock the line direction to be perp to the curve tangent.
-              // At a kink, use the pick-point position to determine which side's tangent.
-              var domain = pickedCurve.Domain;
-              var eps = (domain.T1 - domain.T0) * 1e-5;
-              var tBefore = Math.Max(domain.T0, paramAtStart - eps);
-              var tAfter = Math.Min(domain.T1, paramAtStart + eps);
-              var tanBefore = pickedCurve.TangentAt(tBefore);
-              var tanAfter = pickedCurve.TangentAt(tAfter);
-
-              Vector3d useTangent;
-              var isKink = tanBefore.IsValid && tanAfter.IsValid && tanBefore * tanAfter < 0.9999;
-              if (isKink)
-              {
-                pickedCurve.ClosestPoint(pickPoint, out var paramAtPick);
-                useTangent = paramAtPick >= paramAtStart ? tanAfter : tanBefore;
-                DebugLog($"Perp: kink detected at param {paramAtStart:F4}, pick side={(paramAtPick >= paramAtStart ? "after" : "before")}");
-              }
-              else
-              {
-                useTangent = pickedCurve.TangentAt(paramAtStart);
-              }
-
-              var t2d = ToCPlane2d(useTangent, cplane);
-              if (!TryUnitize2d(t2d, out var t2du))
-                t2du = new Vector2d(1.0, 0.0);
-              var perp2d = new Vector2d(-t2du.Y, t2du.X);
-              var perp3d = (cplane.XAxis * perp2d.X) + (cplane.YAxis * perp2d.Y);
-              if (!perp3d.IsTiny()) perp3d.Unitize();
-
-              perpLockedDir = perp3d;
-              perpLockedCurve = null;
-              DebugLog($"Perp: direction locked to ({perp3d.X:F3},{perp3d.Y:F3},{perp3d.Z:F3}){(isKink ? " [kink]" : "")}");
-            }
-            else
-            {
-              // Start is off the curve — snap endpoint to the perp point on that curve.
-              perpLockedCurve = pickedCurve;
-              perpLockedDir = null;
-              DebugLog($"Perp: curve locked, start-to-curve dist={ptOnCurve.DistanceTo(startPoint):F4}");
-            }
-
+            endAnchor = null;
             mode = "perp";
+            hoveredConstraintPick = null;
+            constraintHoverHitWindow = System.Drawing.Point.Empty;
+            constraintHoverLogged = false;
+            constraintHoverMoveCount = 0;
+            Log.Write("vLine", "endpoint mode=perp activated");
             ApplyModePrompt();
             continue;
           }
 
           if (option.Index == idxTan)
           {
+            endAnchor = null;
             mode = "tangent";
+            hoveredConstraintPick = null;
+            constraintHoverHitWindow = System.Drawing.Point.Empty;
+            constraintHoverLogged = false;
+            constraintHoverMoveCount = 0;
+            Log.Write("vLine", "endpoint mode=tangent activated");
             ApplyModePrompt();
             continue;
           }
 
           if (option.Index == idxPerpNear)
           {
+            endAnchor = null;
             mode = "perp_any";
             ApplyModePrompt();
             continue;
@@ -1038,6 +1881,7 @@ public sealed class vLine : Command
 
           if (option.Index == idxTanNear)
           {
+            endAnchor = null;
             mode = "tangent_any";
             ApplyModePrompt();
             continue;
@@ -1045,6 +1889,7 @@ public sealed class vLine : Command
 
           if (option.Index == idxAuto)
           {
+            endAnchor = null;
             mode = "auto";
             ApplyModePrompt();
             continue;
@@ -1052,6 +1897,7 @@ public sealed class vLine : Command
 
           if (option.Index == idxParallel)
           {
+            endAnchor = null;
             var gDir1 = new GetPoint();
             gDir1.EnableTransparentCommands(true);
             gDir1.SetCommandPrompt("Direction start point");
@@ -1079,15 +1925,22 @@ public sealed class vLine : Command
 
           if (option.Index == idxProjectTo)
           {
-            var goPrj = new GetObject();
-            goPrj.EnableTransparentCommands(true);
-            goPrj.SetCommandPrompt("Select curve, surface, or mesh to project endpoint onto");
-            goPrj.GeometryFilter = ObjectType.Curve | ObjectType.Brep | ObjectType.Mesh;
-            goPrj.SubObjectSelect = false;
-            var goRes = goPrj.Get();
-            if (goRes != GetResult.Object || goPrj.ObjectCount == 0) continue;
-            var prjGeom = goPrj.Object(0).Geometry()?.Duplicate();
-            if (prjGeom == null) continue;
+            endAnchor = null;
+            var picked = PickGeometryWithPoint(
+              "Select curve, surface, polysurface, or mesh to project endpoint onto",
+              ObjectType.Curve | ObjectType.Surface | ObjectType.Brep | ObjectType.Mesh,
+              layerSession,
+              subObjects: false);
+            if (!picked.HasValue)
+              continue;
+
+            var prjGeom = picked.Value.Geometry;
+            projectTargetHighlight?.Dispose();
+            projectTargetHighlight = TemporaryGeometryHighlight.Create(
+              doc,
+              prjGeom,
+              SourceFeedbackColor);
+            projectToGeometry?.Dispose();
             projectToGeometry = prjGeom;
             mode = "project_to";
             ApplyModePrompt();
@@ -1148,6 +2001,9 @@ public sealed class vLine : Command
             angleOption.CurrentValue,
             angleRelative.CurrentValue,
             referenceVector,
+            startConstraint,
+            startDirection,
+            fromFirstPoint,
             layerSession,
             runMode,
             canUndo,
@@ -1160,7 +2016,10 @@ public sealed class vLine : Command
     }
     finally
     {
+      getPoint.MouseMove -= trackConstraintHover;
       getPoint.DynamicDraw -= drawPreview;
+      projectTargetHighlight?.Dispose();
+      projectToGeometry?.Dispose();
     }
   }
 
@@ -1755,15 +2614,225 @@ public sealed class vLine : Command
     return valid[0].Point;
   }
 
+  private static PickedGeometry? PickGeometryWithPoint(
+    string prompt,
+    ObjectType geometryFilter,
+    LineLayerSession? layerSession = null,
+    bool subObjects = false)
+  {
+    var doc = RhinoDoc.ActiveDoc;
+    if (doc == null)
+      return null;
+
+    var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
+    getPoint.SetCommandPrompt(
+      layerSession?.DecoratePrompt(doc, prompt) ?? prompt);
+    getPoint.AcceptNothing(true);
+
+    ScreenGeometryPick? hovered = null;
+    System.Drawing.Point hoverHitWindow = System.Drawing.Point.Empty;
+    getPoint.MouseMove += (_, e) =>
+    {
+      var nextPick = PickGeometryAtScreenPoint(
+        doc,
+        e.Viewport,
+        e.WindowPoint,
+        geometryFilter,
+        subObjects,
+        out var diagnostic);
+      if (nextPick.HasValue)
+      {
+        hovered = nextPick;
+        hoverHitWindow = e.WindowPoint;
+      }
+      else if (hovered.HasValue &&
+               ScreenDistanceSquared(e.WindowPoint, hoverHitWindow) <= 100)
+      {
+        diagnostic += $" retained={hovered.Value.ObjectId}";
+      }
+      else
+      {
+        hovered = null;
+      }
+    };
+    getPoint.DynamicDraw += (_, e) =>
+    {
+      if (layerSession != null)
+        DrawHiddenLayerWarning(e, doc, layerSession);
+      if (!hovered.HasValue)
+        return;
+
+      var geometry = GeometryFromScreenPick(
+        doc,
+        hovered.Value,
+        preferWholeObject: !subObjects);
+      if (geometry != null)
+        DrawFeedbackGeometry(e.Display, geometry, HoverFeedbackColor, 3);
+    };
+
+    var result = getPoint.Get();
+    if (result != GetResult.Point || !hovered.HasValue)
+      return null;
+
+    var sourceGeometry = GeometryFromScreenPick(
+      doc,
+      hovered.Value,
+      preferWholeObject: !subObjects);
+    var duplicate = DuplicatePickedGeometry(sourceGeometry);
+    if (duplicate == null)
+      return null;
+
+    Log.Write(
+      "vLine.PickGeometry",
+      $"prompt={prompt} source={hovered.Value.ObjectId} " +
+      $"component={hovered.Value.ComponentIndex} selected=" +
+      $"{doc.Objects.FindId(hovered.Value.ObjectId)?.IsSelected(true) > 0}");
+    return new PickedGeometry(
+      duplicate,
+      hovered.Value.PickPoint,
+      hovered.Value.ObjectId,
+      hovered.Value.ComponentIndex);
+  }
+
+  private static ScreenGeometryPick? PickGeometryAtScreenPoint(
+    RhinoDoc doc,
+    Rhino.Display.RhinoViewport viewport,
+    System.Drawing.Point windowPoint,
+    ObjectType geometryFilter,
+    bool subObjects,
+    out string diagnostic)
+  {
+    if (viewport.ParentView == null ||
+        !viewport.GetFrustumLine(windowPoint.X, windowPoint.Y, out var pickLine))
+    {
+      diagnostic = "no pick line";
+      return null;
+    }
+
+    using var pickContext = new PickContext
+    {
+      View = viewport.ParentView,
+      PickLine = pickLine,
+      PickStyle = PickStyle.PointPick,
+      PickMode = PickMode.Shaded,
+      PickGroupsEnabled = false,
+      SubObjectSelectionEnabled = subObjects
+    };
+    pickContext.SetPickTransform(viewport.GetPickTransform(windowPoint));
+    pickContext.UpdateClippingPlanes();
+
+    var picked = doc.Objects.PickObjects(pickContext);
+    if (picked == null)
+    {
+      diagnostic = "PickObjects returned null";
+      return null;
+    }
+
+    foreach (var objRef in picked)
+    {
+      var geometry = subObjects
+        ? objRef.Geometry()
+        : objRef.Object()?.Geometry;
+      if (!GeometryMatchesFilter(geometry, geometryFilter))
+        continue;
+
+      var pickPoint = objRef.SelectionPoint();
+      if (!pickPoint.IsValid && geometry != null)
+        pickPoint = geometry.GetBoundingBox(true).Center;
+      if (!pickPoint.IsValid)
+        continue;
+
+      diagnostic =
+        $"picked={picked.Length} id={objRef.ObjectId} " +
+        $"component={objRef.GeometryComponentIndex} type={geometry!.GetType().Name}";
+      return new ScreenGeometryPick(
+        objRef.ObjectId,
+        objRef.GeometryComponentIndex,
+        pickPoint);
+    }
+
+    diagnostic = $"picked={picked.Length} no matching geometry";
+    return null;
+  }
+
+  private static bool GeometryMatchesFilter(
+    GeometryBase? geometry,
+    ObjectType geometryFilter)
+  {
+    return geometry switch
+    {
+      Curve => (geometryFilter & ObjectType.Curve) != 0,
+      Brep => (geometryFilter & (ObjectType.Brep | ObjectType.Surface)) != 0,
+      Extrusion => (geometryFilter & (ObjectType.Brep | ObjectType.Surface)) != 0,
+      Surface => (geometryFilter & (ObjectType.Brep | ObjectType.Surface)) != 0,
+      Mesh => (geometryFilter & ObjectType.Mesh) != 0,
+      _ => false
+    };
+  }
+
+  private static GeometryBase? GeometryFromScreenPick(
+    RhinoDoc doc,
+    ScreenGeometryPick pick,
+    bool preferWholeObject)
+  {
+    var rhinoObject = doc.Objects.FindId(pick.ObjectId);
+    if (rhinoObject == null)
+      return null;
+    if (preferWholeObject)
+      return rhinoObject.Geometry;
+
+    if (rhinoObject.Geometry is Brep brep)
+    {
+      if (pick.ComponentIndex.ComponentIndexType == ComponentIndexType.BrepFace &&
+          pick.ComponentIndex.Index >= 0 &&
+          pick.ComponentIndex.Index < brep.Faces.Count)
+      {
+        return brep.Faces[pick.ComponentIndex.Index];
+      }
+
+      if (pick.ComponentIndex.ComponentIndexType == ComponentIndexType.BrepEdge &&
+          pick.ComponentIndex.Index >= 0 &&
+          pick.ComponentIndex.Index < brep.Edges.Count)
+      {
+        return brep.Edges[pick.ComponentIndex.Index];
+      }
+    }
+
+    return rhinoObject.Geometry;
+  }
+
+  private static GeometryBase? DuplicatePickedGeometry(GeometryBase? geometry)
+  {
+    return geometry switch
+    {
+      Extrusion extrusion => extrusion.ToBrep(),
+      BrepFace face => face.DuplicateSurface(),
+      BrepEdge edge => edge.DuplicateCurve(),
+      _ => geometry?.Duplicate()
+    };
+  }
+
   private static bool RunBiTangent(
     RhinoDoc doc,
     LineLayerSession layerSession)
   {
-    var first = PickCurveWithPoint("Select first tangent curve");
+    var first = PickCurveWithPoint(
+      "Select first tangent curve",
+      layerSession,
+      EndpointConstraintKind.Tangent);
     if (first == null)
       return false;
 
-    var second = PickCurveWithPoint("Select second tangent curve");
+    using var firstHighlight = TemporaryGeometryHighlight.Create(
+      doc,
+      first.Value.Curve,
+      SourceFeedbackColor);
+    var second = PickCurveWithPoint(
+      "Select second tangent curve",
+      layerSession,
+      EndpointConstraintKind.Tangent,
+      first.Value);
     if (second == null)
       return false;
 
@@ -1781,29 +2850,323 @@ public sealed class vLine : Command
     return true;
   }
 
-  private static (Curve Curve, Point3d PickPoint)? PickCurveWithPoint(string prompt)
+  private static PickedCurve? PickCurveWithPoint(
+    string prompt,
+    LineLayerSession? layerSession = null,
+    EndpointConstraintKind? cueKind = null,
+    PickedCurve? biTangentFrom = null)
   {
-    var go = new GetObject();
-    go.EnableTransparentCommands(true);
-    go.SetCommandPrompt(prompt);
-    go.GeometryFilter = ObjectType.Curve;
-    go.SubObjectSelect = false;
-    go.GroupSelect = false;
-    go.EnablePreSelect(false, true);
-
-    if (go.Get() != GetResult.Object)
+    var doc = RhinoDoc.ActiveDoc;
+    if (doc == null)
       return null;
 
-    var objRef = go.Object(0);
-    var curve = objRef.Curve();
-    if (curve == null)
+    var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
+    getPoint.SetCommandPrompt(
+      layerSession?.DecoratePrompt(doc, prompt) ?? prompt);
+    getPoint.AcceptNothing(true);
+    if (cueKind.HasValue)
+    {
+      getPoint.EnableSnapToCurves(true);
+      getPoint.EnableCurveSnapTangentBar(true, false);
+    }
+
+    ScreenCurvePick? hovered = null;
+    System.Drawing.Point hoverHitWindow = System.Drawing.Point.Empty;
+    var hoverLogged = false;
+    Guid hoverLoggedId = Guid.Empty;
+    Line? biTangentPreview = null;
+    getPoint.MouseMove += (_, e) =>
+    {
+      var nextPick = PickCurveAtScreenPoint(
+        doc,
+        e.Viewport,
+        e.WindowPoint,
+        out var diagnostic);
+      if (nextPick.HasValue)
+      {
+        hovered = nextPick;
+        hoverHitWindow = e.WindowPoint;
+      }
+      else if (hovered.HasValue &&
+               ScreenDistanceSquared(e.WindowPoint, hoverHitWindow) <= 100)
+      {
+        diagnostic += $" retained={hovered.Value.ObjectId}";
+      }
+      else
+      {
+        hovered = null;
+      }
+
+      biTangentPreview = null;
+      if (biTangentFrom.HasValue && hovered.HasValue)
+      {
+        var secondCurve = CurveFromScreenPick(doc, hovered.Value);
+        if (secondCurve != null &&
+            TryFindBiTangent(
+              biTangentFrom.Value.Curve,
+              secondCurve,
+              biTangentFrom.Value.PickPoint,
+              hovered.Value.PickPoint,
+              e.Viewport.ConstructionPlane(),
+              out var previewLine))
+        {
+          biTangentPreview = previewLine;
+        }
+      }
+
+      var hoveredId = hovered?.ObjectId ?? Guid.Empty;
+      if (!hoverLogged || hoveredId != hoverLoggedId)
+      {
+        hoverLogged = true;
+        hoverLoggedId = hoveredId;
+        Log.Write(
+          "vLine.PickCurve",
+          $"prompt={prompt} window={e.WindowPoint} world={e.Point} result={diagnostic}");
+      }
+    };
+    getPoint.DynamicDraw += (_, e) =>
+    {
+      if (layerSession != null)
+        DrawHiddenLayerWarning(e, doc, layerSession);
+
+      if (!hovered.HasValue)
+        return;
+
+      var curve = CurveFromScreenPick(doc, hovered.Value);
+      if (curve != null)
+      {
+        e.Display.DrawCurve(
+          curve,
+          HoverFeedbackColor,
+          3);
+      }
+
+      if (biTangentPreview.HasValue)
+      {
+        var previewColor = layerSession?.ResolveColor(doc) ?? Color.Cyan;
+        e.Display.DrawLine(biTangentPreview.Value, previewColor, 1);
+        e.Display.DrawDottedLine(
+          biTangentPreview.Value.From,
+          biTangentPreview.Value.To,
+          previewColor);
+      }
+    };
+
+    var result = getPoint.Get();
+    Log.Write(
+      "vLine.PickCurve",
+      $"prompt={prompt} getResult={result} commandResult={getPoint.CommandResult()} " +
+      $"hoverId={hovered?.ObjectId.ToString() ?? "none"}");
+    if (result != GetResult.Point)
       return null;
 
-    var pickPoint = objRef.SelectionPoint();
-    if (!pickPoint.IsValid)
-      pickPoint = curve.PointAtNormalizedLength(0.5);
+    Curve? pickedCurve = null;
+    var pickedPoint = getPoint.Point();
+    var pickedObjectId = Guid.Empty;
+    var pickedComponentIndex = ComponentIndex.Unset;
+    if (hovered.HasValue)
+    {
+      pickedCurve = CurveFromScreenPick(doc, hovered.Value);
+      pickedPoint = hovered.Value.PickPoint;
+      pickedObjectId = hovered.Value.ObjectId;
+      pickedComponentIndex = hovered.Value.ComponentIndex;
+    }
 
-    return (curve, pickPoint);
+    if (pickedCurve == null)
+    {
+      var pointObject = getPoint.PointOnObject();
+      pickedCurve = pointObject?.Curve();
+      pickedObjectId = pointObject?.ObjectId ?? Guid.Empty;
+      pickedComponentIndex = pointObject?.GeometryComponentIndex ?? ComponentIndex.Unset;
+      Log.Write(
+        "vLine.PickCurve",
+        $"prompt={prompt} native fallback id={pointObject?.ObjectId.ToString() ?? "none"} " +
+        $"component={pointObject?.GeometryComponentIndex.ToString() ?? "none"} " +
+        $"curveType={pickedCurve?.GetType().Name ?? "none"} point={pickedPoint}");
+    }
+
+    var duplicate = pickedCurve?.DuplicateCurve();
+    if (duplicate == null)
+      return null;
+
+    Log.Write(
+      "vLine.PickCurve",
+      $"prompt={prompt} source={pickedObjectId} " +
+      $"selected={doc.Objects.FindId(pickedObjectId)?.IsSelected(true) > 0}");
+
+    return new PickedCurve(
+      duplicate,
+      pickedPoint,
+      pickedObjectId,
+      pickedComponentIndex);
+  }
+
+  private static ScreenCurvePick? PickCurveAtScreenPoint(
+    RhinoDoc doc,
+    Rhino.Display.RhinoViewport viewport,
+    System.Drawing.Point windowPoint,
+    out string diagnostic)
+  {
+    if (viewport.ParentView == null)
+    {
+      diagnostic = "no parent view";
+      return null;
+    }
+
+    if (!viewport.GetFrustumLine(windowPoint.X, windowPoint.Y, out var pickLine))
+    {
+      diagnostic = "GetFrustumLine failed";
+      return null;
+    }
+
+    using var pickContext = new PickContext
+    {
+      View = viewport.ParentView,
+      PickLine = pickLine,
+      PickStyle = PickStyle.PointPick,
+      PickMode = PickMode.Wireframe,
+      PickGroupsEnabled = false,
+      SubObjectSelectionEnabled = true
+    };
+    pickContext.SetPickTransform(viewport.GetPickTransform(windowPoint));
+    pickContext.UpdateClippingPlanes();
+
+    var picked = doc.Objects.PickObjects(pickContext);
+    if (picked == null)
+    {
+      diagnostic = "PickObjects returned null";
+      return null;
+    }
+
+    var candidates = new List<string>();
+
+    foreach (var objRef in picked)
+    {
+      var curve = objRef.Curve();
+      if (curve == null)
+      {
+        if (objRef.Object()?.Geometry is Brep brep &&
+            TryPickBrepEdge(
+              pickContext,
+              brep,
+              out var edgeIndex,
+              out var edgePoint,
+              out var edgeDepth,
+              out var edgeDistance))
+        {
+          var componentIndex = new ComponentIndex(
+            ComponentIndexType.BrepEdge,
+            edgeIndex);
+          diagnostic =
+            $"picked={picked.Length} curveId={objRef.ObjectId} " +
+            $"component={componentIndex} curveType=BrepEdge " +
+            $"pick={edgePoint} depth={edgeDepth:G6} distance={edgeDistance:G6}";
+          return new ScreenCurvePick(
+            objRef.ObjectId,
+            componentIndex,
+            edgePoint);
+        }
+
+        candidates.Add($"{objRef.ObjectId}:{objRef.Object()?.ObjectType.ToString() ?? "unknown"}");
+        continue;
+      }
+
+      var pickPoint = objRef.SelectionPoint();
+      if (!pickPoint.IsValid)
+      {
+        using var pickCurve = new LineCurve(pickLine);
+        if (!curve.ClosestPoints(pickCurve, out pickPoint, out _))
+          pickPoint = curve.PointAtNormalizedLength(0.5);
+      }
+
+      diagnostic =
+        $"picked={picked.Length} curveId={objRef.ObjectId} " +
+        $"component={objRef.GeometryComponentIndex} " +
+        $"curveType={curve.GetType().Name} pick={pickPoint}";
+      return new ScreenCurvePick(
+        objRef.ObjectId,
+        objRef.GeometryComponentIndex,
+        pickPoint);
+    }
+
+    diagnostic = $"picked={picked.Length} no curves candidates=[{string.Join(",", candidates)}]";
+    return null;
+  }
+
+  private static bool TryPickBrepEdge(
+    PickContext pickContext,
+    Brep brep,
+    out int edgeIndex,
+    out Point3d edgePoint,
+    out double depth,
+    out double distance)
+  {
+    edgeIndex = -1;
+    edgePoint = Point3d.Unset;
+    depth = double.MaxValue;
+    distance = double.MaxValue;
+
+    for (var i = 0; i < brep.Edges.Count; i++)
+    {
+      using var nurbs = brep.Edges[i].ToNurbsCurve();
+      if (nurbs == null ||
+          !pickContext.PickFrustumTest(
+            nurbs,
+            out var parameter,
+            out var candidateDepth,
+            out var candidateDistance))
+      {
+        continue;
+      }
+
+      if (candidateDistance > distance ||
+          (Math.Abs(candidateDistance - distance) <= 1e-12 && candidateDepth >= depth))
+      {
+        continue;
+      }
+
+      edgeIndex = i;
+      edgePoint = nurbs.PointAt(parameter);
+      depth = candidateDepth;
+      distance = candidateDistance;
+    }
+
+    return edgeIndex >= 0 && edgePoint.IsValid;
+  }
+
+  private static Curve? CurveFromScreenPick(RhinoDoc doc, ScreenCurvePick pick)
+  {
+    var rhinoObject = doc.Objects.FindId(pick.ObjectId);
+    if (rhinoObject?.Geometry is Curve curve)
+      return curve;
+
+    if (pick.ComponentIndex.ComponentIndexType == ComponentIndexType.BrepEdge &&
+        rhinoObject?.Geometry is Brep brep &&
+        pick.ComponentIndex.Index >= 0 &&
+        pick.ComponentIndex.Index < brep.Edges.Count)
+    {
+      return brep.Edges[pick.ComponentIndex.Index];
+    }
+
+    if (pick.ComponentIndex.ComponentIndexType == ComponentIndexType.PolycurveSegment &&
+        rhinoObject?.Geometry is PolyCurve polyCurve &&
+        pick.ComponentIndex.Index >= 0 &&
+        pick.ComponentIndex.Index < polyCurve.SegmentCount)
+    {
+      return polyCurve.SegmentCurve(pick.ComponentIndex.Index);
+    }
+
+    return null;
+  }
+
+  private static int ScreenDistanceSquared(
+    System.Drawing.Point first,
+    System.Drawing.Point second)
+  {
+    var dx = first.X - second.X;
+    var dy = first.Y - second.Y;
+    return (dx * dx) + (dy * dy);
   }
 
   private static bool TryFindBiTangent(Curve a, Curve b, Point3d pickA, Point3d pickB,
@@ -1877,8 +3240,14 @@ public sealed class vLine : Command
 
     valid.Sort((x, y) =>
     {
-      var p = x.PickScore.CompareTo(y.PickScore);
-      return p != 0 ? p : x.Error.CompareTo(y.Error);
+      var endPick = x.PB.DistanceToSquared(pickB)
+        .CompareTo(y.PB.DistanceToSquared(pickB));
+      if (endPick != 0)
+        return endPick;
+
+      var startPick = x.PA.DistanceToSquared(pickA)
+        .CompareTo(y.PA.DistanceToSquared(pickA));
+      return startPick != 0 ? startPick : x.Error.CompareTo(y.Error);
     });
 
     var best = valid[0];
@@ -1955,6 +3324,384 @@ public sealed class vLine : Command
     var crossA = Math.Abs((tanAU.X * dirU.Y) - (tanAU.Y * dirU.X));
     var crossB = Math.Abs((tanBU.X * dirU.Y) - (tanBU.Y * dirU.X));
     return crossA + crossB;
+  }
+
+  private static bool TryResolveConstraintToPoint(
+    EndpointConstraint constraint,
+    Point3d oppositePoint,
+    bool preview,
+    out Point3d constrainedPoint)
+  {
+    constrainedPoint = Point3d.Unset;
+    Point3d? point;
+    if (constraint.Kind == EndpointConstraintKind.Perpendicular)
+    {
+      point = PerpPointFromStartWithHint(
+        oppositePoint,
+        constraint.Curve,
+        constraint.HintPoint,
+        preview ? 80 : 240,
+        preview ? 8 : 18);
+      point ??= PerpFallbackToPointedSegment(
+        oppositePoint,
+        constraint.Curve,
+        constraint.HintPoint,
+        preview);
+    }
+    else
+    {
+      point = TangentPointFromStart(
+        oppositePoint,
+        constraint.Curve,
+        constraint.HintPoint,
+        preview ? 80 : 240,
+        preview ? 8 : 18);
+    }
+
+    if (!point.HasValue)
+      return false;
+
+    constrainedPoint = point.Value;
+    return constrainedPoint.IsValid;
+  }
+
+  private static bool TryResolveConstraintToDirection(
+    EndpointConstraint constraint,
+    Vector3d direction,
+    bool preview,
+    out Point3d constrainedPoint)
+  {
+    constrainedPoint = Point3d.Unset;
+    if (!direction.Unitize())
+      return false;
+
+    var domain = constraint.Curve.Domain;
+    if (!domain.IsValid || domain.Length <= RhinoMath.SqrtEpsilon)
+      return false;
+
+    var samples = preview ? 64 : 192;
+    var values = new double[samples + 1];
+    for (var i = 0; i <= samples; i++)
+    {
+      var t = domain.T0 + (domain.Length * i / samples);
+      values[i] = ConstraintDirectionScore(constraint, direction, t);
+    }
+
+    var candidates = new List<(double Parameter, double Error)>();
+    for (var i = 0; i <= samples; i++)
+    {
+      var previous = i == 0 ? double.MaxValue : values[i - 1];
+      var next = i == samples ? double.MaxValue : values[i + 1];
+      if (values[i] > previous || values[i] > next)
+        continue;
+
+      var t0 = domain.T0 + (domain.Length * Math.Max(0, i - 1) / samples);
+      var t1 = domain.T0 + (domain.Length * Math.Min(samples, i + 1) / samples);
+      candidates.Add(RefineConstraintDirection(
+        constraint,
+        direction,
+        t0,
+        t1,
+        preview ? 10 : 22));
+    }
+
+    candidates.Sort((a, b) =>
+    {
+      var aValid = a.Error <= 0.015;
+      var bValid = b.Error <= 0.015;
+      if (aValid != bValid)
+        return aValid ? -1 : 1;
+
+      var aPoint = constraint.Curve.PointAt(a.Parameter);
+      var bPoint = constraint.Curve.PointAt(b.Parameter);
+      var byHint = aPoint.DistanceToSquared(constraint.HintPoint)
+        .CompareTo(bPoint.DistanceToSquared(constraint.HintPoint));
+      return byHint != 0 ? byHint : a.Error.CompareTo(b.Error);
+    });
+
+    if (candidates.Count == 0 || candidates[0].Error > 0.015)
+      return false;
+
+    constrainedPoint = constraint.Curve.PointAt(candidates[0].Parameter);
+    return constrainedPoint.IsValid;
+  }
+
+  private static double ConstraintDirectionScore(
+    EndpointConstraint constraint,
+    Vector3d direction,
+    double parameter)
+  {
+    var tangent = constraint.Curve.TangentAt(parameter);
+    if (!tangent.Unitize())
+      return double.MaxValue;
+
+    var dot = Math.Abs(Vector3d.Multiply(tangent, direction));
+    return constraint.Kind == EndpointConstraintKind.Perpendicular
+      ? dot
+      : Math.Abs(1.0 - dot);
+  }
+
+  private static (double Parameter, double Error) RefineConstraintDirection(
+    EndpointConstraint constraint,
+    Vector3d direction,
+    double t0,
+    double t1,
+    int iterations)
+  {
+    const double phi = 0.61803398875;
+    var a = Math.Min(t0, t1);
+    var b = Math.Max(t0, t1);
+    var c = b - ((b - a) * phi);
+    var d = a + ((b - a) * phi);
+    var fc = ConstraintDirectionScore(constraint, direction, c);
+    var fd = ConstraintDirectionScore(constraint, direction, d);
+    for (var i = 0; i < iterations; i++)
+    {
+      if (fc <= fd)
+      {
+        b = d;
+        d = c;
+        fd = fc;
+        c = b - ((b - a) * phi);
+        fc = ConstraintDirectionScore(constraint, direction, c);
+      }
+      else
+      {
+        a = c;
+        c = d;
+        fc = fd;
+        d = a + ((b - a) * phi);
+        fd = ConstraintDirectionScore(constraint, direction, d);
+      }
+    }
+
+    return fc <= fd ? (c, fc) : (d, fd);
+  }
+
+  private static bool DirectionsAreParallel(
+    Vector3d first,
+    Vector3d second,
+    double angularError)
+  {
+    if (!first.Unitize() || !second.Unitize())
+      return false;
+    return 1.0 - Math.Abs(Vector3d.Multiply(first, second)) <= angularError;
+  }
+
+  private static bool TryConstrainEndpointFromFixedStart(
+    EndpointConstraint constraint,
+    Point3d fixedStart,
+    Point3d cursorPoint,
+    out Point3d endpoint)
+  {
+    endpoint = Point3d.Unset;
+    var tangent = constraint.Curve.TangentAt(constraint.SeedParameter);
+    if (!tangent.Unitize())
+      return false;
+
+    var toCursor = cursorPoint - fixedStart;
+    Vector3d constrained;
+    if (constraint.Kind == EndpointConstraintKind.Tangent)
+    {
+      constrained = tangent * Vector3d.Multiply(toCursor, tangent);
+    }
+    else
+    {
+      constrained = toCursor -
+                    (tangent * Vector3d.Multiply(toCursor, tangent));
+    }
+
+    if (constrained.IsTiny())
+      return false;
+
+    endpoint = fixedStart + constrained;
+    return endpoint.IsValid;
+  }
+
+  private static bool DirectionMatchesConstraintAtSeed(
+    EndpointConstraint constraint,
+    Vector3d direction)
+  {
+    var tangent = constraint.Curve.TangentAt(constraint.SeedParameter);
+    if (!tangent.Unitize() || !direction.Unitize())
+      return false;
+
+    var dot = Math.Abs(Vector3d.Multiply(tangent, direction));
+    return constraint.Kind == EndpointConstraintKind.Tangent
+      ? 1.0 - dot <= 0.02
+      : dot <= 0.02;
+  }
+
+  private static bool TryResolveFixedStartConstraintPair(
+    EndpointConstraint startConstraint,
+    EndpointConstraint endConstraint,
+    bool preview,
+    out Line line)
+  {
+    line = Line.Unset;
+    var fixedStart = startConstraint.Curve.PointAt(
+      startConstraint.SeedParameter);
+    if (!TryResolveConstraintToPoint(
+          endConstraint,
+          fixedStart,
+          preview,
+          out var constrainedEnd))
+      return false;
+
+    var candidate = new Line(fixedStart, constrainedEnd);
+    if (!candidate.IsValid ||
+        candidate.Length <= RhinoMath.SqrtEpsilon ||
+        !DirectionMatchesConstraintAtSeed(startConstraint, candidate.Direction))
+      return false;
+
+    line = candidate;
+    return true;
+  }
+
+  private static void DrawCurveConstraintHelper(
+    Rhino.Display.DisplayPipeline display,
+    RhinoDoc doc,
+    EndpointConstraint constraint,
+    Point3d point)
+  {
+    if (!constraint.Curve.ClosestPoint(point, out var parameter))
+      parameter = constraint.SeedParameter;
+
+    var tangent = constraint.Curve.TangentAt(parameter);
+    if (!tangent.Unitize())
+      return;
+
+    const double HalfLengthPixels = 36.0;
+    var halfLength = Math.Max(doc.ModelAbsoluteTolerance * 8.0, 0.1);
+    var viewport = doc.Views.ActiveView?.ActiveViewport;
+    if (viewport != null &&
+        viewport.GetWorldToScreenScale(point, out var pixelsPerUnit) &&
+        pixelsPerUnit > RhinoMath.SqrtEpsilon)
+      halfLength = HalfLengthPixels / pixelsPerUnit;
+
+    display.PushDepthTesting(false);
+    display.PushDepthWriting(false);
+    try
+    {
+      display.DrawLine(
+        point - (tangent * halfLength),
+        point + (tangent * halfLength),
+        Color.White,
+        1);
+      if (constraint.HintPoint.IsValid)
+        display.DrawPoint(constraint.HintPoint, Color.White);
+      display.DrawPoint(point, Color.Red);
+    }
+    finally
+    {
+      display.PopDepthWriting();
+      display.PopDepthTesting();
+    }
+  }
+
+  private static bool TryResolveConstraintPair(
+    EndpointConstraint startConstraint,
+    EndpointConstraint endConstraint,
+    bool preview,
+    out Line line)
+  {
+    line = Line.Unset;
+    var startSeeds = BuildConstraintSeeds(
+      startConstraint.Curve.Domain,
+      startConstraint.SeedParameter,
+      preview);
+    var endSeeds = BuildConstraintSeeds(
+      endConstraint.Curve.Domain,
+      endConstraint.SeedParameter,
+      preview);
+
+    var bestMaximumDistance = double.MaxValue;
+    var bestCombinedDistance = double.MaxValue;
+    var candidateCount = 0;
+    var bestT0 = RhinoMath.UnsetValue;
+    var bestT1 = RhinoMath.UnsetValue;
+    foreach (var startSeed in startSeeds)
+    {
+      foreach (var endSeed in endSeeds)
+      {
+        var t0 = startSeed;
+        var t1 = endSeed;
+        if (!Line.TryCreateBetweenCurves(
+              startConstraint.Curve,
+              endConstraint.Curve,
+              ref t0,
+              ref t1,
+              startConstraint.Kind == EndpointConstraintKind.Perpendicular,
+              endConstraint.Kind == EndpointConstraintKind.Perpendicular,
+              out _))
+          continue;
+
+        var candidate = new Line(
+          startConstraint.Curve.PointAt(t0),
+          endConstraint.Curve.PointAt(t1));
+        if (!candidate.IsValid || candidate.Length <= RhinoMath.SqrtEpsilon)
+          continue;
+
+        candidateCount++;
+        var endDistance = candidate.To.DistanceToSquared(endConstraint.HintPoint);
+        var startDistance = candidate.From.DistanceToSquared(startConstraint.HintPoint);
+        var maximumDistance = Math.Max(startDistance, endDistance);
+        var combinedDistance = startDistance + endDistance;
+        if (maximumDistance > bestMaximumDistance ||
+            (maximumDistance == bestMaximumDistance && combinedDistance >= bestCombinedDistance))
+          continue;
+
+        bestMaximumDistance = maximumDistance;
+        bestCombinedDistance = combinedDistance;
+        bestT0 = t0;
+        bestT1 = t1;
+        line = candidate;
+      }
+    }
+
+    if (!preview)
+    {
+      Log.Write(
+        "vLine.Pair",
+        $"start={startConstraint.Kind} hint={startConstraint.HintPoint} " +
+        $"end={endConstraint.Kind} hint={endConstraint.HintPoint} " +
+        $"candidates={candidateCount} t0={bestT0:R} t1={bestT1:R} " +
+        $"lineFrom={line.From} lineTo={line.To}");
+    }
+
+    return line.IsValid;
+  }
+
+  private static IReadOnlyList<double> BuildConstraintSeeds(
+    Interval domain,
+    double preferred,
+    bool preview)
+  {
+    if (!domain.IsValid || domain.Length <= RhinoMath.SqrtEpsilon)
+      return new[] { preferred };
+
+    var normalized = (preferred - domain.T0) / domain.Length;
+    normalized = Math.Max(0.0, Math.Min(1.0, normalized));
+    var offsets = preview
+      ? new[] { 0.0, -0.08, 0.08 }
+      : new[] { 0.0, -0.04, 0.04, -0.12, 0.12, -0.3, 0.3 };
+    var divisions = preview ? 6 : 16;
+    var seeds = new List<double>(offsets.Length + divisions + 1);
+    void AddSeed(double unit)
+    {
+      unit = Math.Max(0.0, Math.Min(1.0, unit));
+      var parameter = domain.T0 + (domain.Length * unit);
+      if (seeds.Count == 0 || !seeds.Exists(value => Math.Abs(value - parameter) <= domain.Length * 1e-9))
+        seeds.Add(parameter);
+    }
+
+    foreach (var offset in offsets)
+      AddSeed(normalized + offset);
+
+    for (var i = 0; i <= divisions; i++)
+      AddSeed((double)i / divisions);
+
+    return seeds;
   }
 
   private static Point3d? FindParallelRaySnap(
@@ -2145,42 +3892,60 @@ public sealed class vLine : Command
     Log.Write("vLine.Debug", msg);
   }
 
+  private static void DrawFeedbackGeometry(
+    Rhino.Display.DisplayPipeline display,
+    GeometryBase geometry,
+    Color color,
+    int thickness)
+  {
+    switch (geometry)
+    {
+      case Curve curve:
+        display.DrawCurve(curve, color, thickness);
+        break;
+      case Brep brep:
+        display.DrawBrepWires(brep, color, thickness);
+        break;
+      case Mesh mesh:
+        display.DrawMeshWires(mesh, color, thickness);
+        break;
+      case Extrusion extrusion:
+      {
+        using var brep = extrusion.ToBrep();
+        if (brep != null)
+          display.DrawBrepWires(brep, color, thickness);
+        break;
+      }
+      case Surface surface:
+      {
+        using var brep = surface.ToBrep();
+        if (brep != null)
+          display.DrawBrepWires(brep, color, thickness);
+        break;
+      }
+    }
+  }
+
+  private static void DrawHiddenLayerWarning(
+    GetPointDrawEventArgs e,
+    RhinoDoc doc,
+    LineLayerSession layerSession)
+  {
+    var layerName = layerSession.HiddenLayerName(doc);
+    if (layerName == null || !e.CurrentPoint.IsValid)
+      return;
+
+    var client = e.Viewport.WorldToClient(e.CurrentPoint);
+    var position = new Point2d(client.X + 18.0, client.Y + 26.0);
+    var shadow = new Point2d(position.X + 1.0, position.Y + 1.0);
+    var message = $"Layer hidden: {layerName}";
+    e.Display.Draw2dText(message, Color.Black, shadow, false, 12);
+    e.Display.Draw2dText(message, Color.OrangeRed, position, false, 12);
+  }
+
   private static void EnsureDebugLog()
   {
     RhinoApp.WriteLine($"[vLine] Debug log: {Log.FilePath ?? "unavailable"}");
-  }
-
-  private static void LaunchNativeLineMode()
-  {
-    if (_pendingNativeLineLaunchIdleHandler != null)
-    {
-      RhinoApp.Idle -= _pendingNativeLineLaunchIdleHandler;
-      _pendingNativeLineLaunchIdleHandler = null;
-    }
-
-    if (string.IsNullOrWhiteSpace(_pendingNativeLineMode))
-      return;
-
-    _pendingNativeLineLaunchIdleHandler = OnLaunchNativeLineModeOnIdle;
-    RhinoApp.Idle += _pendingNativeLineLaunchIdleHandler;
-  }
-
-  private static void OnLaunchNativeLineModeOnIdle(object? sender, EventArgs e)
-  {
-    if (_pendingNativeLineLaunchIdleHandler != null)
-    {
-      RhinoApp.Idle -= _pendingNativeLineLaunchIdleHandler;
-      _pendingNativeLineLaunchIdleHandler = null;
-    }
-
-    var mode = _pendingNativeLineMode;
-    _pendingNativeLineMode = null;
-    if (string.IsNullOrWhiteSpace(mode))
-      return;
-
-    var script = $"_Line _{mode}";
-    Log.Write("vLine.Native", $"launching {script}");
-    _ = RhinoApp.RunScript(script, false);
   }
 
   private static void DeleteObjectIfValid(RhinoDoc doc, Guid id)
@@ -2213,6 +3978,23 @@ public sealed class vLine : Command
     }
 
     public string OptionLayerName { get; private set; }
+
+    public string DecoratePrompt(RhinoDoc doc, string prompt)
+    {
+      var hiddenLayerName = HiddenLayerName(doc);
+      return hiddenLayerName == null
+        ? prompt
+        : $"{prompt} [Layer hidden: {hiddenLayerName}]";
+    }
+
+    public string? HiddenLayerName(RhinoDoc doc)
+    {
+      var layerIndex = ResolveLayerIndex(doc);
+      if (!IsUsableLayer(doc, layerIndex) || IsEffectivelyVisible(doc.Layers[layerIndex], doc))
+        return null;
+
+      return doc.Layers[layerIndex].FullPath;
+    }
 
     public void ApplyOption(RhinoDoc doc, string optionLayerName)
     {
@@ -2275,6 +4057,27 @@ public sealed class vLine : Command
         ? currentLayerIndex
         : 0;
     }
+
+    private static bool IsEffectivelyVisible(Layer layer, RhinoDoc doc)
+    {
+      var visited = new HashSet<Guid>();
+      var current = layer;
+      while (current != null)
+      {
+        if (!current.IsVisible)
+          return false;
+
+        var parentId = current.ParentLayerId;
+        if (parentId == Guid.Empty)
+          return true;
+        if (!visited.Add(parentId))
+          return false;
+
+        current = doc.Layers.FindId(parentId);
+      }
+
+      return false;
+    }
   }
 
   private sealed class CurveCacheState
@@ -2291,6 +4094,86 @@ public sealed class vLine : Command
 
   private readonly record struct CurveCacheItem(Curve Curve, BoundingBox BoundingBox);
 
+  private sealed class TemporaryGeometryHighlight : Rhino.Display.DisplayConduit, IDisposable
+  {
+    private readonly RhinoDoc _doc;
+    private readonly GeometryBase _geometry;
+    private readonly Color _color;
+
+    private TemporaryGeometryHighlight(
+      RhinoDoc doc,
+      GeometryBase geometry,
+      Color color)
+    {
+      _doc = doc;
+      _geometry = geometry;
+      _color = color;
+      Enabled = true;
+      _doc.Views.Redraw();
+    }
+
+    public static TemporaryGeometryHighlight? Create(
+      RhinoDoc doc,
+      GeometryBase geometry,
+      Color color)
+    {
+      var duplicate = DuplicatePickedGeometry(geometry);
+      if (duplicate == null)
+        return null;
+      return new TemporaryGeometryHighlight(doc, duplicate, color);
+    }
+
+    protected override void DrawForeground(Rhino.Display.DrawEventArgs e)
+      => DrawFeedbackGeometry(e.Display, _geometry, _color, 3);
+
+    public void Dispose()
+    {
+      Enabled = false;
+      _geometry.Dispose();
+      _doc.Views.Redraw();
+    }
+  }
+
+  private readonly record struct ScreenGeometryPick(
+    Guid ObjectId,
+    ComponentIndex ComponentIndex,
+    Point3d PickPoint);
+
+  private readonly record struct PickedGeometry(
+    GeometryBase Geometry,
+    Point3d PickPoint,
+    Guid ObjectId,
+    ComponentIndex ComponentIndex);
+
+  private readonly record struct ScreenCurvePick(
+    Guid ObjectId,
+    ComponentIndex ComponentIndex,
+    Point3d PickPoint);
+
+  private readonly record struct PickedCurve(
+    Curve Curve,
+    Point3d PickPoint,
+    Guid ObjectId,
+    ComponentIndex ComponentIndex);
+
+  private enum EndpointConstraintKind
+  {
+    Tangent,
+    Perpendicular
+  }
+
+  private readonly record struct EndpointConstraint(
+    Curve Curve,
+    double SeedParameter,
+    Point3d HintPoint,
+    EndpointConstraintKind Kind,
+    Guid ObjectId = default,
+    ComponentIndex ComponentIndex = default);
+
+  private readonly record struct EndAnchor(
+    Point3d Point,
+    Vector3d Direction);
+
   private readonly record struct ConstraintState(
     string? Mode,
     bool PersistConstraint,
@@ -2305,20 +4188,37 @@ public sealed class vLine : Command
     Point3d Point,
     bool BothSides,
     int ChainMode,
-    bool DelegatedToNative)
+    bool Completed,
+    EndpointConstraint? Constraint,
+    Vector3d? Direction)
   {
     public static FirstPointResult WithPoint(Point3d point, bool bothSides, int chainMode)
-      => new(true, point, bothSides, chainMode, false);
+      => new(true, point, bothSides, chainMode, false, null, null);
 
-    public static FirstPointResult Delegated(bool bothSides, int chainMode)
-      => new(false, Point3d.Unset, bothSides, chainMode, true);
+    public static FirstPointResult WithConstraint(
+      Point3d point,
+      bool bothSides,
+      int chainMode,
+      EndpointConstraint constraint)
+      => new(true, point, bothSides, chainMode, false, constraint, null);
+
+    public static FirstPointResult WithDirection(
+      Point3d point,
+      Vector3d direction,
+      bool bothSides,
+      int chainMode)
+      => new(true, point, bothSides, chainMode, false, null, direction);
+
+    public static FirstPointResult CompletedResult(bool bothSides, int chainMode)
+      => new(false, Point3d.Unset, bothSides, chainMode, true, null, null);
 
     public static FirstPointResult None(bool bothSides, int chainMode)
-      => new(false, Point3d.Unset, bothSides, chainMode, false);
+      => new(false, Point3d.Unset, bothSides, chainMode, false, null, null);
   }
 
   private readonly record struct SecondPointResult(
     bool HasPoint,
+    Point3d StartPoint,
     Point3d Point,
     bool BothSides,
     int ChainMode,
@@ -2327,16 +4227,16 @@ public sealed class vLine : Command
     public bool IsUndo { get; init; } = false;
     public bool IsRedo { get; init; } = false;
 
-    public static SecondPointResult WithPoint(Point3d point, bool bothSides, int chainMode, ConstraintState state)
-      => new(true, point, bothSides, chainMode, state);
+    public static SecondPointResult WithPoint(Point3d startPoint, Point3d point, bool bothSides, int chainMode, ConstraintState state)
+      => new(true, startPoint, point, bothSides, chainMode, state);
 
     public static SecondPointResult None(bool bothSides, int chainMode, ConstraintState state)
-      => new(false, Point3d.Unset, bothSides, chainMode, state);
+      => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state);
 
     public static SecondPointResult Undo(bool bothSides, int chainMode, ConstraintState state)
-      => new(false, Point3d.Unset, bothSides, chainMode, state) { IsUndo = true };
+      => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state) { IsUndo = true };
 
     public static SecondPointResult Redo(bool bothSides, int chainMode, ConstraintState state)
-      => new(false, Point3d.Unset, bothSides, chainMode, state) { IsRedo = true };
+      => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state) { IsRedo = true };
   }
 }

@@ -1,4 +1,4 @@
-# vTools  ·  v26.7.31.1803
+# vTools  ·  v26.8.1.2129
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -18,7 +18,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vGroup](#vgroup-flow) *(26.5.27.1300)* — groups selected objects by closed-curve boundaries; each boundary is grouped with the objects inside it
   - [vIsolate](#visolate-flow) *(26.7.22.1515)* — keeps selected objects visible while hiding every other visible normal object, optionally in a named Rhino hide set
   - [vJoin](#vjoin-flow) *(26.7.30.2016)* — joins selected objects, optionally joining copies while preserving the originals
-  - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, angle lock, length constraint, and perp/tangent endpoint solving
+  - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, angle lock, and length constraints
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
   - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves
@@ -258,17 +258,31 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
       - `Chained`: each next segment starts at the previous end point.
       - `Polyline`: build/update one polyline as you add vertices.
     - `BothSides`: creates a symmetric line centered on the picked start point.
+    - `Normal`: starts on a selected curve or surface and follows its normal.
+    - `Angled`: defines a reference direction and rotates it by the entered CPlane angle.
+    - `Vertical`: starts a line constrained to the active CPlane Z-axis.
+    - `FourPoint`: defines the direction with two points, then picks the line start.
+    - `Bisector`: starts at an angle vertex and follows the bisector of two picked sides.
+    - `Extension`: starts at the selected end of a curve and follows its tangent.
+    - `Parallel`: defines the direction with two points, then picks the line start.
+    - `Perpendicular` and `Tangent`: pick the first curve, keep it feedback-highlighted without selecting it, and defer the exact start point until the end constraint is known.
+    - `BiTangent`: hover-clicks two curves and previews the candidate tangent line while hovering the second curve.
     - `Layer`: opens the shared searchable layer selector with `*Current*` as the first item. Choosing `*Current*` follows the document's current layer dynamically; choosing another layer stores its full path. `-vLine` accepts the layer name or full path directly instead. The choice persists. If Rhino's current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.
-    - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `BiTangent`, `Extension`: delegates to Rhino native line variants.
+    - Reference geometry is display-highlighted without changing Rhino object or subobject selection; existing preselection is preserved.
 
 1. Pick the end point.
 1. End-point options:
 
-    - `Perp`: solve endpoint perpendicular to the hovered curve under cursor.
+    - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `BiTangent`, `Extension`, and `Parallel`: remain available where compatible with the start definition. `Vertical` constrains the endpoint along the active CPlane Z-axis. A direction-defining mode is offered once per line; tangent and perpendicular constraints can be applied at both endpoints.
+    - When a constraint has multiple valid positions, the solution nearest the clicked location is used.
+    - Curve-constrained previews show a short white tangent bar and center point at each solved endpoint.
+    - `Perpendicular`: solve against the hovered curve and use the valid perpendicular point nearest the cursor.
     - `Tangent`: solve against the hovered curve and use the valid tangent point nearest the cursor.
     - `PerpNear`: solve perpendicular against nearest curve.
     - `TanNear`: solve against the nearest curve and use the valid tangent point nearest the cursor.
     - `Auto`: choose perpendicular/tangent solution using `Priority`.
+    - `FromFirstPoint`: locks a curve-constrained start to the initially clicked point instead of allowing the solver to move it along the first curve.
+    - `ProjectTo`: picks a curve, surface, polysurface, or mesh and constrains the endpoint to its nearest projected point.
     - `Priority`: auto-mode choice policy.
       - `Closest`: whichever solution is closer to cursor.
       - `PerpFirst`: prefer perpendicular when available.
@@ -280,6 +294,8 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
     - `Angle`: angle value used by `AngleLock`.
     - `AngleRef`: `Absolute` uses CPlane X-axis; `Relative` uses previous segment direction.
     - `Mode`, `BothSides`, and `Layer`: also available while placing the end point.
+    - Direct numerical input sets the segment length without leaving the active construction mode.
+    - A hidden target layer is reported at the cursor and command line; the line is still created on that layer.
 
 ### vLineLength flow
 

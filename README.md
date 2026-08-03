@@ -1,11 +1,11 @@
-# vTools  ·  v26.8.3.757
+# vTools  ·  v26.8.3.856
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (45):
+- Native commands (46):
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
@@ -33,6 +33,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vProjectToSurface](#vprojecttosurface-flow) *(26.7.16.1432)* — projects selected curves and points onto one or more target surfaces or polysurfaces with live preview; overhanging curve portions are clipped away
   - [vPointTrace](#vpointtrace-flow) *(26.4.30.1044)* — maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position
   - [vRectangle](#vrectangle-flow) *(26.4.27.2259)* — creates an axis-aligned rectangle polyline from width/height inputs driven by numeric value or selected curve lengths
+  - [vReGroup](#vregroup-flow) *(26.8.3.845)* — dissolves all existing groups (including nested sub-groups) on the selected objects and collects them into one new group
   - [vScallop](#vscallop-flow) *(26.4.27.2125)* — creates an arc scallop between two points or along a selected line
   - [vSetPt](#vsetpt-flow) *(26.5.28.1145)* — previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using the built-in SetPt
   - [vShow](#vshow-flow) *(26.7.22.1818)* — shows one named hidden-object set, or all named sets, without cancelling the command already in progress
@@ -486,6 +487,13 @@ Behavior:
 1. Pick the bottom-left corner. Press Enter to reuse the previous bottom-right position.
 1. Live preview shows the rectangle while moving the cursor.
 1. Use `Width` and `Height` options while picking the corner to adjust values.
+
+### vReGroup flow
+
+1. Preselect or select objects in any combination of groups and sub-groups.
+1. Run `vReGroup`.
+1. If the selection spans exactly one group and every member of that group is selected, the existing group is reused and any ungrouped objects are simply added to it.
+1. Otherwise, all existing group memberships (including nested sub-groups) are stripped from the selected objects, any groups left empty are deleted, and all selected objects are placed into one new group.
 
 ### vScallop flow
 

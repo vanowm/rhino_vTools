@@ -57,6 +57,10 @@ public sealed class vMiddleCurve : Command
 
     if (!PromptTwoCurves(doc, out var curveA, out var curveB))
       return Result.Cancel;
+
+    // Capture shared group before SaveOptions/PreviewMiddleCurve can alter selection state.
+    int sharedGroup = SharedGroupOfSelectedCurves(doc);
+
     SaveOptions();
 
     AlignCurvePair(curveA!, curveB!);
@@ -78,11 +82,53 @@ public sealed class vMiddleCurve : Command
       return Result.Failure;
     }
 
+    AddToGroupIfShared(doc, newId, sharedGroup);
+
     foreach (var connectorLine in connectorLines)
-      _ = doc.Objects.AddCurve(connectorLine);
+    {
+      var lineId = doc.Objects.AddCurve(connectorLine);
+      AddToGroupIfShared(doc, lineId, sharedGroup);
+    }
 
     doc.Views.Redraw();
     return Result.Success;
+  }
+
+  private static int SharedGroupOfSelectedCurves(RhinoDoc doc)
+  {
+    int[]? common = null;
+    foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
+    {
+      if (obj?.Geometry is not Curve)
+        continue;
+      var groups = obj.Attributes.GetGroupList();
+      if (groups == null || groups.Length == 0)
+        return -1;
+      if (common == null)
+      {
+        common = groups;
+        continue;
+      }
+      var next = new System.Collections.Generic.List<int>();
+      foreach (var g in groups)
+        if (System.Array.IndexOf(common, g) >= 0)
+          next.Add(g);
+      if (next.Count == 0)
+        return -1;
+      common = next.ToArray();
+    }
+    return common != null && common.Length > 0 ? common[0] : -1;
+  }
+
+  private static void AddToGroupIfShared(RhinoDoc doc, Guid id, int groupIndex)
+  {
+    if (groupIndex < 0 || id == Guid.Empty)
+      return;
+    var obj = doc.Objects.FindId(id);
+    if (obj == null)
+      return;
+    obj.Attributes.AddToGroup(groupIndex);
+    obj.CommitChanges();
   }
 
   private static void LoadOptions(RhinoDoc doc)

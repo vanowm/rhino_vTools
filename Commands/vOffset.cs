@@ -44,22 +44,20 @@ public sealed class vOffset : Command
     if (doc == null)
       return;
 
-    var ok = RhinoApp.RunScript("_Offset", false);
+    // Loop synchronously so Escape always cancels an active _Offset prompt;
+    // idle re-registration left a window where Escape had no effect.
+    bool ok;
+    do
+    {
+      ok = RhinoApp.RunScript("_Offset", false);
+      doc.Objects.UnselectAll();
+      doc.Views.Redraw();
+    }
+    while (ok);
 
-    doc.Objects.UnselectAll();
-    doc.Views.Redraw();
-
-    // Silently re-run vOffset (restart flag set so RunCommand returns immediately)
-    // so that pressing Enter afterward repeats vOffset, not _Offset.
+    // Silently re-run vOffset so that pressing Enter afterward repeats vOffset, not _Offset.
     _restartingAfterOffsetDelegate = true;
     _ = RhinoApp.RunScript("_vOffset", false);
     _restartingAfterOffsetDelegate = false; // safety clear if RunScript didn't invoke us
-
-    // Re-queue for the next iteration as long as the user didn't cancel.
-    if (ok)
-    {
-      _pendingOffsetIdleHandler = OnLaunchOffsetOnIdle;
-      RhinoApp.Idle += _pendingOffsetIdleHandler;
-    }
   }
 }

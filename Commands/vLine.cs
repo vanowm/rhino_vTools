@@ -918,6 +918,8 @@ public sealed class vLine : Command
     Curve? fallbackPairEndCurve = null;
     EndpointConstraintKind? fallbackPairEndKind = null;
     var fallbackPairLine = Line.Unset;
+    var lastPreviewResolvedStart = Point3d.Unset;
+    var lastPreviewResolvedEnd   = Point3d.Unset;
 
     var sourceFeedbackGeometry = startConstraint.HasValue
       ? startConstraint.Value.Curve
@@ -1734,7 +1736,12 @@ public sealed class vLine : Command
         }
 
         if (!TryResolveSegment(e.CurrentPoint, preview: true, out var previewStart, out var ep))
+        {
+          lastPreviewResolvedEnd = Point3d.Unset;
           return;
+        }
+        lastPreviewResolvedStart = previewStart;
+        lastPreviewResolvedEnd   = ep;
         if (bothSides.CurrentValue)
         {
           var vec = ep - previewStart;
@@ -1892,23 +1899,31 @@ public sealed class vLine : Command
           DebugLog($"Click: cursor=({clickedRaw.X:F3},{clickedRaw.Y:F3},{clickedRaw.Z:F3}) mode={mode ?? "free"}");
           Point3d resolvedStart;
           Point3d endPoint;
-          try
+          if (lastPreviewResolvedEnd.IsValid)
           {
-            if (!TryResolveSegment(clickedRaw, preview: false, out resolvedStart, out endPoint))
+            resolvedStart = lastPreviewResolvedStart;
+            endPoint      = lastPreviewResolvedEnd;
+          }
+          else
+          {
+            try
             {
-              Log.Write(
-                "vLine",
-                $"accept failed mode={mode ?? "free"} point={clickedRaw} " +
-                $"reason={lastResolveFailure ?? "unspecified"}");
-              RhinoApp.WriteLine($"vLine: no valid {mode ?? "endpoint"} solution found at this cursor location.");
+              if (!TryResolveSegment(clickedRaw, preview: false, out resolvedStart, out endPoint))
+              {
+                Log.Write(
+                  "vLine",
+                  $"accept failed mode={mode ?? "free"} point={clickedRaw} " +
+                  $"reason={lastResolveFailure ?? "unspecified"}");
+                RhinoApp.WriteLine($"vLine: no valid {mode ?? "endpoint"} solution found at this cursor location.");
+                continue;
+              }
+            }
+            catch (Exception ex)
+            {
+              Log.Write("vLine.Accept", ex.ToString());
+              RhinoApp.WriteLine("vLine: failed to resolve the selected endpoint. See vTools.log.");
               continue;
             }
-          }
-          catch (Exception ex)
-          {
-            Log.Write("vLine.Accept", ex.ToString());
-            RhinoApp.WriteLine("vLine: failed to resolve the selected endpoint. See vTools.log.");
-            continue;
           }
 
           Log.Write("vLine", $"accept mode={mode ?? "free"} start={resolvedStart} end={endPoint}");

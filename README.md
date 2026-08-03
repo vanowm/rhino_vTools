@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.1.2129
+# vTools  ·  v26.8.3.757
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -273,13 +273,14 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
 1. Pick the end point.
 1. End-point options:
 
-    - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `BiTangent`, `Extension`, and `Parallel`: remain available where compatible with the start definition. `Vertical` constrains the endpoint along the active CPlane Z-axis. A direction-defining mode is offered once per line; tangent and perpendicular constraints can be applied at both endpoints.
-    - When a constraint has multiple valid positions, the solution nearest the clicked location is used.
+    - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `Extension`, and `Parallel`: remain available where compatible with the start definition; incompatible constructions and controls are hidden. `Vertical` constrains the endpoint along the active CPlane Z-axis. A direction-defining mode is offered once per line. Endpoint constraints such as `Perpendicular`, `Tangent`, and `ProjectTo` preserve an existing start direction such as `Extension` and solve only where both constraints are geometrically compatible.
+    - `Extension` continues outward when the selected curve already ends at the current chained start; otherwise it uses the selected curve end as the target anchor.
+    - When a constraint pair has multiple valid positions, the branch nearest the first curve click remains stable; the endpoint click chooses among solutions on that branch.
     - Curve-constrained previews show a short white tangent bar and center point at each solved endpoint.
     - `Perpendicular`: solve against the hovered curve and use the valid perpendicular point nearest the cursor.
     - `Tangent`: solve against the hovered curve and use the valid tangent point nearest the cursor.
-    - `PerpNear`: solve perpendicular against nearest curve.
-    - `TanNear`: solve against the nearest curve and use the valid tangent point nearest the cursor.
+    - `PerpNear`: solve perpendicular against the nearest curve or surface/polysurface edge.
+    - `TanNear`: solve against the nearest curve or surface/polysurface edge and use the valid tangent point nearest the cursor.
     - `Auto`: choose perpendicular/tangent solution using `Priority`.
     - `FromFirstPoint`: locks a curve-constrained start to the initially clicked point instead of allowing the solver to move it along the first curve.
     - `ProjectTo`: picks a curve, surface, polysurface, or mesh and constrains the endpoint to its nearest projected point.

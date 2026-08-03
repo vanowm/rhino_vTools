@@ -84,6 +84,7 @@ public sealed class vLine : Command
     var currentStart = startResult.Point;
     var startConstraintState = startResult.Constraint;
     var startDirectionState = startResult.Direction;
+    var startFeedbackState = startResult.FeedbackGeometry;
     var firstSegment = true;
     var chainModeState = startResult.ChainMode;
     var initialBothSides = startResult.BothSides;
@@ -126,6 +127,7 @@ public sealed class vLine : Command
         lastSegmentVector,
         startConstraintState,
         startDirectionState,
+        startFeedbackState,
         false,
         layerSession,
         mode,
@@ -304,6 +306,7 @@ public sealed class vLine : Command
           currentStart = newStartResult.Point;
           startConstraintState = newStartResult.Constraint;
           startDirectionState = newStartResult.Direction;
+          startFeedbackState = newStartResult.FeedbackGeometry;
           chainModeState = newStartResult.ChainMode;
           firstSegment = true;
           lastSegmentVector = null;
@@ -318,6 +321,7 @@ public sealed class vLine : Command
       currentStart = endPoint;
       startConstraintState = null;
       startDirectionState = null;
+      startFeedbackState = null;
       chainModeState = selectedChainMode;
       if (!persistConstraintState)
         constraintModeState = null;
@@ -555,7 +559,12 @@ public sealed class vLine : Command
 
         if (directionMode != null)
         {
-          if (!TryGetStartDirectionDefinition(doc, directionMode, out var origin, out var direction))
+          if (!TryGetStartDirectionDefinition(
+                doc,
+                directionMode,
+                out var origin,
+                out var direction,
+                out var feedbackGeometry))
             return FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
 
           Log.Write(
@@ -566,7 +575,8 @@ public sealed class vLine : Command
             origin,
             direction,
             bothSides.CurrentValue,
-            chainModeIndex);
+            chainModeIndex,
+            feedbackGeometry);
         }
 
         if (option.Index == chainModeOptionIndex)
@@ -587,10 +597,12 @@ public sealed class vLine : Command
     RhinoDoc doc,
     string modeName,
     out Point3d origin,
-    out Vector3d direction)
+    out Vector3d direction,
+    out Curve? feedbackGeometry)
   {
     origin = Point3d.Unset;
     direction = Vector3d.Unset;
+    feedbackGeometry = null;
     var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
 
     switch (modeName)
@@ -670,7 +682,10 @@ public sealed class vLine : Command
       }
 
       case "Extension":
-        return TryPickExtensionDefinition(out origin, out direction);
+        return TryPickExtensionDefinition(
+          out origin,
+          out direction,
+          out feedbackGeometry);
 
       default:
         return false;
@@ -752,15 +767,18 @@ public sealed class vLine : Command
 
   private static bool TryPickExtensionDefinition(
     out Point3d origin,
-    out Vector3d direction)
+    out Vector3d direction,
+    out Curve? feedbackGeometry)
   {
     origin = Point3d.Unset;
     direction = Vector3d.Unset;
+    feedbackGeometry = null;
     var picked = PickCurveWithPoint("Select curve near end to extend");
     if (picked == null || picked.Value.Curve.IsClosed)
       return false;
 
     var curve = picked.Value.Curve;
+    feedbackGeometry = curve;
     var pickPoint = picked.Value.PickPoint;
     var useStart = pickPoint.DistanceToSquared(curve.PointAtStart) <=
                    pickPoint.DistanceToSquared(curve.PointAtEnd);
@@ -849,6 +867,7 @@ public sealed class vLine : Command
     Vector3d? referenceVector,
     EndpointConstraint? startConstraint,
     Vector3d? startDirection,
+    GeometryBase? startFeedbackGeometry,
     bool initialFromFirstPoint,
     LineLayerSession layerSession,
     RunMode runMode,
@@ -857,6 +876,7 @@ public sealed class vLine : Command
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
+    getPoint.EnableSnapToCurves(true);
     getPoint.SetBasePoint(startPoint, true);
     getPoint.AcceptNumber(true, true);
     getPoint.AcceptNothing(true);
@@ -886,17 +906,26 @@ public sealed class vLine : Command
     string? lastAutoChoice = null;
     var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
     ScreenCurvePick? hoveredConstraintPick = null;
+    Curve? hoveredConstraintFallbackCurve = null;
+    var hoveredConstraintFallbackPoint = Point3d.Unset;
     System.Drawing.Point constraintHoverHitWindow = System.Drawing.Point.Empty;
     var constraintHoverLogged = false;
     var constraintHoverMoveCount = 0;
     Guid constraintHoverLoggedId = Guid.Empty;
     var constraintHoverLoggedComponent = ComponentIndex.Unset;
+    var constraintHoverLoggedFallback = false;
     string? lastResolveFailure = null;
+    Curve? fallbackPairEndCurve = null;
+    EndpointConstraintKind? fallbackPairEndKind = null;
+    var fallbackPairLine = Line.Unset;
 
-    using var sourceHighlight = startConstraint.HasValue
+    var sourceFeedbackGeometry = startConstraint.HasValue
+      ? startConstraint.Value.Curve
+      : startFeedbackGeometry;
+    using var sourceHighlight = sourceFeedbackGeometry != null
       ? TemporaryGeometryHighlight.Create(
           doc,
-          startConstraint.Value.Curve,
+          sourceFeedbackGeometry,
           SourceFeedbackColor)
       : null;
     TemporaryGeometryHighlight? projectTargetHighlight = null;
@@ -904,18 +933,71 @@ public sealed class vLine : Command
     Curve? HoveredConstraintCurve()
       => hoveredConstraintPick.HasValue
         ? CurveFromScreenPick(doc, hoveredConstraintPick.Value)
-        : null;
+        : hoveredConstraintFallbackCurve;
 
     Point3d HoveredConstraintPoint(Point3d fallback)
       => hoveredConstraintPick.HasValue
         ? hoveredConstraintPick.Value.PickPoint
-        : fallback;
+        : hoveredConstraintFallbackPoint.IsValid
+          ? hoveredConstraintFallbackPoint
+          : fallback;
+
+    bool TryUseNativeConstraintSnap(Point3d currentPoint)
+    {
+      var pointObject = getPoint.PointOnObject();
+      var curve = pointObject?.Curve();
+      if (curve == null)
+        return false;
+
+      var hint = currentPoint;
+      if (curve.ClosestPoint(currentPoint, out var parameter))
+        hint = curve.PointAt(parameter);
+      hoveredConstraintPick = new ScreenCurvePick(
+        pointObject!.ObjectId,
+        pointObject.GeometryComponentIndex,
+        hint);
+      hoveredConstraintFallbackCurve = null;
+      hoveredConstraintFallbackPoint = Point3d.Unset;
+      return true;
+    }
+
+    bool TryUseWorldConstraintFallback(
+      Rhino.Display.RhinoViewport viewport,
+      Point3d currentPoint)
+    {
+      MaybeRefreshCurveCache(false);
+      var capturePixels = Math.Max(
+        6.0,
+        Rhino.ApplicationSettings.ModelAidSettings.MousePickboxRadius + 2.0);
+      var captureTolerance = doc.ModelAbsoluteTolerance * 4.0;
+      if (viewport.GetWorldToScreenScale(currentPoint, out var pixelsPerUnit) &&
+          pixelsPerUnit > RhinoMath.SqrtEpsilon)
+      {
+        captureTolerance = Math.Max(
+          captureTolerance,
+          capturePixels / pixelsPerUnit);
+      }
+
+      var curve = CurveAtCursorPoint(
+        currentPoint,
+        cacheState.CurveCache,
+        captureTolerance);
+      if (curve == null || !curve.ClosestPoint(currentPoint, out var parameter))
+        return false;
+
+      hoveredConstraintPick = null;
+      hoveredConstraintFallbackCurve = curve;
+      hoveredConstraintFallbackPoint = curve.PointAt(parameter);
+      return true;
+    }
 
     EventHandler<GetPointMouseEventArgs> trackConstraintHover = (_, e) =>
     {
       if (mode is not ("perp" or "tangent"))
       {
         hoveredConstraintPick = null;
+        hoveredConstraintFallbackCurve = null;
+        hoveredConstraintFallbackPoint = Point3d.Unset;
         return;
       }
 
@@ -928,26 +1010,44 @@ public sealed class vLine : Command
       if (nextPick.HasValue)
       {
         hoveredConstraintPick = nextPick;
+        hoveredConstraintFallbackCurve = null;
+        hoveredConstraintFallbackPoint = Point3d.Unset;
         constraintHoverHitWindow = e.WindowPoint;
       }
-      else if (hoveredConstraintPick.HasValue &&
+      else if (TryUseNativeConstraintSnap(e.Point) ||
+               TryUseWorldConstraintFallback(e.Viewport, e.Point))
+      {
+        constraintHoverHitWindow = e.WindowPoint;
+        diagnostic += hoveredConstraintPick.HasValue
+          ? $" native={hoveredConstraintPick.Value.ObjectId}"
+          : " world-fallback";
+      }
+      else if ((hoveredConstraintPick.HasValue ||
+                hoveredConstraintFallbackCurve != null) &&
                ScreenDistanceSquared(e.WindowPoint, constraintHoverHitWindow) <= 100)
       {
-        diagnostic += $" retained={hoveredConstraintPick.Value.ObjectId}";
+        diagnostic += hoveredConstraintPick.HasValue
+          ? $" retained={hoveredConstraintPick.Value.ObjectId}"
+          : " retained=world-fallback";
       }
       else
       {
         hoveredConstraintPick = null;
+        hoveredConstraintFallbackCurve = null;
+        hoveredConstraintFallbackPoint = Point3d.Unset;
       }
       var hoveredId = hoveredConstraintPick?.ObjectId ?? Guid.Empty;
       var hoveredComponent = hoveredConstraintPick?.ComponentIndex ?? ComponentIndex.Unset;
+      var usingFallback = hoveredConstraintFallbackCurve != null;
       if (!constraintHoverLogged ||
           hoveredId != constraintHoverLoggedId ||
-          hoveredComponent != constraintHoverLoggedComponent)
+          hoveredComponent != constraintHoverLoggedComponent ||
+          usingFallback != constraintHoverLoggedFallback)
       {
         constraintHoverLogged = true;
         constraintHoverLoggedId = hoveredId;
         constraintHoverLoggedComponent = hoveredComponent;
+        constraintHoverLoggedFallback = usingFallback;
         Log.Write(
           "vLine.Hover",
           $"mode={mode} move={constraintHoverMoveCount} window={e.WindowPoint} " +
@@ -962,10 +1062,11 @@ public sealed class vLine : Command
 
       // Without a native 3-D constraint, CPlane Z projects back onto the
       // CPlane and collapses a vertical preview to the start point.
-      if (startConstraint.HasValue || mode is not (null or "parallel"))
+      if (startConstraint.HasValue)
         return;
 
-      var activeDirection = startDirection ?? parallelDir;
+      var activeDirection = startDirection ??
+                            (mode is "parallel" or "extension_direction" ? parallelDir : null);
       if (!activeDirection.HasValue)
         return;
 
@@ -1003,6 +1104,8 @@ public sealed class vLine : Command
         getPoint.SetCommandPrompt(Prompt("End point of line (Auto mode: priority chooses Perp/Tangent)"));
       else if (mode == "parallel")
         getPoint.SetCommandPrompt(Prompt("End point of line (Parallel)"));
+      else if (mode == "extension_direction")
+        getPoint.SetCommandPrompt(Prompt("End point of line (Extension)"));
       else if (mode == "project_to")
         getPoint.SetCommandPrompt(Prompt("End point of line (ProjectTo: endpoint snaps to nearest point on target geometry)"));
       else if (mode == "end_anchor")
@@ -1272,7 +1375,8 @@ public sealed class vLine : Command
       activeEndConstraint = null;
       lastResolveFailure = null;
 
-      var activeDirection = startDirection ?? (mode == "parallel" ? parallelDir : null);
+      var activeDirection = startDirection ??
+                            (mode is "parallel" or "extension_direction" ? parallelDir : null);
 
       if (endAnchor.HasValue)
       {
@@ -1326,7 +1430,8 @@ public sealed class vLine : Command
           if (!direction.Unitize())
             return false;
 
-          if (string.IsNullOrWhiteSpace(mode) || mode == "parallel")
+          if (string.IsNullOrWhiteSpace(mode) ||
+              mode is "parallel" or "extension_direction")
           {
             var distance = Vector3d.Multiply(cursorPoint - resolvedStart, direction);
             rawEnd = resolvedStart + (direction * distance);
@@ -1395,7 +1500,9 @@ public sealed class vLine : Command
         return resolvedEnd.IsValid;
       }
 
-      if (activeDirection.HasValue && (string.IsNullOrWhiteSpace(mode) || mode == "parallel"))
+      if (activeDirection.HasValue &&
+          (string.IsNullOrWhiteSpace(mode) ||
+           mode is "parallel" or "extension_direction"))
       {
         var direction = activeDirection.Value;
         if (!direction.Unitize())
@@ -1461,17 +1568,60 @@ public sealed class vLine : Command
           endSeed,
           endHint,
           kind);
-        return fromFirstPoint
-          ? TryResolveFixedStartConstraintPair(
+        if (fromFirstPoint)
+        {
+          if (TryResolveFixedStartConstraintPair(
+                firstConstraint,
+                endConstraint,
+                preview,
+                out solvedLine))
+            return true;
+
+          return preview && TryResolveFixedStartConstraintPair(
+            firstConstraint,
+            endConstraint,
+            preview: false,
+            out solvedLine);
+        }
+
+        if (TryResolveConstraintPair(
               firstConstraint,
               endConstraint,
               preview,
-              out solvedLine)
-          : TryResolveConstraintPair(
+              out solvedLine))
+        {
+          if (preview)
+          {
+            fallbackPairEndCurve = endCurve;
+            fallbackPairEndKind = kind;
+            fallbackPairLine = solvedLine;
+          }
+          return true;
+        }
+
+        if (!preview)
+          return false;
+
+        if (ReferenceEquals(fallbackPairEndCurve, endCurve) &&
+            fallbackPairEndKind == kind &&
+            fallbackPairLine.IsValid)
+        {
+          solvedLine = fallbackPairLine;
+          return true;
+        }
+
+        if (!TryResolveConstraintPair(
               firstConstraint,
               endConstraint,
-              preview,
-              out solvedLine);
+              preview: false,
+              out solvedLine,
+              writeLog: false))
+          return false;
+
+        fallbackPairEndCurve = endCurve;
+        fallbackPairEndKind = kind;
+        fallbackPairLine = solvedLine;
+        return true;
       }
 
       Line line;
@@ -1566,6 +1716,13 @@ public sealed class vLine : Command
         var previewColor = CurrentPreviewColor();
         if (mode is "perp" or "tangent")
         {
+          if (!hoveredConstraintPick.HasValue &&
+              hoveredConstraintFallbackCurve == null)
+          {
+            _ = TryUseNativeConstraintSnap(e.CurrentPoint) ||
+                TryUseWorldConstraintFallback(e.Viewport, e.CurrentPoint);
+          }
+
           var hoveredCurve = HoveredConstraintCurve();
           if (hoveredCurve != null)
           {
@@ -1627,29 +1784,38 @@ public sealed class vLine : Command
           "Mode", ChainModeValues, chainModeIndex);
         getPoint.AddOptionToggle("BothSides", ref bothSides);
         var allowDirectionMode = !startDirection.HasValue;
-        var idxNormal = getPoint.AddOption("Normal");
+        var allowEndDirectionAnchor = !startDirection.HasValue;
+        var allowAngleControls = !startConstraint.HasValue &&
+                                 !startDirection.HasValue &&
+                                 endAnchor == null &&
+                                 string.IsNullOrWhiteSpace(mode);
+        var idxNormal = allowEndDirectionAnchor ? getPoint.AddOption("Normal") : -1;
         var idxAngled = allowDirectionMode ? getPoint.AddOption("Angled") : -1;
         var idxVertical = allowDirectionMode ? getPoint.AddOption("Vertical") : -1;
         var idxFourPoint = allowDirectionMode ? getPoint.AddOption("FourPoint") : -1;
         var idxTan = getPoint.AddOption("Tangent");
-        var idxBiTangent = getPoint.AddOption("BiTangent");
         var idxPerpNear = getPoint.AddOption("PerpNear");
         var idxParallel = allowDirectionMode ? getPoint.AddOption("Parallel") : -1;
-        var idxPriority = getPoint.AddOptionList(
-          "Priority", PriorityValues, priorityIndex);
+        var idxPriority = mode == "auto"
+          ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
+          : -1;
         var idxFromFirstPoint = startConstraint.HasValue && !fromFirstPoint
           ? getPoint.AddOption("FromFirstPoint")
           : -1;
         var idxTanNear = getPoint.AddOption("TanNear");
         var idxBisector = allowDirectionMode ? getPoint.AddOption("Bisector") : -1;
         var idxPerp = getPoint.AddOption("Perpendicular");
-        var idxExtension = getPoint.AddOption("Extension");
+        var idxExtension = allowEndDirectionAnchor ? getPoint.AddOption("Extension") : -1;
         var idxAuto = getPoint.AddOption("Auto");
         var idxProjectTo = getPoint.AddOption("ProjectTo");
-        getPoint.AddOptionToggle("AngleRef", ref angleRelative);
-        var idxAngle = getPoint.AddOptionDouble("Angle", ref angleOption);
+        if (allowAngleControls)
+          getPoint.AddOptionToggle("AngleRef", ref angleRelative);
+        var idxAngle = allowAngleControls
+          ? getPoint.AddOptionDouble("Angle", ref angleOption)
+          : -1;
         var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
-        getPoint.AddOptionToggle("AngleLock", ref angleLock);
+        if (allowAngleControls)
+          getPoint.AddOptionToggle("AngleLock", ref angleLock);
         var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
         var idxPersistConstraint = getPoint.AddOption(
           "PersistConstraint",
@@ -1824,22 +1990,32 @@ public sealed class vLine : Command
             continue;
           }
 
-          if (option.Index == idxBiTangent)
-          {
-            if (RunBiTangent(doc, layerSession))
-            {
-              var completedState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
-              return SecondPointResult.None(bothSides.CurrentValue, ModeSingle, completedState);
-            }
-            continue;
-          }
-
           if (option.Index == idxExtension)
           {
-            if (TryPickExtensionDefinition(out var anchorPoint, out var anchorDirection))
+            if (TryPickExtensionDefinition(
+                  out var anchorPoint,
+                  out var anchorDirection,
+                  out var extensionCurve))
             {
-              endAnchor = new EndAnchor(anchorPoint, anchorDirection);
-              mode = "end_anchor";
+              extensionCurve?.Dispose();
+              var sharedEndpointTolerance = Math.Max(
+                doc.ModelAbsoluteTolerance * 2.0,
+                RhinoMath.ZeroTolerance);
+              if (anchorPoint.DistanceTo(startPoint) <= sharedEndpointTolerance)
+              {
+                parallelDir = anchorDirection;
+                endAnchor = null;
+                mode = "extension_direction";
+                Log.Write(
+                  "vLine",
+                  $"endpoint extension continues from shared anchor={anchorPoint} " +
+                  $"direction={anchorDirection}");
+              }
+              else
+              {
+                endAnchor = new EndAnchor(anchorPoint, anchorDirection);
+                mode = "end_anchor";
+              }
               ApplyModePrompt();
             }
             continue;
@@ -2003,6 +2179,7 @@ public sealed class vLine : Command
             referenceVector,
             startConstraint,
             startDirection,
+            startFeedbackGeometry,
             fromFirstPoint,
             layerSession,
             runMode,
@@ -2037,19 +2214,47 @@ public sealed class vLine : Command
 
     var cache = new List<CurveCacheItem>();
 
+    void AddCurve(Curve source)
+    {
+      var duplicate = source.DuplicateCurve();
+      if (duplicate != null)
+        cache.Add(new CurveCacheItem(duplicate, duplicate.GetBoundingBox(true)));
+    }
+
+    void AddBrepEdges(Brep brep)
+    {
+      foreach (var edge in brep.Edges)
+        AddCurve(edge);
+    }
+
     foreach (var rhObj in doc.Objects.GetObjectList(settings))
     {
-      if (rhObj.ObjectType != ObjectType.Curve)
-        continue;
+      switch (rhObj.Geometry)
+      {
+        case Curve curve:
+          AddCurve(curve);
+          break;
 
-      if (rhObj.Geometry is not Curve curve)
-        continue;
+        case Brep brep:
+          AddBrepEdges(brep);
+          break;
 
-      var duplicate = curve.DuplicateCurve();
-      if (duplicate == null)
-        continue;
+        case Extrusion extrusion:
+          using (var extrusionBrep = extrusion.ToBrep())
+          {
+            if (extrusionBrep != null)
+              AddBrepEdges(extrusionBrep);
+          }
+          break;
 
-      cache.Add(new CurveCacheItem(duplicate, duplicate.GetBoundingBox(true)));
+        case Surface surface:
+          using (var surfaceBrep = Brep.CreateFromSurface(surface))
+          {
+            if (surfaceBrep != null)
+              AddBrepEdges(surfaceBrep);
+          }
+          break;
+      }
     }
 
     return cache;
@@ -2287,6 +2492,14 @@ public sealed class vLine : Command
         candidates.Add((parameters[i], values[i]));
     }
 
+    if (values.Count > 1)
+    {
+      if (values[0] <= values[1])
+        candidates.Add((parameters[0], values[0]));
+      if (values[^1] <= values[^2])
+        candidates.Add((parameters[^1], values[^1]));
+    }
+
     if (candidates.Count == 0)
     {
       var bestIndex = 0;
@@ -2332,7 +2545,15 @@ public sealed class vLine : Command
       var t0 = Math.Max(a, seedT - window);
       var t1 = Math.Min(b, seedT + window);
       var refinedResult = RefinePerpParameter(curve, startPoint, cplane, t0, t1, refineIterations);
-      refined.Add((refinedResult.Parameter, refinedResult.Error, curve.PointAt(refinedResult.Parameter)));
+      if (candidates[i].Error < refinedResult.Error)
+      {
+        refined.Add((seedT, candidates[i].Error, curve.PointAt(seedT)));
+      }
+      else
+      {
+        refined.Add((refinedResult.Parameter, refinedResult.Error,
+          curve.PointAt(refinedResult.Parameter)));
+      }
     }
     if (refined.Count == 0)
       return null;
@@ -2353,7 +2574,8 @@ public sealed class vLine : Command
       }
     }
 
-    var valid = unique.FindAll(v => v.Error <= 0.02);
+    var scoreTolerance = ConstraintCrossScoreTolerance();
+    var valid = unique.FindAll(v => v.Error <= scoreTolerance);
     if (_debugMode)
     {
       DebugLog($"PerpSolver: candidates={candidates.Count} refined={refined.Count} unique={unique.Count} valid={valid.Count}");
@@ -2362,7 +2584,7 @@ public sealed class vLine : Command
         var bestErr = unique[0].Error;
         for (var i = 1; i < unique.Count; i++)
           if (unique[i].Error < bestErr) bestErr = unique[i].Error;
-        DebugLog($"PerpSolver: best error={bestErr:F6} threshold=0.02{(valid.Count == 0 ? " -> FAILED" : " -> OK")}");
+        DebugLog($"PerpSolver: best error={bestErr:F6} threshold={scoreTolerance:F6}{(valid.Count == 0 ? " -> FAILED" : " -> OK")}");
       }
     }
 
@@ -2588,7 +2810,7 @@ public sealed class vLine : Command
       }
     }
 
-    var valid = unique.FindAll(v => v.Error <= 0.015);
+    var valid = unique.FindAll(v => v.Error <= ConstraintCrossScoreTolerance());
     if (_debugMode)
     {
       DebugLog(
@@ -3521,16 +3743,38 @@ public sealed class vLine : Command
   private static bool DirectionMatchesConstraintAtSeed(
     EndpointConstraint constraint,
     Vector3d direction)
+    => DirectionMatchesConstraintAtParameter(
+      constraint,
+      constraint.SeedParameter,
+      direction);
+
+  private static bool DirectionMatchesConstraintAtParameter(
+    EndpointConstraint constraint,
+    double parameter,
+    Vector3d direction)
   {
-    var tangent = constraint.Curve.TangentAt(constraint.SeedParameter);
+    var tangent = constraint.Curve.TangentAt(parameter);
     if (!tangent.Unitize() || !direction.Unitize())
       return false;
 
     var dot = Math.Abs(Vector3d.Multiply(tangent, direction));
+    var angleTolerance = ConstraintAngleToleranceRadians();
     return constraint.Kind == EndpointConstraintKind.Tangent
-      ? 1.0 - dot <= 0.02
-      : dot <= 0.02;
+      ? 1.0 - dot <= Math.Max(1.0 - Math.Cos(angleTolerance), 1e-10)
+      : dot <= Math.Max(Math.Sin(angleTolerance), 1e-6);
   }
+
+  private static double ConstraintAngleToleranceRadians()
+  {
+    var maximum = RhinoMath.ToRadians(0.1);
+    var modelTolerance = RhinoDoc.ActiveDoc?.ModelAngleToleranceRadians ?? maximum;
+    if (!double.IsFinite(modelTolerance) || modelTolerance <= 0.0)
+      return maximum;
+    return Math.Min(modelTolerance, maximum);
+  }
+
+  private static double ConstraintCrossScoreTolerance()
+    => Math.Max(Math.Sin(ConstraintAngleToleranceRadians()), 1e-6);
 
   private static bool TryResolveFixedStartConstraintPair(
     EndpointConstraint startConstraint,
@@ -3603,7 +3847,8 @@ public sealed class vLine : Command
     EndpointConstraint startConstraint,
     EndpointConstraint endConstraint,
     bool preview,
-    out Line line)
+    out Line line,
+    bool writeLog = true)
   {
     line = Line.Unset;
     var startSeeds = BuildConstraintSeeds(
@@ -3615,8 +3860,13 @@ public sealed class vLine : Command
       endConstraint.SeedParameter,
       preview);
 
-    var bestMaximumDistance = double.MaxValue;
-    var bestCombinedDistance = double.MaxValue;
+    var bestStartDistance = double.MaxValue;
+    var bestEndDistance = double.MaxValue;
+    var distanceTieTolerance = Math.Pow(
+      Math.Max(RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? 0.0, 1e-6) * 4.0,
+      2.0);
+    var rawCandidateCount = 0;
+    var rejectedConstraintCount = 0;
     var candidateCount = 0;
     var bestT0 = RhinoMath.UnsetValue;
     var bestT1 = RhinoMath.UnsetValue;
@@ -3642,29 +3892,43 @@ public sealed class vLine : Command
         if (!candidate.IsValid || candidate.Length <= RhinoMath.SqrtEpsilon)
           continue;
 
+        rawCandidateCount++;
+        if (!DirectionMatchesConstraintAtParameter(
+              startConstraint,
+              t0,
+              candidate.Direction) ||
+            !DirectionMatchesConstraintAtParameter(
+              endConstraint,
+              t1,
+              candidate.Direction))
+        {
+          rejectedConstraintCount++;
+          continue;
+        }
+
         candidateCount++;
         var endDistance = candidate.To.DistanceToSquared(endConstraint.HintPoint);
         var startDistance = candidate.From.DistanceToSquared(startConstraint.HintPoint);
-        var maximumDistance = Math.Max(startDistance, endDistance);
-        var combinedDistance = startDistance + endDistance;
-        if (maximumDistance > bestMaximumDistance ||
-            (maximumDistance == bestMaximumDistance && combinedDistance >= bestCombinedDistance))
+        if (startDistance > bestStartDistance + distanceTieTolerance ||
+            (Math.Abs(startDistance - bestStartDistance) <= distanceTieTolerance &&
+             endDistance >= bestEndDistance))
           continue;
 
-        bestMaximumDistance = maximumDistance;
-        bestCombinedDistance = combinedDistance;
+        bestStartDistance = startDistance;
+        bestEndDistance = endDistance;
         bestT0 = t0;
         bestT1 = t1;
         line = candidate;
       }
     }
 
-    if (!preview)
+    if (!preview && writeLog)
     {
       Log.Write(
         "vLine.Pair",
         $"start={startConstraint.Kind} hint={startConstraint.HintPoint} " +
         $"end={endConstraint.Kind} hint={endConstraint.HintPoint} " +
+        $"raw={rawCandidateCount} rejected={rejectedConstraintCount} " +
         $"candidates={candidateCount} t0={bestT0:R} t1={bestT1:R} " +
         $"lineFrom={line.From} lineTo={line.To}");
     }
@@ -4190,30 +4454,40 @@ public sealed class vLine : Command
     int ChainMode,
     bool Completed,
     EndpointConstraint? Constraint,
-    Vector3d? Direction)
+    Vector3d? Direction,
+    GeometryBase? FeedbackGeometry)
   {
     public static FirstPointResult WithPoint(Point3d point, bool bothSides, int chainMode)
-      => new(true, point, bothSides, chainMode, false, null, null);
+      => new(true, point, bothSides, chainMode, false, null, null, null);
 
     public static FirstPointResult WithConstraint(
       Point3d point,
       bool bothSides,
       int chainMode,
       EndpointConstraint constraint)
-      => new(true, point, bothSides, chainMode, false, constraint, null);
+      => new(true, point, bothSides, chainMode, false, constraint, null, null);
 
     public static FirstPointResult WithDirection(
       Point3d point,
       Vector3d direction,
       bool bothSides,
-      int chainMode)
-      => new(true, point, bothSides, chainMode, false, null, direction);
+      int chainMode,
+      GeometryBase? feedbackGeometry)
+      => new(
+        true,
+        point,
+        bothSides,
+        chainMode,
+        false,
+        null,
+        direction,
+        feedbackGeometry);
 
     public static FirstPointResult CompletedResult(bool bothSides, int chainMode)
-      => new(false, Point3d.Unset, bothSides, chainMode, true, null, null);
+      => new(false, Point3d.Unset, bothSides, chainMode, true, null, null, null);
 
     public static FirstPointResult None(bool bothSides, int chainMode)
-      => new(false, Point3d.Unset, bothSides, chainMode, false, null, null);
+      => new(false, Point3d.Unset, bothSides, chainMode, false, null, null, null);
   }
 
   private readonly record struct SecondPointResult(

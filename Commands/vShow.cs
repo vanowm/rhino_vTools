@@ -101,10 +101,10 @@ public sealed class vShow : Command
     var clearedCount = 0;
     foreach (var objectId in hiddenIds)
     {
-      if (!doc.Objects.Show(objectId, false))
-        continue;
+      if (doc.Objects.Show(objectId, false))
+        shownCount++;
 
-      shownCount++;
+      // Clear tracking attributes unconditionally — Show may fail if already visible.
       HideSetState.SetTrackedName(doc, objectId, string.Empty);
       var shownObject = doc.Objects.FindId(objectId);
       if (shownObject != null && HideSetState.RemoveNativeName(shownObject))

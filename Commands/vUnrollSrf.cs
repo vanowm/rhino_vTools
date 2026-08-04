@@ -33,8 +33,8 @@ namespace vTools.Commands
     private const string FlatGroupPrefix = "MultiUnroll_Flat";
     private const string OriginalGroupPrefix = "MultiUnroll_Original";
     private const string FailureMarkerText = "X";
-    private const string LabelHelperDotPrefix = "__vTools_vUnrollSrf_LabelHelper__";
-    private const string EdgeMateHelperDotPrefix = "__vTools_vUnrollSrf_EdgeHelper__";
+    private const string LabelHelperDotPrefix     = "__vTools_vUnrollSrf_LabelHelper__";
+    private const string EdgeMateHelperDotPrefix  = "__vTools_vUnrollSrf_EdgeHelper__";
 
     private const string TextFont = "Arial";
     private const double TextHeightScale = 1.5;
@@ -300,8 +300,48 @@ namespace vTools.Commands
             }
             else
             {
-              unrolledBreps = unroller.PerformUnroll(out unrolledCurves, out unrolledPoints, out unrolledDots);
+              // Unroll surface only — no following geometry added; prevents boundary-dot triangulation distortion.
+              unrolledBreps = unroller.PerformUnroll(out _, out _, out _);
               Dbg($"part={number} unroll_method=rhino_unroller");
+
+              // UV-project following items onto the flat surface (same as TryPerformRuledUvUnroll).
+              if (unrolledBreps?.Length > 0 && src.Brep.Faces.Count == unrolledBreps[0].Faces.Count)
+              {
+                var mc = new List<Curve>(curves.Count);
+                var mp = new List<Point3d>(points.Count);
+                var md = new List<TextDot>(followingDots.Count);
+                for (int fi = 0; fi < src.Brep.Faces.Count; fi++)
+                {
+                  var sf = src.Brep.Faces[fi];
+                  var ff = unrolledBreps[0].Faces[fi].UnderlyingSurface();
+                  if (ff == null) continue;
+                  foreach (var c in curves)
+                  {
+                    var uv = sf.Pullback(c, tol);
+                    var flat = uv != null ? ff.Pushup(uv, tol) : null;
+                    if (flat != null) mc.Add(flat);
+                  }
+                  foreach (var p in points)
+                    if (sf.ClosestPoint(p.Location, out double u, out double v))
+                      mp.Add(ff.PointAt(u, v));
+                  foreach (var dot in followingDots)
+                  {
+                    if (!sf.ClosestPoint(dot.Point, out double u, out double v)) continue;
+                    var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? "", dot.Point);
+                    copy.Point = ff.PointAt(u, v);
+                    md.Add(copy);
+                  }
+                }
+                unrolledCurves = mc.ToArray();
+                unrolledPoints = mp.ToArray();
+                unrolledDots   = md.ToArray();
+              }
+              else
+              {
+                unrolledCurves = Array.Empty<Curve>();
+                unrolledPoints = Array.Empty<Point3d>();
+                unrolledDots   = Array.Empty<TextDot>();
+              }
             }
           }
           catch (Exception ex)
@@ -327,6 +367,21 @@ namespace vTools.Commands
 
           var outputIds = new List<Guid>();
           var followingOutputPairs = new List<(Guid srcId, Guid outId)>(); // source-ID → flat output-ID for KeepPropFollowing
+          var curveOutputIds    = new List<Guid>();
+          // Compute flat midpoints via UV projection (source face → flat face) — no extra geometry added to unroller.
+          var curveFlatMidpoints = new Dictionary<int, Point3d>();
+          for (int ci = 0; ci < curves.Count; ci++)
+          {
+            var mid3d = curves[ci].PointAtNormalizedLength(0.5);
+            for (int fi = 0; fi < src.Brep.Faces.Count && fi < unrolledBreps[0].Faces.Count; fi++)
+            {
+              if (!src.Brep.Faces[fi].ClosestPoint(mid3d, out double u, out double v)) continue;
+              var check = src.Brep.Faces[fi].PointAt(u, v);
+              if (!check.IsValid || check.DistanceTo(mid3d) > tol * 100) continue;
+              var flatMid = unrolledBreps[0].Faces[fi].PointAt(u, v);
+              if (flatMid.IsValid) { curveFlatMidpoints[ci] = flatMid; break; }
+            }
+          }
           var finalBreps = !_explode && unrolledBreps.Length > 1
             ? (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps)
             : unrolledBreps;
@@ -340,8 +395,7 @@ namespace vTools.Commands
             {
               var cid = doc.Objects.AddCurve(unrolledCurves[j]);
               AddValid(outputIds, cid);
-              if (IsValidId(cid) && j < curveSourceIds.Count)
-                followingOutputPairs.Add((curveSourceIds[j], cid));
+              curveOutputIds.Add(cid);
             }
             Dbg($"part={number} following_curve_output selected={curves.Count}" +
                 $" returned={unrolledCurves.Length} added={unrolledCurves.Length}");
@@ -396,6 +450,28 @@ namespace vTools.Commands
                 int userIdx = followingOutputPairs.Count(p => dotSourceIds.Contains(p.srcId));
                 if (userIdx < dotSourceIds.Count)
                   followingOutputPairs.Add((dotSourceIds[userIdx], dotId));
+              }
+            }
+          }
+
+          // Spatial curve matching: always use proximity to handle splits, drops, and reorderings.
+          if (unrolledCurves != null && curveFlatMidpoints.Count > 0)
+          {
+            for (int j = 0; j < curveOutputIds.Count && j < unrolledCurves.Length; j++)
+            {
+              if (!IsValidId(curveOutputIds[j])) continue;
+              var outMid = unrolledCurves[j].PointAtNormalizedLength(0.5);
+              int bestIdx = -1;
+              double bestDist = double.MaxValue;
+              foreach (var kvp in curveFlatMidpoints)
+              {
+                double d = outMid.DistanceTo(kvp.Value);
+                if (d < bestDist) { bestDist = d; bestIdx = kvp.Key; }
+              }
+              if (bestIdx >= 0)
+              {
+                Dbg($"part={number} curve_spatial j={j} src_idx={bestIdx} dist={bestDist:G3}");
+                followingOutputPairs.Add((curveSourceIds[bestIdx], curveOutputIds[j]));
               }
             }
           }
@@ -2079,6 +2155,14 @@ namespace vTools.Commands
 
       int curvedCount = linearDirection == 0 ? source.Points.CountV : source.Points.CountU;
       if (curvedCount < 2)
+        return false;
+
+      // Kinks in the curved direction can't be flattened correctly by the circle-intersection method;
+      // fall back to Rhino's native unroller which handles them accurately.
+      int curvedDir = linearDirection == 0 ? 1 : 0;
+      var curvedDomain = source.Domain(curvedDir);
+      if (source.GetNextDiscontinuity(curvedDir, Continuity.G1_locus_continuous,
+          curvedDomain.T0, curvedDomain.T1, out _))
         return false;
 
       var sourcePoints = new Point3d[curvedCount, 2];

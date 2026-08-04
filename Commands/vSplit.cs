@@ -32,6 +32,7 @@ public sealed class vSplit : Command
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    var initialSelection = doc.Objects.GetSelectedObjects(false, false).Select(o => o.Id).ToList();
     var pointDisplayMode = LoadPersistedPointDisplayMode();
     var pointDisplaySnapshot = CurvePointDisplaySnapshot(doc);
 
@@ -44,7 +45,7 @@ public sealed class vSplit : Command
     {
       DeleteSplitPointObjects(doc, targets);
       RestoreTargetPointDisplays(doc, targets);
-      SelectExistingTargets(doc, targets);
+      RestoreInitialSelection(doc, initialSelection);
       return Result.Cancel;
     }
 
@@ -52,6 +53,7 @@ public sealed class vSplit : Command
     if (newIds.Count > 0)
       RhinoApp.WriteLine($"vSplit: split {newIds.Count} curve piece{(newIds.Count == 1 ? "" : "s")}.");
 
+    RestoreInitialSelection(doc, initialSelection);
     return Result.Success;
   }
 
@@ -671,6 +673,13 @@ public sealed class vSplit : Command
     }
 
     return items;
+  }
+
+  private static void RestoreInitialSelection(RhinoDoc doc, IEnumerable<Guid> ids)
+  {
+    doc.Objects.UnselectAll();
+    // foreach (var id in ids) doc.Objects.FindId(id)?.Select(true);
+    doc.Views.Redraw();
   }
 
   private static void SelectExistingTargets(RhinoDoc doc, IEnumerable<SplitTarget> targets)

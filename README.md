@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.3.1411
+# vTools  ·  v26.8.3.2019
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -9,7 +9,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
-  - [vCurveToSpline](#vcurvetospline-flow) *(26.4.24.934)* — converts selected curves to interpolated splines with join modes
+  - [vCurveToSpline](#vcurvetospline-flow) *(26.4.24.934)* — converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement
   - [vDiamonds](#vdiamonds-flow) *(26.5.14.928)* — draws an argyle diamond pattern with optional bounding rectangle and size/count labels; supports BySize centering mode
   - [vFacing](#vfacing-flow) *(26.5.29.1333)* — builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview
   - [vFilterExec](#vfilterexec-flow) *(26.7.30.1223)* — runs a command with a temporary selection filter and restores the previous filter afterward
@@ -21,8 +21,8 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, angle lock, and length constraints
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
   - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
-  - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves
-  - [vNotches](#vnotches-flow) *(26.6.1.1529)* — places perpendicular notch marks along one or two selected curves at clicked positions; a floating panel controls notch type, dimensions, optional label, and per-curve side/reverse settings
+  - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one
+  - [vNotches](#vnotches-flow) *(26.6.1.1529)* — places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview
   - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in Offset in a continuous loop, clearing selection after each run
   - [vOrient2pt](#vorient2pt-flow) *(26.4.24.934)* — orients objects from a source two-point frame to a target two-point frame
   - [vOrient3pt](#vorient3pt-flow) *(26.4.24.934)* — orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient)
@@ -148,14 +148,16 @@ Notes:
 
 ### vCurveToSpline flow
 
-1. Select source curves (preselect or postselect is supported).
+1. Select source curves (preselect or postselect is supported). If all selected curves form one connected end-to-end chain they are automatically joined and treated as a single input.
 1. Set `Join` option.
 
     - `None`: one spline per selected curve.
     - `Connected`: one spline per connected curve island.
     - `All`: one spline through all selected curves.
 
+1. Set `Smooth`: `Yes` (default) blends all control points of a joined group into one smooth spline; `No` converts each segment to its own spline and joins them into a polycurve, preserving kinks at segment boundaries. Has no effect under `Join=None`.
 1. Set `SmoothClose`: `Yes` makes closed outputs smooth; `No` closes with an explicit seam point, leaving a kink.
+1. Set `ReplaceOriginal`: `Yes` deletes the input curves after creating the spline output; `No` (default) keeps them.
 1. Confirm to create interpolated curve output and select results.
 
 Closed source curves and closed joined chains are created as closed splines.
@@ -338,10 +340,11 @@ Options persist to `vTools.config.json` under `vMatch`.
 1. Select exactly 2 curves (preselect supported — press Enter to confirm).
 1. The command aligns curve directions and seams automatically, then creates an interpolated curve equidistant between the two inputs.
 1. Sample density is chosen adaptively and refined until the middle curve error is within tolerance.
+1. If both input curves belong to the same Rhino group, the new middle curve (and any connector lines) is added to that group.
 
 ### vNotches flow
 
-1. Select one or two open or closed curves (preselect supported; press Enter to confirm).
+1. Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions.
 1. A floating **Notches** panel opens. Click positions along the curve(s) to place notches.
 1. Use the disclosure chevron in each group header to collapse or restore the Notch, Multiple, and Label settings.
 1. Numeric controls and readouts display at most three decimal places without unnecessary trailing zeroes.
@@ -360,15 +363,15 @@ Options persist to `vTools.config.json` under `vMatch`.
     - `AutoAdv`: when enabled, increments a trailing numeric suffix after each placement.
     - `FlipSide`: mirrors the label to the opposite side of the curve.
     - `Layer`: target layer for label text, using the same packed-ARGB swatches as vObjectPropertiesPlus.
-    - `Size`: manual label text height. `Auto` computes height proportionally from notch geometry; the adjacent percentage stepper scales the auto-computed height.
+    - `Size`: manual label text height. `Auto` computes height proportionally from notch geometry; the adjacent percentage stepper scales the auto-computed height. When `Auto` is checked the manual size field is disabled; when unchecked the percentage stepper is disabled.
     - `Offset X` / `Offset Y`: numeric steppers for label position relative to the notch point (along-curve and across-curve).
 
 1. **Multiple** group options:
 
     - `Start offset` / `End offset`: numeric steppers for the distances from each curve's respective ends to the first and last notch.
-    - `Number`: numeric stepper for the total number of notches, including the first and last positions.
+    - `Number`: numeric stepper for the total number of notches; minimum is 1. When `Number=1` a single notch is placed at the start offset position only.
     - `Distance`: editable numeric stepper with a `1.0` button increment. Changing `Number` evenly distributes the fixed start/end span. Changing `Distance` repeats that spacing and uses a shorter final gap when needed to preserve the fixed end offset. The shortest enabled curve is the spacing reference.
-    - `Add`: creates an evenly spaced notch batch. When labels are enabled, only the first notch position receives the label and auto-advance runs once.
+    - `Add`: creates an evenly spaced notch batch. Hovering over `Add` shows a live preview of the positions that will be placed. When labels are enabled, only the first notch position receives the label and auto-advance runs once.
 
 1. Other panel controls:
 
@@ -389,8 +392,9 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 
 1. Run `vOffset`.
 1. The built-in `_Offset` command runs interactively.
-1. After each offset, selection is cleared automatically.
-1. Press Enter to repeat `vOffset` for another offset cycle.
+1. After each completed offset, selection is cleared and `_Offset` starts again automatically.
+1. Press Escape to exit the loop.
+1. Press Enter to repeat `vOffset` for a new loop.
 
 ### vOrient2pt flow
 

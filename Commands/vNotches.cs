@@ -225,7 +225,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     LoadOptions(doc);
 
-    if (!TrySelectCurves(doc, out var curves, out var curveIds))
+    if (!TrySelectCurves(doc, out var curves, out var curveIds, out var curveSourceIds))
       return Result.Cancel;
 
     // Print curve lengths
@@ -266,11 +266,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _multipleStartOffset, _multipleEndOffset, _multipleNumber,
       _multipleDistance, _multipleUseDistance);
 
+    // Apply actual source IDs so SelectBothCurves highlights all segments of joined chains.
+    for (int i = 0; i < curveSourceIds.Count && i < session.PerCurveSourceIds.Count; i++)
+      session.PerCurveSourceIds[i] = curveSourceIds[i];
+
     RunLoop(doc, session);
     SaveOptions(session);
 
-    // Deselect source curves
-    foreach (var id in session.CurveIds)
+    // Deselect all segments, including joined chain source segments.
+    foreach (var id in session.PerCurveSourceIds.SelectMany(list => list))
       doc.Objects.FindId(id)?.Select(false);
     doc.Views.Redraw();
 
@@ -279,10 +283,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   // ── Curve selection ───────────────────────────────────────────────────────
 
-  static bool TrySelectCurves(RhinoDoc doc, out List<Curve> curves, out List<Guid> curveIds)
+  static bool TrySelectCurves(RhinoDoc doc, out List<Curve> curves, out List<Guid> curveIds, out List<List<Guid>> curveSourceIds)
   {
-    curves    = new List<Curve>();
-    curveIds  = new List<Guid>();
+    curves         = new List<Curve>();
+    curveIds       = new List<Guid>();
+    curveSourceIds = new List<List<Guid>>();
     var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select one or more curves (near start)");
@@ -292,16 +297,88 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     var res = go.GetMultiple(1, 0);
     if (go.CommandResult() != Result.Success || res != GetResult.Object)
       return false;
+    var rawCurves = new List<Curve>();
+    var rawIds    = new List<Guid>();
+    var rawPicks  = new List<Point3d>();
     for (int i = 0; i < go.ObjectCount; i++)
     {
       var crv = go.Object(i).Curve();
       if (crv == null) return false;
-      var pick = go.Object(i).SelectionPoint();
-      crv = OrientCurveToPickPoint(crv, pick);
-      curves.Add(crv);
-      curveIds.Add(go.Object(i).ObjectId);
+      rawCurves.Add(crv);
+      rawIds.Add(go.Object(i).ObjectId);
+      rawPicks.Add(go.Object(i).SelectionPoint());
     }
-    return curves.Count > 0;
+    if (rawCurves.Count == 0) return false;
+
+    // If all selected curves form one connected chain, join them into a PolyCurve.
+    if (rawCurves.Count > 1 &&
+        TryJoinConnectedChain(doc, rawCurves, rawIds, rawPicks[0], out var joined, out var joinedIds))
+    {
+      curves.Add(joined);
+      curveIds.Add(rawIds[0]);
+      curveSourceIds.Add(joinedIds);
+    }
+    else
+    {
+      for (int i = 0; i < rawCurves.Count; i++)
+      {
+        curves.Add(OrientCurveToPickPoint(rawCurves[i], rawPicks[i]));
+        curveIds.Add(rawIds[i]);
+        curveSourceIds.Add(new List<Guid> { rawIds[i] });
+      }
+    }
+    return true;
+  }
+
+  static bool TryJoinConnectedChain(
+    RhinoDoc doc, List<Curve> curves, List<Guid> ids, Point3d startPick,
+    out Curve joined, out List<Guid> orderedIds)
+  {
+    joined     = null!;
+    orderedIds = new List<Guid>();
+    double tol = doc.ModelAbsoluteTolerance;
+
+    // Find the endpoint closest to the click to determine chain start.
+    int firstIdx = 0;
+    double bestDist = double.MaxValue;
+    for (int i = 0; i < curves.Count; i++)
+    {
+      double d = Math.Min(
+        curves[i].PointAtStart.DistanceTo(startPick),
+        curves[i].PointAtEnd.DistanceTo(startPick));
+      if (d < bestDist) { bestDist = d; firstIdx = i; }
+    }
+
+    var firstCurve = OrientCurveToPickPoint(curves[firstIdx].DuplicateCurve(), startPick);
+    var orderedCurves = new List<Curve> { firstCurve };
+    orderedIds.Add(ids[firstIdx]);
+
+    var remaining = Enumerable.Range(0, curves.Count).Where(i => i != firstIdx).ToList();
+    while (remaining.Count > 0)
+    {
+      Point3d currentEnd = orderedCurves[^1].PointAtEnd;
+      int nextIdx = -1;
+      bool flip   = false;
+      foreach (int ri in remaining)
+      {
+        if (curves[ri].PointAtStart.DistanceTo(currentEnd) <= tol) { nextIdx = ri; flip = false; break; }
+        if (curves[ri].PointAtEnd  .DistanceTo(currentEnd) <= tol) { nextIdx = ri; flip = true;  break; }
+      }
+      if (nextIdx < 0) return false; // gap — keep curves separate
+
+      var next = curves[nextIdx].DuplicateCurve();
+      if (flip) next.Reverse();
+      orderedCurves.Add(next);
+      orderedIds.Add(ids[nextIdx]);
+      remaining.Remove(nextIdx);
+    }
+
+    // PolyCurve.Append preserves kinks at segment junctions.
+    var poly = new PolyCurve();
+    foreach (var c in orderedCurves)
+      poly.Append(c);
+    joined = poly;
+    return true;
   }
 
   static bool TryUpdateCurveSelection(RhinoDoc doc, NotchSession s)
@@ -542,13 +619,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     s.Curves.RemoveAt(curveIndex);
     s.CurveIds.RemoveAt(curveIndex);
+    if (curveIndex < s.PerCurveSourceIds.Count) s.PerCurveSourceIds.RemoveAt(curveIndex);
     s.CurveSides = s.CurveSides.Where((_, i) => i != curveIndex).ToArray();
     s.CurveEnabled = s.CurveEnabled.Where((_, i) => i != curveIndex).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Where((_, i) => i != curveIndex).ToArray();
     s.CurveContextGroupIndices = s.CurveContextGroupIndices.Where((_, i) => i != curveIndex).ToArray();
   }
 
-  static void AddSessionCurve(NotchSession s, RhinoObject rhObj, Curve curve)
+  static void AddSessionCurve(NotchSession s, RhinoObject rhObj, Curve curve, IReadOnlyList<Guid>? allSourceIds = null)
   {
     int priorCurveCount = s.Curves.Count;
     bool initialSide = priorCurveCount > 0 && s.CurveSides[^1];
@@ -557,6 +635,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     s.Curves.Add(curve);
     s.CurveIds.Add(rhObj.Id);
+    s.PerCurveSourceIds.Add(allSourceIds != null
+      ? new List<Guid>(allSourceIds)
+      : new List<Guid> { rhObj.Id });
     s.CurveSides = s.CurveSides.Append(initialSide).ToArray();
     s.CurveEnabled = s.CurveEnabled.Append(true).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Append(-1).ToArray();
@@ -2734,7 +2815,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   static void SelectBothCurves(RhinoDoc doc, NotchSession s)
   {
     doc.Objects.UnselectAll();
-    foreach (var id in s.CurveIds)
+    var toSelect = s.PerCurveSourceIds.Count > 0
+      ? s.PerCurveSourceIds.SelectMany(list => list)
+      : (IEnumerable<Guid>)s.CurveIds;
+    foreach (var id in toSelect)
       doc.Objects.FindId(id)?.Select(true);
     doc.Views.Redraw();
   }
@@ -2955,6 +3039,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     // Context group indices from source curves
     public int[] CurveContextGroupIndices;
 
+    // Per-curve source IDs — one inner list per curve slot; multiple IDs for joined chains.
+    public readonly List<List<Guid>> PerCurveSourceIds;
+
     // Loop control
     public bool PanelClosedExit;
     public bool RefreshCommandLine;
@@ -3052,6 +3139,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       NotchIdsByCurve = curves.Select(_ => new List<Guid>()).ToList();
       LabelIdsByCurve = curves.Select(_ => new List<Guid?>()).ToList();
+      PerCurveSourceIds = curveIds.Select(id => new List<Guid> { id }).ToList();
     }
 
     public List<string> CurveSidesAsStrings() =>

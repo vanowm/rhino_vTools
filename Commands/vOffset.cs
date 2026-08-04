@@ -44,16 +44,17 @@ public sealed class vOffset : Command
     if (doc == null)
       return;
 
-    // Loop synchronously so Escape always cancels an active _Offset prompt;
-    // idle re-registration left a window where Escape had no effect.
-    bool ok;
-    do
+    // Command result and RunScript return value are both unreliable in Rhino 9 BETA
+    // (both report success even on Escape). Track whether any object was actually added.
+    while (true)
     {
-      ok = RhinoApp.RunScript("_Offset", false);
+      int countBefore = doc.Objects.Count;
+      RhinoApp.RunScript("_Offset", false);
+      bool placed = doc.Objects.Count > countBefore;
       doc.Objects.UnselectAll();
       doc.Views.Redraw();
+      if (!placed) break;
     }
-    while (ok);
 
     // Silently re-run vOffset so that pressing Enter afterward repeats vOffset, not _Offset.
     _restartingAfterOffsetDelegate = true;

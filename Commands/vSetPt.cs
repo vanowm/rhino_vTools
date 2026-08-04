@@ -909,18 +909,28 @@ public sealed class vSetPt : Command
 
     Log.Write(Tag, $"  launching -SetPt with {selectedCount} grip(s) selected");
 
-    // Delegate to -SetPt; pre-selected grips bypass the "Select points" step
-    // so the user only has to click the target location.
-    // XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No are the desired defaults.
-    var ok = false;
+    // Snapshot endpoints before SetPt; RunScript result is unreliable in Rhino 9 (true even on Escape).
+    var endpointsBefore = picks.ToDictionary(
+      p => p.Id,
+      p => { var c = doc.Objects.FindId(p.Id)?.Geometry as Curve; return c == null ? Point3d.Unset : (p.IsStart ? c.PointAtStart : c.PointAtEnd); });
+
     try
     {
-      ok = RhinoApp.RunScript(
+      _ = RhinoApp.RunScript(
         "_-SetPt _XSet=_Yes _YSet=_Yes _ZSet=_Yes _Alignment=_World _Copy=_No", false);
-      Log.Write(Tag, $"  -SetPt result={ok}");
+      Log.Write(Tag, $"  -SetPt returned");
     }
     finally
     {
+      bool ok = picks.Any(p =>
+      {
+        if (!endpointsBefore.TryGetValue(p.Id, out var before) || before == Point3d.Unset) return false;
+        var c = doc.Objects.FindId(p.Id)?.Geometry as Curve;
+        if (c == null) return false;
+        var after = p.IsStart ? c.PointAtStart : c.PointAtEnd;
+        return after.DistanceTo(before) > doc.ModelAbsoluteTolerance;
+      });
+      Log.Write(Tag, $"  -SetPt moved={ok}");
       UnselectObjectsAndGrips(doc);
       if (ok)
       {

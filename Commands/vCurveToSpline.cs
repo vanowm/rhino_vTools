@@ -21,9 +21,13 @@ public sealed class vCurveToSpline : Command
   private const string OptionsSectionName = "vCurveToSpline";
   private const string JoinModeKey = "joinMode";
   private const string SmoothCloseKey = "smoothClose";
+  private const string ReplaceOriginalKey = "replaceOriginal";
+  private const string SmoothKey = "smooth";
   private static readonly string[] JoinModes = { "None", "Connected", "All" };
   private static int _joinModeIndex = 2;
   private static bool _smoothClose;
+  private static bool _replaceOriginal;
+  private static bool _smooth = true;
 
   /// <summary>Unified representation of a selected curve or point object.</summary>
   private readonly struct Segment
@@ -69,7 +73,7 @@ public sealed class vCurveToSpline : Command
     LoadPersistedOptions();
     Log.Write("vCurveToSpline", $"BEGIN joinMode={JoinModes[_joinModeIndex]} smoothClose={_smoothClose}");
 
-    var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode, out var smoothClose);
+    var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode, out var smoothClose, out var smooth);
     _joinModeIndex = Array.IndexOf(JoinModes, joinMode);
     if (_joinModeIndex < 0)
       _joinModeIndex = 2;
@@ -81,11 +85,14 @@ public sealed class vCurveToSpline : Command
       return pickResult;
     }
 
-    Log.Write("vCurveToSpline", $"selected segments={selectedSegments.Count} joinMode={joinMode} smoothClose={smoothClose}");
+    Log.Write("vCurveToSpline", $"selected segments={selectedSegments.Count} joinMode={joinMode} smoothClose={smoothClose} smooth={smooth}");
     var tolerance = doc.ModelAbsoluteTolerance;
+    var originalIds = _replaceOriginal
+      ? SelectedGeometryObjects(doc).Select(o => o.Id).ToList()
+      : null;
     var newCurveIds = new List<Guid>();
 
-    foreach (var interpCurve in BuildInterpCurves(selectedSegments, joinMode, smoothClose, tolerance))
+    foreach (var interpCurve in BuildInterpCurves(selectedSegments, joinMode, smoothClose, smooth, tolerance))
     {
       var id = doc.Objects.AddCurve(interpCurve);
       if (id != Guid.Empty)
@@ -103,6 +110,10 @@ public sealed class vCurveToSpline : Command
     doc.Objects.UnselectAll();
     foreach (var id in newCurveIds)
       doc.Objects.Select(id);
+
+    if (_replaceOriginal && originalIds != null)
+      foreach (var id in originalIds)
+        doc.Objects.Delete(id, true);
 
     doc.Views.Redraw();
     Log.Write("vCurveToSpline", $"END result=Success created={newCurveIds.Count}");
@@ -136,6 +147,12 @@ public sealed class vCurveToSpline : Command
         if (ToolsOptionStore.TryGetBool(section, SmoothCloseKey, out var smoothClose))
           _smoothClose = smoothClose;
 
+        if (ToolsOptionStore.TryGetBool(section, ReplaceOriginalKey, out var replaceOriginal))
+          _replaceOriginal = replaceOriginal;
+
+        if (ToolsOptionStore.TryGetBool(section, SmoothKey, out var smooth))
+          _smooth = smooth;
+
         return index;
       });
 
@@ -152,6 +169,8 @@ public sealed class vCurveToSpline : Command
     {
       section[JoinModeKey] = modeName;
       section[SmoothCloseKey] = _smoothClose;
+      section[ReplaceOriginalKey] = _replaceOriginal;
+      section[SmoothKey] = _smooth;
     });
   }
 
@@ -186,11 +205,13 @@ public sealed class vCurveToSpline : Command
     RhinoDoc doc,
     out List<Segment> segments,
     out string joinMode,
-    out bool smoothClose)
+    out bool smoothClose,
+    out bool smooth)
   {
-    segments = new List<Segment>();
-    joinMode = JoinModes[Math.Max(0, Math.Min(_joinModeIndex, JoinModes.Length - 1))];
+    segments    = new List<Segment>();
+    joinMode    = JoinModes[Math.Max(0, Math.Min(_joinModeIndex, JoinModes.Length - 1))];
     smoothClose = _smoothClose;
+    smooth      = _smooth;
 
     var tolerance = doc.ModelAbsoluteTolerance;
     var go = new GetObject();
@@ -210,16 +231,38 @@ public sealed class vCurveToSpline : Command
     };
 
     var preselectedWaitingForEnter = false;
+    // Tracks current selection so conditional options can be shown/hidden per-iteration.
+    var currentSegments = new List<Segment>();
     doc.Views.Redraw();
 
     try
     {
       while (true)
       {
+        bool isNoneJoin     = string.Equals(joinMode, "None", StringComparison.OrdinalIgnoreCase);
+        bool smoothRelevant = !isNoneJoin && currentSegments.Count >= 2;
+        bool smoothCloseRelevant = false;
+        if (currentSegments.Count > 0)
+        {
+          foreach (var grp in SegmentGroupsForMode(currentSegments, joinMode, tolerance))
+          {
+            if (grp.Count == 0) continue;
+            var chain = string.Equals(joinMode, "All", StringComparison.OrdinalIgnoreCase)
+              ? OrderSegmentsByClosestEndpointPairs(grp, tolerance)
+              : OrderSegmentsAsChain(grp, tolerance);
+            if (IsClosedOutput(grp, chain, tolerance)) { smoothCloseRelevant = true; break; }
+          }
+        }
+
         go.ClearCommandOptions();
         var joinOptionIndex = go.AddOptionList("Join", JoinModes, _joinModeIndex);
-        var smoothCloseOption = new OptionToggle(_smoothClose, "No", "Yes");
-        var smoothCloseOptionIndex = go.AddOptionToggle("SmoothClose", ref smoothCloseOption);
+        var replaceOriginalOption      = new OptionToggle(_replaceOriginal, "No", "Yes");
+        var replaceOriginalOptionIndex = go.AddOptionToggle("ReplaceOriginal", ref replaceOriginalOption);
+        // Smooth and SmoothClose are only shown when they affect the current selection.
+        var smoothOption      = new OptionToggle(_smooth, "No", "Yes");
+        var smoothOptionIndex = smoothRelevant ? go.AddOptionToggle("Smooth", ref smoothOption) : -1;
+        var smoothCloseOption      = new OptionToggle(_smoothClose, "No", "Yes");
+        var smoothCloseOptionIndex = smoothCloseRelevant ? go.AddOptionToggle("SmoothClose", ref smoothCloseOption) : -1;
 
         var getResult = go.GetMultiple(1, 0);
         if (go.CommandResult() != Result.Success)
@@ -228,13 +271,31 @@ public sealed class vCurveToSpline : Command
         if (getResult == GetResult.Option)
         {
           var option = go.Option();
-          if (smoothCloseOption.CurrentValue != _smoothClose)
+
+          if (smoothOptionIndex >= 0 && smoothOption.CurrentValue != _smooth)
+          {
+            _smooth = smoothOption.CurrentValue;
+            smooth  = _smooth;
+            Log.Write("vCurveToSpline", $"Smooth -> {_smooth}");
+            preview.SetSmooth(_smooth);
+            doc.Views.Redraw();
+            SavePersistedOptions();
+          }
+
+          if (smoothCloseOptionIndex >= 0 && smoothCloseOption.CurrentValue != _smoothClose)
           {
             _smoothClose = smoothCloseOption.CurrentValue;
             smoothClose = _smoothClose;
             Log.Write("vCurveToSpline", $"SmoothClose -> {_smoothClose}");
             preview.SetSmoothClose(_smoothClose);
             doc.Views.Redraw();
+            SavePersistedOptions();
+          }
+
+          if (replaceOriginalOption.CurrentValue != _replaceOriginal)
+          {
+            _replaceOriginal = replaceOriginalOption.CurrentValue;
+            Log.Write("vCurveToSpline", $"ReplaceOriginal -> {_replaceOriginal}");
             SavePersistedOptions();
           }
 
@@ -247,17 +308,30 @@ public sealed class vCurveToSpline : Command
             doc.Views.Redraw();
             SavePersistedOptions();
           }
-          else if (option != null && option.Index == smoothCloseOptionIndex)
-          {
-            // Value already captured from the toggle above.
-          }
           continue;
         }
 
         if (getResult == GetResult.String)
         {
           var shortcut = (go.StringResult() ?? string.Empty).Trim();
-          if (TryGetJoinModeIndexFromShortcut(shortcut, out var shortcutJoinModeIndex))
+          // Allow toggling hidden Smooth/SmoothClose by typing them when not shown.
+          if ("SmoothClose".StartsWith(shortcut, StringComparison.OrdinalIgnoreCase) &&
+              !string.Equals(shortcut, "Smooth", StringComparison.OrdinalIgnoreCase) &&
+              shortcut.Length >= 7)
+          {
+            _smoothClose = !_smoothClose; smoothClose = _smoothClose;
+            Log.Write("vCurveToSpline", $"SmoothClose shortcut -> {_smoothClose}");
+            preview.SetSmoothClose(_smoothClose); doc.Views.Redraw(); SavePersistedOptions();
+          }
+          else if ("Smooth".StartsWith(shortcut, StringComparison.OrdinalIgnoreCase) &&
+                   shortcut.Length >= 2 &&
+                   !("SmoothClose".StartsWith(shortcut, StringComparison.OrdinalIgnoreCase) && shortcut.Length > "Smooth".Length))
+          {
+            _smooth = !_smooth; smooth = _smooth;
+            Log.Write("vCurveToSpline", $"Smooth shortcut -> {_smooth}");
+            preview.SetSmooth(_smooth); doc.Views.Redraw(); SavePersistedOptions();
+          }
+          else if (TryGetJoinModeIndexFromShortcut(shortcut, out var shortcutJoinModeIndex))
           {
             _joinModeIndex = shortcutJoinModeIndex;
             joinMode = JoinModes[_joinModeIndex];
@@ -272,9 +346,11 @@ public sealed class vCurveToSpline : Command
         if (getResult == GetResult.Object)
         {
           segments = SegmentsFromDocumentSelection(doc);
+          currentSegments = segments;
           Log.Write("vCurveToSpline", $"Object: segments={segments.Count} preselected={go.ObjectsWerePreselected}");
           preview.SetJoinMode(joinMode);
           preview.SetSmoothClose(smoothClose);
+          preview.SetSmooth(smooth);
           doc.Views.Redraw();
 
           if (go.ObjectsWerePreselected && !preselectedWaitingForEnter)
@@ -375,9 +451,11 @@ public sealed class vCurveToSpline : Command
     IReadOnlyList<Segment> segments,
     string joinMode,
     bool smoothClose,
+    bool smooth,
     double tolerance)
   {
     var interpCurves = new List<Curve>();
+    bool isNone = string.Equals(joinMode, "None", StringComparison.OrdinalIgnoreCase);
 
     foreach (var group in SegmentGroupsForMode(segments, joinMode, tolerance))
     {
@@ -387,9 +465,27 @@ public sealed class vCurveToSpline : Command
       var orderedChain = string.Equals(joinMode, "All", StringComparison.OrdinalIgnoreCase)
         ? OrderSegmentsByClosestEndpointPairs(group, tolerance)
         : OrderSegmentsAsChain(group, tolerance);
+
+      // Smooth=No on a joined group: create one InterpCrv per segment then join (kinks preserved).
+      if (!smooth && !isNone && orderedChain.Count > 1)
+      {
+        var pieces = new List<Curve>();
+        foreach (var (segIndex, reverse) in orderedChain)
+        {
+          var singleChain = new List<(int, bool)> { (segIndex, reverse) };
+          var pts = BuildInterpPoints(group, singleChain, tolerance, false);
+          var piece = CreateInterpCurve(pts, group[segIndex].IsClosed, false, tolerance);
+          if (piece != null) pieces.Add(piece);
+        }
+        var joined = Curve.JoinCurves(pieces, tolerance);
+        if (joined != null)
+          foreach (var c in joined) interpCurves.Add(c);
+        continue;
+      }
+
       var closedOutput = IsClosedOutput(group, orderedChain, tolerance);
       var interpPoints = BuildInterpPoints(group, orderedChain, tolerance, closedOutput && !smoothClose);
-      var interpCurve = CreateInterpCurve(interpPoints, closedOutput, smoothClose, tolerance);
+      var interpCurve  = CreateInterpCurve(interpPoints, closedOutput, smoothClose, tolerance);
       if (interpCurve != null)
         interpCurves.Add(interpCurve);
     }
@@ -1054,6 +1150,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     private readonly Color _color = Color.OrangeRed;
     private string _joinMode;
     private bool _smoothClose;
+    private bool _smooth;
     private string _selectionSignature = string.Empty;
     private List<Curve> _previewCurves = new();
 
@@ -1062,6 +1159,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
       _doc = doc;
       _joinMode = joinMode;
       _smoothClose = smoothClose;
+      _smooth = _smooth = true;
       _tolerance = tolerance;
     }
 
@@ -1077,6 +1175,12 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     public void SetSmoothClose(bool smoothClose)
     {
       _smoothClose = smoothClose;
+      _selectionSignature = string.Empty;
+    }
+
+    public void SetSmooth(bool smooth)
+    {
+      _smooth = smooth;
       _selectionSignature = string.Empty;
     }
 
@@ -1097,18 +1201,18 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
     private void RefreshCacheIfNeeded()
     {
       var selectedObjects = SelectedGeometryObjects(_doc);
-      var signature = BuildSignature(selectedObjects, _joinMode, _smoothClose);
+      var signature = BuildSignature(selectedObjects, _joinMode, _smoothClose, _smooth);
       if (string.Equals(signature, _selectionSignature, StringComparison.Ordinal))
         return;
 
       _selectionSignature = signature;
-      _previewCurves = BuildInterpCurves(SegmentsFromDocumentSelection(_doc), _joinMode, _smoothClose, _tolerance);
+      _previewCurves = BuildInterpCurves(SegmentsFromDocumentSelection(_doc), _joinMode, _smoothClose, _smooth, _tolerance);
     }
 
-    private static string BuildSignature(IEnumerable<RhinoObject> objects, string joinMode, bool smoothClose)
+    private static string BuildSignature(IEnumerable<RhinoObject> objects, string joinMode, bool smoothClose, bool smooth)
     {
       var ids = string.Join("|", objects.Select(obj => obj.Id.ToString("N")));
-      return joinMode + "::" + smoothClose + "::" + ids;
+      return joinMode + "::" + smoothClose + "::" + smooth + "::" + ids;
     }
   }
 }

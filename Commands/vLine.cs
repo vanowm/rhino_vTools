@@ -20,10 +20,9 @@ public sealed class vLine : Command
   private const string PriorityKey = "priority";
   private const string PersistConstraintKey = "persistConstraint";
   private const string LengthKey = "length";
-  private const string AngleLockKey = "angleLock";
-  private const string AngleKey = "angle";
-  private const string AngleRelativeKey = "angleRelative";
-  private const string LayerKey = "layer";
+  private const string AngleKey          = "angle";
+  private const string AngleRelativeKey  = "angleRelative";
+  private const string LayerKey          = "layer";
   private const string CurrentLayerOption = "*Current*";
 
   private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" };
@@ -45,9 +44,8 @@ public sealed class vLine : Command
   private static int _priority = PriorityClosest;
   private static bool _persistConstraint;
   private static double _length;
-  private static bool _angleLock;
   private static double _angle;
-  private static bool _angleRelative;
+  private static bool   _angleRelative;
   private static string _layer = CurrentLayerOption;
 
   private static bool _debugMode = false;
@@ -93,7 +91,7 @@ public sealed class vLine : Command
     var persistConstraintState = _persistConstraint;
     var priorityState = _priority;
     var lengthState = _length;
-    var angleLockState = _angleLock;
+    var angleLockState = false; // angle lock always starts off; activates when user sets an angle
     var angleState = _angle;
     var angleRelativeState = _angleRelative;
 
@@ -101,7 +99,9 @@ public sealed class vLine : Command
 
     List<Point3d>? polylinePoints = null;
     Guid tempPolylineId = Guid.Empty;
-    var redoStack = new Stack<Point3d>();
+    var redoStack    = new Stack<Point3d>();
+    var lineHistory  = new Stack<(Point3d segStart, Point3d segEnd, Guid lineId)>(); // Chained/Multiple undo
+    var lineRedoData = new Stack<(Point3d segStart, Point3d segEnd)>();              // Chained redo
 
     var continueChain = true;
     while (continueChain)
@@ -110,8 +110,10 @@ public sealed class vLine : Command
       // Endpoint constraint options are single-use in multi-segment modes; only Single mode inherits.
       var modeSeed = chainModeState == ModeSingle && (persistConstraintState || firstSegment) ? constraintModeState : null;
 
-      var canUndo = chainModeState == ModePolyline && polylinePoints is { Count: >= 2 };
-      var canRedo = chainModeState == ModePolyline && redoStack.Count > 0;
+      var canUndo = (chainModeState == ModePolyline && polylinePoints is { Count: >= 2 })
+                 || (chainModeState == ModeChained   && lineHistory.Count > 0);
+      var canRedo = (chainModeState == ModePolyline && redoStack.Count > 0)
+                 || (chainModeState == ModeChained   && lineRedoData.Count > 0);
       var secondResult = ResolveSecondPoint(
         doc,
         currentStart,
@@ -148,7 +150,6 @@ public sealed class vLine : Command
         _persistConstraint = persistConstraintState;
         _priority = priorityState;
         _length = lengthState;
-        _angleLock = angleLockState;
         _angle = angleState;
         _angleRelative = angleRelativeState;
       }
@@ -177,24 +178,48 @@ public sealed class vLine : Command
             : null;
           doc.Views.Redraw();
         }
+        else if (chainModeState == ModeChained && lineHistory.TryPop(out var lastSeg))
+        {
+          lineRedoData.Push((lastSeg.segStart, lastSeg.segEnd));
+          DeleteObjectIfValid(doc, lastSeg.lineId);
+          currentStart = lastSeg.segStart;
+          lastSegmentVector = lineHistory.Count > 0
+            ? (Vector3d?)(lineHistory.Peek().segEnd - lineHistory.Peek().segStart)
+            : null;
+          doc.Views.Redraw();
+        }
         continueChain = true;
         SavePersistedOptions();
         continue;
       }
 
-      if (secondResult.IsRedo && redoStack.TryPop(out var redoPoint))
+      if (secondResult.IsRedo)
       {
-        polylinePoints ??= new List<Point3d> { currentStart };
-        polylinePoints.Add(redoPoint);
-        currentStart = redoPoint;
-        DeleteObjectIfValid(doc, tempPolylineId);
-        if (polylinePoints.Count >= 2)
+        if (redoStack.TryPop(out var redoPoint))
         {
-          tempPolylineId = doc.Objects.AddPolyline(
-            new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
-          lastSegmentVector = polylinePoints[^1] - polylinePoints[^2];
+          polylinePoints ??= new List<Point3d> { currentStart };
+          polylinePoints.Add(redoPoint);
+          currentStart = redoPoint;
+          DeleteObjectIfValid(doc, tempPolylineId);
+          if (polylinePoints.Count >= 2)
+          {
+            tempPolylineId = doc.Objects.AddPolyline(
+              new Polyline(polylinePoints), layerSession.CreateAttributes(doc));
+            lastSegmentVector = polylinePoints[^1] - polylinePoints[^2];
+          }
+          doc.Views.Redraw();
         }
-        doc.Views.Redraw();
+        else if (chainModeState == ModeChained && lineRedoData.TryPop(out var redoSeg))
+        {
+          var redoId = doc.Objects.AddLine(redoSeg.segStart, redoSeg.segEnd, layerSession.CreateAttributes(doc));
+          if (redoId != Guid.Empty)
+          {
+            lineHistory.Push((redoSeg.segStart, redoSeg.segEnd, redoId));
+            currentStart = redoSeg.segEnd;
+            lastSegmentVector = redoSeg.segEnd - redoSeg.segStart;
+            doc.Views.Redraw();
+          }
+        }
         continueChain = true;
         SavePersistedOptions();
         continue;
@@ -282,6 +307,11 @@ public sealed class vLine : Command
             $"vLine: line created on hidden layer \"{addedLayer?.FullPath ?? "unknown"}\".");
         }
         lastSegmentVector = endPoint - segmentStart;
+        if (selectedChainMode is ModeChained or ModeMultiple)
+        {
+          lineHistory.Push((segmentStart, endPoint, lineId));
+          lineRedoData.Clear();
+        }
       }
 
       doc.Views.Redraw();
@@ -289,13 +319,31 @@ public sealed class vLine : Command
 
       if (selectedChainMode == ModeMultiple)
       {
+        var undoneByMultiple = false;
         while (true)
         {
+          var canUndoStart = lineHistory.Count > 0;
           var newStartResult = ResolveFirstPoint(
-            doc, layerSession, initialBothSides, selectedChainMode, mode);
+            doc, layerSession, initialBothSides, selectedChainMode, mode, canUndoStart);
 
           if (newStartResult.Completed)
             return Result.Success;
+
+          if (newStartResult.IsUndo && lineHistory.TryPop(out var lastSeg))
+          {
+            lineRedoData.Clear();
+            DeleteObjectIfValid(doc, lastSeg.lineId);
+            currentStart = lastSeg.segStart;
+            lastSegmentVector = lineHistory.Count > 0
+              ? (Vector3d?)(lineHistory.Peek().segEnd - lineHistory.Peek().segStart)
+              : null;
+            startConstraintState = null;
+            startDirectionState  = null;
+            startFeedbackState   = null;
+            doc.Views.Redraw();
+            undoneByMultiple = true;
+            break;
+          }
 
           if (!newStartResult.HasPoint)
           {
@@ -314,6 +362,7 @@ public sealed class vLine : Command
           break;
         }
 
+        if (undoneByMultiple) continue;
         SavePersistedOptions();
         continue;
       }
@@ -348,7 +397,6 @@ public sealed class vLine : Command
         var priority = _priority;
         var persistConstraint = _persistConstraint;
         var length = _length;
-        var angleLock = _angleLock;
         var angle = _angle;
         var angleRelative = _angleRelative;
         var layer = _layer;
@@ -359,25 +407,18 @@ public sealed class vLine : Command
           priority = ClampIndex((int)Math.Round(persistedPriority, MidpointRounding.AwayFromZero), PriorityValues.Length);
         if (ToolsOptionStore.TryGetBool(section, PersistConstraintKey, out var persistedPersist))
           persistConstraint = persistedPersist;
-        if (ToolsOptionStore.TryGetDouble(section, LengthKey, out var persistedLength))
-          length = persistedLength;
-        if (ToolsOptionStore.TryGetBool(section, AngleLockKey, out var persistedAngleLock))
-          angleLock = persistedAngleLock;
-        if (ToolsOptionStore.TryGetDouble(section, AngleKey, out var persistedAngle))
-          angle = persistedAngle;
         if (ToolsOptionStore.TryGetBool(section, AngleRelativeKey, out var persistedAngleRelative))
           angleRelative = persistedAngleRelative;
         if (ToolsOptionStore.TryGetString(section, LayerKey, out var persistedLayer))
           layer = NormalizeLayerOption(persistedLayer);
 
-        return (chainMode, priority, persistConstraint, length, angleLock, angle, angleRelative, layer);
+        return (chainMode, priority, persistConstraint, length, angle, angleRelative, layer);
       });
 
     _chainMode = ClampIndex(values.chainMode, ChainModeValues.Length);
     _priority = ClampIndex(values.priority, PriorityValues.Length);
     _persistConstraint = values.persistConstraint;
     _length = values.length;
-    _angleLock = values.angleLock;
     _angle = values.angle;
     _angleRelative = values.angleRelative;
     _layer = NormalizeLayerOption(values.layer);
@@ -392,9 +433,6 @@ public sealed class vLine : Command
         section[ChainModeKey] = _chainMode;
         section[PriorityKey] = _priority;
         section[PersistConstraintKey] = _persistConstraint;
-        section[LengthKey] = _length;
-        section[AngleLockKey] = _angleLock;
-        section[AngleKey] = _angle;
         section[AngleRelativeKey] = _angleRelative;
         section[LayerKey] = _layer;
       });
@@ -447,11 +485,13 @@ public sealed class vLine : Command
     LineLayerSession layerSession,
     bool initialBothSides,
     int initialChainMode,
-    RunMode runMode)
+    RunMode runMode,
+    bool canUndo = false)
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
     getPoint.AcceptNothing(true);
+    if (canUndo) getPoint.AcceptUndo(true);
     getPoint.DynamicDraw += (_, e) =>
       DrawHiddenLayerWarning(e, doc, layerSession);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
@@ -481,6 +521,9 @@ public sealed class vLine : Command
 
       var result = getPoint.Get();
       layerSession.ObserveCurrentLayer(doc);
+
+      if (result == GetResult.Undo)
+        return FirstPointResult.Undo(bothSides.CurrentValue, chainModeIndex);
 
       if (result == GetResult.Point)
       {
@@ -1800,8 +1843,12 @@ public sealed class vLine : Command
         var idxAngled = allowDirectionMode ? getPoint.AddOption("Angled") : -1;
         var idxVertical = allowDirectionMode ? getPoint.AddOption("Vertical") : -1;
         var idxFourPoint = allowDirectionMode ? getPoint.AddOption("FourPoint") : -1;
+        var idxBisector = allowDirectionMode ? getPoint.AddOption("Bisector") : -1;
+        var idxPerp = getPoint.AddOption("Perpendicular");
         var idxTan = getPoint.AddOption("Tangent");
         var idxPerpNear = getPoint.AddOption("PerpNear");
+        var idxTanNear = getPoint.AddOption("TanNear");
+        var idxExtension = allowEndDirectionAnchor ? getPoint.AddOption("Extension") : -1;
         var idxParallel = allowDirectionMode ? getPoint.AddOption("Parallel") : -1;
         var idxPriority = mode == "auto"
           ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
@@ -1809,10 +1856,6 @@ public sealed class vLine : Command
         var idxFromFirstPoint = startConstraint.HasValue && !fromFirstPoint
           ? getPoint.AddOption("FromFirstPoint")
           : -1;
-        var idxTanNear = getPoint.AddOption("TanNear");
-        var idxBisector = allowDirectionMode ? getPoint.AddOption("Bisector") : -1;
-        var idxPerp = getPoint.AddOption("Perpendicular");
-        var idxExtension = allowEndDirectionAnchor ? getPoint.AddOption("Extension") : -1;
         var idxAuto = getPoint.AddOption("Auto");
         var idxProjectTo = getPoint.AddOption("ProjectTo");
         if (allowAngleControls)
@@ -1821,13 +1864,11 @@ public sealed class vLine : Command
           ? getPoint.AddOptionDouble("Angle", ref angleOption)
           : -1;
         var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
-        if (allowAngleControls)
-          getPoint.AddOptionToggle("AngleLock", ref angleLock);
         var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
         var idxPersistConstraint = getPoint.AddOption(
           "PersistConstraint",
           persistConstraint.CurrentValue ? "Yes" : "No",
-          true);
+          false);
         var idxDebug = getPoint.AddOption(
           "Debug",
           debugToggle.CurrentValue ? "On" : "Off",
@@ -2156,6 +2197,7 @@ public sealed class vLine : Command
           if (option.Index == idxAngle)
           {
             _angle = angleOption.CurrentValue;
+            angleLock.CurrentValue = true; // activate lock automatically when user sets an angle
             SavePersistedOptions();
             continue;
           }
@@ -2168,9 +2210,8 @@ public sealed class vLine : Command
             continue;
           }
 
-          // Catches OptionToggle changes: PersistConstraint, AngleLock, AngleRef.
+          // Catches OptionToggle changes: PersistConstraint, AngleRef.
           _persistConstraint = persistConstraint.CurrentValue;
-          _angleLock = angleLock.CurrentValue;
           _angleRelative = angleRelative.CurrentValue;
           SavePersistedOptions();
           continue;
@@ -4472,6 +4513,8 @@ public sealed class vLine : Command
     Vector3d? Direction,
     GeometryBase? FeedbackGeometry)
   {
+    public bool IsUndo { get; init; } = false;
+
     public static FirstPointResult WithPoint(Point3d point, bool bothSides, int chainMode)
       => new(true, point, bothSides, chainMode, false, null, null, null);
 
@@ -4503,6 +4546,9 @@ public sealed class vLine : Command
 
     public static FirstPointResult None(bool bothSides, int chainMode)
       => new(false, Point3d.Unset, bothSides, chainMode, false, null, null, null);
+
+    public static FirstPointResult Undo(bool bothSides, int chainMode)
+      => new(false, Point3d.Unset, bothSides, chainMode, false, null, null, null) { IsUndo = true };
   }
 
   private readonly record struct SecondPointResult(

@@ -60,7 +60,8 @@ namespace vTools.Commands
     private static LabelMode _labelMode = LabelMode.Text;
     private static bool _rotateFlatParts = true;
     private static bool _explode = false;
-    private static bool _keepProperties = false;
+    private static bool _keepPropSurface  = false;
+    private static bool _keepPropFollowing = true;
     private static double _layoutSpacing = 1.0;
     private static double _xExtents = 0.0;
     private static bool   _edgeDots = true;
@@ -116,7 +117,8 @@ namespace vTools.Commands
       _labelMode = options.LabelMode;
       _rotateFlatParts = options.RotateFlatParts;
       _explode = options.Explode;
-      _keepProperties = options.KeepProperties;
+      _keepPropSurface  = options.KeepPropSurface;
+      _keepPropFollowing = options.KeepPropFollowing;
       _layoutSpacing = options.LayoutSpacing;
       _xExtents = options.XExtents;
       _splitFaces = options.SplitFaces;
@@ -214,6 +216,9 @@ namespace vTools.Commands
             Dbg($"part={number} original_frame None");
 
           var surfaceItems = i < assignment.Buckets.Count ? assignment.Buckets[i] : new List<FollowingItem>();
+          var curveSourceIds = surfaceItems.Where(x => x.Kind == FollowingKind.Curve).Select(x => x.Id).ToList();
+          var pointSourceIds = surfaceItems.Where(x => x.Kind == FollowingKind.Point).Select(x => x.Id).ToList();
+          var dotSourceIds   = surfaceItems.Where(x => x.Kind == FollowingKind.Dot)  .Select(x => x.Id).ToList();
           var curves = surfaceItems.Where(x => x.Kind == FollowingKind.Curve).Select(x => x.Geometry).OfType<Curve>().ToList();
           var points = surfaceItems.Where(x => x.Kind == FollowingKind.Point).Select(x => x.Geometry).OfType<Point>().ToList();
           var dots = surfaceItems.Where(x => x.Kind == FollowingKind.Dot).Select(x => x.Geometry).OfType<TextDot>().ToList();
@@ -321,6 +326,7 @@ namespace vTools.Commands
           done++;
 
           var outputIds = new List<Guid>();
+          var followingOutputPairs = new List<(Guid srcId, Guid outId)>(); // source-ID → flat output-ID for KeepPropFollowing
           var finalBreps = !_explode && unrolledBreps.Length > 1
             ? (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps)
             : unrolledBreps;
@@ -330,8 +336,13 @@ namespace vTools.Commands
           var edgeFlatPoints = new Dictionary<(string, int, int), Point3d>();
           if (unrolledCurves != null)
           {
-            foreach (var curve in unrolledCurves)
-              AddValid(outputIds, doc.Objects.AddCurve(curve));
+            for (int j = 0; j < unrolledCurves.Length; j++)
+            {
+              var cid = doc.Objects.AddCurve(unrolledCurves[j]);
+              AddValid(outputIds, cid);
+              if (IsValidId(cid) && j < curveSourceIds.Count)
+                followingOutputPairs.Add((curveSourceIds[j], cid));
+            }
             Dbg($"part={number} following_curve_output selected={curves.Count}" +
                 $" returned={unrolledCurves.Length} added={unrolledCurves.Length}");
           }
@@ -342,7 +353,12 @@ namespace vTools.Commands
           if (unrolledPoints != null)
           {
             for (int p = 0; p < unrolledPoints.Length; p++)
-              AddValid(outputIds, doc.Objects.AddPoint(unrolledPoints[p]));
+            {
+              var pid = doc.Objects.AddPoint(unrolledPoints[p]);
+              AddValid(outputIds, pid);
+              if (IsValidId(pid) && p < pointSourceIds.Count)
+                followingOutputPairs.Add((pointSourceIds[p], pid));
+            }
           }
 
           if (unrolledDots != null)
@@ -373,7 +389,14 @@ namespace vTools.Commands
                 continue;
               }
 
-              AddValid(outputIds, doc.Objects.AddTextDot(dot));
+              var dotId = doc.Objects.AddTextDot(dot);
+              AddValid(outputIds, dotId);
+              if (IsValidId(dotId))
+              {
+                int userIdx = followingOutputPairs.Count(p => dotSourceIds.Contains(p.srcId));
+                if (userIdx < dotSourceIds.Count)
+                  followingOutputPairs.Add((dotSourceIds[userIdx], dotId));
+              }
             }
           }
 
@@ -422,24 +445,38 @@ namespace vTools.Commands
               // the raw frame normal for flat labels. If the unrolled helper frame lands with
               // a -Z normal, annotation text becomes mirrored in Top view. World +Z keeps the
               // text readable while preserving the same unrolled Y/up direction.
-              AddValid(unrolledLabelIds, AddFlatText(doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis, frame.Height, src.Id, _keepProperties));
+              AddValid(unrolledLabelIds, AddFlatText(doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis, frame.Height, src.Id, _keepPropSurface));
             }
             else if (addDots)
             {
-              AddValid(unrolledLabelIds, AddDot(doc, display, labelPoint.Value, outputIds.FirstOrDefault(), _keepProperties));
+              AddValid(unrolledLabelIds, AddDot(doc, display, labelPoint.Value, outputIds.FirstOrDefault(), _keepPropSurface));
             }
             outputIds.AddRange(unrolledLabelIds.Where(IsValidId));
           }
 
-          if (_keepProperties)
+          if (_keepPropSurface)
           {
             TransferAttributes(doc, outputIds, src.Id);
             PutOnReferenceLayer(doc, unrolledLabelIds);
           }
+          if (_keepPropFollowing && followingOutputPairs.Count > 0)
+          {
+            foreach (var (srcId, outId) in followingOutputPairs)
+            {
+              var srcObj = doc.Objects.FindId(srcId);
+              var outObj = doc.Objects.FindId(outId);
+              if (srcObj == null || outObj == null) continue;
+              var attrs = outObj.Attributes.Duplicate();
+              attrs.LayerIndex  = srcObj.Attributes.LayerIndex;
+              attrs.ObjectColor = srcObj.Attributes.ObjectColor;
+              attrs.ColorSource = srcObj.Attributes.ColorSource;
+              doc.Objects.ModifyAttributes(outId, attrs, true);
+            }
+          }
 
           if (addLabels && frame != null && (priorOutput == null || !priorOutput.MemberIds.Contains(src.Id)))
           {
-            EnsureOriginalLabel(doc, src.Id, number, display, frame, addText, addDots, _keepProperties);
+            EnsureOriginalLabel(doc, src.Id, number, display, frame, addText, addDots, _keepPropSurface);
           }
 
           // Place edge mate dots on flat output
@@ -662,7 +699,8 @@ namespace vTools.Commands
         RotateFlatParts= _rotateFlatParts,
         Explode        = _explode,
         SplitFaces     = _splitFaces,
-        KeepProperties = _keepProperties,
+        KeepPropSurface  = _keepPropSurface,
+        KeepPropFollowing = _keepPropFollowing,
         LayoutSpacing  = _layoutSpacing,
         XExtents       = _xExtents
       };
@@ -675,7 +713,8 @@ namespace vTools.Commands
       public OptionToggle? EdgeDotsOption;
       public OptionToggle? ExplodeOption;
       public OptionToggle? SplitFacesOption;
-      public OptionToggle? PropsOption;
+      public OptionToggle? SurfacePropsOption;
+      public OptionToggle? FollowingPropsOption;
       public int SpacingIndex = -1;
       public int XExtentsIndex = -1;
     }
@@ -692,8 +731,10 @@ namespace vTools.Commands
       getter.AddOptionToggle("Explode", ref state.ExplodeOption);
       state.SplitFacesOption = new OptionToggle(_splitFaces, "No", "Yes");
       getter.AddOptionToggle("SplitFaces", ref state.SplitFacesOption);
-      state.PropsOption = new OptionToggle(_keepProperties, "No", "Yes");
-      getter.AddOptionToggle("KeepProperties", ref state.PropsOption);
+      state.SurfacePropsOption = new OptionToggle(_keepPropSurface, "No", "Yes");
+      getter.AddOptionToggle("KeepPropSurface", ref state.SurfacePropsOption);
+      state.FollowingPropsOption = new OptionToggle(_keepPropFollowing, "No", "Yes");
+      getter.AddOptionToggle("KeepPropFollowing", ref state.FollowingPropsOption);
       state.SpacingIndex  = getter.AddOption("Spacing",  $"{_layoutSpacing:G}");
       state.XExtentsIndex = getter.AddOption("XExtents", $"{_xExtents:G}");
       return state;
@@ -703,13 +744,32 @@ namespace vTools.Commands
     {
       if (state == null) return;
 
-      if (state.RotateOption    != null) _rotateFlatParts = state.RotateOption.CurrentValue;
-      if (state.EdgeDotsOption  != null) _edgeDots        = state.EdgeDotsOption.CurrentValue;
-      if (state.ExplodeOption   != null) _explode         = state.ExplodeOption.CurrentValue;
-      if (state.SplitFacesOption!= null) _splitFaces      = state.SplitFacesOption.CurrentValue;
-      if (state.PropsOption     != null) _keepProperties  = state.PropsOption.CurrentValue;
+      if (state.RotateOption     != null) _rotateFlatParts  = state.RotateOption.CurrentValue;
+      if (state.EdgeDotsOption   != null) _edgeDots         = state.EdgeDotsOption.CurrentValue;
+      if (state.ExplodeOption    != null) _explode          = state.ExplodeOption.CurrentValue;
+      if (state.SplitFacesOption != null) _splitFaces       = state.SplitFacesOption.CurrentValue;
+      if (state.SurfacePropsOption   != null) _keepPropSurface  = state.SurfacePropsOption.CurrentValue;
+      if (state.FollowingPropsOption != null) _keepPropFollowing = state.FollowingPropsOption.CurrentValue;
 
       var option = getter.Option();
+
+      // Print a one-line description for the option that just changed (no tooltip API exists in Rhino).
+      if (option != null)
+      {
+        switch (option.EnglishName)
+        {
+          case "RotateFlatParts":    RhinoApp.WriteLine("RotateFlatParts: rotate each flat part so its label text faces up."); break;
+          case "EdgeDots":           RhinoApp.WriteLine("EdgeDots: place numbered match dots on shared edges between adjacent parts."); break;
+          case "Explode":            RhinoApp.WriteLine("Explode: keep each brep face as a separate surface instead of joining them."); break;
+          case "SplitFaces":         RhinoApp.WriteLine("SplitFaces: split polysurfaces into individual faces before unrolling."); break;
+          case "KeepPropSurface":    RhinoApp.WriteLine("KeepPropSurface: flat brep inherits layer and colour of its source surface."); break;
+          case "KeepPropFollowing":  RhinoApp.WriteLine("KeepPropFollowing: each flat curve/point/dot inherits layer and colour of its original object."); break;
+          case "Labels":             RhinoApp.WriteLine("Labels: Text = annotation text, Dots = text dots, None = no label on flat output."); break;
+          case "Spacing":            RhinoApp.WriteLine("Spacing: gap between flat parts in the layout row."); break;
+          case "XExtents":           RhinoApp.WriteLine("XExtents: maximum row width before wrapping to a new row (0 = unlimited)."); break;
+        }
+      }
+
       if (option != null && option.Index == state.LabelIndex)
       {
         int idx = option.CurrentListOptionIndex;
@@ -2724,7 +2784,8 @@ namespace vTools.Commands
       public bool RotateFlatParts;
       public bool Explode;
       public bool SplitFaces;
-      public bool KeepProperties;
+      public bool KeepPropSurface;
+      public bool KeepPropFollowing;
       public double LayoutSpacing;
       public double XExtents;
     }

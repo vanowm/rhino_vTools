@@ -1,11 +1,11 @@
-# vTools  ·  v26.8.3.2019
+# vTools  ·  v26.8.4.1517
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (46):
+- Native commands (47):
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
@@ -18,7 +18,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vGroup](#vgroup-flow) *(26.5.27.1300)* — groups selected objects by closed-curve boundaries; each boundary is grouped with the objects inside it
   - [vIsolate](#visolate-flow) *(26.7.22.1515)* — keeps selected objects visible while hiding every other visible normal object, optionally in a named Rhino hide set
   - [vJoin](#vjoin-flow) *(26.7.30.2016)* — joins selected objects, optionally joining copies while preserving the originals
-  - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, angle lock, and length constraints
+  - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, automatic angle constraint, and length constraints
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
   - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one
@@ -36,6 +36,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vReGroup](#vregroup-flow) *(26.8.3.845)* — dissolves all existing groups (including nested sub-groups) on the selected objects and collects them into one new group
   - [vScallop](#vscallop-flow) *(26.4.27.2125)* — creates an arc scallop between two points or along a selected line
   - [vSetPt](#vsetpt-flow) *(26.5.28.1145)* — previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using the built-in SetPt
+  - [vSmooth](#vsmooth-flow) *(26.8.4.0)* — adjusts a selected curve so it transitions smoothly (G1) into one or two connected neighbours by eliminating kinks at shared endpoints; per-end StrengthStart/StrengthEnd, Copy, and Join options
   - [vShow](#vshow-flow) *(26.7.22.1818)* — shows one named hidden-object set, or all named sets, without cancelling the command already in progress
   - [vSplit](#vsplit-flow) *(26.7.9.1647)* — interactively splits selected curves at picked real point markers with cyan remove preview and point snapping
   - [vSplitAtCorners](#vsplitatcorners-flow) *(26.4.27.2125)* — splits curves at detected corners with interactive per-corner toggle preview
@@ -293,9 +294,8 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
       - `TanFirst`: prefer tangent when available.
       - `KeepCurrent`: keep previous auto choice when possible.
     - `PersistConstraint`: keeps current constraint mode (`Perp`/`Tangent`/etc.) for following segments.
-    - `Length`: forces segment length from start point.
-    - `AngleLock`: locks direction by angle.
-    - `Angle`: angle value used by `AngleLock`.
+    - `Length`: forces segment length from start point. Not persistent across sessions.
+    - `Angle`: angle value; setting this automatically activates the angle constraint for the current invocation. Not persistent across sessions.
     - `AngleRef`: `Absolute` uses CPlane X-axis; `Relative` uses previous segment direction.
     - `Mode`, `BothSides`, and `Layer`: also available while placing the end point.
     - Direct numerical input sets the segment length without leaving the active construction mode.
@@ -517,6 +517,20 @@ Behavior:
 1. Grips are enabled and the identified points are selected automatically. After a successful SetPt, the exact endpoints, edit points, or control points used remain visible and selected so Rhino displays the gumball; cancelling restores each curve's original grip visibility.
 1. The built-in `-SetPt` command launches with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No`; click the target location to commit.
 1. Press Enter to repeat `vSetPt`.
+
+### vSmooth flow
+
+1. Run `vSmooth` and select the target curve (preselect supported).
+1. Connected candidate curves are pickable. Click one to select it as the neighbour for that end — the start-end neighbour highlights **orange**, the end-end neighbour highlights **green**.
+1. Click a selected neighbour again to deselect it. Click the target curve to clear all neighbour selections and start over.
+1. Options (available throughout):
+
+    - `StrengthStart` / `StrengthEnd`: independent handle-length scale per end. 0 = near-degenerate handle (very tight turn at the endpoint), 1 = rotate the existing handle to the G1 direction (default), >1 = lengthen the handle for a more extended blend.
+    - `Copy`: when `Yes`, a new curve is created and the original is kept; when `No` (default) the original is replaced in-place.
+    - `Join`: when `Yes`, the smoothed curve and its connected neighbours are joined into a single polycurve; the separate originals are deleted.
+    - Typing a number sets both `StrengthStart` and `StrengthEnd` simultaneously.
+
+1. Press Enter to commit. If the input curve belongs to a group the output curve inherits that group.
 
 ### vShow flow
 

@@ -987,18 +987,28 @@ public sealed class vFacing : Command
       $"side1Span={side1Final.GetLength():F3} side2Span={side2Final.GetLength():F3} " +
       $"offsetLen={offTrimmed.GetLength():F3}");
 
-    // Output pieces are ready; set them now so they are always returned on success.
-    outPieces = new List<(Curve, int)>
+    // Build output pieces; bridge any sub-mm gap at the base-side junctions with a closing line.
+    outPieces = new List<(Curve, int)>();
+    outPieces.Add((baseJoined, baseLayer));
+    var s2Gap = baseJoined.PointAtEnd.DistanceTo(side2Final.PointAtStart);
+    if (s2Gap > tol && s2Gap <= snapTol)
     {
-      (baseJoined,   baseLayer),
-      (side2Final,   side2Layer),
-      (offTrimmed!,  baseLayer),
-      (s1Rev,        side1Layer),
-    };
+      outPieces.Add((new LineCurve(baseJoined.PointAtEnd, side2Final.PointAtStart), baseLayer));
+      Log.Write("vFacing", $"  added closing bridge at side2 junction (gap={s2Gap:F4})");
+    }
+    outPieces.Add((side2Final,  side2Layer));
+    outPieces.Add((offTrimmed!, baseLayer));
+    outPieces.Add((s1Rev,       side1Layer));
+    var s1Gap = s1Rev.PointAtEnd.DistanceTo(baseJoined.PointAtStart);
+    if (s1Gap > tol && s1Gap <= snapTol)
+    {
+      outPieces.Add((new LineCurve(s1Rev.PointAtEnd, baseJoined.PointAtStart), baseLayer));
+      Log.Write("vFacing", $"  added closing bridge at side1 junction (gap={s1Gap:F4})");
+    }
 
     // Joined boundary for CollectInsideObjects only.
     // Failure here is non-fatal — inside-object collection will be skipped.
-    var bndPieces = new Curve[] { baseJoined, side2Final, offTrimmed, s1Rev };
+    var bndPieces = outPieces.Select(p => p.Crv).ToArray();
     var bnd = Curve.JoinCurves(bndPieces, snapTol);
     if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
     {

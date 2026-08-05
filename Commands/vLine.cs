@@ -49,6 +49,7 @@ public sealed class vLine : Command
   private static string _layer = CurrentLayerOption;
 
   private static bool _debugMode = false;
+  internal static volatile bool _pendingLineRedo;
 
   /// <summary>
   /// Rhino command name.
@@ -102,8 +103,10 @@ public sealed class vLine : Command
     var redoStack    = new Stack<Point3d>();
     var lineHistory  = new Stack<(Point3d segStart, Point3d segEnd, Guid lineId)>(); // Chained/Multiple undo
     var lineRedoData = new Stack<(Point3d segStart, Point3d segEnd)>();              // Chained redo
+    var pendingRedoEnds = new Stack<Point3d>(); // step-1 redo queues end here; step-2 redo completes it
 
     var continueChain = true;
+    using var vLineShortcutSession = new VLineShortcutSession();
     while (continueChain)
     {
       var segmentBothDefault = firstSegment ? initialBothSides : false;
@@ -111,9 +114,11 @@ public sealed class vLine : Command
       var modeSeed = chainModeState == ModeSingle && (persistConstraintState || firstSegment) ? constraintModeState : null;
 
       var canUndo = (chainModeState == ModePolyline && polylinePoints is { Count: >= 2 })
-                 || (chainModeState == ModeChained   && lineHistory.Count > 0);
-      var canRedo = (chainModeState == ModePolyline && redoStack.Count > 0)
-                 || (chainModeState == ModeChained   && lineRedoData.Count > 0);
+                 || (chainModeState == ModeChained   && lineHistory.Count > 0)
+                 || (chainModeState == ModeMultiple); // always enabled: step-2 undo returns to start pick
+      // canRedo always true: AcceptString must be active in all modes so "r" is captured as String
+      // and silently ignored when nothing is on the redo stack, never falling through to Nothing.
+      var canRedo = true;
       var secondResult = ResolveSecondPoint(
         doc,
         currentStart,
@@ -156,6 +161,43 @@ public sealed class vLine : Command
 
       if (secondResult.IsUndo)
       {
+        if (chainModeState == ModeMultiple)
+        {
+          // Step-2 undo: mini step-1 loop — handles undo, redo, and new start pick.
+          while (true)
+          {
+            var sr = ResolveFirstPoint(doc, layerSession, initialBothSides, ModeMultiple, mode,
+              canUndo: lineHistory.Count > 0, canRedo: lineRedoData.Count > 0);
+            if (sr.Completed) return Result.Success;
+            if (sr.IsUndo && lineHistory.TryPop(out var undoSeg))
+            {
+              lineRedoData.Push((undoSeg.segStart, undoSeg.segEnd));
+              pendingRedoEnds.Clear();
+              DeleteObjectIfValid(doc, undoSeg.lineId);
+              currentStart = undoSeg.segStart;
+              lastSegmentVector = lineHistory.Count > 0
+                ? (Vector3d?)(lineHistory.Peek().segEnd - lineHistory.Peek().segStart)
+                : null;
+              startConstraintState = null; startDirectionState = null; startFeedbackState = null;
+              doc.Views.Redraw(); break;
+            }
+            if (sr.IsRedo && lineRedoData.TryPop(out var redoSeg))
+            {
+              // Step-1 redo: restore start for step-2, queue end for completion
+              pendingRedoEnds.Push(redoSeg.segEnd);
+              currentStart = redoSeg.segStart;
+              lastSegmentVector = null; startConstraintState = null; startDirectionState = null; startFeedbackState = null;
+              break;
+            }
+            if (!sr.HasPoint) { SavePersistedOptions(); return Result.Cancel; }
+            currentStart = sr.Point; startConstraintState = sr.Constraint;
+            startDirectionState = sr.Direction; startFeedbackState = sr.FeedbackGeometry;
+            chainModeState = sr.ChainMode; lastSegmentVector = null; break;
+          }
+          continueChain = true;
+          SavePersistedOptions();
+          continue;
+        }
         if (polylinePoints is { Count: >= 2 })
         {
           redoStack.Push(polylinePoints[^1]);
@@ -181,6 +223,7 @@ public sealed class vLine : Command
         else if (chainModeState == ModeChained && lineHistory.TryPop(out var lastSeg))
         {
           lineRedoData.Push((lastSeg.segStart, lastSeg.segEnd));
+          pendingRedoEnds.Clear();
           DeleteObjectIfValid(doc, lastSeg.lineId);
           currentStart = lastSeg.segStart;
           lastSegmentVector = lineHistory.Count > 0
@@ -195,7 +238,33 @@ public sealed class vLine : Command
 
       if (secondResult.IsRedo)
       {
-        if (redoStack.TryPop(out var redoPoint))
+        if (pendingRedoEnds.TryPop(out var pendingEnd) && chainModeState == ModeMultiple)
+        {
+          // Step-2 redo: complete pending segment from currentStart (=segStart) to stored end
+          var cmpId = doc.Objects.AddLine(currentStart, pendingEnd, layerSession.CreateAttributes(doc));
+          if (cmpId != Guid.Empty)
+          {
+            lineHistory.Push((currentStart, pendingEnd, cmpId));
+            lastSegmentVector = pendingEnd - currentStart;
+            doc.Views.Redraw();
+            var undoneByRedo = false;
+            while (true)
+            {
+              var ns = ResolveFirstPoint(doc, layerSession, initialBothSides, ModeMultiple, mode,
+                canUndo: lineHistory.Count > 0, canRedo: lineRedoData.Count > 0);
+              if (ns.Completed) return Result.Success;
+              if (ns.IsUndo && lineHistory.TryPop(out var uSeg2))
+              { lineRedoData.Push((uSeg2.segStart, uSeg2.segEnd)); pendingRedoEnds.Clear(); DeleteObjectIfValid(doc, uSeg2.lineId); currentStart = uSeg2.segStart; lastSegmentVector = lineHistory.Count > 0 ? (Vector3d?)(lineHistory.Peek().segEnd - lineHistory.Peek().segStart) : null; startConstraintState = null; startDirectionState = null; startFeedbackState = null; doc.Views.Redraw(); undoneByRedo = true; break; }
+              if (ns.IsRedo && lineRedoData.TryPop(out var rSeg2))
+              { pendingRedoEnds.Push(rSeg2.segEnd); currentStart = rSeg2.segStart; lastSegmentVector = null; startConstraintState = null; startDirectionState = null; startFeedbackState = null; break; }
+              if (!ns.HasPoint) { SavePersistedOptions(); return Result.Cancel; }
+              currentStart = ns.Point; startConstraintState = ns.Constraint; startDirectionState = ns.Direction; startFeedbackState = ns.FeedbackGeometry; chainModeState = ns.ChainMode; firstSegment = true; lastSegmentVector = null; continueChain = true; break;
+            }
+            if (undoneByRedo) { continueChain = true; SavePersistedOptions(); continue; }
+            // currentStart is already set by the mini step-1 sub-loop; do not overwrite with pendingEnd
+          }
+        }
+        else if (redoStack.TryPop(out var redoPoint))
         {
           polylinePoints ??= new List<Point3d> { currentStart };
           polylinePoints.Add(redoPoint);
@@ -209,17 +278,58 @@ public sealed class vLine : Command
           }
           doc.Views.Redraw();
         }
-        else if (chainModeState == ModeChained && lineRedoData.TryPop(out var redoSeg))
+        else if ((chainModeState == ModeChained || chainModeState == ModeMultiple) && lineRedoData.TryPop(out var redoSeg))
         {
-          var redoId = doc.Objects.AddLine(redoSeg.segStart, redoSeg.segEnd, layerSession.CreateAttributes(doc));
-          if (redoId != Guid.Empty)
+          if (pendingRedoEnds.Count > 0 || chainModeState == ModeChained)
           {
-            lineHistory.Push((redoSeg.segStart, redoSeg.segEnd, redoId));
-            currentStart = redoSeg.segEnd;
-            lastSegmentVector = redoSeg.segEnd - redoSeg.segStart;
-            doc.Views.Redraw();
+            // Chained redo or fallthrough: immediate full segment redo
+            pendingRedoEnds.Clear();
+            var redoId = doc.Objects.AddLine(redoSeg.segStart, redoSeg.segEnd, layerSession.CreateAttributes(doc));
+            if (redoId != Guid.Empty)
+            {
+              lineHistory.Push((redoSeg.segStart, redoSeg.segEnd, redoId));
+              currentStart = redoSeg.segEnd;
+              lastSegmentVector = redoSeg.segEnd - redoSeg.segStart;
+              doc.Views.Redraw();
+              if (chainModeState == ModeMultiple)
+              {
+                // run step-1 sub-loop (same as normal placement)
+                var undoneByRedo = false;
+                while (true)
+                {
+                  var ns = ResolveFirstPoint(doc, layerSession, initialBothSides, ModeMultiple, mode,
+                    canUndo: lineHistory.Count > 0, canRedo: lineRedoData.Count > 0);
+                  if (ns.Completed) return Result.Success;
+                  if (ns.IsUndo && lineHistory.TryPop(out var uSeg))
+                  {
+                    lineRedoData.Push((uSeg.segStart, uSeg.segEnd)); pendingRedoEnds.Clear();
+                    DeleteObjectIfValid(doc, uSeg.lineId);
+                    currentStart = uSeg.segStart; lastSegmentVector = lineHistory.Count > 0 ? (Vector3d?)(lineHistory.Peek().segEnd - lineHistory.Peek().segStart) : null;
+                    startConstraintState = null; startDirectionState = null; startFeedbackState = null;
+                    doc.Views.Redraw(); undoneByRedo = true; break;
+                  }
+                  if (ns.IsRedo && lineRedoData.TryPop(out var reSeg))
+                  { pendingRedoEnds.Push(reSeg.segEnd); currentStart = reSeg.segStart; lastSegmentVector = null; startConstraintState = null; startDirectionState = null; startFeedbackState = null; break; }
+                  if (!ns.HasPoint) { SavePersistedOptions(); return Result.Cancel; }
+                  currentStart = ns.Point; startConstraintState = ns.Constraint;
+                  startDirectionState = ns.Direction; startFeedbackState = ns.FeedbackGeometry;
+                  chainModeState = ns.ChainMode; firstSegment = true; lastSegmentVector = null; continueChain = true; break;
+                }
+                if (undoneByRedo) { continueChain = true; SavePersistedOptions(); continue; }
+                SavePersistedOptions();
+                continue;
+              }
+            }
+          }
+          else
+          {
+            // Multiple step-1 redo: queue end, go to step-2 from stored start
+            pendingRedoEnds.Push(redoSeg.segEnd);
+            currentStart = redoSeg.segStart;
+            lastSegmentVector = null;
           }
         }
+        // else: nothing to redo — silently ignore
         continueChain = true;
         SavePersistedOptions();
         continue;
@@ -311,6 +421,7 @@ public sealed class vLine : Command
         {
           lineHistory.Push((segmentStart, endPoint, lineId));
           lineRedoData.Clear();
+          pendingRedoEnds.Clear();
         }
       }
 
@@ -324,14 +435,16 @@ public sealed class vLine : Command
         {
           var canUndoStart = lineHistory.Count > 0;
           var newStartResult = ResolveFirstPoint(
-            doc, layerSession, initialBothSides, selectedChainMode, mode, canUndoStart);
+            doc, layerSession, initialBothSides, selectedChainMode, mode, canUndoStart,
+            canRedo: lineRedoData.Count > 0);
 
           if (newStartResult.Completed)
             return Result.Success;
 
           if (newStartResult.IsUndo && lineHistory.TryPop(out var lastSeg))
           {
-            lineRedoData.Clear();
+            lineRedoData.Push((lastSeg.segStart, lastSeg.segEnd));
+            pendingRedoEnds.Clear();
             DeleteObjectIfValid(doc, lastSeg.lineId);
             currentStart = lastSeg.segStart;
             lastSegmentVector = lineHistory.Count > 0
@@ -342,6 +455,14 @@ public sealed class vLine : Command
             startFeedbackState   = null;
             doc.Views.Redraw();
             undoneByMultiple = true;
+            break;
+          }
+
+          if (newStartResult.IsRedo && lineRedoData.TryPop(out var redoStart))
+          {
+            pendingRedoEnds.Push(redoStart.segEnd);
+            currentStart = redoStart.segStart;
+            lastSegmentVector = null; startConstraintState = null; startDirectionState = null; startFeedbackState = null;
             break;
           }
 
@@ -486,12 +607,14 @@ public sealed class vLine : Command
     bool initialBothSides,
     int initialChainMode,
     RunMode runMode,
-    bool canUndo = false)
+    bool canUndo = false,
+    bool canRedo = false)
   {
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
     getPoint.AcceptNothing(true);
     if (canUndo) getPoint.AcceptUndo(true);
+    if (canRedo) getPoint.AcceptCustomMessage(true);
     getPoint.DynamicDraw += (_, e) =>
       DrawHiddenLayerWarning(e, doc, layerSession);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
@@ -524,6 +647,9 @@ public sealed class vLine : Command
 
       if (result == GetResult.Undo)
         return FirstPointResult.Undo(bothSides.CurrentValue, chainModeIndex);
+
+      if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string cm && cm == "redo")
+        return FirstPointResult.Redo(bothSides.CurrentValue, chainModeIndex);
 
       if (result == GetResult.Point)
       {
@@ -923,6 +1049,7 @@ public sealed class vLine : Command
     getPoint.SetBasePoint(startPoint, true);
     getPoint.AcceptNumber(true, true);
     getPoint.AcceptNothing(true);
+    getPoint.AcceptCustomMessage(true);
 
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
     var chainModeIndex = ClampIndex(initialChainMode, ChainModeValues.Length);
@@ -1891,8 +2018,15 @@ public sealed class vLine : Command
 
         if (result == GetResult.Undo)
         {
+          vLine._pendingLineRedo = false;
           var undoState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
           return SecondPointResult.Undo(bothSides.CurrentValue, chainModeIndex, undoState);
+        }
+
+        if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string customCmd && customCmd == "redo")
+        {
+          var redoState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
+          return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, redoState);
         }
 
         if (result == GetResult.String)
@@ -2244,6 +2378,11 @@ public sealed class vLine : Command
         }
 
         var fallbackState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
+        if (vLine._pendingLineRedo)
+        {
+          vLine._pendingLineRedo = false;
+          return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, fallbackState);
+        }
         return SecondPointResult.None(bothSides.CurrentValue, chainModeIndex, fallbackState);
       }
     }
@@ -4503,6 +4642,58 @@ public sealed class vLine : Command
     double Angle,
     bool AngleRelative);
 
+  private sealed class VLineShortcutSession : IDisposable
+  {
+    readonly string _redoMacro;
+    readonly string _altRedoMacro;
+    bool _restoreNeeded;
+
+    public VLineShortcutSession()
+    {
+      _redoMacro    = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+        Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
+      _altRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
+        Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
+      try
+      {
+        _restoreNeeded = true;
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vLineRedo");
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vLineRedo");
+        // Post redo message after vLineRedo finishes so it reaches the parent Get() correctly.
+        Rhino.Commands.Command.EndCommand += OnEndCommand;
+      }
+      catch { Dispose(); }
+    }
+
+    static void OnEndCommand(object? sender, Rhino.Commands.CommandEventArgs e)
+    {
+      if (string.Equals(e.CommandEnglishName, "vLineRedo", StringComparison.OrdinalIgnoreCase))
+      {
+        Log.Write("vLine", "EndCommand vLineRedo → posting redo message");
+        GetBaseClass.PostCustomMessage("redo");
+      }
+    }
+
+    public void Dispose()
+    {
+      if (!_restoreNeeded) return;
+      _restoreNeeded = false;
+      Rhino.Commands.Command.EndCommand -= OnEndCommand;
+      try
+      {
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.CtrlY,
+          string.IsNullOrEmpty(_redoMacro) ? "!_Redo" : _redoMacro);
+        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
+          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ,
+          string.IsNullOrEmpty(_altRedoMacro) ? "!_Redo" : _altRedoMacro);
+      }
+      catch { }
+    }
+  }
+
   private readonly record struct FirstPointResult(
     bool HasPoint,
     Point3d Point,
@@ -4514,6 +4705,7 @@ public sealed class vLine : Command
     GeometryBase? FeedbackGeometry)
   {
     public bool IsUndo { get; init; } = false;
+    public bool IsRedo { get; init; } = false;
 
     public static FirstPointResult WithPoint(Point3d point, bool bothSides, int chainMode)
       => new(true, point, bothSides, chainMode, false, null, null, null);
@@ -4549,6 +4741,9 @@ public sealed class vLine : Command
 
     public static FirstPointResult Undo(bool bothSides, int chainMode)
       => new(false, Point3d.Unset, bothSides, chainMode, false, null, null, null) { IsUndo = true };
+
+    public static FirstPointResult Redo(bool bothSides, int chainMode)
+      => new(false, Point3d.Unset, bothSides, chainMode, false, null, null, null) { IsRedo = true };
   }
 
   private readonly record struct SecondPointResult(
@@ -4573,5 +4768,15 @@ public sealed class vLine : Command
 
     public static SecondPointResult Redo(bool bothSides, int chainMode, ConstraintState state)
       => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state) { IsRedo = true };
+  }
+}
+
+[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
+public sealed class vLineRedo : Command
+{
+  public override string EnglishName => "vLineRedo";
+  protected override Result RunCommand(RhinoDoc doc, RunMode mode)
+  {
+    return Result.Success;
   }
 }

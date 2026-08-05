@@ -324,7 +324,7 @@ public sealed class vFacing : Command
     }
 
     // PRIMARY: group curves by layer index.
-    // Curves on the same layer belong to the same role (base / side1 / side2 / chamfer).
+    // Group curves by layer so multi-segment bases/sides stay together.
     var layerGroups = input
       .GroupBy(t => t.Layer)
       .Select(g => g.Select(t => (t.Crv, t.Layer)).ToList())
@@ -334,28 +334,27 @@ public sealed class vFacing : Command
     for (var _i = 0; _i < layerGroups.Count; _i++)
       Log.Write("vFacing", $"  group[{_i}] layer={layerGroups[_i][0].Layer} count={layerGroups[_i].Count}");
 
-    // FALLBACK: all curves on the same layer.
-    if (layerGroups.Count == 1)
+    // For exactly 3 input curves, roles are always determined geometrically — layers don't decide.
+    if (input.Count == 3)
+    {
+      if (layerGroups.Count != 3)
+        Log.Write("vFacing", "3-curve input: using per-curve topology (layer grouping ignored)");
+      layerGroups = input
+        .Select(t => new List<(Curve Crv, int Layer)> { (t.Crv, t.Layer) })
+        .ToList();
+    }
+    // All curves on the same layer (2 or 4+ curves).
+    else if (layerGroups.Count == 1)
     {
       if (input.Count == 2)
       {
-        // 2 curves same layer: split into 2 individual groups, fall through to 2-group handler.
         Log.Write("vFacing", "All curves on same layer (2 curves) — treating as base + combined side");
-        layerGroups = input
-          .Select(t => new List<(Curve Crv, int Layer)> { (t.Crv, t.Layer) })
-          .ToList();
-      }
-      else if (input.Count == 3)
-      {
-        // Exactly 3 — split into individual groups and let topology detection work.
-        Log.Write("vFacing", "All curves on same layer (3 curves) — treating each as separate group");
         layerGroups = input
           .Select(t => new List<(Curve Crv, int Layer)> { (t.Crv, t.Layer) })
           .ToList();
       }
       else if (input.Count > 3)
       {
-        // More than 3 curves on the same layer — ask user to identify the 2 side curves.
         Log.Write("vFacing", $"All curves on same layer ({input.Count} curves) — asking user to pick 2 sides");
         if (!TryPickSideCurves(doc, input, out var sideIdxs))
           return false;
@@ -436,37 +435,63 @@ public sealed class vFacing : Command
       var bChain2 = chains2[baseGrpIdx];
       var sChain2 = chains2[sideGrpIdx].DuplicateCurve();
 
-      // Orient combined side: Start ≈ bChain2.End, End ≈ bChain2.Start
       var sStartNearBEnd = sChain2.PointAtStart.DistanceTo(bChain2.PointAtEnd)
                          < sChain2.PointAtEnd.DistanceTo(bChain2.PointAtEnd);
       if (!sStartNearBEnd)
         sChain2.Reverse();
 
-      if (!sChain2.LengthParameter(sChain2.GetLength() / 2.0, out var midT))
+      var wrapGap = sChain2.PointAtEnd.DistanceTo(bChain2.PointAtStart);
+      if (wrapGap > tol * 100)
       {
-        RhinoApp.WriteLine("vFacing: could not find midpoint of combined side.");
-        return false;
+        Log.Write("vFacing", $"2-group topology rejected: wrapGap={wrapGap:F3}");
+        // Fall back to connectivity-based chain grouping (layers don't decide roles).
+        if (TryBuildChainGroups(input, tol, out var cgBase, out var cgSide1, out var cgSide2))
+        {
+          baseParts  = cgBase;
+          side1Parts = cgSide1;
+          side2Parts = cgSide2;
+          return true;
+        }
+        // Chain grouping ambiguous — ask user to pick the 2 side curves.
+        if (!TryPickSideCurves(doc, input, out var sideIdxs))
+          return false;
+        var s1i = sideIdxs![0]; var s2i = sideIdxs![1];
+        var bGroup = input.Where((_, i) => i != s1i && i != s2i).Select(t => (t.Crv, t.Layer)).ToList();
+        layerGroups = new List<List<(Curve Crv, int Layer)>>
+        {
+          bGroup,
+          new List<(Curve Crv, int Layer)> { (input[s1i].Crv, input[s1i].Layer) },
+          new List<(Curve Crv, int Layer)> { (input[s2i].Crv, input[s2i].Layer) },
+        };
       }
-
-      var halves = sChain2.Split(midT);
-      if (halves == null || halves.Length != 2)
+      else
       {
-        RhinoApp.WriteLine("vFacing: could not split combined side at midpoint.");
-        return false;
+        if (!sChain2.LengthParameter(sChain2.GetLength() / 2.0, out var midT))
+        {
+          RhinoApp.WriteLine("vFacing: could not find midpoint of combined side.");
+          return false;
+        }
+
+        var halves = sChain2.Split(midT);
+        if (halves == null || halves.Length != 2)
+        {
+          RhinoApp.WriteLine("vFacing: could not split combined side at midpoint.");
+          return false;
+        }
+
+        var s2Raw = halves[0].DuplicateCurve(); // starts at bChain2.End
+        var s1Raw = halves[1].DuplicateCurve(); s1Raw.Reverse(); // starts at bChain2.Start
+
+        Curve b2 = bChain2, s1c = s1Raw, s2c = s2Raw;
+        OrientSides(ref b2, ref s1c, ref s2c, tol);
+
+        Log.Write("vFacing", $"2-group topology: base=group[{baseGrpIdx}] len={bChain2.GetLength():F3} combined-side=group[{sideGrpIdx}]");
+
+        baseParts  = new List<(Curve, int)> { (b2,  layerGroups[baseGrpIdx][0].Layer) };
+        side1Parts = new List<(Curve, int)> { (s1c, layerGroups[sideGrpIdx][0].Layer) };
+        side2Parts = new List<(Curve, int)> { (s2c, layerGroups[sideGrpIdx][0].Layer) };
+        return true;
       }
-
-      var s2Raw = halves[0].DuplicateCurve(); // starts at bChain2.End
-      var s1Raw = halves[1].DuplicateCurve(); s1Raw.Reverse(); // starts at bChain2.Start
-
-      Curve b2 = bChain2, s1c = s1Raw, s2c = s2Raw;
-      OrientSides(ref b2, ref s1c, ref s2c, tol);
-
-      Log.Write("vFacing", $"2-curve topology: base=group[{baseGrpIdx}] len={bChain2.GetLength():F3} combined-side=group[{sideGrpIdx}]");
-
-      baseParts  = new List<(Curve, int)> { (b2,  layerGroups[baseGrpIdx][0].Layer) };
-      side1Parts = new List<(Curve, int)> { (s1c, layerGroups[sideGrpIdx][0].Layer) };
-      side2Parts = new List<(Curve, int)> { (s2c, layerGroups[sideGrpIdx][0].Layer) };
-      return true;
     }
 
     if (layerGroups.Count != 3)
@@ -515,6 +540,59 @@ public sealed class vFacing : Command
     baseParts  = OrderChain(layerGroups[baseIdx], bChain,  tol);
     side1Parts = OrderChain(layerGroups[s1Idx],   s1Chain, tol);
     side2Parts = OrderChain(layerGroups[s2Idx],   s2Chain, tol);
+    return true;
+  }
+
+  /// <summary>
+  // Groups N curves into (base, side1, side2) purely by endpoint connectivity.
+  // Only succeeds when the curves form a linear chain; endpoint curves become the two sides.
+  private static bool TryBuildChainGroups(
+    List<(Guid Id, Curve Crv, int Layer)> input, double tol,
+    out List<(Curve Crv, int Layer)>? baseParts,
+    out List<(Curve Crv, int Layer)>? side1Parts,
+    out List<(Curve Crv, int Layer)>? side2Parts)
+  {
+    baseParts = side1Parts = side2Parts = null;
+    var n = input.Count;
+    // Build adjacency: each curve index → list of connected curve indices.
+    var adj = new List<int>[n];
+    for (var i = 0; i < n; i++) adj[i] = new List<int>();
+    for (var i = 0; i < n; i++)
+      for (var j = i + 1; j < n; j++)
+        if (SharesEndpoint(input[i].Crv, input[j].Crv, tol))
+        { adj[i].Add(j); adj[j].Add(i); }
+
+    // Must be a simple linear chain: exactly 2 nodes with degree=1, rest degree=2.
+    var ends = Enumerable.Range(0, n).Where(i => adj[i].Count == 1).ToList();
+    if (ends.Count != 2 || Enumerable.Range(0, n).Any(i => adj[i].Count > 2))
+    {
+      Log.Write("vFacing", "chain-grouping: not a linear chain — falling back to side pick");
+      return false;
+    }
+
+    // Walk the chain from one end to the other.
+    var order = new List<int>();
+    var visited = new HashSet<int>();
+    var cur = ends[0];
+    while (order.Count < n)
+    {
+      order.Add(cur); visited.Add(cur);
+      var next = adj[cur].FirstOrDefault(x => !visited.Contains(x), -1);
+      if (next < 0) break;
+      cur = next;
+    }
+    if (order.Count != n) return false;
+
+    // Endpoint curves are the two sides; everything in between is the base.
+    var s1Idx  = order[0];
+    var s2Idx  = order[n - 1];
+    var bIdxs  = order.Skip(1).Take(n - 2).ToList();
+
+    Log.Write("vFacing", $"chain-grouping: side1=curve[{s1Idx}] base=curve[{string.Join(",", bIdxs)}] side2=curve[{s2Idx}]");
+
+    side1Parts = new List<(Curve, int)> { (input[s1Idx].Crv, input[s1Idx].Layer) };
+    side2Parts = new List<(Curve, int)> { (input[s2Idx].Crv, input[s2Idx].Layer) };
+    baseParts  = bIdxs.Select(i => (input[i].Crv, input[i].Layer)).ToList();
     return true;
   }
 

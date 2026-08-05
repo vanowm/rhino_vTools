@@ -982,10 +982,15 @@ public sealed class vFacing : Command
     var s1Rev = side1Final.DuplicateCurve();
     s1Rev.Reverse();
 
+    static string Pt(Point3d p) => $"({p.X:F3},{p.Y:F3})";
     Log.Write("vFacing",
       $"  result method=closest-point-zero-radius-fillet " +
       $"side1Span={side1Final.GetLength():F3} side2Span={side2Final.GetLength():F3} " +
       $"offsetLen={offTrimmed.GetLength():F3}");
+    Log.Write("vFacing", $"  base    {Pt(baseJoined.PointAtStart)}→{Pt(baseJoined.PointAtEnd)}");
+    Log.Write("vFacing", $"  side2   {Pt(side2Final.PointAtStart)}→{Pt(side2Final.PointAtEnd)}");
+    Log.Write("vFacing", $"  offset  {Pt(offTrimmed.PointAtStart)}→{Pt(offTrimmed.PointAtEnd)}");
+    Log.Write("vFacing", $"  side1rv {Pt(s1Rev.PointAtStart)}→{Pt(s1Rev.PointAtEnd)}");
 
     // Build output pieces; bridge any sub-mm gap at the base-side junctions with a closing line.
     outPieces = new List<(Curve, int)>();

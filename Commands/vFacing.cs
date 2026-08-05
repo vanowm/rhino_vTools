@@ -859,7 +859,7 @@ public sealed class vFacing : Command
   /// </summary>
   private static void OrientSides(ref Curve baseCurve, ref Curve side1, ref Curve side2, double tol)
   {
-    var eps = tol * 2;
+    var eps = Math.Max(tol * 2, 1.0);
     var b   = baseCurve.DuplicateCurve();
     var s1  = side1.DuplicateCurve();
     var s2  = side2.DuplicateCurve();
@@ -1269,18 +1269,19 @@ public sealed class vFacing : Command
     if (filletResult == null || filletResult.Length != 2)
       return false;
 
+    var snapTol = Math.Max(tol, 1.0);
     var firstIsSide =
-      filletResult[0].PointAtStart.DistanceTo(sideJunction) <= tol ||
-      filletResult[0].PointAtEnd.DistanceTo(sideJunction) <= tol;
+      filletResult[0].PointAtStart.DistanceTo(sideJunction) <= snapTol ||
+      filletResult[0].PointAtEnd.DistanceTo(sideJunction) <= snapTol;
     var secondIsSide =
-      filletResult[1].PointAtStart.DistanceTo(sideJunction) <= tol ||
-      filletResult[1].PointAtEnd.DistanceTo(sideJunction) <= tol;
+      filletResult[1].PointAtStart.DistanceTo(sideJunction) <= snapTol ||
+      filletResult[1].PointAtEnd.DistanceTo(sideJunction) <= snapTol;
 
     if (firstIsSide == secondIsSide)
       return false;
 
     var sideIndex = firstIsSide ? 0 : 1;
-    side = OrientFromPoint(filletResult[sideIndex], sideJunction, tol);
+    side = OrientFromPoint(filletResult[sideIndex], sideJunction, snapTol);
     offset = filletResult[1 - sideIndex];
     return side != null;
   }
@@ -1297,7 +1298,8 @@ public sealed class vFacing : Command
     var result = curve.DuplicateCurve();
     if (result.PointAtEnd.DistanceTo(startPoint) < result.PointAtStart.DistanceTo(startPoint))
       result.Reverse();
-    return result.PointAtStart.DistanceTo(startPoint) <= tol ? result : null;
+    // Accept if start is the closer end, regardless of exact distance.
+    return result.PointAtStart.DistanceTo(startPoint) <= result.PointAtEnd.DistanceTo(startPoint) ? result : null;
   }
 
   // ── Inside-object collection (from vPart) ────────────────────────────────

@@ -554,17 +554,18 @@ public sealed class vFacing : Command
   {
     baseParts = side1Parts = side2Parts = null;
     var n = input.Count;
-    // Build adjacency: each curve index → list of connected curve indices.
+    // Use a generous snap for adjacency — garment endpoints are often not perfectly coincident.
+    var snapTol = Math.Max(tol * 1000, 1.0);
     var adj = new List<int>[n];
     for (var i = 0; i < n; i++) adj[i] = new List<int>();
     for (var i = 0; i < n; i++)
       for (var j = i + 1; j < n; j++)
-        if (SharesEndpoint(input[i].Crv, input[j].Crv, tol))
+        if (SharesEndpoint(input[i].Crv, input[j].Crv, snapTol))
         { adj[i].Add(j); adj[j].Add(i); }
 
-    // Must be a simple linear chain: exactly 2 nodes with degree=1, rest degree=2.
+    // Must be a simple linear chain: exactly 2 nodes with degree=1, rest degree=2, none degree=0.
     var ends = Enumerable.Range(0, n).Where(i => adj[i].Count == 1).ToList();
-    if (ends.Count != 2 || Enumerable.Range(0, n).Any(i => adj[i].Count > 2))
+    if (ends.Count != 2 || Enumerable.Range(0, n).Any(i => adj[i].Count != 1 && adj[i].Count != 2))
     {
       Log.Write("vFacing", "chain-grouping: not a linear chain — falling back to side pick");
       return false;

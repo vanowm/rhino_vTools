@@ -978,8 +978,6 @@ public sealed class vFacing : Command
 
     // Snap trimmed-side junction endpoints to the exact base corners to close any sub-mm endpoint gap.
     var snapTol = Math.Max(tol, 1.0);
-    side1Final = SnapCurveEnd(side1Final, baseJoined.PointAtStart, snapTol) ?? side1Final;
-    side2Final = SnapCurveEnd(side2Final, baseJoined.PointAtEnd,   snapTol) ?? side2Final;
 
     var s1Rev = side1Final.DuplicateCurve();
     s1Rev.Reverse();
@@ -1001,26 +999,13 @@ public sealed class vFacing : Command
     // Joined boundary for CollectInsideObjects only.
     // Failure here is non-fatal — inside-object collection will be skipped.
     var bndPieces = new Curve[] { baseJoined, side2Final, offTrimmed, s1Rev };
-    var bnd = Curve.JoinCurves(bndPieces, Math.Max(tol, 1.0));
+    var bnd = Curve.JoinCurves(bndPieces, snapTol);
     if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
     {
       boundaryCurve = bnd[0];
     }
     // boundaryCurve may remain null; caller handles that gracefully.
     return true;
-  }
-
-  // Snaps the start of a curve to targetPoint if it is the closer end and within snapTol.
-  private static Curve? SnapCurveEnd(Curve crv, Point3d targetPoint, double snapTol)
-  {
-    var dStart = crv.PointAtStart.DistanceTo(targetPoint);
-    var dEnd   = crv.PointAtEnd.DistanceTo(targetPoint);
-    if (dStart > snapTol && dEnd > snapTol) return null;
-    var nurbs = crv.ToNurbsCurve();
-    if (nurbs == null) return null;
-    if (dStart <= dEnd) nurbs.SetStartPoint(targetPoint);
-    else                nurbs.SetEndPoint(targetPoint);
-    return nurbs;
   }
 
   private static bool TrySelectOffsetByClosestPoints(

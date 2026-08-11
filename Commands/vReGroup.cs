@@ -75,7 +75,9 @@ public sealed class vReGroup : Command
           obj.CommitChanges();
         }
         doc.Views.Redraw();
-        RhinoApp.WriteLine($"vReGroup: {ids.Count} object(s) collected into one group.");
+        RhinoApp.WriteLine(
+          $"vReGroup: {ids.Count} object(s) collected into one group | " +
+          $"Consolidated groups: {groupsInUse.Count}");
         return Result.Success;
       }
     }
@@ -107,7 +109,9 @@ public sealed class vReGroup : Command
     }
 
     doc.Views.Redraw();
-    RhinoApp.WriteLine($"vReGroup: {ids.Count} object(s) collected into one group.");
+    RhinoApp.WriteLine(
+      $"vReGroup: {ids.Count} object(s) collected into one group | " +
+      $"Consolidated groups: {groupsInUse.Count}");
     return Result.Success;
   }
 }

@@ -369,11 +369,19 @@ public sealed class vTextAligned : Command
       }
 
       var entity = BuildTextEntity(doc, effTextPlace, effHeightPlace, plane);
+      LogTextMetrics("primary before add", entity);
       var newAttributes = NewTextAttributes(doc, activeCurveId);
       var newId = doc.Objects.AddText(entity, newAttributes);
       if (newId == Guid.Empty)
       {
         RhinoApp.WriteLine("vTextAligned: failed to add text.");
+        continue;
+      }
+      if (!FinalizePlacedText(
+            doc, newId, entity, effTextPlace, effHeightPlace, plane, "primary"))
+      {
+        RhinoApp.WriteLine("vTextAligned: placed text does not match preview; object removed.");
+        doc.Objects.Delete(newId, true);
         continue;
       }
 
@@ -413,17 +421,27 @@ public sealed class vTextAligned : Command
               boundsHint: getter.PreviewTextBounds))
         {
           var secEntity = BuildTextEntity(doc, effTextPlace, effHeightPlace, oppPlane);
+          LogTextMetrics("opposite before add", secEntity);
           var secAttributes = NewTextAttributes(doc, activeCurveId);
           var secId = doc.Objects.AddText(secEntity, secAttributes);
           if (secId != Guid.Empty)
           {
-            var oppositeSideVec = oppositeSideSign < 0 ? -sideBaseVec : sideBaseVec;
-            CorrectStoredTextPlacement(
-              doc, secId, curvePoint, oppositeSideVec,
-              _offset, normalDistance, "opposite");
-            var secGeo = DupTextGeometry(doc, secId);
-            if (secGeo != null)
-              undoStack.Push(TextAction.CreateAdd(secId, secGeo, secAttributes));
+            if (FinalizePlacedText(
+                  doc, secId, secEntity, effTextPlace, effHeightPlace, oppPlane, "opposite"))
+            {
+              var oppositeSideVec = oppositeSideSign < 0 ? -sideBaseVec : sideBaseVec;
+              CorrectStoredTextPlacement(
+                doc, secId, curvePoint, oppositeSideVec,
+                _offset, normalDistance, "opposite");
+              var secGeo = DupTextGeometry(doc, secId);
+              if (secGeo != null)
+                undoStack.Push(TextAction.CreateAdd(secId, secGeo, secAttributes));
+            }
+            else
+            {
+              RhinoApp.WriteLine("vTextAligned: opposite text does not match preview; object removed.");
+              doc.Objects.Delete(secId, true);
+            }
           }
         }
       }
@@ -844,7 +862,7 @@ public sealed class vTextAligned : Command
       Plane = plane,
       TextHeight = Math.Max(heightValue, RhinoMath.ZeroTolerance),
       Justification = TextJustification.MiddleCenter,
-      DrawForward = false
+      DrawForward = false,
     };
 
     SetTextEntityValue(text, textValue);
@@ -882,6 +900,68 @@ public sealed class vTextAligned : Command
     {
       return false;
     }
+  }
+
+  private static void LogTextMetrics(string role, TextEntity text)
+  {
+    var bounds = CenteredLocalTextBounds(text);
+    string size = bounds.HasValue
+      ? $"bounds={(bounds.Value.MaxX - bounds.Value.MinX):G9}x{(bounds.Value.MaxY - bounds.Value.MinY):G9}"
+      : "bounds=unavailable";
+    Log.Write("vTextAligned",
+      $"{role} textHeight={text.TextHeight:G9} dimensionScale={text.DimensionScale:G9} {size}");
+  }
+
+  private static bool TextGeometryMatches(
+    TextEntity expected, TextEntity actual, double tolerance, out string mismatch)
+  {
+    mismatch = "bounds unavailable";
+    var expectedBounds = CenteredLocalTextBounds(expected);
+    var actualBounds = CenteredLocalTextBounds(actual);
+    if (!expectedBounds.HasValue || !actualBounds.HasValue)
+      return false;
+
+    double expectedWidth = expectedBounds.Value.MaxX - expectedBounds.Value.MinX;
+    double expectedHeight = expectedBounds.Value.MaxY - expectedBounds.Value.MinY;
+    double actualWidth = actualBounds.Value.MaxX - actualBounds.Value.MinX;
+    double actualHeight = actualBounds.Value.MaxY - actualBounds.Value.MinY;
+    double checkTolerance = Math.Max(tolerance * 2.0, 1e-8);
+    mismatch =
+      $"expected={expectedWidth:G9}x{expectedHeight:G9} " +
+      $"actual={actualWidth:G9}x{actualHeight:G9} tolerance={checkTolerance:G9}";
+    return Math.Abs(expectedWidth - actualWidth) <= checkTolerance &&
+           Math.Abs(expectedHeight - actualHeight) <= checkTolerance;
+  }
+
+  private static bool FinalizePlacedText(
+    RhinoDoc doc,
+    Guid textId,
+    TextEntity previewEntity,
+    string textValue,
+    double heightValue,
+    Plane plane,
+    string role)
+  {
+    if (doc.Objects.FindId(textId)?.Geometry is not TextEntity inserted)
+    {
+      Log.Write("vTextAligned", $"{role} verification failed: inserted text unavailable");
+      return false;
+    }
+
+    LogTextMetrics($"{role} after add", inserted);
+    if (!ApplySettingsToTextObject(doc, textId, textValue, heightValue, plane) ||
+        doc.Objects.FindId(textId)?.Geometry is not TextEntity finalized)
+    {
+      Log.Write("vTextAligned", $"{role} verification failed: finalization failed");
+      return false;
+    }
+
+    LogTextMetrics($"{role} finalized", finalized);
+    if (TextGeometryMatches(previewEntity, finalized, doc.ModelAbsoluteTolerance, out var mismatch))
+      return true;
+
+    Log.Write("vTextAligned", $"{role} verification failed: {mismatch}");
+    return false;
   }
 
   private static bool ApplySettingsToTextObject(RhinoDoc doc, Guid textId, string textValue, double heightValue, Plane plane)
@@ -1191,7 +1271,10 @@ public sealed class vTextAligned : Command
 
     private readonly List<CurveObjectCacheItem> _curveCache;
     private readonly List<TextPickCacheItem> _textPickCache;
-    private readonly TextEntity _previewTextTemplate;
+    private readonly Curve[] _previewTextOutlines;
+    private readonly Brep[] _previewTextFaces;
+    private readonly Rhino.Display.DisplayMaterial _previewTextMaterial =
+      new(System.Drawing.Color.Cyan);
 
     private readonly Guid? _activeCurveId;
     private readonly Guid? _activeTextId;
@@ -1230,14 +1313,24 @@ public sealed class vTextAligned : Command
       SnapTolerance = Math.Max(doc.ModelAbsoluteTolerance * 3.0, 0.25);
       HoverSnapTolerance = SnapTolerance;
       PreviewTemplateTextId = _activeTextId;
-      _previewTextTemplate = BuildProbeTextEntity(
+      var previewTextTemplate = BuildProbeTextEntity(
         doc, text, height, Plane.WorldXY, PreviewTemplateTextId);
       PreviewTextBounds = null;
-      var previewBounds = CenteredLocalTextBounds(_previewTextTemplate);
+      var previewBounds = CenteredLocalTextBounds(previewTextTemplate);
       if (previewBounds.HasValue)
       {
         var (_, minx, maxx, miny, maxy) = previewBounds.Value;
         PreviewTextBounds = new LocalTextBounds(minx, maxx, miny, maxy);
+      }
+      _previewTextOutlines = previewTextTemplate.Explode() ?? [];
+      try
+      {
+        _previewTextFaces = Brep.CreatePlanarBreps(
+          _previewTextOutlines, doc.ModelAbsoluteTolerance) ?? [];
+      }
+      catch
+      {
+        _previewTextFaces = [];
       }
     }
 
@@ -1421,7 +1514,7 @@ public sealed class vTextAligned : Command
         {
           try
           {
-            e.Display.DrawAnnotation(BuildPreviewText(PreviewPlane.Value), System.Drawing.Color.Cyan);
+            DrawPreviewText(e.Display, PreviewPlane.Value);
           }
           catch
           {
@@ -1433,7 +1526,7 @@ public sealed class vTextAligned : Command
       {
         try
         {
-          e.Display.DrawAnnotation(BuildPreviewText(PreviewPlaneOpp.Value), System.Drawing.Color.Cyan);
+          DrawPreviewText(e.Display, PreviewPlaneOpp.Value);
         }
         catch
         {
@@ -1443,13 +1536,27 @@ public sealed class vTextAligned : Command
       base.OnDynamicDraw(e);
     }
 
-    private TextEntity BuildPreviewText(Plane plane)
+    private void DrawPreviewText(Rhino.Display.DisplayPipeline display, Plane plane)
     {
-      var te = _previewTextTemplate.Duplicate() as TextEntity ??
-        BuildTextEntity(_doc, _text, _height, plane);
-      te.Plane = plane;
-      try { te.DrawForward = false; } catch { }
-      return te;
+      var transform = Transform.PlaneToPlane(Plane.WorldXY, plane);
+      display.PushModelTransform(transform);
+      try
+      {
+        if (_previewTextFaces.Length > 0)
+        {
+          foreach (var face in _previewTextFaces)
+            display.DrawBrepShaded(face, _previewTextMaterial);
+        }
+        else
+        {
+          foreach (var outline in _previewTextOutlines)
+            display.DrawCurve(outline, System.Drawing.Color.Cyan, 1);
+        }
+      }
+      finally
+      {
+        display.PopModelTransform();
+      }
     }
   }
 }

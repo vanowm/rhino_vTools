@@ -89,6 +89,8 @@
     "keep_selection": false,
     "multiple_start_offset": 2.0,
     "multiple_end_offset": 2.0,
+    "multiple_start_offset_enabled": true,
+    "multiple_end_offset_enabled": true,
     "multiple_number": 2,
     "multiple_distance": 0.0,
     "multiple_use_distance": false,

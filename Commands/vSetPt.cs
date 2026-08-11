@@ -914,6 +914,17 @@ public sealed class vSetPt : Command
       p => p.Id,
       p => { var c = doc.Objects.FindId(p.Id)?.Geometry as Curve; return c == null ? Point3d.Unset : (p.IsStart ? c.PointAtStart : c.PointAtEnd); });
 
+    Result? setPtResult = null;
+    EventHandler<CommandEventArgs> onSetPtEnded = (_, e) =>
+    {
+      if (e.Document == doc &&
+          string.Equals(e.CommandEnglishName, "SetPt", StringComparison.OrdinalIgnoreCase))
+      {
+        setPtResult = e.CommandResult;
+      }
+    };
+
+    Command.EndCommand += onSetPtEnded;
     try
     {
       _ = RhinoApp.RunScript(
@@ -922,7 +933,8 @@ public sealed class vSetPt : Command
     }
     finally
     {
-      bool ok = picks.Any(p =>
+      Command.EndCommand -= onSetPtEnded;
+      bool moved = picks.Any(p =>
       {
         if (!endpointsBefore.TryGetValue(p.Id, out var before) || before == Point3d.Unset) return false;
         var c = doc.Objects.FindId(p.Id)?.Geometry as Curve;
@@ -930,9 +942,13 @@ public sealed class vSetPt : Command
         var after = p.IsStart ? c.PointAtStart : c.PointAtEnd;
         return after.DistanceTo(before) > doc.ModelAbsoluteTolerance;
       });
-      Log.Write(Tag, $"  -SetPt moved={ok}");
+      bool completed = setPtResult == Result.Success ||
+        (setPtResult == null && moved);
+      Log.Write(Tag,
+        $"  -SetPt result={setPtResult?.ToString() ?? "Unknown"}" +
+        $" moved={moved} completed={completed}");
       UnselectObjectsAndGrips(doc);
-      if (ok)
+      if (completed)
       {
         SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
       }

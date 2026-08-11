@@ -64,6 +64,55 @@ if ($Publish -or $ComposeOnly) {
     if ($ComposeOnly) { exit 0 }
 }
 
+if ($Publish) {
+    $sourceFiles = Get-ChildItem -LiteralPath $PSScriptRoot -Recurse -File -Filter '*.cs' |
+        Where-Object {
+            $_.FullName -notmatch '\\(bin|obj|logs|backups|\.git)\\' -and
+            $_.Name -notlike '*.Generated*'
+        }
+    $latestSource = $sourceFiles | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    $expectedVersion = if ($latestSource) {
+        $latestSource.LastWriteTime.ToString('yy.M.d.Hmm')
+    } else {
+        [DateTime]::Now.ToString('yy.M.d.Hmm')
+    }
+    $releaseDllPaths = @(
+        "bin\Release\net7.0-windows\$projectName.dll",
+        "bin\Release\net10.0-windows\$projectName.dll"
+    )
+    $releaseOutputsCurrent = $null -ne $latestSource
+
+    foreach ($relativePath in $releaseDllPaths) {
+        $dllPath = Join-Path $PSScriptRoot $relativePath
+        if (-not (Test-Path -LiteralPath $dllPath -PathType Leaf)) {
+            $releaseOutputsCurrent = $false
+            break
+        }
+
+        $dll = Get-Item -LiteralPath $dllPath
+        $dllVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($dll.FullName).FileVersion
+        if ($dllVersion -ne $expectedVersion -or $dll.LastWriteTimeUtc -lt $latestSource.LastWriteTimeUtc) {
+            $releaseOutputsCurrent = $false
+            break
+        }
+    }
+
+    if ($releaseOutputsCurrent) {
+        Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
+        Write-Host 'Continuing publish commit flow with the existing Release outputs.' -ForegroundColor Green
+        $publishArguments = @(
+            'msbuild',
+            $projectFile.FullName,
+            '-t:CommitReleaseVersion',
+            '-p:Configuration=Release',
+            "-p:BuildVersion=$expectedVersion",
+            "-p:Version=$expectedVersion"
+        )
+        & dotnet @publishArguments
+        exit $LASTEXITCODE
+    }
+}
+
 $buildArguments = @('build', $projectFile.FullName, '-c', 'Release', '--no-incremental')
 if (-not $Publish) {
     $buildArguments += '-p:AutoCommitVersionOnRelease=false'

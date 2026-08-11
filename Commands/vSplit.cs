@@ -23,7 +23,7 @@ public sealed class vSplit : Command
   private const int DefaultPointRadius = 5;
   private const int PointOutlineWidth = 1;
 
-  private static readonly string[] PointDisplayModeNames = ["Default", "CP", "EditPoints", "Hidden"];
+  private static readonly string[] PointDisplayModeNames = ["Default", "ControlPoints", "EditPoints", "Hidden"];
   private static readonly Color SetPointColor = Color.Red;
   private static readonly Color RemovePointColor = Color.Cyan;
   private static readonly Color PointOutlineColor = Color.Pink;

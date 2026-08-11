@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.11.1155
+# vTools  ·  v26.8.11.1442
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -74,12 +74,15 @@ From this folder:
 This standalone Release build does not require Git and never commits or pushes.
 Repository maintainers can use `.\build.ps1 -Publish` for the semantic-message,
 signed-commit, push, and GitHub release workflow used by the normal VS Code build task.
+When both Release DLLs already match the source-derived version and are not older than
+the latest C# source, publishing reuses them and continues without recompiling, including
+while Rhino has the DLL loaded.
 
 Build behavior:
 
-1. Release builds fail fast if output files are locked (for example, if Rhino holds `vTools.dll`).
+1. Release builds fail fast if stale output files are locked (for example, if Rhino holds `vTools.dll`).
 2. After every successful Release build, a timestamped backup snapshot is created automatically.
-3. When `-Publish` produces either changed DLL, the build commits both runtime outputs once and pushes a full-version tag. GitHub then creates a release containing distinctly named .NET 7 and .NET 10 DLLs plus the toolbar `.rui` file.
+3. When `-Publish` finds either changed DLL, the build commits both runtime outputs once and pushes a full-version tag. GitHub then creates a release containing distinctly named .NET 7 and .NET 10 DLLs plus the toolbar `.rui` file.
 
 ## Output
 
@@ -514,7 +517,7 @@ Behavior:
 
 1. Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Each curve keeps the end nearest the cursor when that curve is selected, even if its other end is nearer the eventual common target; deselecting and reselecting the curve captures a new end. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.
 1. Use `Preview=On/Off` during curve selection to show or hide the live result; the setting persists. When enabled, thin cyan temporary curves show each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moving to a common target that follows the cursor at the selected points' view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.
-1. Grips are enabled and the identified points are selected automatically. After a successful SetPt, the exact endpoints, edit points, or control points used remain visible and selected so Rhino displays the gumball; cancelling restores each curve's original grip visibility.
+1. Grips are enabled and the identified points are selected automatically. After a successful SetPt, including when the points are already at the chosen coordinate, the exact endpoints, edit points, or control points used remain visible and selected so Rhino displays the gumball; cancelling restores each curve's original grip visibility.
 1. The built-in `-SetPt` command launches with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No`; click the target location to commit.
 1. Press Enter to repeat `vSetPt`.
 

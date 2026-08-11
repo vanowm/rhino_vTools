@@ -9,7 +9,7 @@
 - Keep commit and pending summaries consolidated and concise: state only what was added, changed, fixed, or removed, without implementation details.
 - `build.ps1` without options must perform a standalone Release build with no Git requirement, commit, or push. Use `build.ps1 -Publish` or the normal workspace build task for the publishing flow.
 - After agent-made project changes, run the standalone no-commit Release build whenever Rhino is not running. Agents must leave staging, commits, and pushes to the user.
-- In the publishing flow, automatically commit and push only when a successful Release build changes the tracked Release DLL. Sign the commit, push `master`, and preserve the pending message if the commit fails.
+- In the publishing flow, skip compilation when both Release DLL versions match the source-derived version and neither DLL is older than the latest C# source; continue the normal commit/push flow with those outputs even if Rhino is running. Otherwise, automatically commit and push only when a successful Release build changes the tracked Release DLL. Sign the commit, push `master`, and preserve the pending message if the commit fails.
 - Use the `(No Commit)` workspace build task for a Release build that must not commit or push.
 - Build versions shown in a README must be updated automatically by a successful Release build. Command versions in README command lists are introduction versions and must not change when commands are updated.
 - Commit messages describe plug-in behavior and build changes; do not mention source script filenames.

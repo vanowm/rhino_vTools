@@ -83,7 +83,7 @@ public sealed class vJoin : Command
       ObjectType.Mesh |
       ObjectType.SubD;
     getter.SubObjectSelect = false;
-    getter.GroupSelect = true;
+    getter.GroupSelect = false;
     getter.AlreadySelectedObjectSelect = true;
     getter.AcceptNothing(true);
     getter.EnablePreSelect(true, true);

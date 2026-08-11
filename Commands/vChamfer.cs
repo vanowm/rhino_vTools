@@ -333,6 +333,156 @@ public sealed class vChamfer : Command
     return true;
   }
 
+  private static bool TryEvaluatePointStation(
+    Curve c1, bool c1AtStart,
+    Curve c2, bool c2AtStart,
+    double station,
+    out Point3d ptA, out Point3d ptB,
+    out double tA, out double tB)
+  {
+    ptA = ptB = Point3d.Unset;
+    tA = tB = double.NaN;
+
+    double len1 = c1.GetLength();
+    station = Math.Max(0.0, Math.Min(station, len1));
+    double curveLength = c1AtStart ? station : len1 - station;
+    if (!c1.LengthParameter(curveLength, out tA))
+      return false;
+
+    ptA = c1.PointAt(tA);
+    var tanA = c1.TangentAt(tA);
+    var (gap, candidateTB, candidatePtB) = EquidistantGap(
+      ptA, tanA, c1AtStart, c2, c2AtStart);
+    if (double.IsNaN(gap) || double.IsNaN(candidateTB) || !candidatePtB.IsValid)
+      return false;
+
+    tB = candidateTB;
+    ptB = candidatePtB;
+    return true;
+  }
+
+  private static bool ComputeChamferFromPoint(
+    Curve c1, bool c1AtStart,
+    Curve c2, bool c2AtStart,
+    Point3d pickedPoint, double offset,
+    out Point3d ptA, out Point3d ptB,
+    out double tA, out double tB)
+  {
+    ptA = ptB = Point3d.Unset;
+    tA = tB = double.NaN;
+    if (!pickedPoint.IsValid || offset < 0.0)
+      return false;
+
+    double length = c1.GetLength();
+    const int sampleCount = 48;
+    double bestStation = double.NaN;
+    double bestDistance = double.MaxValue;
+    double sampleStep = length / sampleCount;
+
+    double MidpointDistance(double station)
+    {
+      if (!TryEvaluatePointStation(
+            c1, c1AtStart, c2, c2AtStart, station,
+            out var a, out var b, out _, out _))
+        return double.MaxValue;
+      return pickedPoint.DistanceTo((a + b) * 0.5);
+    }
+
+    for (int i = 0; i <= sampleCount; i++)
+    {
+      double station = length * i / sampleCount;
+      double distance = MidpointDistance(station);
+      if (distance < bestDistance)
+      {
+        bestDistance = distance;
+        bestStation = station;
+      }
+    }
+
+    if (double.IsNaN(bestStation))
+      return false;
+
+    double refineLo = Math.Max(0.0, bestStation - sampleStep);
+    double refineHi = Math.Min(length, bestStation + sampleStep);
+    for (int i = 0; i < 28; i++)
+    {
+      double left = (2.0 * refineLo + refineHi) / 3.0;
+      double right = (refineLo + 2.0 * refineHi) / 3.0;
+      if (MidpointDistance(left) <= MidpointDistance(right))
+        refineHi = right;
+      else
+        refineLo = left;
+    }
+
+    double referenceStation = 0.5 * (refineLo + refineHi);
+    if (!TryEvaluatePointStation(
+          c1, c1AtStart, c2, c2AtStart, referenceStation,
+          out var refA, out var refB, out _, out _))
+      return false;
+    var referenceMidpoint = (refA + refB) * 0.5;
+
+    double targetStation = referenceStation;
+    if (offset > RhinoMath.ZeroTolerance)
+    {
+      double nearStation = referenceStation;
+      double farStation = double.NaN;
+      const int offsetSamples = 64;
+
+      for (int i = 1; i <= offsetSamples; i++)
+      {
+        double station = referenceStation * (offsetSamples - i) / offsetSamples;
+        if (!TryEvaluatePointStation(
+              c1, c1AtStart, c2, c2AtStart, station,
+              out var candidateA, out var candidateB, out _, out _))
+          continue;
+
+        double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
+        if (distance >= offset)
+        {
+          farStation = station;
+          break;
+        }
+        nearStation = station;
+      }
+
+      if (double.IsNaN(farStation))
+        return false;
+
+      for (int i = 0; i < 44; i++)
+      {
+        double station = 0.5 * (farStation + nearStation);
+        if (!TryEvaluatePointStation(
+              c1, c1AtStart, c2, c2AtStart, station,
+              out var candidateA, out var candidateB, out _, out _))
+        {
+          farStation = station;
+          continue;
+        }
+
+        double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
+        if (distance >= offset)
+          farStation = station;
+        else
+          nearStation = station;
+      }
+      targetStation = 0.5 * (farStation + nearStation);
+    }
+
+    if (!TryEvaluatePointStation(
+          c1, c1AtStart, c2, c2AtStart, targetStation,
+          out ptA, out ptB, out tA, out tB))
+      return false;
+
+    var targetMidpoint = (ptA + ptB) * 0.5;
+    Log.Write("vChamfer",
+      $"PointOffset  referenceStation={referenceStation:G6} " +
+      $"targetStation={targetStation:G6} offset={offset:G6} " +
+      $"actual={referenceMidpoint.DistanceTo(targetMidpoint):G6} " +
+      $"projection={pickedPoint.DistanceTo(referenceMidpoint):G6} " +
+      $"ptA={P(ptA)} ptB={P(ptB)}");
+    return true;
+  }
+
 
   // -- Preview conduit --------------------------------------------------------
 
@@ -487,8 +637,8 @@ public sealed class vChamfer : Command
     conduit.Enabled = true;
     doc.Views.Redraw();
 
-    bool   pointActive        = false;
-    double pickedGap = double.NaN;  // equidistant gap at the click reference when a point was picked
+    bool pointActive = false;
+    Point3d pickedReferencePoint = Point3d.Unset;
 
     try
     {
@@ -519,55 +669,16 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
-          // Binary search in [0, s_foot]: find arc position where distance from
-          // click to chamfer LINE MIDPOINT ((ptA+ptB)/2) equals _length.
-          // The foot (nearest work1 point to click) is the minimum of this distance;
-          // search only on the corner side [0, s_foot] where dist is monotone decreasing.
-          work1.ClosestPoint(pickedPt, out double ppTFoot);
-          double ppLen1 = work1.GetLength();
-          double ppSfoot = c1AtStart
-              ? work1.GetLength(new Interval(work1.Domain.Min, ppTFoot))
-              : work1.GetLength(new Interval(ppTFoot, work1.Domain.Max));
-
-          double ppLo = 0.0, ppHi = ppSfoot;
-          for (int i = 0; i < 52; i++)
+          if (!ComputeChamferFromPoint(
+                work1, c1AtStart, work2, c2AtStart,
+                pickedPt, runLength,
+                out ptA, out ptB, out tA, out tB))
           {
-            double s   = 0.5 * (ppLo + ppHi);
-            double seg = c1AtStart ? s : (ppLen1 - s);
-            if (!work1.LengthParameter(seg, out double tS)) break;
-            var ptS  = work1.PointAt(tS);
-            var tanS = work1.TangentAt(tS);
-            var (gS, _, ptBS) = EquidistantGap(
-              ptS, tanS, c1AtStart, work2, c2AtStart);
-            if (double.IsNaN(gS) || !ptBS.IsValid) { ppHi = s; continue; }
-            var midS = (ptS + ptBS) * 0.5;
-            double dist = pickedPt.DistanceTo(midS);
-            if (dist > _length) ppLo = s; else ppHi = s;
-            if (ppHi - ppLo < 1e-9) break;
-          }
-          double ppSA   = 0.5 * (ppLo + ppHi);
-          double ppSegA = c1AtStart ? ppSA : (ppLen1 - ppSA);
-          if (!work1.LengthParameter(ppSegA, out double ppTA))
-          {
-            RhinoApp.WriteLine("vChamfer: cannot compute offset position.");
+            RhinoApp.WriteLine("vChamfer: cannot place the chamfer that far from the point.");
             continue;
           }
-          var ppPtA  = work1.PointAt(ppTA);
-          var ppTanA = work1.TangentAt(ppTA);
-          var (ppGap, ppTBfinal, ppPtBfinal) = EquidistantGap(
-            ppPtA, ppTanA, c1AtStart, work2, c2AtStart);
-          if (double.IsNaN(ppGap) || !ppPtBfinal.IsValid)
-          {
-            RhinoApp.WriteLine("vChamfer: cannot find chamfer at that point.");
-            continue;
-          }
-          var ppMid = (ppPtA + ppPtBfinal) * 0.5;
-          double ppDistMid = pickedPt.DistanceTo(ppMid);
-          Log.Write("vChamfer", $"PointPick  ptA={P(ppPtA)}  gap={ppGap:G4}  distToMid={ppDistMid:G4}  target={_length:G4}");
 
-          tA = ppTA; ptA = ppPtA;
-          tB = ppTBfinal; ptB = ppPtBfinal;
-          pickedGap = ppGap;
+          pickedReferencePoint = pickedPt;
           pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
@@ -587,7 +698,7 @@ public sealed class vChamfer : Command
         if (res == GetResult.Option && idxClearPoint >= 0 && get.Option()?.Index == idxClearPoint)
         {
           pointActive = false;
-          pickedGap = double.NaN;
+          pickedReferencePoint = Point3d.Unset;
           if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
@@ -620,14 +731,12 @@ public sealed class vChamfer : Command
         if (res == GetResult.Number || res == GetResult.Option)
         {
           bool recomputed = false;
-          // If an offset point is active, recompute from the same reference arc position.
-          // If offset point is active, Length changed ? perp-dist target changed.
-          // Re-run the full perp-dist binary search isn't stored; just recompute
-          // If offset point is active, Length changed ? re-place chamfer at same ptA with new gap.
-          if (pointActive && !double.IsNaN(pickedGap))
+          if (pointActive && pickedReferencePoint.IsValid)
           {
-            if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, pickedGap,
-                               out ptA, out ptB, out tA, out tB))
+            if (ComputeChamferFromPoint(
+                  work1, c1AtStart, work2, c2AtStart,
+                  pickedReferencePoint, runLength,
+                  out ptA, out ptB, out tA, out tB))
             {
               UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
               recomputed = true;

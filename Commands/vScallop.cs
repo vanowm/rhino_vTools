@@ -14,6 +14,13 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vScallop : Command
 {
+  private enum StageResult
+  {
+    Success,
+    Undo,
+    Cancel
+  }
+
   private const string OptionsSectionName = "vScallop";
   private const string SizeKey = "size";
   private const string DeleteOriginalKey = "deleteOriginal";
@@ -157,9 +164,18 @@ public sealed class vScallop : Command
       }
 
       // ── Side / bulge ───────────────────────────────────────────────────
-      if (!TryGetSideAndBulge(doc, pointA, pointB, out var sideDirection, out var bulgeSize))
+      var sideResult = TryGetSideAndBulge(
+        doc, pointA, pointB, out var sideDirection, out var bulgeSize);
+      if (sideResult != StageResult.Success)
       {
         SavePersistedOptions();
+        if (sideResult == StageResult.Undo)
+        {
+          if (sourceLineId != Guid.Empty)
+            doc.Objects.FindId(sourceLineId)?.Select(false);
+          doc.Views.Redraw();
+          continue;
+        }
         return Result.Cancel;
       }
 
@@ -281,10 +297,12 @@ public sealed class vScallop : Command
       gp.AcceptNumber(true, false);
 
       var autoOption = new OptionToggle(_auto, "No", "Yes");
+      var deleteOption = new OptionToggle(_deleteOriginal, "No", "Yes");
       var freeOption = new OptionToggle(_free, "No", "Yes");
 
       gp.AddOptionToggle("Auto", ref autoOption);
       var idxSize = gp.AddOption("Size", FormatSize());
+      gp.AddOptionToggle("DeleteOriginal", ref deleteOption);
       gp.AddOptionToggle("Free", ref freeOption);
 
       var result = gp.Get();
@@ -294,6 +312,7 @@ public sealed class vScallop : Command
       if (result == GetResult.Option)
       {
         _auto = autoOption.CurrentValue;
+        _deleteOriginal = deleteOption.CurrentValue;
         _free = freeOption.CurrentValue;
         var opt = gp.Option();
         if (opt?.Index == idxSize)
@@ -323,7 +342,7 @@ public sealed class vScallop : Command
     }
   }
 
-  private static bool TryGetSideAndBulge(
+  private static StageResult TryGetSideAndBulge(
     RhinoDoc doc,
     Point3d pointA,
     Point3d pointB,
@@ -344,11 +363,14 @@ public sealed class vScallop : Command
       gp.AcceptNumber(true, false);
 
       var autoOption = new OptionToggle(_auto, "No", "Yes");
+      var deleteOption = new OptionToggle(_deleteOriginal, "No", "Yes");
       var freeOption = new OptionToggle(_free, "No", "Yes");
 
       gp.AddOptionToggle("Auto", ref autoOption);
       var idxSize = gp.AddOption("Size", FormatSize());
+      gp.AddOptionToggle("DeleteOriginal", ref deleteOption);
       gp.AddOptionToggle("Free", ref freeOption);
+      var idxUndo = gp.AddOption("Undo", string.Empty, true);
 
       EventHandler<GetPointDrawEventArgs> draw = (_, e) =>
       {
@@ -361,14 +383,19 @@ public sealed class vScallop : Command
       var result = gp.Get();
       gp.DynamicDraw -= draw;
 
+      if (result == GetResult.Undo)
+        return StageResult.Undo;
       if (gp.CommandResult() != Result.Success)
-        return false;
+        return StageResult.Cancel;
 
       if (result == GetResult.Option)
       {
         _auto = autoOption.CurrentValue;
+        _deleteOriginal = deleteOption.CurrentValue;
         _free = freeOption.CurrentValue;
         var opt = gp.Option();
+        if (opt?.Index == idxUndo)
+          return StageResult.Undo;
         if (opt?.Index == idxSize)
         {
           var v = GetSizeSubprompt(doc);
@@ -387,7 +414,7 @@ public sealed class vScallop : Command
       }
 
       if (result != GetResult.Point)
-        return false;
+        return result == GetResult.Undo ? StageResult.Undo : StageResult.Cancel;
 
       var sidePoint = gp.Point();
       if (!TryResolvePerpDirection(doc, pointA, pointB, sidePoint, out sideDirection))
@@ -403,7 +430,7 @@ public sealed class vScallop : Command
         continue;
       }
 
-      return true;
+      return StageResult.Success;
     }
   }
 

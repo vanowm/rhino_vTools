@@ -77,6 +77,14 @@ public sealed class vFacing : Command
     var inside = boundaryCurve != null
                ? CollectInsideObjects(doc, excludeIds, boundaryCurve, viewPlane, tol)
                : new List<(GeometryBase Geom, ObjectAttributes Attr)>();
+    Log.Write("vFacing", $"  collected interior objects={inside.Count}");
+    for (var i = 0; i < inside.Count; i++)
+    {
+      var bounds = inside[i].Geom.GetBoundingBox(true);
+      Log.Write("vFacing",
+        $"    interior[{i}] type={inside[i].Geom.GetType().Name} " +
+        $"bounds=({bounds.Min.X:F3},{bounds.Min.Y:F3})-({bounds.Max.X:F3},{bounds.Max.Y:F3})");
+    }
 
     // 5. Build item list: boundary pieces (each on its original layer) + inside
     var items = new List<(GeometryBase Geom, ObjectAttributes Attr)>();
@@ -388,7 +396,7 @@ public sealed class vFacing : Command
         if (layerGroups[_i].Count != 1) continue;
         var shareCount = 0;
         for (var _j = 0; _j < 4; _j++)
-          if (_j != _i && SharesEndpoint(joinedForMerge[_i], joinedForMerge[_j], tol))
+          if (_j != _i && CurvesConnect(joinedForMerge[_i], joinedForMerge[_j], tol, tol))
             shareCount++;
         Log.Write("vFacing", $"  group[{_i}] single-curve, shareCount={shareCount}");
         if (shareCount == 1) chamferIdx = _i;
@@ -408,7 +416,7 @@ public sealed class vFacing : Command
       for (var _j = 0; _j < 4; _j++)
       {
         if (_j == chamferIdx) continue;
-        if (SharesEndpoint(joinedForMerge[chamferIdx], joinedForMerge[_j], tol))
+        if (CurvesConnect(joinedForMerge[chamferIdx], joinedForMerge[_j], tol, tol))
         { adjIdx = _j; break; }
       }
 
@@ -515,9 +523,9 @@ public sealed class vFacing : Command
     {
       var j = (i + 1) % 3;
       var k = (i + 2) % 3;
-      var ij = SharesEndpoint(chains[i], chains[j], tol);
-      var ik = SharesEndpoint(chains[i], chains[k], tol);
-      Log.Write("vFacing", $"  SharesEndpoint([{i}],[{j}])={ij}  SharesEndpoint([{i}],[{k}])={ik}");
+      var ij = CurvesConnect(chains[i], chains[j], tol, tol);
+      var ik = CurvesConnect(chains[i], chains[k], tol, tol);
+      Log.Write("vFacing", $"  Connected([{i}],[{j}])={ij}  Connected([{i}],[{k}])={ik}");
       if (ij && ik) { baseIdx = i; break; }
     }
 
@@ -560,7 +568,7 @@ public sealed class vFacing : Command
     for (var i = 0; i < n; i++) adj[i] = new List<int>();
     for (var i = 0; i < n; i++)
       for (var j = i + 1; j < n; j++)
-        if (SharesEndpoint(input[i].Crv, input[j].Crv, snapTol))
+        if (CurvesConnect(input[i].Crv, input[j].Crv, snapTol, tol))
         { adj[i].Add(j); adj[j].Add(i); }
 
     // Must be a simple linear chain: exactly 2 nodes with degree=1, rest degree=2, none degree=0.
@@ -852,6 +860,17 @@ public sealed class vFacing : Command
            a.PointAtEnd.DistanceTo(b.PointAtEnd)     < eps;
   }
 
+  private static bool CurvesConnect(
+    Curve a, Curve b, double endpointTolerance, double intersectionTolerance)
+  {
+    if (SharesEndpoint(a, b, endpointTolerance))
+      return true;
+
+    var intersections = Intersection.CurveCurve(
+      a, b, intersectionTolerance, intersectionTolerance);
+    return intersections != null && intersections.Any(hit => hit.IsPoint || hit.IsOverlap);
+  }
+
   /// <summary>
   /// Orients base, side1, side2 so that:
   ///   side1.PointAtStart == base.PointAtStart  (junction A)
@@ -915,6 +934,15 @@ public sealed class vFacing : Command
     var s2Joined   = JoinChain(side2Parts.Select(p => p.Crv).ToArray(), tol);
 
     OrientSides(ref baseJoined, ref s1Joined, ref s2Joined, tol);
+
+    if (!TryTrimCrossedJunctions(
+          ref baseJoined, ref s1Joined, ref s2Joined, tol,
+          out var junctionFailure))
+    {
+      RhinoApp.WriteLine("vFacing: could not trim the crossed center/side curves.");
+      Log.Write("vFacing", $"  crossed-junction trim failed: {junctionFailure}");
+      return false;
+    }
 
     Log.Write("vFacing",
       $"BuildFacingPieces size={size:F3} baseLen={baseJoined.GetLength():F3} " +
@@ -1021,6 +1049,116 @@ public sealed class vFacing : Command
     }
     // boundaryCurve may remain null; caller handles that gracefully.
     return true;
+  }
+
+  private static bool TryTrimCrossedJunctions(
+    ref Curve baseCurve, ref Curve side1, ref Curve side2, double tol,
+    out string failure)
+  {
+    failure = string.Empty;
+
+    var hasSide1Intersection = TryFindJunctionIntersection(
+      baseCurve, side1, atBaseStart: true, tol,
+      out var baseAtSide1, out var side1AtBase);
+    var hasSide2Intersection = TryFindJunctionIntersection(
+      baseCurve, side2, atBaseStart: false, tol,
+      out var baseAtSide2, out var side2AtBase);
+
+    if (!hasSide1Intersection && !hasSide2Intersection)
+      return true;
+
+    var baseStart = hasSide1Intersection ? baseAtSide1 : baseCurve.Domain.T0;
+    var baseEnd = hasSide2Intersection ? baseAtSide2 : baseCurve.Domain.T1;
+    if (baseEnd <= baseStart)
+    {
+      failure = $"junction order is reversed ({baseStart:F6}, {baseEnd:F6})";
+      return false;
+    }
+
+    var trimmedBase = TrimRetainedSpan(baseCurve, baseStart, baseEnd, tol);
+    var trimmedSide1 = hasSide1Intersection
+      ? TrimRetainedSpan(side1, side1AtBase, side1.Domain.T1, tol)
+      : side1.DuplicateCurve();
+    var trimmedSide2 = hasSide2Intersection
+      ? TrimRetainedSpan(side2, side2AtBase, side2.Domain.T1, tol)
+      : side2.DuplicateCurve();
+
+    if (trimmedBase == null || trimmedSide1 == null || trimmedSide2 == null)
+    {
+      failure = "one of the retained spans is empty";
+      return false;
+    }
+
+    static string Pt(Point3d point) => $"({point.X:F3},{point.Y:F3})";
+    if (hasSide1Intersection)
+      Log.Write("vFacing",
+        $"  trimmed side1 crossing at {Pt(baseCurve.PointAt(baseAtSide1))} " +
+        $"baseTail={SpanLength(baseCurve, baseCurve.Domain.T0, baseAtSide1):F3} " +
+        $"sideTail={SpanLength(side1, side1.Domain.T0, side1AtBase):F3}");
+    if (hasSide2Intersection)
+      Log.Write("vFacing",
+        $"  trimmed side2 crossing at {Pt(baseCurve.PointAt(baseAtSide2))} " +
+        $"baseTail={SpanLength(baseCurve, baseAtSide2, baseCurve.Domain.T1):F3} " +
+        $"sideTail={SpanLength(side2, side2.Domain.T0, side2AtBase):F3}");
+
+    baseCurve = trimmedBase;
+    side1 = trimmedSide1;
+    side2 = trimmedSide2;
+    return true;
+  }
+
+  private static bool TryFindJunctionIntersection(
+    Curve baseCurve, Curve side, bool atBaseStart, double tol,
+    out double baseParameter, out double sideParameter)
+  {
+    baseParameter = sideParameter = double.NaN;
+    var intersections = Intersection.CurveCurve(
+      baseCurve, side, tol, tol);
+    if (intersections == null || intersections.Count == 0)
+      return false;
+
+    var candidates = intersections
+      .Where(hit => hit.IsPoint)
+      .Select(hit => new
+      {
+        BaseParameter = hit.ParameterA,
+        SideParameter = hit.ParameterB,
+        Score =
+          (atBaseStart
+            ? SpanLength(baseCurve, baseCurve.Domain.T0, hit.ParameterA)
+            : SpanLength(baseCurve, hit.ParameterA, baseCurve.Domain.T1)) +
+          SpanLength(side, side.Domain.T0, hit.ParameterB),
+      })
+      .OrderBy(candidate => candidate.Score)
+      .FirstOrDefault();
+
+    if (candidates == null)
+      return false;
+
+    baseParameter = candidates.BaseParameter;
+    sideParameter = candidates.SideParameter;
+    return true;
+  }
+
+  private static Curve? TrimRetainedSpan(
+    Curve curve, double startParameter, double endParameter, double tol)
+  {
+    if (SpanLength(curve, startParameter, endParameter) <= tol)
+      return null;
+
+    var trimsStart = SpanLength(curve, curve.Domain.T0, startParameter) > tol;
+    var trimsEnd = SpanLength(curve, endParameter, curve.Domain.T1) > tol;
+    return trimsStart || trimsEnd
+      ? curve.Trim(startParameter, endParameter)
+      : curve.DuplicateCurve();
+  }
+
+  private static double SpanLength(Curve curve, double startParameter, double endParameter)
+  {
+    if (endParameter <= startParameter)
+      return 0.0;
+
+    return curve.GetLength(new Interval(startParameter, endParameter));
   }
 
   private static bool TrySelectOffsetByClosestPoints(

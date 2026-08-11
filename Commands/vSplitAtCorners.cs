@@ -43,7 +43,7 @@ public sealed class vSplitAtCorners : Command
     getObject.SetCommandPrompt("Select curve(s) to split at corners");
     getObject.GeometryFilter = ObjectType.Curve;
     getObject.SubObjectSelect = false;
-    getObject.GroupSelect = true;
+    getObject.GroupSelect = false;
     getObject.AcceptNothing(false);
     getObject.EnableClearObjectsOnEntry(false);
     getObject.EnableUnselectObjectsOnExit(false);

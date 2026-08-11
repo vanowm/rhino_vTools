@@ -560,7 +560,7 @@ public sealed class vSplit : Command
     go.SetCommandPrompt("Select curves to split");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
-    go.GroupSelect = true;
+    go.GroupSelect = false;
     go.EnablePreSelect(true, true);
     go.EnableTransparentCommands(true);
     go.DeselectAllBeforePostSelect = false;

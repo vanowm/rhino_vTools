@@ -98,7 +98,7 @@ public sealed class vSetPt : Command
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select curves");
     go.GeometryFilter  = ObjectType.Curve;
-    go.GroupSelect     = true;
+    go.GroupSelect     = false;
     go.SubObjectSelect = false;
     go.EnablePreSelect(true, true);
     go.AlreadySelectedObjectSelect = true;

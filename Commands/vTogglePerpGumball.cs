@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Reflection;
 using Rhino;
 using Rhino.Commands;
@@ -32,6 +34,7 @@ public sealed class vTogglePerpGumball : Command
 
 internal static class PerpGumballMonitor
 {
+  private const string Tag = "vTogglePerpGumball";
   private const int IdlePollMs = 100;
   private const int IdleSettleTicks = 2;
   private const string BadgeLabel = "PG";
@@ -200,7 +203,7 @@ internal static class PerpGumballMonitor
       !string.Equals(_lastGripKey, ctx.GripKey, StringComparison.Ordinal) ||
       !string.Equals(_lastViewId, ctx.ViewId, StringComparison.Ordinal);
 
-    var gripPointKey = PointKey(ctx.Grip.CurrentLocation);
+    var gripPointKey = ctx.GripPointKey;
     var gripPointChanged = !string.Equals(_lastGripPointKey, gripPointKey, StringComparison.Ordinal);
 
     if (cameraChanged)
@@ -249,12 +252,20 @@ internal static class PerpGumballMonitor
   {
     context = default;
 
-    if (!TryGetSingleSelectedGrip(doc, out var grip) || grip == null)
-      return false;
+    var selections = new List<GripSelection>();
+    foreach (var obj in doc.Objects.GetSelectedObjects(false, true))
+    {
+      if (obj is not GripObject grip) continue;
+      var owner = doc.Objects.FindId(grip.OwnerId);
+      if (owner != null) selections.Add(new GripSelection(grip, owner));
+    }
+    if (selections.Count == 0) return false;
 
-    var owner = doc.Objects.FindId(grip.OwnerId);
-    if (owner == null)
-      return false;
+    selections.Sort((left, right) =>
+    {
+      int ownerOrder = left.Grip.OwnerId.CompareTo(right.Grip.OwnerId);
+      return ownerOrder != 0 ? ownerOrder : left.Grip.Index.CompareTo(right.Grip.Index);
+    });
 
     var view = doc.Views.ActiveView;
     if (view == null)
@@ -264,37 +275,16 @@ internal static class PerpGumballMonitor
     if (viewport == null || !IsSupportedViewport(viewport))
       return false;
 
-    var gripKey = string.Create(
-      CultureInfo.InvariantCulture,
-      $"{grip.OwnerId:N}:{grip.Index}");
+    var gripKey = string.Join(";", selections.Select(selection =>
+      string.Create(CultureInfo.InvariantCulture,
+        $"{selection.Grip.OwnerId:N}:{selection.Grip.Index}")));
+    var gripPointKey = string.Join(";", selections.Select(selection =>
+      PointKey(selection.Grip.CurrentLocation)));
 
     var viewId = viewport.Id.ToString("N", CultureInfo.InvariantCulture);
 
-    context = new GripContext(grip, owner, view, viewport, gripKey, viewId);
+    context = new GripContext(selections, view, viewport, gripKey, gripPointKey, viewId);
     return true;
-  }
-
-  private static bool TryGetSingleSelectedGrip(RhinoDoc doc, out GripObject? grip)
-  {
-    grip = null;
-    var count = 0;
-
-    foreach (var obj in doc.Objects.GetSelectedObjects(false, true))
-    {
-      if (obj is not GripObject gripObj)
-        continue;
-
-      count += 1;
-      if (count > 1)
-      {
-        grip = null;
-        return false;
-      }
-
-      grip = gripObj;
-    }
-
-    return count == 1 && grip != null;
   }
 
   private static void UpdateGumballForActiveGrip(RhinoDoc doc, bool force, bool allowCommandFallback)
@@ -313,7 +303,7 @@ internal static class PerpGumballMonitor
     if (!_enabled)
       return;
 
-    var plane = ComputePlaneForGrip(ctx.Viewport, ctx.Grip, ctx.Owner.Geometry, doc.ModelAbsoluteTolerance);
+    var plane = ComputePlaneForContext(ctx, doc.ModelAbsoluteTolerance);
 
     if (!plane.IsValid)
       return;
@@ -328,7 +318,9 @@ internal static class PerpGumballMonitor
       return;
     }
 
-    var applied = TrySetGumballFrame(ctx.Viewport, plane);
+    bool selectionChanged = !string.Equals(_lastGripKey, ctx.GripKey, StringComparison.Ordinal);
+    var direct = TrySetGumballFrame(ctx.Viewport, plane);
+    var applied = direct;
     if (!applied && allowCommandFallback)
       applied = RelocateGumballByCommand(plane);
 
@@ -338,7 +330,11 @@ internal static class PerpGumballMonitor
     _lastGripKey = ctx.GripKey;
     _lastViewId = ctx.ViewId;
     _lastPlaneKey = planeKey;
-    _lastGripPointKey = PointKey(ctx.Grip.CurrentLocation);
+    _lastGripPointKey = ctx.GripPointKey;
+
+    if (selectionChanged)
+      Log.Write(Tag,
+        $"oriented grips={ctx.Selections.Count} origin={plane.Origin} direct={direct}");
 
     ctx.View.Redraw();
   }
@@ -351,6 +347,67 @@ internal static class PerpGumballMonitor
     _lastCameraKey = null;
     _lastGripPointKey = null;
     _idleSettle = 0;
+  }
+
+  private static Plane ComputePlaneForContext(GripContext context, double tolerance)
+  {
+    if (context.Selections.Count == 1)
+    {
+      var selection = context.Selections[0];
+      return ComputePlaneForGrip(
+        context.Viewport, selection.Grip, selection.Owner.Geometry, tolerance);
+    }
+
+    var cameraFrame = GetCameraFramePlane(context.Viewport);
+    var cameraRight = Unit(cameraFrame.XAxis);
+    var cameraUp = Unit(cameraFrame.YAxis);
+    var origin = SelectionCenter(context.Selections);
+
+    var sum = Vector3d.Zero;
+    var reference = Vector3d.Zero;
+    int directionCount = 0;
+    foreach (var selection in context.Selections)
+    {
+      if (selection.Owner.Geometry is not Curve curve ||
+          !TryCurvePerpendicularDirection(
+            context.Viewport, curve, selection.Grip, tolerance, out var direction))
+        continue;
+
+      if (reference.IsTiny()) reference = direction;
+      if ((direction * reference) < 0.0) direction = -direction;
+      sum += direction;
+      directionCount++;
+    }
+
+    if (directionCount > 0 && !sum.IsTiny())
+      return BuildCurvePerpendicularPlane(origin, Unit(sum), cameraRight, cameraUp);
+
+    var first = context.Selections[0];
+    var fallback = ComputePlaneForGrip(
+      context.Viewport, first.Grip, first.Owner.Geometry, tolerance);
+    return new Plane(origin, fallback.XAxis, fallback.YAxis);
+  }
+
+  private static Point3d SelectionCenter(IReadOnlyList<GripSelection> selections)
+  {
+    var first = selections[0].Grip.CurrentLocation;
+    double minX = first.X, minY = first.Y, minZ = first.Z;
+    double maxX = first.X, maxY = first.Y, maxZ = first.Z;
+    for (int i = 1; i < selections.Count; i++)
+    {
+      var point = selections[i].Grip.CurrentLocation;
+      minX = Math.Min(minX, point.X);
+      minY = Math.Min(minY, point.Y);
+      minZ = Math.Min(minZ, point.Z);
+      maxX = Math.Max(maxX, point.X);
+      maxY = Math.Max(maxY, point.Y);
+      maxZ = Math.Max(maxZ, point.Z);
+    }
+
+    return new Point3d(
+      (minX + maxX) * 0.5,
+      (minY + maxY) * 0.5,
+      (minZ + maxZ) * 0.5);
   }
 
   private static Plane ComputePlaneForGrip(RhinoViewport viewport, GripObject grip, GeometryBase geometry, double tolerance)
@@ -372,43 +429,9 @@ internal static class PerpGumballMonitor
 
     if (geometry is Curve curve)
     {
-      var z = viewDirection;
-      Vector3d perp2d;
-
-      // For off-curve grips, use view-projected grip->curve direction (matches viewport perpendicular behavior).
-      if (TryGripToCurvePerpendicularDirection(curve, origin, viewport, tolerance, out var gripToCurve, out var footTangent))
-      {
-        perp2d = ProjectToPlane(gripToCurve, z);
-        if (perp2d.IsTiny())
-        {
-          // If grip->curve projects to near-zero in this viewport, use local curve tangent to keep view-consistent orientation.
-          var tangent2d = ProjectToPlane(footTangent, z);
-          if (tangent2d.IsTiny())
-            tangent2d = cameraRight;
-          tangent2d = Unit(tangent2d);
-
-          perp2d = Vector3d.CrossProduct(tangent2d, z);
-        }
-      }
-      else
-      {
-        var tangent = CurveTangentAtGrip(curve, grip, tolerance);
-        if (tangent.IsTiny())
-          return new Plane(origin, cameraRight, cameraUp);
-
-        var tangent2d = ProjectToPlane(tangent, z);
-        if (tangent2d.IsTiny())
-          tangent2d = cameraRight;
-        tangent2d = Unit(tangent2d);
-
-        perp2d = Vector3d.CrossProduct(tangent2d, z);
-      }
-
-      if (perp2d.IsTiny())
-        perp2d = cameraUp;
-      perp2d = Unit(perp2d);
-
-      return BuildCurvePerpendicularPlane(origin, perp2d, cameraRight, cameraUp);
+      return TryCurvePerpendicularDirection(viewport, curve, grip, tolerance, out var direction)
+        ? BuildCurvePerpendicularPlane(origin, direction, cameraRight, cameraUp)
+        : new Plane(origin, cameraRight, cameraUp);
     }
 
     var hasNormal = TrySurfaceNormalAtPoint(geometry, origin, out var normal);
@@ -434,6 +457,44 @@ internal static class PerpGumballMonitor
 
     yAxis = -yAxis;
     return new Plane(origin, xAxis, yAxis);
+  }
+
+  private static bool TryCurvePerpendicularDirection(
+    RhinoViewport viewport, Curve curve, GripObject grip, double tolerance,
+    out Vector3d perpendicular)
+  {
+    perpendicular = Vector3d.Zero;
+    var cameraFrame = GetCameraFramePlane(viewport);
+    var cameraRight = Unit(cameraFrame.XAxis);
+    var cameraUp = Unit(cameraFrame.YAxis);
+    var viewDirection = Unit(viewport.CameraDirection);
+    if (viewDirection.IsTiny()) viewDirection = Unit(viewport.ConstructionPlane().ZAxis);
+
+    var origin = grip.CurrentLocation;
+    if (TryGripToCurvePerpendicularDirection(
+      curve, origin, viewport, tolerance, out var gripToCurve, out var footTangent))
+    {
+      perpendicular = ProjectToPlane(gripToCurve, viewDirection);
+      if (perpendicular.IsTiny())
+      {
+        var tangent2d = ProjectToPlane(footTangent, viewDirection);
+        if (tangent2d.IsTiny()) tangent2d = cameraRight;
+        perpendicular = Vector3d.CrossProduct(Unit(tangent2d), viewDirection);
+      }
+    }
+    else
+    {
+      var tangent = CurveTangentAtGrip(curve, grip, tolerance);
+      if (tangent.IsTiny()) return false;
+
+      var tangent2d = ProjectToPlane(tangent, viewDirection);
+      if (tangent2d.IsTiny()) tangent2d = cameraRight;
+      perpendicular = Vector3d.CrossProduct(Unit(tangent2d), viewDirection);
+    }
+
+    if (perpendicular.IsTiny()) perpendicular = cameraUp;
+    perpendicular = Unit(perpendicular);
+    return !perpendicular.IsTiny();
   }
 
   private static Plane BuildCurvePerpendicularPlane(
@@ -822,23 +883,31 @@ internal static class PerpGumballMonitor
 
   private readonly struct GripContext
   {
-    public GripContext(GripObject grip, RhinoObject owner, RhinoView view, RhinoViewport viewport, string gripKey, string viewId)
+    public GripContext(
+      IReadOnlyList<GripSelection> selections,
+      RhinoView view,
+      RhinoViewport viewport,
+      string gripKey,
+      string gripPointKey,
+      string viewId)
     {
-      Grip = grip;
-      Owner = owner;
+      Selections = selections;
       View = view;
       Viewport = viewport;
       GripKey = gripKey;
+      GripPointKey = gripPointKey;
       ViewId = viewId;
     }
 
-    public GripObject Grip { get; }
-    public RhinoObject Owner { get; }
+    public IReadOnlyList<GripSelection> Selections { get; }
     public RhinoView View { get; }
     public RhinoViewport Viewport { get; }
     public string GripKey { get; }
+    public string GripPointKey { get; }
     public string ViewId { get; }
   }
+
+  private readonly record struct GripSelection(GripObject Grip, RhinoObject Owner);
 
   private static Vector3d Unit(Vector3d vector)
   {

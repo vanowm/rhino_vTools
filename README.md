@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.12.1005
+# vTools  ·  v26.8.12.1346
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -46,7 +46,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vTitle](#vtitle-flow) *(26.7.1.1755)* — places or edits a titled annotation text box with optional bounding rectangle; hover to highlight, click existing to edit
   - [vToggleAxes](#vtoggleaxes-flow) *(26.6.22.1811)* — toggles visible viewport axes (grid/construction axes plus display-mode Z axis)
   - [vToggleControlPoints](#vtogglecontrolpoints-flow) *(26.7.13.1046)* — toggles selected objects between edit points on the curve and off-curve control points
-  - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected control point grips
+  - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected grips
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join
   - [vTrimOff](#vtrimoff-flow) *(26.5.18.849)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
   - [vUnrollSrf](#vunrollsrf-flow) *(26.5.19.1918)* — unrolls selected surfaces with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output
@@ -523,14 +523,15 @@ Behavior:
 
 ### vSmooth flow
 
-1. Run `vSmooth` and select the target curve (preselect supported).
+1. Run `vSmooth` and select the target curve. Preselected connected curves seed the target and neighbour preview immediately; each remains individually toggleable.
 1. Connected candidate curves are pickable. Click one to select it as the neighbour for that end — the start-end neighbour highlights **orange**, the end-end neighbour highlights **green**.
 1. Click a selected neighbour again to deselect it. Click the target curve to clear all neighbour selections and start over.
-1. Options (available throughout):
+1. Options are available during target and neighbour selection:
 
     - `StrengthStart` / `StrengthEnd`: independent handle-length scale per end. 0 = near-degenerate handle (very tight turn at the endpoint), 1 = rotate the existing handle to the G1 direction (default), >1 = lengthen the handle for a more extended blend.
     - `Copy`: when `Yes`, a new curve is created and the original is kept; when `No` (default) the original is replaced in-place.
     - `Join`: when `Yes`, the smoothed curve and its connected neighbours are joined into a single polycurve; the separate originals are deleted.
+    - `SmoothAll`: when `No` (default), only the target curve changes. When `Yes`, the tangent correction is shared between the target and each selected neighbour so the transition is spread across both curves.
     - Typing a number sets both `StrengthStart` and `StrengthEnd` simultaneously.
 
 1. Press Enter to commit. If the input curve belongs to a group the output curve inherits that group.
@@ -549,7 +550,7 @@ Behavior:
 1. Click near selected curves to add real red point-object split markers; point picking is constrained to the chosen curves.
 1. Existing split markers are snap points; hover one to preview it in cyan, then click to remove it.
 1. Press Enter to apply splitting and replace the original curves with split pieces.
-1. When splitting would break history, a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
+1. When splitting would break history, affected objects are shaded orange with a dark outline while a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
 1. Options:
 
     - `Points`: choose `Default`, `CP`, `EditPoints`, or `Hidden` while choosing split points. `Default` leaves the original point visibility untouched on start and restores each selected curve's original hidden/CP/edit-point state when switched back.
@@ -644,8 +645,8 @@ Notes:
 ### vTogglePerpGumball flow
 
 1. Run `vTogglePerpGumball` to toggle monitor state (`ON`/`OFF`).
-1. While `ON`, select exactly one grip in a supported viewport.
-1. The command auto-orients gumball so it stays perpendicular and view-stable without changing the viewport CPlane.
+1. While `ON`, select one or more grips in a supported viewport.
+1. The command auto-orients gumball so it stays perpendicular and view-stable without changing the viewport CPlane. Multiple curve endpoints use their shared perpendicular direction and keep the gumball at the selection center.
 1. `Perspective` viewports keep default gumball, including when switched to `Parallel` projection.
 1. When turning `OFF`, gumball orientation is reset to Rhino default.
 

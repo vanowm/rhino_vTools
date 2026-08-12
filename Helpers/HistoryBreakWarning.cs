@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using Rhino;
 using Rhino.ApplicationSettings;
+using Rhino.Display;
+using Rhino.Geometry;
 using Rhino.UI;
 
 namespace vTools;
@@ -42,21 +45,99 @@ internal static class HistoryBreakWarning
     return records;
   }
 
-  internal static bool Confirm(string commandName, IReadOnlyCollection<Guid> affectedRecords)
+  internal static bool Confirm(
+    RhinoDoc doc,
+    string commandName,
+    IReadOnlyCollection<Guid> affectedRecords)
   {
     if (!HistorySettings.BrokenRecordWarningEnabled || affectedRecords.Count == 0)
       return true;
 
     var objectLabel = affectedRecords.Count == 1 ? "object" : "objects";
     var message = $"The {commandName} command broke history on {affectedRecords.Count} {objectLabel}.";
-    var result = Dialogs.ShowMessage(
-      message,
-      $"Rhino {RhinoApp.Version.Major}  History Warning",
-      ShowMessageButton.OKCancel,
-      ShowMessageIcon.Warning);
+    var highlight = new AffectedBodyConduit(doc, affectedRecords) { Enabled = true };
+    doc.Views.Redraw();
+    ShowMessageResult result;
+    try
+    {
+      result = Dialogs.ShowMessage(
+        message,
+        $"Rhino {RhinoApp.Version.Major}  History Warning",
+        ShowMessageButton.OKCancel,
+        ShowMessageIcon.Warning);
+    }
+    finally
+    {
+      highlight.Enabled = false;
+      doc.Views.Redraw();
+    }
+
     var accepted = result == ShowMessageResult.OK;
     Log.Write("History",
       $"{commandName} pending records={affectedRecords.Count} accepted={accepted}");
     return accepted;
+  }
+
+  private sealed class AffectedBodyConduit : DisplayConduit
+  {
+    private static readonly Color Orange = Color.FromArgb(255, 128, 0);
+    private static readonly Color Outline = Color.FromArgb(112, 48, 0);
+    private readonly RhinoDoc _doc;
+    private readonly IReadOnlyCollection<Guid> _objectIds;
+    private readonly DisplayMaterial _material = new(Orange)
+    {
+      Transparency = 0.25,
+      BackTransparency = 0.25
+    };
+
+    internal AffectedBodyConduit(RhinoDoc doc, IReadOnlyCollection<Guid> objectIds)
+    {
+      _doc = doc;
+      _objectIds = objectIds;
+    }
+
+    protected override void DrawForeground(DrawEventArgs e)
+    {
+      foreach (var objectId in _objectIds)
+      {
+        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        switch (geometry)
+        {
+          case Brep brep:
+            DrawBrep(e.Display, brep);
+            break;
+          case Extrusion extrusion:
+          {
+            using var extrusionBrep = extrusion.ToBrep();
+            if (extrusionBrep != null) DrawBrep(e.Display, extrusionBrep);
+            break;
+          }
+          case Surface surface:
+          {
+            using var surfaceBrep = surface.ToBrep();
+            if (surfaceBrep != null) DrawBrep(e.Display, surfaceBrep);
+            break;
+          }
+          case Mesh mesh:
+            e.Display.DrawMeshShaded(mesh, _material);
+            e.Display.DrawMeshWires(mesh, Outline, 2);
+            break;
+          case Curve curve:
+            e.Display.DrawCurve(curve, Outline, 5);
+            e.Display.DrawCurve(curve, Orange, 2);
+            break;
+          case Rhino.Geometry.Point point:
+            e.Display.DrawPoint(point.Location, PointStyle.RoundSimple, 7, Outline);
+            e.Display.DrawPoint(point.Location, PointStyle.RoundSimple, 5, Orange);
+            break;
+        }
+      }
+    }
+
+    private void DrawBrep(DisplayPipeline display, Brep brep)
+    {
+      display.DrawBrepShaded(brep, _material);
+      display.DrawBrepWires(brep, Outline, 2);
+    }
   }
 }

@@ -1174,7 +1174,7 @@ public sealed class vSplit : Command
       affectedHistoryRecords.UnionWith(
         HistoryBreakWarning.CaptureAffectedRecords(doc, target.ObjectId));
 
-    if (!HistoryBreakWarning.Confirm("Split", affectedHistoryRecords))
+    if (!HistoryBreakWarning.Confirm(doc, "Split", affectedHistoryRecords))
     {
       historyWarningCanceled = true;
       DeleteSplitPointObjects(doc, targets);

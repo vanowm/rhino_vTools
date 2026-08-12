@@ -118,6 +118,13 @@
   "vSetPt": {
     "preview": true
   },
+  "vSmooth": {
+    "strengthStart": 1.0,
+    "strengthEnd": 1.0,
+    "copy": false,
+    "join": false,
+    "smoothAll": false
+  },
   "vSplit": {
     "pointDisplay": "Default"
   },

@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.11.1442
+# vTools  ·  v26.8.12.1005
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -549,6 +549,7 @@ Behavior:
 1. Click near selected curves to add real red point-object split markers; point picking is constrained to the chosen curves.
 1. Existing split markers are snap points; hover one to preview it in cyan, then click to remove it.
 1. Press Enter to apply splitting and replace the original curves with split pieces.
+1. When splitting would break history, a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
 1. Options:
 
     - `Points`: choose `Default`, `CP`, `EditPoints`, or `Hidden` while choosing split points. `Default` leaves the original point visibility untouched on start and restores each selected curve's original hidden/CP/edit-point state when switched back.

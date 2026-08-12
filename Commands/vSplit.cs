@@ -49,7 +49,13 @@ public sealed class vSplit : Command
       return Result.Cancel;
     }
 
-    var newIds = ApplySplits(doc, targets);
+    var newIds = ApplySplits(doc, targets, out var historyWarningCanceled);
+    if (historyWarningCanceled)
+    {
+      RestoreInitialSelection(doc, initialSelection);
+      return Result.Cancel;
+    }
+
     if (newIds.Count > 0)
       RhinoApp.WriteLine($"vSplit: split {newIds.Count} curve piece{(newIds.Count == 1 ? "" : "s")}.");
 
@@ -1147,8 +1153,12 @@ public sealed class vSplit : Command
     return newIds;
   }
 
-  private static List<Guid> ApplySplits(RhinoDoc doc, List<SplitTarget> targets)
+  private static List<Guid> ApplySplits(
+    RhinoDoc doc,
+    List<SplitTarget> targets,
+    out bool historyWarningCanceled)
   {
+    historyWarningCanceled = false;
     var splitTargets = targets.Where(target => target.SplitPoints.Count > 0).ToList();
     if (splitTargets.Count == 0)
     {
@@ -1156,6 +1166,21 @@ public sealed class vSplit : Command
       DeleteSplitPointObjects(doc, targets);
       RestoreTargetPointDisplays(doc, targets);
       SelectExistingTargets(doc, targets);
+      return new List<Guid>();
+    }
+
+    var affectedHistoryRecords = new HashSet<Guid>();
+    foreach (var target in splitTargets)
+      affectedHistoryRecords.UnionWith(
+        HistoryBreakWarning.CaptureAffectedRecords(doc, target.ObjectId));
+
+    if (!HistoryBreakWarning.Confirm("Split", affectedHistoryRecords))
+    {
+      historyWarningCanceled = true;
+      DeleteSplitPointObjects(doc, targets);
+      RestoreTargetPointDisplays(doc, targets);
+      SelectExistingTargets(doc, targets);
+      doc.Views.Redraw();
       return new List<Guid>();
     }
 

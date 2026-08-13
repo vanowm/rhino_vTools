@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.13.1328
+# vTools  ·  v26.8.13.1629
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -143,8 +143,8 @@ Methods:
 
 ### vChamfer flow
 
-1. Pick **curve 1** — near the corner of the two diverging curves.
-1. Pick **curve 2** — near the same corner.
+1. Pick **curve 1** — near the corner of the two diverging curves. For one closed curve, pick it near the corner to chamfer; the closest G1 kink is used and the second-curve prompt is skipped.
+1. For open curves, pick **curve 2** near the same corner.
 1. Adjust options while previewing the cyan chamfer line:
 
     - `Length`: the desired chamfer line length — the perpendicular (equidistant) gap between both curves at the chamfer point. The chamfer is placed where the equidistant gap equals this value, with the line perpendicular to the middle curve.
@@ -155,7 +155,7 @@ Methods:
 1. Press Enter to apply.
 
 Notes:
-- Corner detection uses the closest endpoint pair. Extension stubs (toward a virtual corner) are shown in the preview when `Trim=Yes` and the cut falls inside the extension zone.
+- Open-curve corner detection uses the closest endpoint pair. Closed-curve detection uses the G1 corner closest to the cursor and rebuilds the same object around the chamfer. Extension stubs (toward a virtual corner) are shown in the preview when `Trim=Yes` and the cut falls inside the extension zone.
 - All options persist to `vTools.config.json` under `vChamfer`.
 
 ### vCommandFailSound flow
@@ -433,8 +433,11 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 ### vOffset flow
 
 1. Run `vOffset`.
-1. Select one source curve; `AutoTrim` and `Group` are available during this step.
-1. The selected curve is passed to the built-in `_Offset` command, which runs interactively.
+1. Select one source curve, or preselect it before starting the command.
+1. The source and side stages both provide `Distance`, `Loose`, `Corner`, `ThroughPoint`, `Trim`, `Tolerance`, `BothSides`, `InCPlane`, `Cap`, `OutputLayer`, `Group`, and `AutoTrim` in that order. `ThroughPoint` and `OutputLayer` are toggles; custom `Group` and `AutoTrim` controls follow the native options so existing option hotkeys remain stable.
+1. Pick the offset side while previewing the final result.
+1. `Trim=Yes` previews the trimmed offset, and `AutoTrim=Yes` previews endpoint trimming or extension against curves touching the source ends.
+1. The selected curve and settings are passed to the built-in `_Offset` command when the side is accepted.
 1. After each completed offset, selection is cleared and `vOffset` starts again automatically.
 1. Press Escape to exit the loop.
 1. Press Enter to repeat `vOffset` for a new loop.

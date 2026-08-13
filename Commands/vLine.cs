@@ -61,6 +61,9 @@ public sealed class vLine : Command
   /// </summary>
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    if (LineUndoRecordSession.DeferRunUntilFinalized(doc))
+      return Result.Success;
+
     Log.Write("vLine", "begin");
     LoadPersistedOptions();
     var undoSession = new LineUndoRecordSession(doc);
@@ -4566,8 +4569,10 @@ public sealed class vLine : Command
   {
     private static readonly Queue<PendingLineFinalization> PendingFinalizations = new();
     private static readonly Queue<PendingLineFinalization> PendingRecordCreations = new();
+    private static readonly HashSet<uint> DeferredRuns = new();
     private static bool _idleHandlerAttached;
     private static bool _recordCreationHandlerAttached;
+    private static bool _restartHandlerAttached;
 
     private readonly uint _docSerial;
     private bool _queued;
@@ -4579,6 +4584,19 @@ public sealed class vLine : Command
     }
 
     public string Token { get; }
+
+    public static bool DeferRunUntilFinalized(RhinoDoc doc)
+    {
+      var docSerial = doc.RuntimeSerialNumber;
+      var pending = PendingFinalizations.Any(item => item.DocSerial == docSerial) ||
+                    PendingRecordCreations.Any(item => item.DocSerial == docSerial);
+      if (!pending)
+        return false;
+
+      DeferredRuns.Add(docSerial);
+      Log.Write("vLine", "run deferred until undo finalization completes");
+      return true;
+    }
 
     public void QueueFinalization()
     {
@@ -4643,10 +4661,21 @@ public sealed class vLine : Command
       RhinoApp.Idle -= OnFinalizeIdle;
       _idleHandlerAttached = false;
 
+      if (Command.InCommand())
+      {
+        _idleHandlerAttached = true;
+        RhinoApp.Idle += OnFinalizeIdle;
+        return;
+      }
+
       while (PendingFinalizations.TryDequeue(out var pending))
       {
-        if (RollbackCombinedRecord(pending))
-          PendingRecordCreations.Enqueue(pending);
+        if (RollbackCombinedRecord(pending, out var prepared))
+        {
+          CreateIndividualRecords(prepared, out var continuation);
+          if (continuation != null)
+            PendingRecordCreations.Enqueue(continuation);
+        }
       }
 
       if (PendingRecordCreations.Count > 0 && !_recordCreationHandlerAttached)
@@ -4654,21 +4683,37 @@ public sealed class vLine : Command
         _recordCreationHandlerAttached = true;
         RhinoApp.Idle += OnCreateRecordsIdle;
       }
+      else if (PendingRecordCreations.Count == 0)
+      {
+        QueueDeferredRuns();
+      }
     }
 
-    private static bool RollbackCombinedRecord(PendingLineFinalization pending)
+    private static bool RollbackCombinedRecord(
+      PendingLineFinalization pending,
+      out PendingLineFinalization prepared)
     {
+      prepared = pending;
       var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
       if (doc == null)
         return false;
 
+      var redrawWasEnabled = doc.Views.RedrawEnabled;
+      doc.Views.RedrawEnabled = false;
       var presentCount = pending.Outputs.Count(output => IsPresent(doc, output.OriginalId));
       var rolledBack = presentCount == 0;
       var undoResult = false;
-      if (presentCount == pending.Outputs.Count)
+      try
       {
-        undoResult = doc.Undo();
-        rolledBack = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
+        if (presentCount == pending.Outputs.Count)
+        {
+          undoResult = RunSilentHistoryCommand(pending.DocSerial, "_Undo");
+          rolledBack = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
+        }
+      }
+      catch
+      {
+        rolledBack = false;
       }
 
       Log.Write(
@@ -4681,11 +4726,16 @@ public sealed class vLine : Command
 
       if (!rolledBack)
       {
+        doc.Views.RedrawEnabled = redrawWasEnabled;
         RhinoApp.WriteLine("vLine: could not separate the completed objects into individual undo records.");
         return false;
       }
 
-      doc.Views.Redraw();
+      prepared = pending with
+      {
+        RedrawSuppressed = true,
+        RedrawWasEnabled = redrawWasEnabled
+      };
       return true;
     }
 
@@ -4706,6 +4756,14 @@ public sealed class vLine : Command
       {
         if (pending.Attempts >= 5)
         {
+          var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
+          if (doc != null &&
+              (doc.UndoRecordingIsActive || doc.UndoActive || doc.RedoActive))
+          {
+            PendingRecordCreations.Enqueue(pending);
+            continue;
+          }
+
           RestoreCombinedResult(pending);
           continue;
         }
@@ -4718,6 +4776,10 @@ public sealed class vLine : Command
         _recordCreationHandlerAttached = true;
         RhinoApp.Idle += OnCreateRecordsIdle;
       }
+      else if (PendingRecordCreations.Count == 0)
+      {
+        QueueDeferredRuns();
+      }
     }
 
     private static void RestoreCombinedResult(PendingLineFinalization pending)
@@ -4729,7 +4791,7 @@ public sealed class vLine : Command
       var restored = false;
       if (pending.NextOutputIndex == 0)
       {
-        var redoResult = doc.Redo();
+        var redoResult = RunSilentHistoryCommand(pending.DocSerial, "_Redo");
         restored = redoResult && pending.Outputs.All(output => IsPresent(doc, output.OriginalId));
         Log.Write(
           "vLine",
@@ -4754,7 +4816,7 @@ public sealed class vLine : Command
       }
 
       RhinoApp.WriteLine("vLine: separate undo records were unavailable; restored the completed geometry.");
-      doc.Views.Redraw();
+      RestoreRedraw(doc, pending);
     }
 
     private static void CreateIndividualRecords(
@@ -4830,7 +4892,36 @@ public sealed class vLine : Command
       }
 
       Log.Write("vLine", "undo finalization completed records={0}", added);
-      doc.Views.Redraw();
+      RestoreRedraw(doc, pending);
+    }
+
+    private static void RestoreRedraw(RhinoDoc doc, PendingLineFinalization pending)
+    {
+      if (pending.RedrawSuppressed)
+        doc.Views.RedrawEnabled = pending.RedrawWasEnabled;
+      if (pending.RedrawWasEnabled)
+        doc.Views.Redraw();
+    }
+
+    private static void QueueDeferredRuns()
+    {
+      if (DeferredRuns.Count == 0 || _restartHandlerAttached)
+        return;
+
+      _restartHandlerAttached = true;
+      RhinoApp.Idle += OnRestartDeferredRuns;
+    }
+
+    private static void OnRestartDeferredRuns(object? sender, EventArgs e)
+    {
+      RhinoApp.Idle -= OnRestartDeferredRuns;
+      _restartHandlerAttached = false;
+
+      var doc = RhinoDoc.ActiveDoc;
+      if (doc == null || !DeferredRuns.Remove(doc.RuntimeSerialNumber))
+        return;
+
+      _ = RhinoApp.RunScript("_vLine", false);
     }
 
     private static bool IsPresent(RhinoDoc doc, Guid objectId)
@@ -4838,13 +4929,38 @@ public sealed class vLine : Command
       var obj = doc.Objects.FindId(objectId);
       return obj != null && !obj.IsDeleted;
     }
+
+    private static bool RunSilentHistoryCommand(uint docSerial, string command)
+    {
+      var captureWasEnabled = RhinoApp.CommandWindowCaptureEnabled;
+      try
+      {
+        if (!captureWasEnabled)
+        {
+          _ = RhinoApp.CapturedCommandWindowStrings(true);
+          RhinoApp.CommandWindowCaptureEnabled = true;
+        }
+
+        return RhinoApp.RunScript(docSerial, command, false);
+      }
+      finally
+      {
+        if (!captureWasEnabled)
+        {
+          _ = RhinoApp.CapturedCommandWindowStrings(true);
+          RhinoApp.CommandWindowCaptureEnabled = false;
+        }
+      }
+    }
   }
 
   private sealed record PendingLineFinalization(
     uint DocSerial,
     IReadOnlyList<LineOutputSnapshot> Outputs,
     int NextOutputIndex = 0,
-    int Attempts = 0);
+    int Attempts = 0,
+    bool RedrawSuppressed = false,
+    bool RedrawWasEnabled = true);
 
   private sealed record LineOutputSnapshot(
     Guid OriginalId,

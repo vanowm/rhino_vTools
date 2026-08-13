@@ -110,7 +110,17 @@
   },
   "vOffset": {
     "autoTrim": false,
-    "group": false
+    "group": false,
+    "distance": 0.5,
+    "loose": false,
+    "corner": 1,
+    "throughPoint": false,
+    "trim": true,
+    "tolerance": 0.001,
+    "bothSides": false,
+    "inCPlane": true,
+    "cap": 0,
+    "outputLayer": 0
   },
   "vOverlaps": {
     "tolerance": 0.001,

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Display;
@@ -175,6 +177,257 @@ public sealed class vChamfer : Command
     var mid = (ep1 + ep2) * 0.5;
     Log.Write("vChamfer", $"FindCorner  parallel tangents fallback  ep1={P(ep1)}  ep2={P(ep2)}  mid={P(mid)}");
     return (bestC1s, bestC2s, mid);
+  }
+
+  private static bool TryPrepareClosedCorner(
+    Curve source,
+    Point3d pickPoint,
+    out Curve side1,
+    out Curve side2,
+    out Point3d corner,
+    out double sourceCornerParameter)
+  {
+    side1 = null!;
+    side2 = null!;
+    corner = Point3d.Unset;
+    sourceCornerParameter = double.NaN;
+
+    var corners = FindClosedCorners(source);
+    if (corners.Count == 0)
+      return false;
+
+    var selected = corners
+      .OrderBy(candidate => candidate.Point.DistanceTo(pickPoint))
+      .First();
+    corner = selected.Point;
+    sourceCornerParameter = selected.Parameter;
+
+    var seamed = source.DuplicateCurve();
+    if (seamed == null)
+      return false;
+
+    var sourceDomain = seamed.Domain;
+    var seamTolerance = Math.Max(
+      sourceDomain.Length * 1.0e-9,
+      RhinoMath.ZeroTolerance * 10.0);
+    var alreadyAtSeam =
+      Math.Abs(sourceCornerParameter - sourceDomain.T0) <= seamTolerance ||
+      Math.Abs(sourceCornerParameter - sourceDomain.T1) <= seamTolerance;
+    if (!alreadyAtSeam &&
+        !seamed.ChangeClosedCurveSeam(sourceCornerParameter))
+    {
+      seamed.Dispose();
+      return false;
+    }
+
+    try
+    {
+      var domain = seamed.Domain;
+      var epsilon = Math.Max(
+        domain.Length * 1.0e-7,
+        RhinoMath.ZeroTolerance * 10.0);
+      var internalCorners = new List<double>();
+      var seek = domain.T0 + epsilon;
+      while (seek < domain.T1 &&
+             seamed.GetNextDiscontinuity(
+               Continuity.G1_continuous,
+               seek,
+               domain.T1,
+               out var parameter))
+      {
+        internalCorners.Add(parameter);
+        seek = parameter + epsilon;
+      }
+
+      double nextParameter;
+      double previousParameter;
+      if (internalCorners.Count > 0)
+      {
+        nextParameter = internalCorners.Min();
+        previousParameter = internalCorners.Max();
+      }
+      else
+      {
+        if (!seamed.LengthParameter(seamed.GetLength() * 0.5, out var midpointParameter))
+          return false;
+        nextParameter = previousParameter = midpointParameter;
+      }
+
+      side1 = seamed.Trim(domain.T0, nextParameter)!;
+      side2 = seamed.Trim(previousParameter, domain.T1)!;
+      if (side1 == null || side2 == null ||
+          side1.GetLength() <= RhinoMath.ZeroTolerance ||
+          side2.GetLength() <= RhinoMath.ZeroTolerance)
+      {
+        side1?.Dispose();
+        side2?.Dispose();
+        side1 = null!;
+        side2 = null!;
+        return false;
+      }
+
+      corner = side1.PointAtStart;
+      Log.Write(
+        "vChamfer",
+        $"ClosedCorner  click={P(pickPoint)} corner={P(corner)} " +
+        $"source_parameter={sourceCornerParameter:G17} candidates={corners.Count}");
+      return true;
+    }
+    finally
+    {
+      seamed.Dispose();
+    }
+  }
+
+  private static List<ClosedCornerCandidate> FindClosedCorners(Curve curve)
+  {
+    var corners = new List<ClosedCornerCandidate>();
+    var domain = curve.Domain;
+    var epsilon = Math.Max(
+      domain.Length * 1.0e-7,
+      RhinoMath.ZeroTolerance * 10.0);
+    var seek = domain.T0 + epsilon;
+
+    while (seek < domain.T1 &&
+           curve.GetNextDiscontinuity(
+             Continuity.G1_continuous,
+             seek,
+             domain.T1,
+             out var parameter))
+    {
+      AddCorner(parameter, false);
+      seek = parameter + epsilon;
+    }
+
+    AddCorner(domain.T0, true);
+    return corners;
+
+    void AddCorner(double parameter, bool seam)
+    {
+      var beforeParameter = seam
+        ? domain.T1 - epsilon
+        : Math.Max(domain.T0, parameter - epsilon);
+      var afterParameter = seam
+        ? domain.T0 + epsilon
+        : Math.Min(domain.T1, parameter + epsilon);
+      var before = curve.TangentAt(beforeParameter);
+      var after = curve.TangentAt(afterParameter);
+      if (!before.Unitize() || !after.Unitize())
+        return;
+
+      var angle = Vector3d.VectorAngle(before, after);
+      if (!RhinoMath.IsValidDouble(angle) ||
+          angle < RhinoMath.ToRadians(1.0))
+        return;
+
+      if (corners.Any(candidate =>
+            Math.Abs(candidate.Parameter - parameter) <= epsilon))
+        return;
+
+      corners.Add(new ClosedCornerCandidate(
+        parameter,
+        curve.PointAt(parameter)));
+    }
+  }
+
+  private static bool TryBuildClosedChamferReplacement(
+    RhinoDoc doc,
+    Curve source,
+    Point3d corner,
+    Point3d point1,
+    Point3d point2,
+    bool join,
+    out Curve replacement)
+  {
+    replacement = null!;
+    if (!source.ClosestPoint(point1, out var parameter1) ||
+        !source.ClosestPoint(point2, out var parameter2) ||
+        Math.Abs(parameter1 - parameter2) <= RhinoMath.ZeroTolerance)
+      return false;
+
+    var pieces = source.Split(new[] { parameter1, parameter2 });
+    if (pieces == null || pieces.Length < 2)
+    {
+      if (pieces != null)
+      {
+        foreach (var piece in pieces)
+          piece?.Dispose();
+      }
+      return false;
+    }
+
+    var cornerTolerance = Math.Max(
+      doc.ModelAbsoluteTolerance * 2.0,
+      RhinoMath.ZeroTolerance * 10.0);
+    var retainedPieces = pieces
+      .Where(piece => DistanceToCurve(piece, corner) > cornerTolerance)
+      .ToList();
+    if (retainedPieces.Count == 0)
+    {
+      retainedPieces.Add(pieces
+        .OrderByDescending(piece => DistanceToCurve(piece, corner))
+        .First());
+    }
+
+    Curve retained;
+    if (retainedPieces.Count == 1)
+    {
+      retained = retainedPieces[0];
+      foreach (var piece in pieces)
+      {
+        if (!ReferenceEquals(piece, retained))
+          piece.Dispose();
+      }
+    }
+    else
+    {
+      var joinedRemainder = Curve.JoinCurves(
+        retainedPieces,
+        doc.ModelAbsoluteTolerance);
+      foreach (var piece in pieces)
+        piece.Dispose();
+      if (joinedRemainder == null || joinedRemainder.Length != 1)
+      {
+        if (joinedRemainder != null)
+        {
+          foreach (var curve in joinedRemainder)
+            curve?.Dispose();
+        }
+        return false;
+      }
+      retained = joinedRemainder[0];
+    }
+
+    if (!join)
+    {
+      replacement = retained;
+      return true;
+    }
+
+    using var chamfer = new LineCurve(point1, point2);
+    var joined = Curve.JoinCurves(
+      new Curve[] { retained, chamfer },
+      doc.ModelAbsoluteTolerance);
+    retained.Dispose();
+    if (joined == null || joined.Length != 1)
+    {
+      if (joined != null)
+      {
+        foreach (var curve in joined)
+          curve?.Dispose();
+      }
+      return false;
+    }
+
+    replacement = joined[0];
+    return true;
+
+    static double DistanceToCurve(Curve curve, Point3d point)
+    {
+      return curve.ClosestPoint(point, out var parameter)
+        ? curve.PointAt(parameter).DistanceTo(point)
+        : double.MaxValue;
+    }
   }
 
   // -- Extension -------------------------------------------------------------
@@ -642,23 +895,70 @@ public sealed class vChamfer : Command
   {
     LoadOptions();
 
-    var (ref1, crv1) = PickCurveWithOptions("Select first curve at corner");
-    if (ref1 == null || crv1 == null) return Result.Cancel;
+    var (ref1, pickedCurve1) = PickCurveWithOptions("Select first curve at corner");
+    if (ref1 == null || pickedCurve1 == null) return Result.Cancel;
 
-    var (ref2, crv2) = PickCurveWithOptions("Select second curve at corner");
-    if (ref2 == null || crv2 == null) return Result.Cancel;
+    ObjRef ref2;
+    Curve crv1;
+    Curve crv2;
+    Curve? closedSourceCurve = null;
+    var click1 = ref1.SelectionPoint();
+    var click2 = Point3d.Unset;
+    bool c1AtStart;
+    bool c2AtStart;
+    Point3d corner;
 
-    if (ref1.ObjectId == ref2.ObjectId)
+    if (pickedCurve1.IsClosed)
     {
-      RhinoApp.WriteLine("vChamfer: select two different curves.");
-      return Result.Failure;
+      var cornerHint = click1.IsValid
+        ? click1
+        : pickedCurve1.PointAtStart;
+      if (!TryPrepareClosedCorner(
+            pickedCurve1,
+            cornerHint,
+            out crv1,
+            out crv2,
+            out corner,
+            out _))
+      {
+        RhinoApp.WriteLine("vChamfer: the closed curve has no corner near the pick point.");
+        return Result.Failure;
+      }
+
+      ref2 = ref1;
+      click2 = click1;
+      c1AtStart = true;
+      c2AtStart = false;
+      closedSourceCurve = pickedCurve1;
+    }
+    else
+    {
+      var secondPick = PickCurveWithOptions("Select second curve at corner");
+      if (secondPick.Ref == null || secondPick.Crv == null)
+        return Result.Cancel;
+
+      ref2 = secondPick.Ref;
+      crv1 = pickedCurve1;
+      crv2 = secondPick.Crv;
+      click2 = ref2.SelectionPoint();
+
+      if (ref1.ObjectId == ref2.ObjectId)
+      {
+        RhinoApp.WriteLine("vChamfer: select two different curves.");
+        return Result.Failure;
+      }
+
+      if (crv2.IsClosed)
+      {
+        RhinoApp.WriteLine("vChamfer: select a closed curve as the first curve to chamfer its nearest corner.");
+        return Result.Failure;
+      }
+
+      (c1AtStart, c2AtStart, corner) = FindCorner(crv1, crv2);
     }
 
-    var click1 = ref1.SelectionPoint();
-    var click2 = ref2.SelectionPoint();
     Log.Write("vChamfer", $"RunCommand  click1={P(click1.IsValid ? (Point3d?)click1 : null)}  click2={P(click2.IsValid ? (Point3d?)click2 : null)}");
-    var (c1AtStart, c2AtStart, corner) = FindCorner(crv1, crv2);
-    Log.Write("vChamfer", $"RunCommand  corner={P(corner)}  c1AtStart={c1AtStart}  c2AtStart={c2AtStart}");
+    Log.Write("vChamfer", $"RunCommand  corner={P(corner)}  c1AtStart={c1AtStart}  c2AtStart={c2AtStart} closed={closedSourceCurve != null}");
 
     // Extend working copies to the virtual corner so chamfering always works
     // even when the curves are too short (e.g. previously chamfered corner).
@@ -830,6 +1130,59 @@ public sealed class vChamfer : Command
     if (sharedGroup < 0 && groupList1.Length > 0) sharedGroup = groupList1[0];
 
     var hasChamferLine = ptA.DistanceTo(ptB) > doc.ModelAbsoluteTolerance;
+
+    if (closedSourceCurve != null)
+    {
+      Curve? replacement = null;
+      if (_trim && hasChamferLine &&
+          !TryBuildClosedChamferReplacement(
+            doc,
+            closedSourceCurve,
+            corner,
+            ptA,
+            ptB,
+            _join,
+            out replacement))
+      {
+        RhinoApp.WriteLine("vChamfer: closed curve trim failed.");
+        return Result.Failure;
+      }
+
+      var closedChamferLineId = hasChamferLine && (!_trim || !_join)
+        ? doc.Objects.AddLine(ptA, ptB)
+        : Guid.Empty;
+      if (hasChamferLine && (!_trim || !_join) && closedChamferLineId == Guid.Empty)
+      {
+        replacement?.Dispose();
+        RhinoApp.WriteLine("vChamfer: failed to create the chamfer line.");
+        return Result.Failure;
+      }
+
+      if (replacement != null)
+      {
+        if (!doc.Objects.Replace(ref1.ObjectId, replacement))
+        {
+          if (closedChamferLineId != Guid.Empty)
+            doc.Objects.Delete(closedChamferLineId, quiet: true);
+          replacement.Dispose();
+          RhinoApp.WriteLine("vChamfer: failed to replace the closed curve.");
+          return Result.Failure;
+        }
+        replacement.Dispose();
+      }
+
+      if (sharedGroup >= 0 && closedChamferLineId != Guid.Empty)
+        doc.Groups.AddToGroup(sharedGroup, closedChamferLineId);
+
+      Log.Write(
+        "vChamfer",
+        $"ClosedCorner applied source={ref1.ObjectId} trim={_trim} join={_join} " +
+        $"line={closedChamferLineId} pt1={P(ptA)} pt2={P(ptB)}");
+      SaveOptions();
+      doc.Views.Redraw();
+      return Result.Success;
+    }
+
     var chamferLineId = hasChamferLine ? doc.Objects.AddLine(ptA, ptB) : Guid.Empty;
 
     // With Trim=No, add extension lines for any gap between curve ends and virtual corner.
@@ -902,4 +1255,8 @@ public sealed class vChamfer : Command
     doc.Views.Redraw();
     return Result.Success;
   }
+
+  private readonly record struct ClosedCornerCandidate(
+    double Parameter,
+    Point3d Point);
 }

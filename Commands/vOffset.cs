@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using Rhino;
 using Rhino.Commands;
@@ -16,9 +18,33 @@ public sealed class vOffset : Command
   private const string OptionsSectionName = "vOffset";
   private const string AutoTrimKey = "autoTrim";
   private const string GroupKey = "group";
+  private const string DistanceKey = "distance";
+  private const string LooseKey = "loose";
+  private const string CornerKey = "corner";
+  private const string ThroughPointKey = "throughPoint";
+  private const string TrimKey = "trim";
+  private const string ToleranceKey = "tolerance";
+  private const string BothSidesKey = "bothSides";
+  private const string InCPlaneKey = "inCPlane";
+  private const string CapKey = "cap";
+  private const string OutputLayerKey = "outputLayer";
+
+  private static readonly string[] CornerNames = { "None", "Sharp", "Round", "Smooth", "Chamfer" };
+  private static readonly string[] CapNames = { "None", "Flat", "Round" };
+  private static readonly string[] OutputLayerNames = { "Current", "Input" };
 
   private static bool _autoTrim;
   private static bool _group;
+  private static double _distance = 0.5;
+  private static bool _loose;
+  private static int _corner = 1;
+  private static bool _throughPoint;
+  private static bool _trim = true;
+  private static double _tolerance = 0.001;
+  private static bool _bothSides;
+  private static bool _inCPlane = true;
+  private static int _cap;
+  private static int _outputLayer;
   private static bool _restartingAfterOffsetDelegate;
   private static bool _continuingAfterOffsetDelegate;
   private static EventHandler? _pendingOffsetIdleHandler;
@@ -66,16 +92,30 @@ public sealed class vOffset : Command
     if (picked == null)
       return Result.Cancel;
 
-    _pendingOffset = new PendingOffset(
+    var source = new OffsetSource(
       doc.RuntimeSerialNumber,
       picked.ObjectId,
       picked.RuntimeSerialNumber,
       picked.Curve,
-      _autoTrim,
-      _group,
       picked.GroupIndices,
+      FindCueKinks(picked.Curve),
       FindTouchingDrivers(doc, picked.ObjectId, picked.Curve, CurveEnd.Start),
       FindTouchingDrivers(doc, picked.ObjectId, picked.Curve, CurveEnd.End));
+
+    var sidePoint = PickOffsetSide(doc, source, out historyRequest);
+    if (historyRequest.HasValue)
+    {
+      QueueHistoryAction(doc, historyRequest.Value);
+      return Result.Success;
+    }
+
+    if (!sidePoint.HasValue)
+      return Result.Cancel;
+
+    _pendingOffset = new PendingOffset(
+      source,
+      sidePoint.Value,
+      CurrentSettings());
 
     _pendingOffsetIdleHandler = OnLaunchOffsetOnIdle;
     RhinoApp.Idle += _pendingOffsetIdleHandler;
@@ -85,8 +125,6 @@ public sealed class vOffset : Command
   private static SourcePick? PickSourceCurve(RhinoDoc doc, out bool? historyRequest)
   {
     historyRequest = null;
-    var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
-    var groupToggle = new OptionToggle(_group, "No", "Yes");
 
     while (true)
     {
@@ -99,16 +137,39 @@ public sealed class vOffset : Command
       getter.DeselectAllBeforePostSelect = false;
       getter.EnableClearObjectsOnEntry(false);
       getter.EnableUnselectObjectsOnExit(false);
+      getter.AcceptNumber(true, false);
       getter.AcceptUndo(UndoHistory.Count > 0);
       getter.AcceptCustomMessage(true);
+
+      var distanceOption = new OptionDouble(_distance, RhinoMath.ZeroTolerance, double.MaxValue);
+      var toleranceOption = new OptionDouble(_tolerance, 0.0, double.MaxValue);
+      var looseToggle = new OptionToggle(_loose, "No", "Yes");
+      var throughPointToggle = new OptionToggle(_throughPoint, "No", "Yes");
+      var trimToggle = new OptionToggle(_trim, "No", "Yes");
+      var bothSidesToggle = new OptionToggle(_bothSides, "No", "Yes");
+      var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
+      var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
+      var groupToggle = new OptionToggle(_group, "No", "Yes");
+      var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
+
+      var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
+      getter.AddOptionToggle("Loose", ref looseToggle);
+      var cornerOptionIndex = getter.AddOptionList("Corner", CornerNames, _corner);
+      getter.AddOptionToggle("ThroughPoint", ref throughPointToggle);
+      getter.AddOptionToggle("Trim", ref trimToggle);
+      getter.AddOptionDouble("Tolerance", ref toleranceOption);
+      getter.AddOptionToggle("BothSides", ref bothSidesToggle);
+      getter.AddOptionToggle("InCPlane", ref inCPlaneToggle);
+      var capOptionIndex = getter.AddOptionList("Cap", CapNames, _cap);
+      getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
+      getter.AddOptionToggle("Group", ref groupToggle);
+      getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
       var undoOptionIndex = UndoHistory.Count > 0
         ? getter.AddOption("Undo", string.Empty, true)
         : -1;
       var redoOptionIndex = RedoHistory.Count > 0
         ? getter.AddOption("Redo", string.Empty, true)
         : -1;
-      getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
-      getter.AddOptionToggle("Group", ref groupToggle);
 
       var result = getter.Get();
 
@@ -143,22 +204,47 @@ public sealed class vOffset : Command
         return null;
       }
 
+      if (result == GetResult.Number)
+      {
+        _distance = Math.Max(RhinoMath.ZeroTolerance, getter.Number());
+        SavePersistedOptions();
+        continue;
+      }
+
       if (result == GetResult.Option)
       {
-        if (getter.OptionIndex() == undoOptionIndex)
+        var option = getter.Option();
+        if (option == null)
+          continue;
+
+        if (option.Index == undoOptionIndex)
         {
           historyRequest = false;
           return null;
         }
 
-        if (getter.OptionIndex() == redoOptionIndex)
+        if (option.Index == redoOptionIndex)
         {
           historyRequest = true;
           return null;
         }
 
-        _autoTrim = autoTrimToggle.CurrentValue;
+        if (option.Index == distanceOptionIndex)
+          _distance = Math.Max(RhinoMath.ZeroTolerance, distanceOption.CurrentValue);
+        else if (option.Index == cornerOptionIndex)
+          _corner = ClampIndex(option.CurrentListOptionIndex, CornerNames.Length);
+        else if (option.Index == capOptionIndex)
+          _cap = ClampIndex(option.CurrentListOptionIndex, CapNames.Length);
+
+        _loose = looseToggle.CurrentValue;
+        _throughPoint = throughPointToggle.CurrentValue;
+        _trim = trimToggle.CurrentValue;
+        _tolerance = Math.Max(0.0, toleranceOption.CurrentValue);
+        _bothSides = bothSidesToggle.CurrentValue;
+        _inCPlane = inCPlaneToggle.CurrentValue;
+        _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
         _group = groupToggle.CurrentValue;
+        _autoTrim = autoTrimToggle.CurrentValue;
         SavePersistedOptions();
         continue;
       }
@@ -192,18 +278,227 @@ public sealed class vOffset : Command
     }
   }
 
+  private static Point3d? PickOffsetSide(
+    RhinoDoc doc,
+    OffsetSource source,
+    out bool? historyRequest)
+  {
+    historyRequest = null;
+    Vector3d? previousCueTangent = null;
+
+    while (true)
+    {
+      using var getter = new OffsetSideGetter(e =>
+      {
+        if (!e.CurrentPoint.IsValid)
+          return;
+
+        var settings = CurrentSettings();
+        var preview = BuildOffsetPreview(doc, source, e.CurrentPoint, settings);
+        try
+        {
+          var previewColor = OffsetPreviewColor(doc, source, _outputLayer);
+          foreach (var curve in preview)
+            PreviewDisplay.DrawCurve(e.Display, curve, previewColor);
+
+          previousCueTangent = DrawOffsetCue(
+            e.Display,
+            doc,
+            source,
+            e.CurrentPoint,
+            settings,
+            previousCueTangent);
+        }
+        finally
+        {
+          foreach (var curve in preview)
+            curve.Dispose();
+        }
+      });
+      getter.EnableTransparentCommands(true);
+      getter.EnableObjectSnapCursors(false);
+      getter.SetCommandPrompt(_throughPoint ? "Point to offset through" : "Side to offset");
+      getter.AcceptNothing(true);
+      getter.AcceptNumber(true, false);
+      getter.AcceptUndo(UndoHistory.Count > 0);
+      getter.AcceptCustomMessage(true);
+
+      var distanceOption = new OptionDouble(_distance, RhinoMath.ZeroTolerance, double.MaxValue);
+      var toleranceOption = new OptionDouble(_tolerance, 0.0, double.MaxValue);
+      var looseToggle = new OptionToggle(_loose, "No", "Yes");
+      var throughPointToggle = new OptionToggle(_throughPoint, "No", "Yes");
+      var trimToggle = new OptionToggle(_trim, "No", "Yes");
+      var bothSidesToggle = new OptionToggle(_bothSides, "No", "Yes");
+      var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
+      var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
+      var groupToggle = new OptionToggle(_group, "No", "Yes");
+      var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
+
+      var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
+      getter.AddOptionToggle("Loose", ref looseToggle);
+      var cornerOptionIndex = getter.AddOptionList("Corner", CornerNames, _corner);
+      getter.AddOptionToggle("ThroughPoint", ref throughPointToggle);
+      getter.AddOptionToggle("Trim", ref trimToggle);
+      getter.AddOptionDouble("Tolerance", ref toleranceOption);
+      getter.AddOptionToggle("BothSides", ref bothSidesToggle);
+      getter.AddOptionToggle("InCPlane", ref inCPlaneToggle);
+      var capOptionIndex = getter.AddOptionList("Cap", CapNames, _cap);
+      getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
+      getter.AddOptionToggle("Group", ref groupToggle);
+      getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
+      var undoOptionIndex = UndoHistory.Count > 0
+        ? getter.AddOption("Undo", string.Empty, true)
+        : -1;
+      var redoOptionIndex = RedoHistory.Count > 0
+        ? getter.AddOption("Redo", string.Empty, true)
+        : -1;
+
+      var result = getter.Get();
+
+      if (result == GetResult.CustomMessage &&
+          getter.CustomMessage() is OffsetHistoryRequest shortcutRequest)
+      {
+        var available = shortcutRequest.Redo ? RedoHistory.Count : UndoHistory.Count;
+        if (available == 0)
+        {
+          RhinoApp.WriteLine(shortcutRequest.Redo
+            ? "vOffset: nothing to redo."
+            : "vOffset: nothing to undo.");
+          continue;
+        }
+
+        historyRequest = shortcutRequest.Redo;
+        return null;
+      }
+
+      if (getter.CommandResult() != Result.Success)
+        return null;
+
+      if (result == GetResult.Undo)
+      {
+        if (UndoHistory.Count == 0)
+          continue;
+        historyRequest = false;
+        return null;
+      }
+
+      if (result == GetResult.Number)
+      {
+        _distance = Math.Max(RhinoMath.ZeroTolerance, getter.Number());
+        SavePersistedOptions();
+        continue;
+      }
+
+      if (result == GetResult.Option)
+      {
+        var option = getter.Option();
+        if (option == null)
+          continue;
+
+        if (option.Index == undoOptionIndex)
+        {
+          historyRequest = false;
+          return null;
+        }
+
+        if (option.Index == redoOptionIndex)
+        {
+          historyRequest = true;
+          return null;
+        }
+
+        if (option.Index == distanceOptionIndex)
+          _distance = Math.Max(RhinoMath.ZeroTolerance, distanceOption.CurrentValue);
+        else if (option.Index == cornerOptionIndex)
+          _corner = ClampIndex(option.CurrentListOptionIndex, CornerNames.Length);
+        else if (option.Index == capOptionIndex)
+          _cap = ClampIndex(option.CurrentListOptionIndex, CapNames.Length);
+
+        _loose = looseToggle.CurrentValue;
+        _throughPoint = throughPointToggle.CurrentValue;
+        _trim = trimToggle.CurrentValue;
+        _tolerance = Math.Max(0.0, toleranceOption.CurrentValue);
+        _bothSides = bothSidesToggle.CurrentValue;
+        _inCPlane = inCPlaneToggle.CurrentValue;
+        _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
+        _group = groupToggle.CurrentValue;
+        _autoTrim = autoTrimToggle.CurrentValue;
+        SavePersistedOptions();
+        doc.Views.Redraw();
+        continue;
+      }
+
+      if (result == GetResult.Point)
+        return getter.Point();
+
+      return null;
+    }
+  }
+
+  private static OffsetSettings CurrentSettings() => new(
+    _distance,
+    _loose,
+    _corner,
+    _throughPoint,
+    _trim,
+    _tolerance,
+    _bothSides,
+    _inCPlane,
+    _cap,
+    _outputLayer,
+    _group,
+    _autoTrim);
+
+  private static int ClampIndex(int value, int count) =>
+    Math.Max(0, Math.Min(count - 1, value));
+
   private static void LoadPersistedOptions()
   {
-    _autoTrim = ToolsOptionStore.Read(
+    var values = ToolsOptionStore.Read(
       OptionsSectionName,
-      section => ToolsOptionStore.TryGetBool(section, AutoTrimKey, out var value)
-        ? value
-        : _autoTrim);
-    _group = ToolsOptionStore.Read(
-      OptionsSectionName,
-      section => ToolsOptionStore.TryGetBool(section, GroupKey, out var value)
-        ? value
-        : _group);
+      section =>
+      {
+        var autoTrim = _autoTrim;
+        var group = _group;
+        var distance = _distance;
+        var loose = _loose;
+        var corner = _corner;
+        var throughPoint = _throughPoint;
+        var trim = _trim;
+        var tolerance = _tolerance;
+        var bothSides = _bothSides;
+        var inCPlane = _inCPlane;
+        var cap = _cap;
+        var outputLayer = _outputLayer;
+
+        if (ToolsOptionStore.TryGetBool(section, AutoTrimKey, out var boolValue)) autoTrim = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, GroupKey, out boolValue)) group = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, DistanceKey, out var doubleValue)) distance = doubleValue;
+        if (ToolsOptionStore.TryGetBool(section, LooseKey, out boolValue)) loose = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, CornerKey, out doubleValue)) corner = (int)Math.Round(doubleValue);
+        if (ToolsOptionStore.TryGetBool(section, ThroughPointKey, out boolValue)) throughPoint = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, TrimKey, out boolValue)) trim = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, ToleranceKey, out doubleValue)) tolerance = doubleValue;
+        if (ToolsOptionStore.TryGetBool(section, BothSidesKey, out boolValue)) bothSides = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, InCPlaneKey, out boolValue)) inCPlane = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, CapKey, out doubleValue)) cap = (int)Math.Round(doubleValue);
+        if (ToolsOptionStore.TryGetDouble(section, OutputLayerKey, out doubleValue)) outputLayer = (int)Math.Round(doubleValue);
+
+        return (autoTrim, group, distance, loose, corner, throughPoint, trim, tolerance, bothSides, inCPlane, cap, outputLayer);
+      });
+
+    _autoTrim = values.autoTrim;
+    _group = values.group;
+    _distance = Math.Max(RhinoMath.ZeroTolerance, values.distance);
+    _loose = values.loose;
+    _corner = ClampIndex(values.corner, CornerNames.Length);
+    _throughPoint = values.throughPoint;
+    _trim = values.trim;
+    _tolerance = Math.Max(0.0, values.tolerance);
+    _bothSides = values.bothSides;
+    _inCPlane = values.inCPlane;
+    _cap = ClampIndex(values.cap, CapNames.Length);
+    _outputLayer = ClampIndex(values.outputLayer, OutputLayerNames.Length);
   }
 
   private static void SavePersistedOptions()
@@ -214,6 +509,16 @@ public sealed class vOffset : Command
       {
         section[AutoTrimKey] = _autoTrim;
         section[GroupKey] = _group;
+        section[DistanceKey] = _distance;
+        section[LooseKey] = _loose;
+        section[CornerKey] = _corner;
+        section[ThroughPointKey] = _throughPoint;
+        section[TrimKey] = _trim;
+        section[ToleranceKey] = _tolerance;
+        section[BothSidesKey] = _bothSides;
+        section[InCPlaneKey] = _inCPlane;
+        section[CapKey] = _cap;
+        section[OutputLayerKey] = _outputLayer;
       });
   }
 
@@ -323,6 +628,461 @@ public sealed class vOffset : Command
     _continuingAfterOffsetDelegate = false;
   }
 
+  private static List<Curve> BuildOffsetPreview(
+    RhinoDoc doc,
+    OffsetSource source,
+    Point3d sidePoint,
+    OffsetSettings settings)
+  {
+    var plane = OffsetPlane(doc, source.SourceCurve, settings.InCPlane);
+    var tolerance = settings.Tolerance > 0.0
+      ? settings.Tolerance
+      : doc.ModelAbsoluteTolerance;
+    var distance = settings.ThroughPoint
+      ? ThroughPointDistance(source.SourceCurve, plane, sidePoint, tolerance)
+      : settings.Distance;
+    if (distance <= RhinoMath.ZeroTolerance)
+      return new List<Curve>();
+
+    var preview = OffsetToward(
+      source.SourceCurve,
+      sidePoint,
+      plane.ZAxis,
+      distance,
+      tolerance,
+      doc.ModelAngleToleranceRadians,
+      settings);
+
+    if (settings.BothSides)
+    {
+      var oppositePoint = OppositeSidePoint(source.SourceCurve, plane, sidePoint);
+      preview.AddRange(OffsetToward(
+        source.SourceCurve,
+        oppositePoint,
+        plane.ZAxis,
+        distance,
+        tolerance,
+        doc.ModelAngleToleranceRadians,
+        settings));
+    }
+
+    return settings.AutoTrim && !source.SourceCurve.IsClosed
+      ? AutoTrimPreview(doc, source, preview)
+      : preview;
+  }
+
+  private static Color OffsetPreviewColor(
+    RhinoDoc doc,
+    OffsetSource source,
+    int outputLayer)
+  {
+    var layerIndex = doc.Layers.CurrentLayerIndex;
+    if (ClampIndex(outputLayer, OutputLayerNames.Length) == 1)
+    {
+      var sourceObject = doc.Objects.FindId(source.SourceId);
+      if (sourceObject != null)
+        layerIndex = sourceObject.Attributes.LayerIndex;
+    }
+
+    var color = layerIndex >= 0 && layerIndex < doc.Layers.Count
+      ? doc.Layers[layerIndex].Color
+      : Color.White;
+    return Color.FromArgb(176, color.R, color.G, color.B);
+  }
+
+  private static Vector3d? DrawOffsetCue(
+    Rhino.Display.DisplayPipeline display,
+    RhinoDoc doc,
+    OffsetSource source,
+    Point3d cursorPoint,
+    OffsetSettings settings,
+    Vector3d? previousTangent)
+  {
+    var sourceCurve = source.SourceCurve;
+    if (!sourceCurve.ClosestPoint(cursorPoint, out var sourceParameter))
+      return previousTangent;
+
+    var sourcePoint = sourceCurve.PointAt(sourceParameter);
+    var plane = OffsetPlane(doc, sourceCurve, settings.InCPlane);
+    var tolerance = settings.Tolerance > 0.0
+      ? settings.Tolerance
+      : doc.ModelAbsoluteTolerance;
+    var distance = settings.ThroughPoint
+      ? ThroughPointDistance(sourceCurve, plane, cursorPoint, tolerance)
+      : settings.Distance;
+    var anchor = ResolveCueAnchor(
+      sourceCurve,
+      source.CueKinks,
+      sourceParameter,
+      sourcePoint,
+      cursorPoint,
+      plane,
+      distance,
+      doc.ModelAbsoluteTolerance,
+      previousTangent);
+    sourcePoint = anchor.Point;
+    var tangent = anchor.Tangent;
+    var perpendicular = Vector3d.CrossProduct(plane.ZAxis, tangent);
+    if (!perpendicular.Unitize())
+      return previousTangent;
+
+    if (perpendicular * (cursorPoint - sourcePoint) < 0.0)
+      perpendicular.Reverse();
+
+    if (distance <= RhinoMath.ZeroTolerance)
+      return tangent;
+
+    var targetPoint = sourcePoint + perpendicular * distance;
+    PreviewDisplay.DrawLine(display, sourcePoint, targetPoint, Color.Black);
+    PreviewDisplay.DrawLine(display, targetPoint, cursorPoint, Color.White);
+    display.DrawPoint(
+      targetPoint,
+      Rhino.Display.PointStyle.RoundActivePoint,
+      Color.Black,
+      Color.White,
+      3.0f,
+      1.0f,
+      0.0f,
+      0.0f,
+      true,
+      true);
+    return tangent;
+  }
+
+  private static CueAnchor ResolveCueAnchor(
+    Curve source,
+    IReadOnlyList<CueKink> cueKinks,
+    double parameter,
+    Point3d sourcePoint,
+    Point3d cursorPoint,
+    Plane plane,
+    double offsetDistance,
+    double modelTolerance,
+    Vector3d? previousTangent)
+  {
+    var tangent = source.TangentAt(parameter);
+    var kinkTolerance = Math.Max(
+      RhinoMath.ZeroTolerance * 100.0,
+      modelTolerance);
+    CueKink? kink = null;
+    var bestKinkDistance = double.MaxValue;
+    foreach (var candidate in cueKinks)
+    {
+      var distance = candidate.Point.DistanceTo(sourcePoint);
+      if (distance > kinkTolerance || distance >= bestKinkDistance)
+        continue;
+
+      kink = candidate;
+      bestKinkDistance = distance;
+    }
+
+    if (kink == null)
+      return new CueAnchor(sourcePoint, tangent);
+
+    sourcePoint = kink.Point;
+    var before = kink.BeforeTangent;
+    var after = kink.AfterTangent;
+
+    var cursorVector = cursorPoint - sourcePoint;
+    var beforeDistance = CueTargetDistance(
+      sourcePoint,
+      cursorPoint,
+      plane.ZAxis,
+      before,
+      offsetDistance);
+    var afterDistance = CueTargetDistance(
+      sourcePoint,
+      cursorPoint,
+      plane.ZAxis,
+      after,
+      offsetDistance);
+    var tieTolerance = Math.Max(
+      RhinoMath.ZeroTolerance * 100.0,
+      cursorVector.Length * 1.0e-9);
+    if (Math.Abs(beforeDistance - afterDistance) > tieTolerance)
+      return new CueAnchor(
+        sourcePoint,
+        beforeDistance < afterDistance ? before : after);
+
+    if (previousTangent.HasValue)
+    {
+      var previous = previousTangent.Value;
+      if (previous.Unitize())
+      {
+        return new CueAnchor(
+          sourcePoint,
+          Math.Abs(previous * before) >= Math.Abs(previous * after)
+            ? before
+            : after);
+      }
+    }
+
+    return new CueAnchor(
+      sourcePoint,
+      beforeDistance <= afterDistance ? before : after);
+  }
+
+  private static List<CueKink> FindCueKinks(Curve source)
+  {
+    var kinks = new List<CueKink>();
+    var domain = source.Domain;
+    var epsilon = Math.Max(
+      domain.Length * 1.0e-7,
+      RhinoMath.ZeroTolerance * 10.0);
+    var seek = domain.T0 + epsilon;
+
+    while (seek < domain.T1 &&
+           source.GetNextDiscontinuity(
+             Continuity.G1_continuous,
+             seek,
+             domain.T1,
+             out var parameter))
+    {
+      AddKink(parameter, false);
+      seek = parameter + epsilon;
+    }
+
+    if (source.IsClosed)
+      AddKink(domain.T0, true);
+
+    return kinks;
+
+    void AddKink(double parameter, bool seam)
+    {
+      var beforeParameter = seam
+        ? domain.T1 - epsilon
+        : Math.Max(domain.T0, parameter - epsilon);
+      var afterParameter = seam
+        ? domain.T0 + epsilon
+        : Math.Min(domain.T1, parameter + epsilon);
+      if (afterParameter <= beforeParameter && !seam)
+        return;
+
+      var before = source.TangentAt(beforeParameter);
+      var after = source.TangentAt(afterParameter);
+      if (!before.Unitize() || !after.Unitize())
+        return;
+
+      var angle = Vector3d.VectorAngle(before, after);
+      if (!RhinoMath.IsValidDouble(angle) || angle < RhinoMath.ToRadians(1.0))
+        return;
+
+      kinks.Add(new CueKink(source.PointAt(parameter), before, after));
+    }
+  }
+
+  private static double CueTargetDistance(
+    Point3d sourcePoint,
+    Point3d cursorPoint,
+    Vector3d planeNormal,
+    Vector3d tangent,
+    double offsetDistance)
+  {
+    var perpendicular = Vector3d.CrossProduct(planeNormal, tangent);
+    if (!perpendicular.Unitize())
+      return double.MaxValue;
+
+    var cursorVector = cursorPoint - sourcePoint;
+    if (perpendicular * cursorVector < 0.0)
+      perpendicular.Reverse();
+
+    var targetPoint = sourcePoint + perpendicular * offsetDistance;
+    return targetPoint.DistanceTo(cursorPoint);
+  }
+
+  private static Plane OffsetPlane(RhinoDoc doc, Curve source, bool inCPlane)
+  {
+    if (!inCPlane && source.TryGetPlane(out var curvePlane, doc.ModelAbsoluteTolerance))
+      return curvePlane;
+
+    return doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+  }
+
+  private static double ThroughPointDistance(
+    Curve source,
+    Plane plane,
+    Point3d sidePoint,
+    double tolerance)
+  {
+    var projectedPoint = plane.ClosestPoint(sidePoint);
+    Curve? projected = null;
+    try
+    {
+      projected = Curve.ProjectToPlane(source, plane);
+      var working = projected ?? source;
+      if (working.ClosestPoint(projectedPoint, out var parameter))
+        return working.PointAt(parameter).DistanceTo(projectedPoint);
+    }
+    catch
+    {
+    }
+    finally
+    {
+      projected?.Dispose();
+    }
+
+    return Math.Max(tolerance, source.PointAtStart.DistanceTo(projectedPoint));
+  }
+
+  private static Point3d OppositeSidePoint(Curve source, Plane plane, Point3d sidePoint)
+  {
+    var projectedPoint = plane.ClosestPoint(sidePoint);
+    Curve? projected = null;
+    try
+    {
+      projected = Curve.ProjectToPlane(source, plane);
+      var working = projected ?? source;
+      if (working.ClosestPoint(projectedPoint, out var parameter))
+      {
+        var onCurve = working.PointAt(parameter);
+        return onCurve + (onCurve - projectedPoint);
+      }
+    }
+    catch
+    {
+    }
+    finally
+    {
+      projected?.Dispose();
+    }
+
+    return source.PointAtStart + (source.PointAtStart - projectedPoint);
+  }
+
+  private static List<Curve> OffsetToward(
+    Curve source,
+    Point3d sidePoint,
+    Vector3d normal,
+    double distance,
+    double tolerance,
+    double angleTolerance,
+    OffsetSettings settings)
+  {
+    try
+    {
+      var curves = source.Offset(
+        sidePoint,
+        normal,
+        distance,
+        tolerance,
+        angleTolerance,
+        settings.Loose,
+        (CurveOffsetCornerStyle)ClampIndex(settings.Corner, CornerNames.Length),
+        (CurveOffsetEndStyle)ClampIndex(settings.Cap, CapNames.Length));
+      return curves?.Where(curve => curve != null && curve.IsValid).ToList() ?? new List<Curve>();
+    }
+    catch
+    {
+      return new List<Curve>();
+    }
+  }
+
+  private static List<Curve> AutoTrimPreview(
+    RhinoDoc doc,
+    OffsetSource source,
+    IReadOnlyList<Curve> curves)
+  {
+    var adjustedCurves = new List<Curve>(curves.Count);
+    foreach (var output in curves)
+    {
+      var adjusted = output;
+      if (adjusted.IsClosed)
+      {
+        adjustedCurves.Add(adjusted);
+        continue;
+      }
+
+      var sameDirection = SameEndpointDirection(source.SourceCurve, adjusted);
+      if (source.StartDrivers.Count > 0)
+      {
+        var next = AdjustOffsetEnd(
+          doc,
+          adjusted,
+          sameDirection ? CurveEnd.Start : CurveEnd.End,
+          source.StartDrivers,
+          out _,
+          out _);
+        if (!ReferenceEquals(next, adjusted))
+          adjusted.Dispose();
+        adjusted = next;
+      }
+
+      if (source.EndDrivers.Count > 0)
+      {
+        var next = AdjustOffsetEnd(
+          doc,
+          adjusted,
+          sameDirection ? CurveEnd.End : CurveEnd.Start,
+          source.EndDrivers,
+          out _,
+          out _);
+        if (!ReferenceEquals(next, adjusted))
+          adjusted.Dispose();
+        adjusted = next;
+      }
+
+      adjustedCurves.Add(adjusted);
+    }
+
+    return adjustedCurves;
+  }
+
+  private static string BuildNativeOffsetScript(RhinoDoc doc, PendingOffset pending)
+  {
+    var settings = pending.Settings;
+    var plane = OffsetPlane(doc, pending.SourceCurve, settings.InCPlane);
+    var distance = settings.ThroughPoint && settings.BothSides
+      ? ThroughPointDistance(
+          pending.SourceCurve,
+          plane,
+          pending.SidePoint,
+          settings.Tolerance > 0.0 ? settings.Tolerance : doc.ModelAbsoluteTolerance)
+      : settings.Distance;
+    var parts = new List<string>
+    {
+      "_-Offset",
+      $"_Distance={Number(distance)}",
+      $"_Loose={YesNo(settings.Loose)}"
+    };
+
+    if (!settings.Loose)
+    {
+      parts.Add($"_Corner=_{CornerNames[ClampIndex(settings.Corner, CornerNames.Length)]}");
+      parts.Add($"_Tolerance={Number(settings.Tolerance)}");
+    }
+
+    parts.Add($"_Trim={YesNo(settings.Trim)}");
+    parts.Add($"_InCPlane={YesNo(settings.InCPlane)}");
+    parts.Add($"_Cap=_{CapNames[ClampIndex(settings.Cap, CapNames.Length)]}");
+    parts.Add($"_OutputLayer=_{OutputLayerNames[ClampIndex(settings.OutputLayer, OutputLayerNames.Length)]}");
+
+    if (settings.BothSides)
+    {
+      parts.Add("_BothSides");
+    }
+    else if (settings.ThroughPoint)
+    {
+      parts.Add("_ThroughPoint");
+      parts.Add(WorldPoint(pending.SidePoint));
+    }
+    else
+    {
+      parts.Add(WorldPoint(pending.SidePoint));
+    }
+
+    return string.Join(" ", parts);
+  }
+
+  private static string Number(double value) =>
+    value.ToString("R", CultureInfo.InvariantCulture);
+
+  private static string YesNo(bool value) => value ? "_Yes" : "_No";
+
+  private static string WorldPoint(Point3d point) =>
+    string.Create(
+      CultureInfo.InvariantCulture,
+      $"w{point.X:R},{point.Y:R},{point.Z:R}");
+
   private static void OnLaunchOffsetOnIdle(object? sender, EventArgs e)
   {
     if (_pendingOffsetIdleHandler != null)
@@ -365,7 +1125,9 @@ public sealed class vOffset : Command
     try
     {
       doc.UndoRecordingEnabled = false;
-      nativeResult = RhinoApp.RunScript("_Offset", false);
+      var nativeScript = BuildNativeOffsetScript(doc, pending);
+      Log.Write("vOffset", "native handoff {0}", nativeScript);
+      nativeResult = RhinoApp.RunScript(nativeScript, false);
 
       temporaryOutputIds = doc.Objects
         .GetObjectList(ObjectType.Curve)
@@ -918,16 +1680,52 @@ public sealed class vOffset : Command
     Curve Curve,
     IReadOnlyList<int> GroupIndices);
 
-  private sealed record PendingOffset(
+  private sealed record OffsetSource(
     uint DocSerial,
     Guid SourceId,
     uint SourceRuntimeSerialNumber,
     Curve SourceCurve,
-    bool AutoTrim,
-    bool Group,
     IReadOnlyList<int> SourceGroupIndices,
+    IReadOnlyList<CueKink> CueKinks,
     List<Curve> StartDrivers,
     List<Curve> EndDrivers);
+
+  private sealed record CueKink(
+    Point3d Point,
+    Vector3d BeforeTangent,
+    Vector3d AfterTangent);
+
+  private readonly record struct CueAnchor(Point3d Point, Vector3d Tangent);
+
+  private sealed record OffsetSettings(
+    double Distance,
+    bool Loose,
+    int Corner,
+    bool ThroughPoint,
+    bool Trim,
+    double Tolerance,
+    bool BothSides,
+    bool InCPlane,
+    int Cap,
+    int OutputLayer,
+    bool Group,
+    bool AutoTrim);
+
+  private sealed record PendingOffset(
+    OffsetSource Source,
+    Point3d SidePoint,
+    OffsetSettings Settings)
+  {
+    public uint DocSerial => Source.DocSerial;
+    public Guid SourceId => Source.SourceId;
+    public uint SourceRuntimeSerialNumber => Source.SourceRuntimeSerialNumber;
+    public Curve SourceCurve => Source.SourceCurve;
+    public IReadOnlyList<int> SourceGroupIndices => Source.SourceGroupIndices;
+    public List<Curve> StartDrivers => Source.StartDrivers;
+    public List<Curve> EndDrivers => Source.EndDrivers;
+    public bool Group => Settings.Group;
+    public bool AutoTrim => Settings.AutoTrim;
+  }
 
   private sealed record OffsetAdjustment(Guid ObjectId, Curve Curve);
 
@@ -938,4 +1736,19 @@ public sealed class vOffset : Command
   private sealed record OffsetUndoRecord(IReadOnlyList<Guid> OutputIds);
 
   private sealed record OffsetHistoryRequest(bool Redo);
+
+  private sealed class OffsetSideGetter : GetPoint
+  {
+    private readonly Action<GetPointDrawEventArgs> _draw;
+
+    public OffsetSideGetter(Action<GetPointDrawEventArgs> draw)
+    {
+      _draw = draw;
+    }
+
+    protected override void OnDynamicDraw(GetPointDrawEventArgs e)
+    {
+      _draw(e);
+    }
+  }
 }

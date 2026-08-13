@@ -940,6 +940,12 @@ public sealed class vTrim : Command
       if (HoverObject == null || HoverCurve == null || !HoverPoint.IsValid)
         return;
 
+      PreviewDisplay.DrawCurve(
+        e.Display,
+        HoverCurve,
+        LayerColorForObject(_doc, HoverObject),
+        1);
+
       if (HoverExtendMode)
       {
         if (TryBuildExtendPlan(
@@ -1389,6 +1395,25 @@ public sealed class vTrim : Command
 
       yield return (obj, curve);
     }
+  }
+
+  private static Color LayerColorForObject(RhinoDoc doc, RhinoObject obj)
+  {
+    try
+    {
+      var layerIndex = obj.Attributes.LayerIndex;
+      if (layerIndex >= 0)
+      {
+        var layer = doc.Layers[layerIndex];
+        if (layer != null)
+          return layer.Color;
+      }
+    }
+    catch
+    {
+    }
+
+    return Color.White;
   }
 
   private static List<Curve> ResolveCuttersForTarget(
@@ -2616,7 +2641,11 @@ public sealed class vTrim : Command
       if (driver == null)
         continue;
 
-      var events = Rhino.Geometry.Intersect.Intersection.CurveCurve(candidate, driver, doc.ModelAbsoluteTolerance, doc.ModelAngleToleranceRadians);
+      var events = Rhino.Geometry.Intersect.Intersection.CurveCurve(
+        candidate,
+        driver,
+        doc.ModelAbsoluteTolerance,
+        doc.ModelAbsoluteTolerance);
       if (events == null)
         continue;
 

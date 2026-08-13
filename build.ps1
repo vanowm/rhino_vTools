@@ -69,7 +69,7 @@ if ($Publish -or $ComposeOnly) {
         Write-Error 'A semantic release message is required. Supply it with -Message.'
         exit 1
     } else {
-        $promptedMessage = Read-Host 'Describe plug-in behavior and build changes since the last commit'
+        $promptedMessage = Read-Host 'Describe net plug-in and build changes relative to HEAD; omit intermediate changes that were later reverted'
         $summary = if ($null -eq $promptedMessage) { '' } else { $promptedMessage.Trim() }
         $messageWasPrompted = $true
     }

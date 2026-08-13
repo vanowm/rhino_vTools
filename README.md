@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.13.1304
+# vTools  ·  v26.8.13.1328
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -433,13 +433,15 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 ### vOffset flow
 
 1. Run `vOffset`.
-1. Select one source curve; `AutoTrim` is available during this step.
+1. Select one source curve; `AutoTrim` and `Group` are available during this step.
 1. The selected curve is passed to the built-in `_Offset` command, which runs interactively.
 1. After each completed offset, selection is cleared and `vOffset` starts again automatically.
 1. Press Escape to exit the loop.
 1. Press Enter to repeat `vOffset` for a new loop.
 
 `AutoTrim=Yes` checks each open source endpoint independently. When an endpoint touches another curve, the corresponding end of every new offset is trimmed back if it crosses that curve, left unchanged if already touching, or extended to the curve when it falls short. The setting persists.
+
+`Group=Yes` adds every completed offset to all groups containing its source curve. If the source is ungrouped, one new group is created containing the source and all outputs from that offset. The setting persists, and group changes share the offset's undo record.
 
 ### vOrient2pt flow
 

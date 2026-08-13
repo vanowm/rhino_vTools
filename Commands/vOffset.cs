@@ -15,8 +15,10 @@ public sealed class vOffset : Command
 {
   private const string OptionsSectionName = "vOffset";
   private const string AutoTrimKey = "autoTrim";
+  private const string GroupKey = "group";
 
   private static bool _autoTrim;
+  private static bool _group;
   private static bool _restartingAfterOffsetDelegate;
   private static bool _continuingAfterOffsetDelegate;
   private static EventHandler? _pendingOffsetIdleHandler;
@@ -70,6 +72,8 @@ public sealed class vOffset : Command
       picked.RuntimeSerialNumber,
       picked.Curve,
       _autoTrim,
+      _group,
+      picked.GroupIndices,
       FindTouchingDrivers(doc, picked.ObjectId, picked.Curve, CurveEnd.Start),
       FindTouchingDrivers(doc, picked.ObjectId, picked.Curve, CurveEnd.End));
 
@@ -82,6 +86,7 @@ public sealed class vOffset : Command
   {
     historyRequest = null;
     var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
+    var groupToggle = new OptionToggle(_group, "No", "Yes");
 
     while (true)
     {
@@ -103,6 +108,7 @@ public sealed class vOffset : Command
         ? getter.AddOption("Redo", string.Empty, true)
         : -1;
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
+      getter.AddOptionToggle("Group", ref groupToggle);
 
       var result = getter.Get();
 
@@ -152,6 +158,7 @@ public sealed class vOffset : Command
         }
 
         _autoTrim = autoTrimToggle.CurrentValue;
+        _group = groupToggle.CurrentValue;
         SavePersistedOptions();
         continue;
       }
@@ -173,7 +180,15 @@ public sealed class vOffset : Command
         RhinoApp.WriteLine("vOffset: AutoTrim applies only to open source curves.");
       }
 
-      return new SourcePick(objRef.ObjectId, objRef.Object()?.RuntimeSerialNumber ?? 0, duplicate);
+      var sourceObject = objRef.Object();
+      var groupIndices = sourceObject?.Attributes.GetGroupList()
+        ?.Distinct()
+        .ToArray() ?? Array.Empty<int>();
+      return new SourcePick(
+        objRef.ObjectId,
+        sourceObject?.RuntimeSerialNumber ?? 0,
+        duplicate,
+        groupIndices);
     }
   }
 
@@ -184,13 +199,22 @@ public sealed class vOffset : Command
       section => ToolsOptionStore.TryGetBool(section, AutoTrimKey, out var value)
         ? value
         : _autoTrim);
+    _group = ToolsOptionStore.Read(
+      OptionsSectionName,
+      section => ToolsOptionStore.TryGetBool(section, GroupKey, out var value)
+        ? value
+        : _group);
   }
 
   private static void SavePersistedOptions()
   {
     _ = ToolsOptionStore.Update(
       OptionsSectionName,
-      section => section[AutoTrimKey] = _autoTrim);
+      section =>
+      {
+        section[AutoTrimKey] = _autoTrim;
+        section[GroupKey] = _group;
+      });
   }
 
   private static void CancelPendingOffset()
@@ -472,6 +496,9 @@ public sealed class vOffset : Command
           Log.Write("vOffset", "Final output add failed");
       }
 
+      if (pending.Group && outputIds.Count > 0)
+        ApplyOutputGroups(doc, pending, outputIds);
+
       if (deleteSource && !doc.Objects.Delete(pending.SourceId, true))
         Log.Write("vOffset", "Recorded DeleteInput failed source={0}", pending.SourceId);
     }
@@ -488,6 +515,42 @@ public sealed class vOffset : Command
       string.Join(",", outputIds),
       deleteSource);
     return outputIds;
+  }
+
+  private static void ApplyOutputGroups(
+    RhinoDoc doc,
+    PendingOffset pending,
+    IReadOnlyCollection<Guid> outputIds)
+  {
+    if (pending.SourceGroupIndices.Count > 0)
+    {
+      var applied = 0;
+      foreach (var groupIndex in pending.SourceGroupIndices)
+      {
+        if (doc.Groups.FindIndex(groupIndex) == null)
+          continue;
+
+        if (doc.Groups.AddToGroup(groupIndex, outputIds))
+          applied++;
+      }
+
+      Log.Write(
+        "vOffset",
+        "Applied source groups source={0} groups={1} outputs={2}",
+        pending.SourceId,
+        applied,
+        outputIds.Count);
+      return;
+    }
+
+    var groupIndexCreated = doc.Groups.Add(
+      new[] { pending.SourceId }.Concat(outputIds));
+    Log.Write(
+      "vOffset",
+      "Created source/output group source={0} group={1} outputs={2}",
+      pending.SourceId,
+      groupIndexCreated,
+      outputIds.Count);
   }
 
   private static List<Curve> FindTouchingDrivers(
@@ -849,7 +912,11 @@ public sealed class vOffset : Command
     return false;
   }
 
-  private sealed record SourcePick(Guid ObjectId, uint RuntimeSerialNumber, Curve Curve);
+  private sealed record SourcePick(
+    Guid ObjectId,
+    uint RuntimeSerialNumber,
+    Curve Curve,
+    IReadOnlyList<int> GroupIndices);
 
   private sealed record PendingOffset(
     uint DocSerial,
@@ -857,6 +924,8 @@ public sealed class vOffset : Command
     uint SourceRuntimeSerialNumber,
     Curve SourceCurve,
     bool AutoTrim,
+    bool Group,
+    IReadOnlyList<int> SourceGroupIndices,
     List<Curve> StartDrivers,
     List<Curve> EndDrivers);
 

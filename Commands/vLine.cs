@@ -4667,7 +4667,7 @@ public sealed class vLine : Command
       var undoResult = false;
       if (presentCount == pending.Outputs.Count)
       {
-        undoResult = RhinoApp.RunScript("_Undo", false);
+        undoResult = doc.Undo();
         rolledBack = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
       }
 
@@ -4729,7 +4729,7 @@ public sealed class vLine : Command
       var restored = false;
       if (pending.NextOutputIndex == 0)
       {
-        var redoResult = RhinoApp.RunScript("_Redo", false);
+        var redoResult = doc.Redo();
         restored = redoResult && pending.Outputs.All(output => IsPresent(doc, output.OriginalId));
         Log.Write(
           "vLine",

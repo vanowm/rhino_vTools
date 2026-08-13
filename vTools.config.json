@@ -69,8 +69,8 @@
   },
   "vMatch": {
     "distance": 2.0,
-    "randStart": false,
-    "randNext": false
+    "randStart": true,
+    "randNext": true
   },
   "vMiddleCurve": {
     "lines": true,
@@ -109,7 +109,8 @@
     "curve_sides": []
   },
   "vOffset": {
-    "autoTrim": false
+    "autoTrim": false,
+    "group": false
   },
   "vOverlaps": {
     "tolerance": 0.001,
@@ -144,7 +145,7 @@
     "pointDisplay": "Default"
   },
   "vSplitAtCorners": {
-    "angle": 45,
+    "angle": 30,
     "minLength": 0,
     "ignoreNotches": true
   },

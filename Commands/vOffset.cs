@@ -138,7 +138,6 @@ public sealed class vOffset : Command
       getter.EnableClearObjectsOnEntry(false);
       getter.EnableUnselectObjectsOnExit(false);
       getter.AcceptNumber(true, false);
-      getter.AcceptUndo(UndoHistory.Count > 0);
       getter.AcceptCustomMessage(true);
 
       var distanceOption = new OptionDouble(_distance, RhinoMath.ZeroTolerance, double.MaxValue);
@@ -164,13 +163,6 @@ public sealed class vOffset : Command
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
       getter.AddOptionToggle("Group", ref groupToggle);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
-      var undoOptionIndex = UndoHistory.Count > 0
-        ? getter.AddOption("Undo", string.Empty, true)
-        : -1;
-      var redoOptionIndex = RedoHistory.Count > 0
-        ? getter.AddOption("Redo", string.Empty, true)
-        : -1;
-
       var result = getter.Get();
 
       if (result == GetResult.CustomMessage &&
@@ -192,18 +184,6 @@ public sealed class vOffset : Command
       if (getter.CommandResult() != Result.Success)
         return null;
 
-      if (result == GetResult.Undo)
-      {
-        if (UndoHistory.Count == 0)
-        {
-          RhinoApp.WriteLine("vOffset: nothing to undo.");
-          continue;
-        }
-
-        historyRequest = false;
-        return null;
-      }
-
       if (result == GetResult.Number)
       {
         _distance = Math.Max(RhinoMath.ZeroTolerance, getter.Number());
@@ -216,18 +196,6 @@ public sealed class vOffset : Command
         var option = getter.Option();
         if (option == null)
           continue;
-
-        if (option.Index == undoOptionIndex)
-        {
-          historyRequest = false;
-          return null;
-        }
-
-        if (option.Index == redoOptionIndex)
-        {
-          historyRequest = true;
-          return null;
-        }
 
         if (option.Index == distanceOptionIndex)
           _distance = Math.Max(RhinoMath.ZeroTolerance, distanceOption.CurrentValue);
@@ -320,7 +288,6 @@ public sealed class vOffset : Command
       getter.SetCommandPrompt(_throughPoint ? "Point to offset through" : "Side to offset");
       getter.AcceptNothing(true);
       getter.AcceptNumber(true, false);
-      getter.AcceptUndo(UndoHistory.Count > 0);
       getter.AcceptCustomMessage(true);
 
       var distanceOption = new OptionDouble(_distance, RhinoMath.ZeroTolerance, double.MaxValue);
@@ -346,13 +313,6 @@ public sealed class vOffset : Command
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
       getter.AddOptionToggle("Group", ref groupToggle);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
-      var undoOptionIndex = UndoHistory.Count > 0
-        ? getter.AddOption("Undo", string.Empty, true)
-        : -1;
-      var redoOptionIndex = RedoHistory.Count > 0
-        ? getter.AddOption("Redo", string.Empty, true)
-        : -1;
-
       var result = getter.Get();
 
       if (result == GetResult.CustomMessage &&
@@ -374,14 +334,6 @@ public sealed class vOffset : Command
       if (getter.CommandResult() != Result.Success)
         return null;
 
-      if (result == GetResult.Undo)
-      {
-        if (UndoHistory.Count == 0)
-          continue;
-        historyRequest = false;
-        return null;
-      }
-
       if (result == GetResult.Number)
       {
         _distance = Math.Max(RhinoMath.ZeroTolerance, getter.Number());
@@ -394,18 +346,6 @@ public sealed class vOffset : Command
         var option = getter.Option();
         if (option == null)
           continue;
-
-        if (option.Index == undoOptionIndex)
-        {
-          historyRequest = false;
-          return null;
-        }
-
-        if (option.Index == redoOptionIndex)
-        {
-          historyRequest = true;
-          return null;
-        }
 
         if (option.Index == distanceOptionIndex)
           _distance = Math.Max(RhinoMath.ZeroTolerance, distanceOption.CurrentValue);

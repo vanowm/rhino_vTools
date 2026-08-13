@@ -81,7 +81,7 @@ internal static class HistoryBreakWarning
   private sealed class AffectedBodyConduit : DisplayConduit
   {
     private static readonly Color Orange = Color.FromArgb(255, 128, 0);
-    private static readonly Color Outline = Color.FromArgb(112, 48, 0);
+    private static readonly Color Outline = Color.FromArgb(155, 30, 100);
     private readonly RhinoDoc _doc;
     private readonly IReadOnlyCollection<Guid> _objectIds;
     private readonly DisplayMaterial _material = new(Orange)
@@ -96,6 +96,35 @@ internal static class HistoryBreakWarning
       _objectIds = objectIds;
     }
 
+    protected override void PostDrawObjects(DrawEventArgs e)
+    {
+      foreach (var objectId in _objectIds)
+      {
+        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        switch (geometry)
+        {
+          case Brep brep:
+            e.Display.DrawBrepShaded(brep, _material);
+            break;
+          case Extrusion extrusion:
+          {
+            using var extrusionBrep = extrusion.ToBrep();
+            if (extrusionBrep != null) e.Display.DrawBrepShaded(extrusionBrep, _material);
+            break;
+          }
+          case Surface surface:
+          {
+            using var surfaceBrep = surface.ToBrep();
+            if (surfaceBrep != null) e.Display.DrawBrepShaded(surfaceBrep, _material);
+            break;
+          }
+          case Mesh mesh:
+            e.Display.DrawMeshShaded(mesh, _material);
+            break;
+        }
+      }
+    }
+
     protected override void DrawForeground(DrawEventArgs e)
     {
       foreach (var objectId in _objectIds)
@@ -104,23 +133,22 @@ internal static class HistoryBreakWarning
         switch (geometry)
         {
           case Brep brep:
-            DrawBrep(e.Display, brep);
+            DrawBrepEdges(e.Display, brep);
             break;
           case Extrusion extrusion:
           {
             using var extrusionBrep = extrusion.ToBrep();
-            if (extrusionBrep != null) DrawBrep(e.Display, extrusionBrep);
+            if (extrusionBrep != null) DrawBrepEdges(e.Display, extrusionBrep);
             break;
           }
           case Surface surface:
           {
             using var surfaceBrep = surface.ToBrep();
-            if (surfaceBrep != null) DrawBrep(e.Display, surfaceBrep);
+            if (surfaceBrep != null) DrawBrepEdges(e.Display, surfaceBrep);
             break;
           }
           case Mesh mesh:
-            e.Display.DrawMeshShaded(mesh, _material);
-            e.Display.DrawMeshWires(mesh, Outline, 2);
+            e.Display.DrawMeshWires(mesh, Outline, 4);
             break;
           case Curve curve:
             e.Display.DrawCurve(curve, Outline, 5);
@@ -134,10 +162,10 @@ internal static class HistoryBreakWarning
       }
     }
 
-    private void DrawBrep(DisplayPipeline display, Brep brep)
+    private static void DrawBrepEdges(DisplayPipeline display, Brep brep)
     {
-      display.DrawBrepShaded(brep, _material);
-      display.DrawBrepWires(brep, Outline, 2);
+      foreach (var edge in brep.Edges)
+        display.DrawCurve(edge, Outline, 4);
     }
   }
 }

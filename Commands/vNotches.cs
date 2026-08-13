@@ -746,11 +746,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     Rhino.Commands.Command.EndCommand += commandEnded;
     _activeSession = s;
     _activeGetter = gp;
-    NotchShortcutSession? shortcutSession = null;
+    LocalUndoRedoShortcutSession? shortcutSession = null;
 
     try
     {
-      shortcutSession = new NotchShortcutSession();
+      shortcutSession = new LocalUndoRedoShortcutSession(
+        "vNotches",
+        redo => new NotchHistoryRequest(redo, "shortcut"));
       while (true)
       {
         if (s.PanelClosedExit) { FinalizeBlocks(doc, s); return; }
@@ -3271,61 +3273,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public string Source { get; }
   }
 
-  sealed class NotchShortcutSession : IDisposable
-  {
-    readonly string _undoMacro;
-    readonly string _redoMacro;
-    readonly string _alternateRedoMacro;
-    bool _restoreNeeded;
-
-    public NotchShortcutSession()
-    {
-      _undoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-        Rhino.ApplicationSettings.ShortcutKey.CtrlZ) ?? string.Empty;
-      _redoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-        Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
-      _alternateRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-        Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
-
-      try
-      {
-        _restoreNeeded = true;
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlZ, "'_vNotchesUndo");
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vNotchesRedo");
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vNotchesRedo");
-        vTools.Log.Write("vNotches", "installed temporary history shortcuts");
-      }
-      catch (Exception ex)
-      {
-        vTools.Log.Write("vNotches", $"failed to install history shortcuts: {ex.Message}");
-        Dispose();
-      }
-    }
-
-    public void Dispose()
-    {
-      if (!_restoreNeeded) return;
-      _restoreNeeded = false;
-      try
-      {
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlZ, _undoMacro);
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlY, _redoMacro);
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, _alternateRedoMacro);
-        vTools.Log.Write("vNotches", "restored history shortcuts");
-      }
-      catch (Exception ex)
-      {
-        vTools.Log.Write("vNotches", $"failed to restore history shortcuts: {ex.Message}");
-      }
-    }
-  }
-
   // ── Eto panel ─────────────────────────────────────────────────────────────
 
   sealed class NotchPanel : Eto.Forms.Form
@@ -4886,22 +4833,3 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
   }
 }
-
-[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
-public sealed class vNotchesUndo : Rhino.Commands.Command
-{
-  public override string EnglishName => "vNotchesUndo";
-
-  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
-    vNotches.RunLocalHistory(doc, redo: false, source: "shortcut");
-}
-
-[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
-public sealed class vNotchesRedo : Rhino.Commands.Command
-{
-  public override string EnglishName => "vNotchesRedo";
-
-  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
-    vNotches.RunLocalHistory(doc, redo: true, source: "shortcut");
-}
-

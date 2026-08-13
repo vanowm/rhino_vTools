@@ -1,12 +1,13 @@
-# vTools  ·  v26.8.12.1346
+# vTools  ·  v26.8.12.2049
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (47):
+- Native commands (48):
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
+  - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
   - [vCurveToSpline](#vcurvetospline-flow) *(26.4.24.934)* — converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement
@@ -38,7 +39,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vSetPt](#vsetpt-flow) *(26.5.28.1145)* — previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using the built-in SetPt
   - [vSmooth](#vsmooth-flow) *(26.8.4.0)* — adjusts a selected curve so it transitions smoothly (G1) into one or two connected neighbours by eliminating kinks at shared endpoints; per-end StrengthStart/StrengthEnd, Copy, and Join options
   - [vShow](#vshow-flow) *(26.7.22.1818)* — shows one named hidden-object set, or all named sets, without cancelling the command already in progress
-  - [vSplit](#vsplit-flow) *(26.7.9.1647)* — interactively splits selected curves at picked real point markers with cyan remove preview and point snapping
+  - [vSplit](#vsplit-flow) *(26.7.9.1647)* — interactively splits selected curves at picked real point markers with distinct add/remove colors and shapes plus point snapping
   - [vSplitAtCorners](#vsplitatcorners-flow) *(26.4.27.2125)* — splits curves at detected corners with interactive per-corner toggle preview
   - [vTangent](#vtangent-flow) *(26.5.5.757)* — moves a curve rigidly so one or both endpoints align tangentially to selected driver curves
   - [vTextAligned](#vtextaligned-flow) *(26.4.27.2125)* — places or repositions annotation text aligned and offset along a selected curve
@@ -100,7 +101,7 @@ Release output is written to:
 
 All command options persist by default unless stated otherwise.
 
-Native commands (45): [vBiminiParts](#vbiminiparts-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (48): [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -124,6 +125,19 @@ Native commands (45): [vBiminiParts](#vbiminiparts-flow), [vChamfer](#vchamfer-f
 Options:
 
 - `PipeSize`: selects a pipe size group which sets `MainPktDepth`, `SecPktDepth`, and optional `ExtraRect` dimensions. All groups are configurable in `vTools.config.json` under `vBiminiParts`.
+
+### vCenter flow
+
+1. Preselect geometry or select it after running `vCenter`; add or remove individual objects before pressing Enter, with group selection matching `vFitBox`.
+1. A point preview updates as the selection changes.
+1. Set `Method` from the option list or type `BoundingBox`, `Mass`, or `Objects` directly. The selected method is saved immediately.
+1. Press Enter to place a normal Rhino point on the current layer while preserving the source selection.
+
+Methods:
+
+- `BoundingBox`: center of the combined world-coordinate bounding box.
+- `Mass`: volume-weighted center for solids, otherwise area-weighted center, curve-length-weighted center, or the available point/fallback center.
+- `Objects`: equal-weight average of each selected object's natural volume, area, length, point, or bounding-box center.
 
 ### vChamfer flow
 
@@ -327,7 +341,7 @@ Hidden keywords while editing:
 ### vMatch flow
 
 1. Run `vMatch`.
-1. Click near an **edge-mate dot** (placed by `vUnrollSrf`) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance.
+1. Click near an **edge-mate dot** (placed by `vUnrollSrf`) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance, with the parts placed on opposite sides of the matched edges to avoid overlap. Auto assembly retains each transformed part's live dot positions and orientation while traversing the remaining matches.
 1. Options:
 
     - `Distance`: gap between matched edges.
@@ -547,8 +561,8 @@ Behavior:
 
 1. Run `vSplit`.
 1. Select curves to split.
-1. Click near selected curves to add real red point-object split markers; point picking is constrained to the chosen curves.
-1. Existing split markers are snap points; hover one to preview it in cyan, then click to remove it.
+1. Click near selected curves to add real warm-yellow circular point-object split markers; point picking is constrained to the chosen curves.
+1. Existing split markers are snap points; hover one to preview it as a cool-blue X, then click to remove it. Both marker states use a black halo and the configured pink outline so they remain visible over similarly colored curves.
 1. Press Enter to apply splitting and replace the original curves with split pieces.
 1. When splitting would break history, affected objects are shaded orange with a dark outline while a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
 1. Options:
@@ -675,9 +689,11 @@ Notes:
 ### vUnrollSrf flow
 
 1. Select surfaces, polysurfaces, or extrusions to unroll, then optionally select curves, points, or dots that should follow their nearest surface.
-1. Choose the output start point and adjust label, rotation, explode, split-face, property, spacing, and extents options.
-1. Flat parts receive matching labels and shared-edge `M###` dots for use with `vMatch`. Planar single-face parts are mapped exactly, ruled single-face parts retain their original UV control structure, and unsupported forms use RhinoCommon's tolerance-based unroller.
+1. Choose the output start point and adjust label, rotation, explode, split-face, property, spacing, extents, and output-layer options. `SurfaceLayer`, `LabelLayer`, and `DotLayer` use the shared searchable layer picker and are saved immediately when changed.
+1. Flat parts receive matching labels and shared-edge `M###` dots for use with `vMatch`. The default output layers are `Surface::Unrolled_surface`, `Surface::Unrolled_label`, and `Surface::Unrolled_dot`; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly, ruled single-face parts retain their original UV control structure, and unsupported forms use RhinoCommon's tolerance-based unroller.
 1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds. Pressing Enter at placement keeps each replacement in its prior flat-part position and orientation; specifying a point lays out the results from that point.
+
+Options persist to `vTools.config.json` under the `vUnrollSrf` section.
 
 ### vUzip flow
 

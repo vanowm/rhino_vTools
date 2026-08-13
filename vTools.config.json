@@ -1,4 +1,7 @@
 {
+  "vCenter": {
+    "method": "BoundingBox"
+  },
   "vChamfer": {
     "length": 0.1,
     "trim": true,
@@ -150,6 +153,20 @@
   "vTrim": {
     "extendAsLine": true,
     "joinAfterTrim": true
+  },
+  "vUnrollSrf": {
+    "labelMode": "Text",
+    "rotateFlatParts": true,
+    "edgeDots": true,
+    "explode": false,
+    "splitFaces": false,
+    "keepPropSurface": false,
+    "keepPropFollowing": true,
+    "layoutSpacing": 1.0,
+    "xExtents": 0.0,
+    "surfaceLayer": "Surface::Unrolled_surface",
+    "labelLayer": "Surface::Unrolled_label",
+    "dotLayer": "Surface::Unrolled_dot"
   },
   "vUzip": {
     "label": "",

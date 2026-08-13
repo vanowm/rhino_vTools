@@ -49,7 +49,6 @@ public sealed class vLine : Command
   private static string _layer = CurrentLayerOption;
 
   private static bool _debugMode = false;
-  internal static volatile bool _pendingLineRedo;
 
   /// <summary>
   /// Rhino command name.
@@ -106,7 +105,9 @@ public sealed class vLine : Command
     var pendingRedoEnds = new Stack<Point3d>(); // step-1 redo queues end here; step-2 redo completes it
 
     var continueChain = true;
-    using var vLineShortcutSession = new VLineShortcutSession();
+    using var shortcutSession = new LocalUndoRedoShortcutSession(
+      "vLine",
+      redo => redo ? "redo" : "undo");
     while (continueChain)
     {
       var segmentBothDefault = firstSegment ? initialBothSides : false;
@@ -116,8 +117,7 @@ public sealed class vLine : Command
       var canUndo = (chainModeState == ModePolyline && polylinePoints is { Count: >= 2 })
                  || (chainModeState == ModeChained   && lineHistory.Count > 0)
                  || (chainModeState == ModeMultiple); // always enabled: step-2 undo returns to start pick
-      // canRedo always true: AcceptString must be active in all modes so "r" is captured as String
-      // and silently ignored when nothing is on the redo stack, never falling through to Nothing.
+      // Keep the local redo route active in every mode.
       var canRedo = true;
       var secondResult = ResolveSecondPoint(
         doc,
@@ -614,7 +614,7 @@ public sealed class vLine : Command
     getPoint.EnableTransparentCommands(true);
     getPoint.AcceptNothing(true);
     if (canUndo) getPoint.AcceptUndo(true);
-    if (canRedo) getPoint.AcceptCustomMessage(true);
+    if (canUndo || canRedo) getPoint.AcceptCustomMessage(true);
     getPoint.DynamicDraw += (_, e) =>
       DrawHiddenLayerWarning(e, doc, layerSession);
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
@@ -648,8 +648,14 @@ public sealed class vLine : Command
       if (result == GetResult.Undo)
         return FirstPointResult.Undo(bothSides.CurrentValue, chainModeIndex);
 
-      if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string cm && cm == "redo")
-        return FirstPointResult.Redo(bothSides.CurrentValue, chainModeIndex);
+      if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string cm)
+      {
+        if (cm == "undo" && canUndo)
+          return FirstPointResult.Undo(bothSides.CurrentValue, chainModeIndex);
+        if (cm == "redo" && canRedo)
+          return FirstPointResult.Redo(bothSides.CurrentValue, chainModeIndex);
+        continue;
+      }
 
       if (result == GetResult.Point)
       {
@@ -1062,7 +1068,6 @@ public sealed class vLine : Command
     var angleRelative = new OptionToggle(initialAngleRelative, "Absolute", "Relative");
     var debugToggle = new OptionToggle(_debugMode, "Off", "On");
     if (canUndo) getPoint.AcceptUndo(true);
-    if (canRedo) getPoint.AcceptString(true);
 
     var mode = initialMode;
     var fromFirstPoint = initialFromFirstPoint;
@@ -2018,24 +2023,17 @@ public sealed class vLine : Command
 
         if (result == GetResult.Undo)
         {
-          vLine._pendingLineRedo = false;
           var undoState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
           return SecondPointResult.Undo(bothSides.CurrentValue, chainModeIndex, undoState);
         }
 
-        if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string customCmd && customCmd == "redo")
+        if (result == GetResult.CustomMessage && getPoint.CustomMessage() is string customCmd)
         {
-          var redoState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
-          return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, redoState);
-        }
-
-        if (result == GetResult.String)
-        {
-          if (canRedo && getPoint.StringResult().Trim().Equals("r", StringComparison.OrdinalIgnoreCase))
-          {
-            var redoState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
-            return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, redoState);
-          }
+          var historyState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
+          if (customCmd == "undo" && canUndo)
+            return SecondPointResult.Undo(bothSides.CurrentValue, chainModeIndex, historyState);
+          if (customCmd == "redo" && canRedo)
+            return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, historyState);
           continue;
         }
 
@@ -2378,11 +2376,6 @@ public sealed class vLine : Command
         }
 
         var fallbackState = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
-        if (vLine._pendingLineRedo)
-        {
-          vLine._pendingLineRedo = false;
-          return SecondPointResult.Redo(bothSides.CurrentValue, chainModeIndex, fallbackState);
-        }
         return SecondPointResult.None(bothSides.CurrentValue, chainModeIndex, fallbackState);
       }
     }
@@ -4642,58 +4635,6 @@ public sealed class vLine : Command
     double Angle,
     bool AngleRelative);
 
-  private sealed class VLineShortcutSession : IDisposable
-  {
-    readonly string _redoMacro;
-    readonly string _altRedoMacro;
-    bool _restoreNeeded;
-
-    public VLineShortcutSession()
-    {
-      _redoMacro    = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-        Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
-      _altRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-        Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
-      try
-      {
-        _restoreNeeded = true;
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vLineRedo");
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vLineRedo");
-        // Post redo message after vLineRedo finishes so it reaches the parent Get() correctly.
-        Rhino.Commands.Command.EndCommand += OnEndCommand;
-      }
-      catch { Dispose(); }
-    }
-
-    static void OnEndCommand(object? sender, Rhino.Commands.CommandEventArgs e)
-    {
-      if (string.Equals(e.CommandEnglishName, "vLineRedo", StringComparison.OrdinalIgnoreCase))
-      {
-        Log.Write("vLine", "EndCommand vLineRedo → posting redo message");
-        GetBaseClass.PostCustomMessage("redo");
-      }
-    }
-
-    public void Dispose()
-    {
-      if (!_restoreNeeded) return;
-      _restoreNeeded = false;
-      Rhino.Commands.Command.EndCommand -= OnEndCommand;
-      try
-      {
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlY,
-          string.IsNullOrEmpty(_redoMacro) ? "!_Redo" : _redoMacro);
-        Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ,
-          string.IsNullOrEmpty(_altRedoMacro) ? "!_Redo" : _altRedoMacro);
-      }
-      catch { }
-    }
-  }
-
   private readonly record struct FirstPointResult(
     bool HasPoint,
     Point3d Point,
@@ -4768,15 +4709,5 @@ public sealed class vLine : Command
 
     public static SecondPointResult Redo(bool bothSides, int chainMode, ConstraintState state)
       => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state) { IsRedo = true };
-  }
-}
-
-[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
-public sealed class vLineRedo : Command
-{
-  public override string EnglishName => "vLineRedo";
-  protected override Result RunCommand(RhinoDoc doc, RunMode mode)
-  {
-    return Result.Success;
   }
 }

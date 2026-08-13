@@ -31,6 +31,7 @@ public class vToolsPlugIn : PlugIn
 
     Log.Initialize();
     Log.Write($"startup  rhino={RhinoApp.Version}  version={version}  dll={asm.Location}");
+    LocalUndoRedoShortcutSession.RepairStaleShortcutMacros();
     FpsDisplay.Start();
     CommandFailSoundMonitor.Start();
     HideSetState.StartPolling();

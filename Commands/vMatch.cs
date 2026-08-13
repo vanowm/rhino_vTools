@@ -40,8 +40,6 @@ namespace vTools.Commands
     private static bool   _randNext   = false;
 
     private static readonly Random _rng = new Random();
-    private static RhinoDoc? _activeHistoryDocument;
-    private static GetPoint? _activeHistoryGetter;
 
     private const double EdgeHoverRadiusPixels = 12.0;
     private static readonly Color SourceEdgeHighlightColor = Color.Orange;
@@ -51,20 +49,10 @@ namespace vTools.Commands
 
     public override string EnglishName => "vMatch";
 
-    internal static Result RunLocalHistory(RhinoDoc doc, bool redo)
-    {
-      if (_activeHistoryDocument != doc || _activeHistoryGetter == null)
-        return Result.Nothing;
-
-      GetBaseClass.PostCustomMessage(new MatchHistoryRequest(redo));
-      vTools.Log.Write("vMatch", $"shortcut {(redo ? "redo" : "undo")} requested");
-      return Result.Success;
-    }
-
     // ── Dot record ─────────────────────────────────────────────────────────
     private sealed class Dot
     {
-      public Guid    Id       { get; }
+      public Guid    Id       { get; set; }
       public Point3d Position { get; set; }
       public string  MateId   { get; }
       public string  PartNum  { get; }
@@ -105,61 +93,6 @@ namespace vTools.Commands
     {
       public bool Redo { get; }
       public MatchHistoryRequest(bool redo) { Redo = redo; }
-    }
-
-    private sealed class MatchShortcutSession : IDisposable
-    {
-      private readonly string _undoMacro;
-      private readonly string _redoMacro;
-      private readonly string _alternateRedoMacro;
-      private bool _restoreNeeded;
-
-      public MatchShortcutSession()
-      {
-        _undoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlZ) ?? string.Empty;
-        _redoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.CtrlY) ?? string.Empty;
-        _alternateRedoMacro = Rhino.ApplicationSettings.ShortcutKeySettings.GetMacro(
-          Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ) ?? string.Empty;
-
-        try
-        {
-          _restoreNeeded = true;
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.CtrlZ, "'_vMatchUndo");
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.CtrlY, "'_vMatchRedo");
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, "'_vMatchRedo");
-          vTools.Log.Write("vMatch", "installed temporary history shortcuts");
-        }
-        catch (Exception ex)
-        {
-          vTools.Log.Write("vMatch", $"failed to install history shortcuts: {ex.Message}");
-          Dispose();
-        }
-      }
-
-      public void Dispose()
-      {
-        if (!_restoreNeeded) return;
-        _restoreNeeded = false;
-        try
-        {
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.CtrlZ, _undoMacro);
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.CtrlY, _redoMacro);
-          Rhino.ApplicationSettings.ShortcutKeySettings.SetMacro(
-            Rhino.ApplicationSettings.ShortcutKey.ShiftCtrlZ, _alternateRedoMacro);
-          vTools.Log.Write("vMatch", "restored history shortcuts");
-        }
-        catch (Exception ex)
-        {
-          vTools.Log.Write("vMatch", $"failed to restore history shortcuts: {ex.Message}");
-        }
-      }
     }
 
     private sealed class MateEdgePicker : GetPoint
@@ -251,12 +184,11 @@ namespace vTools.Commands
       var undoMoves = new Stack<MatchMove>();
       var redoMoves = new Stack<MatchMove>();
       var mateEdges = BuildMateEdges(doc, dots);
-      _activeHistoryDocument = doc;
-      using var shortcutSession = new MatchShortcutSession();
-      try
+      using var shortcutSession = new LocalUndoRedoShortcutSession(
+        "vMatch",
+        redo => new MatchHistoryRequest(redo));
+      while (true)
       {
-        while (true)
-        {
           var gp = new MateEdgePicker(doc, dots, mateEdges);
           gp.EnableTransparentCommands(true);
           gp.SetCommandPrompt("Click a highlighted edge to match its part");
@@ -268,19 +200,18 @@ namespace vTools.Commands
           gp.AcceptUndo(true);
           gp.AcceptCustomMessage(true);
 
-          _activeHistoryGetter = gp;
           var res = gp.Get();
-          _activeHistoryGetter = null;
           var src = gp.SourceDot;
           var mate = gp.MateDot;
           gp.ReleaseSnap();
+          if (res != GetResult.Point)
+            doc.Views.Redraw();
 
           if (res == GetResult.CustomMessage &&
               gp.CustomMessage() is MatchHistoryRequest historyRequest)
           {
-            if (ApplyMatchHistory(doc, undoMoves, redoMoves, historyRequest.Redo, out int changedGroup))
+            if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, historyRequest.Redo, out int changedGroup))
             {
-              dots = ScanDots(doc);
               RefreshMateEdges(doc, dots, mateEdges, changedGroup);
             }
             continue;
@@ -288,9 +219,8 @@ namespace vTools.Commands
 
           if (res == GetResult.Undo)
           {
-            if (ApplyMatchHistory(doc, undoMoves, redoMoves, false, out int changedGroup))
+            if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, false, out int changedGroup))
             {
-              dots = ScanDots(doc);
               RefreshMateEdges(doc, dots, mateEdges, changedGroup);
             }
             continue;
@@ -310,9 +240,8 @@ namespace vTools.Commands
             var opt = gp.Option();
             if (opt != null && opt.Index == idxRedo)
             {
-              if (ApplyMatchHistory(doc, undoMoves, redoMoves, true, out int changedGroup))
+              if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, true, out int changedGroup))
               {
-                dots = ScanDots(doc);
                 RefreshMateEdges(doc, dots, mateEdges, changedGroup);
               }
               continue;
@@ -345,6 +274,7 @@ namespace vTools.Commands
 
           SaveSettings();
           if (src == null || mate == null) continue;
+          var moveTimer = System.Diagnostics.Stopwatch.StartNew();
 
           int srcGrp  = GrpOf(doc, src.Id);
           int mateGrp = GrpOf(doc, mate.Id);
@@ -362,22 +292,25 @@ namespace vTools.Commands
           var target = new Point3d(src.Position.X + srcOut.X * _distance,
                                    src.Position.Y + srcOut.Y * _distance, 0.0);
 
+          vTools.Log.Write("vMatch",
+            $"match id={src.MateId} source_part={src.PartNum} mate_part={mate.PartNum}" +
+            $" src_tangent={srcTang.Value} mate_tangent={mateTang.Value}" +
+            $" source_out={srcOut} distance={_distance:G}");
+
           var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
                                mate.Position, mateTang.Value, mateObjs);
           if (!xf.HasValue || !xf.Value.TryGetInverse(out var inverse)) continue;
 
           var move = new MatchMove(mateObjs, xf.Value, inverse);
-          if (!ApplyMatchMove(doc, move, true)) continue;
+          if (!ApplyMatchMove(doc, dots, move, true)) continue;
+          long transformMilliseconds = moveTimer.ElapsedMilliseconds;
           undoMoves.Push(move);
           redoMoves.Clear();
-          dots = ScanDots(doc);
           RefreshMateEdges(doc, dots, mateEdges, mateGrp);
-        }
-      }
-      finally
-      {
-        _activeHistoryGetter = null;
-        _activeHistoryDocument = null;
+          vTools.Log.Write("vMatch",
+            $"move timing transform={transformMilliseconds}ms" +
+            $" refresh={moveTimer.ElapsedMilliseconds - transformMilliseconds}ms" +
+            $" total={moveTimer.ElapsedMilliseconds}ms objects={mateObjs.Count}");
       }
 
       return Result.Success;
@@ -385,6 +318,7 @@ namespace vTools.Commands
 
     private static bool ApplyMatchHistory(
       RhinoDoc doc,
+      IReadOnlyList<Dot> dots,
       Stack<MatchMove> undoMoves,
       Stack<MatchMove> redoMoves,
       bool redo,
@@ -396,7 +330,7 @@ namespace vTools.Commands
       if (!source.TryPop(out var move))
         return false;
 
-      if (!ApplyMatchMove(doc, move, redo))
+      if (!ApplyMatchMove(doc, dots, move, redo))
       {
         source.Push(move);
         return false;
@@ -408,20 +342,19 @@ namespace vTools.Commands
       return true;
     }
 
-    private static bool ApplyMatchMove(RhinoDoc doc, MatchMove move, bool forward)
+    private static bool ApplyMatchMove(
+      RhinoDoc doc,
+      IReadOnlyList<Dot> dots,
+      MatchMove move,
+      bool forward)
     {
       var transform = forward ? move.Forward : move.Reverse;
-      var transformedIds = new List<Guid>(move.ObjectIds.Count);
+      List<Guid> transformedIds;
 
       doc.Views.RedrawEnabled = false;
       try
       {
-        foreach (var id in move.ObjectIds)
-        {
-          var transformedId = doc.Objects.Transform(id, transform, true);
-          if (transformedId != Guid.Empty)
-            transformedIds.Add(transformedId);
-        }
+        transformedIds = TransformObjectsAndDots(doc, dots, move.ObjectIds, transform);
       }
       finally
       {
@@ -434,6 +367,39 @@ namespace vTools.Commands
       move.ObjectIds = transformedIds;
       doc.Views.Redraw();
       return true;
+    }
+
+    private static List<Guid> TransformObjectsAndDots(
+      RhinoDoc doc,
+      IReadOnlyList<Dot> dots,
+      IEnumerable<Guid> objectIds,
+      Transform transform)
+    {
+      var ids = objectIds.ToList();
+      var transformedIds = new List<Guid>(ids.Count);
+      var replacements = new Dictionary<Guid, Guid>(ids.Count);
+      foreach (var id in ids)
+      {
+        var transformedId = doc.Objects.Transform(id, transform, true);
+        if (transformedId == Guid.Empty)
+          continue;
+
+        transformedIds.Add(transformedId);
+        replacements[id] = transformedId;
+      }
+
+      foreach (var dot in dots)
+      {
+        if (!replacements.TryGetValue(dot.Id, out var transformedId))
+          continue;
+
+        var position = dot.Position;
+        position.Transform(transform);
+        dot.Id = transformedId;
+        dot.Position = position;
+      }
+
+      return transformedIds;
     }
 
     // ── Auto sub-mode — inner loop with persistent multi-selection ─────────
@@ -577,9 +543,6 @@ namespace vTools.Commands
 
         var placed = new HashSet<int> { rootGrp };
         var queue  = new List<int>    { rootGrp };
-        // Working cached dot positions updated after each move
-        var dotPts = allDots.ToDictionary(d => d.Id, d => d.Position);
-
         doc.Views.RedrawEnabled = false;
         try
         {
@@ -599,33 +562,31 @@ namespace vTools.Commands
               int mateGrp = GrpOf(doc, mateInfo.Id);
               if (!selGrpSet.Contains(mateGrp) || placed.Contains(mateGrp)) continue;
 
-              var srcDotPt  = dotPts[src.Id];
+              var srcDotPt  = src.Position;
               var srcObjs   = ObjsInGrp(doc, currGrp);
               var mateObjs  = ObjsInGrp(doc, mateGrp);
               if (srcObjs.Count == 0 || mateObjs.Count == 0) continue;
 
               var srcTang  = Tang2d(srcDotPt,           NakedEdges(doc, srcObjs));
-              var mateTang = Tang2d(dotPts[mateInfo.Id], NakedEdges(doc, mateObjs));
+              var mateTang = Tang2d(mateInfo.Position, NakedEdges(doc, mateObjs));
               if (srcTang == null || mateTang == null) continue;
 
               var srcOut = Outward2d(doc, srcDotPt, srcTang.Value, srcObjs);
               var target = new Point3d(srcDotPt.X + srcOut.X * distance,
                                        srcDotPt.Y + srcOut.Y * distance, 0.0);
 
+              vTools.Log.Write("vMatch",
+                $"auto match id={src.MateId} source_part={src.PartNum}" +
+                $" mate_part={mateInfo.PartNum} source_group={currGrp}" +
+                $" mate_group={mateGrp} source_out={srcOut}");
+
               var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
-                                   dotPts[mateInfo.Id], mateTang.Value, mateObjs);
+                                   mateInfo.Position, mateTang.Value, mateObjs);
               if (!xf.HasValue) continue;
 
-              foreach (var id in mateObjs)
-                doc.Objects.Transform(id, xf.Value, true);
-
-              // Update cached positions for moved group's dots
-              foreach (var d in allDots.Where(d2 => GrpOf(doc, d2.Id) == mateGrp))
-              {
-                var pt = dotPts[d.Id];
-                pt.Transform(xf.Value);
-                dotPts[d.Id] = pt;
-              }
+              var movedIds = TransformObjectsAndDots(doc, allDots, mateObjs, xf.Value);
+              if (movedIds.Count == 0)
+                continue;
 
               placed.Add(mateGrp);
               queue.Add(mateGrp);
@@ -979,35 +940,63 @@ namespace vTools.Commands
       var pa = new Vector3d(-ty,  tx, 0.0); // 90° CCW
       var pb = new Vector3d( ty, -tx, 0.0); // 90° CW
 
-      double tol = doc.ModelAbsoluteTolerance;
-      double eps = Math.Max(tol * 20.0, 2.0);
-      var testA  = new Point3d(dotPt.X + pa.X * eps, dotPt.Y + pa.Y * eps, 0.0);
-      var testB  = new Point3d(dotPt.X + pb.X * eps, dotPt.Y + pb.Y * eps, 0.0);
-
-      foreach (var id in srcIds)
+      double tol = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+      var sourceIds = srcIds.ToList();
+      var box = BoundingBox.Empty;
+      bool hasBox = false;
+      foreach (var id in sourceIds)
       {
         var obj = doc.Objects.FindId(id);
-        Brep? brep = null;
-        if      (obj?.Geometry is Brep    b) brep = b;
-        else if (obj?.Geometry is Extrusion e) brep = e.ToBrep();
-        else if (obj?.Geometry is Surface  s) brep = s.ToBrep();
-        if (brep == null) continue;
-
-        bool aIn = false, bIn = false;
-        foreach (var face in brep.Faces)
+        var objectBox = obj?.Geometry.GetBoundingBox(true) ?? BoundingBox.Empty;
+        if (objectBox.IsValid)
         {
-          TestFacePoint(face, testA, tol, ref aIn);
-          TestFacePoint(face, testB, tol, ref bIn);
+          if (hasBox) box.Union(objectBox);
+          else { box = objectBox; hasBox = true; }
         }
-        if (aIn && !bIn) return pb;
-        if (bIn && !aIn) return pa;
+      }
+
+      double scale = hasBox ? Math.Max(box.Diagonal.Length, tol * 100.0) : tol * 100.0;
+      double start = Math.Max(tol * 2.0, scale * 1.0e-7);
+      double limit = Math.Max(start, Math.Min(scale * 0.02, tol * 100.0));
+      for (double eps = start; eps <= limit * 1.001; eps *= 2.0)
+      {
+        var testA = new Point3d(dotPt.X + pa.X * eps, dotPt.Y + pa.Y * eps, 0.0);
+        var testB = new Point3d(dotPt.X + pb.X * eps, dotPt.Y + pb.Y * eps, 0.0);
+        bool aIn = false;
+        bool bIn = false;
+        foreach (var id in sourceIds)
+        {
+          var obj = doc.Objects.FindId(id);
+          Brep? brep = null;
+          if      (obj?.Geometry is Brep    b) brep = b;
+          else if (obj?.Geometry is Extrusion e) brep = e.ToBrep();
+          else if (obj?.Geometry is Surface  s) brep = s.ToBrep();
+          if (brep == null) continue;
+
+          foreach (var face in brep.Faces)
+          {
+            TestFacePoint(face, testA, tol, ref aIn);
+            TestFacePoint(face, testB, tol, ref bIn);
+          }
+        }
+        if (aIn != bIn)
+        {
+          var outward = aIn ? pb : pa;
+          vTools.Log.Write("vMatch",
+            $"outward local point={dotPt} epsilon={eps:G6}" +
+            $" a_inside={aIn} b_inside={bIn} result={outward}");
+          return outward;
+        }
       }
 
       // Fallback: centroid direction
-      var centroid = AreaCentroid2d(doc, srcIds);
+      var centroid = AreaCentroid2d(doc, sourceIds);
       if (!centroid.HasValue) return pa;
       var diff = dotPt - centroid.Value;
-      return (-ty * diff.X + tx * diff.Y) >= 0.0 ? pa : pb;
+      var fallback = (-ty * diff.X + tx * diff.Y) >= 0.0 ? pa : pb;
+      vTools.Log.Write("vMatch",
+        $"outward centroid point={dotPt} centroid={centroid.Value} result={fallback}");
+      return fallback;
     }
 
     private static void TestFacePoint(BrepFace face, Point3d pt, double tol, ref bool inside)
@@ -1026,8 +1015,9 @@ namespace vTools.Commands
     /// <summary>
     /// Builds the rigid transform that moves <paramref name="mateDot"/> to
     /// <paramref name="target"/> and aligns the mate edge tangent to
-    /// src_tang (antiparallel first, then parallel).  Picks the rotation
-    /// that places the most of the mate's bbox volume on the outward side.
+    /// src_tang (antiparallel first, then parallel). Picks the rotation whose
+    /// moved-part exterior points back toward the source, placing the moved
+    /// part's interior on the source edge's outward side.
     /// </summary>
     private static Transform? PlaceXform(
         RhinoDoc doc,
@@ -1035,7 +1025,11 @@ namespace vTools.Commands
         Point3d mateDot, Vector3d mateTang, List<Guid> mateIds)
     {
       Transform? best = null;
-      double bestScore = double.MinValue;
+      double bestSideScore = double.MinValue;
+      double bestCentroidScore = double.MinValue;
+      var mateOut = Outward2d(doc, mateDot, mateTang, mateIds);
+      var mateCentroid = AreaCentroid2d(doc, mateIds);
+      int candidateIndex = 0;
 
       foreach (var (fx, fy) in new[] { (-srcTang.X, -srcTang.Y), (srcTang.X, srcTang.Y) })
       {
@@ -1044,21 +1038,40 @@ namespace vTools.Commands
         var xf = Transform.Translation(target - mateDot)
                * Transform.Rotation(angle, Vector3d.ZAxis, mateDot);
 
-        double score = 0.0;
-        foreach (var id in mateIds)
+        var transformedOut = mateOut;
+        transformedOut.Transform(xf);
+        transformedOut.Z = 0.0;
+        if (!transformedOut.Unitize())
+          transformedOut = mateOut;
+        double sideScore = -(transformedOut.X * srcOut.X + transformedOut.Y * srcOut.Y);
+
+        double centroidScore = 0.0;
+        if (mateCentroid.HasValue)
         {
-          var bb = doc.Objects.FindId(id)?.Geometry.GetBoundingBox(true) ?? BoundingBox.Empty;
-          if (!bb.IsValid) continue;
-          foreach (var corner in bb.GetCorners())
-          {
-            var pt = corner;
-            pt.Transform(xf);
-            var d = pt - target;
-            score += d.X * srcOut.X + d.Y * srcOut.Y;
-          }
+          var transformedCentroid = mateCentroid.Value;
+          transformedCentroid.Transform(xf);
+          var centroidOffset = transformedCentroid - target;
+          centroidScore = centroidOffset.X * srcOut.X + centroidOffset.Y * srcOut.Y;
         }
-        if (score > bestScore) { bestScore = score; best = xf; }
+
+        vTools.Log.Write("vMatch",
+          $"candidate={candidateIndex} angle_deg={RhinoMath.ToDegrees(angle):G6}" +
+          $" moved_out={transformedOut} side_score={sideScore:G6}" +
+          $" centroid_score={centroidScore:G6}");
+
+        if (sideScore > bestSideScore + 1.0e-9 ||
+            Math.Abs(sideScore - bestSideScore) <= 1.0e-9 && centroidScore > bestCentroidScore)
+        {
+          bestSideScore = sideScore;
+          bestCentroidScore = centroidScore;
+          best = xf;
+        }
+        candidateIndex++;
       }
+
+      vTools.Log.Write("vMatch",
+        $"orientation chosen side_score={bestSideScore:G6}" +
+        $" centroid_score={bestCentroidScore:G6} mate_out={mateOut}");
       return best;
     }
 
@@ -1098,21 +1111,4 @@ namespace vTools.Commands
     }
   }
 
-  [CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
-  public sealed class vMatchUndo : Command
-  {
-    public override string EnglishName => "vMatchUndo";
-
-    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
-      vMatch.RunLocalHistory(doc, redo: false);
-  }
-
-  [CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable | Style.DoNotRepeat)]
-  public sealed class vMatchRedo : Command
-  {
-    public override string EnglishName => "vMatchRedo";
-
-    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
-      vMatch.RunLocalHistory(doc, redo: true);
-  }
 }

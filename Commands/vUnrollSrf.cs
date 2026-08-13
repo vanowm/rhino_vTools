@@ -25,7 +25,15 @@ namespace vTools.Commands
   {
     public override string EnglishName => "vUnrollSrf";
 
-    private const string TextLayerName = "Reference";
+    private const string SettingsSection = "vUnrollSrf";
+    private const string CurrentLayerOption = "*Current*";
+    private const string OutputLayerParent = "Surface";
+    private const string DefaultSurfaceLayerName = "Unrolled_surface";
+    private const string DefaultLabelLayerName = "Unrolled_label";
+    private const string DefaultDotLayerName = "Unrolled_dot";
+    private const string DefaultSurfaceLayerPath = OutputLayerParent + "::" + DefaultSurfaceLayerName;
+    private const string DefaultLabelLayerPath = OutputLayerParent + "::" + DefaultLabelLayerName;
+    private const string DefaultDotLayerPath = OutputLayerParent + "::" + DefaultDotLayerName;
     private const string TextObjectName = "MultiUnroll_NumberLabel";
     private const string FailureMarkerName = "MultiUnroll_FailedMarker";
     private const string LabelNumberKey = "MultiUnrollLabelNumber";
@@ -66,6 +74,9 @@ namespace vTools.Commands
     private static double _xExtents = 0.0;
     private static bool   _edgeDots = true;
     private static bool   _splitFaces = false;
+    private static string _surfaceLayer = DefaultSurfaceLayerPath;
+    private static string _labelLayer = DefaultLabelLayerPath;
+    private static string _dotLayer = DefaultDotLayerPath;
 
     // Edge-mate dot constants (match MultiUnroll2.py / vMatch.cs)
     private const string EdgeMateName        = vMatch.EdgeMateName;
@@ -75,11 +86,14 @@ namespace vTools.Commands
     private const string EdgeMateReversedKey = vMatch.EdgeMateReversedKey;
     private const string EdgeIndexKey        = "MultiUnrollEdgeIndex";
     private const string MateEdgeIndexKey    = "MultiUnrollMateEdgeIndex";
+    private const string EdgeIndexModeKey    = "MultiUnrollEdgeIndexMode";
+    private const string TopologyEdgeMode    = "Topology";
     private const string EdgeMatePrefix      = "M";
     private const int    EdgeMateDotSize     = 10;
     private const double EdgeMateTolFactor   = 25.0;
     private const double EdgeMateDiagFactor  = 1.0e-4;
     private const int    EdgeMateSamples     = 7;
+    private const int    LabelInteriorSamples = 17;
 
     // ── Debug logging ─────────────────────────────────────────────────────
     private static void Dbg(string msg) => vTools.Log.Write("vUnrollSrf", msg);
@@ -91,23 +105,26 @@ namespace vTools.Commands
 
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
+      LoadSettings();
       Dbg($"run start model_tol={doc.ModelAbsoluteTolerance:G} doc={doc.Path}");
       var startIds = SelectedIds(doc);
-      var surfaceIds = GetSurfaceIds(doc, startIds.Where(IsSurfaceLikeId).ToList());
+      var surfaceIds = GetSurfaceIds(doc, startIds.Where(IsSurfaceLikeId).ToList(), mode);
       if (surfaceIds == null || surfaceIds.Count == 0)
       {
         RestoreSelection(doc, startIds);
         return Result.Cancel;
       }
 
-      var followingIds = GetFollowingIds(doc, startIds.Where(IsFollowingLikeId).ToList(), surfaceIds);
+      var followingIds = GetFollowingIds(
+        doc, startIds.Where(IsFollowingLikeId).ToList(), surfaceIds, mode);
       if (followingIds == null)
       {
         RestoreSelection(doc, startIds);
         return Result.Cancel;
       }
 
-      var options = GetLayoutOptions(doc, "Start point for unrolls - press Enter for world 0");
+      var options = GetLayoutOptions(
+        doc, "Start point for unrolls - press Enter for world 0", mode);
       if (options == null)
       {
         RestoreSelection(doc, startIds);
@@ -122,6 +139,9 @@ namespace vTools.Commands
       _layoutSpacing = options.LayoutSpacing;
       _xExtents = options.XExtents;
       _splitFaces = options.SplitFaces;
+      _surfaceLayer = options.SurfaceLayer;
+      _labelLayer = options.LabelLayer;
+      _dotLayer = options.DotLayer;
 
       var sources = new List<SourceSurface>();
       foreach (var id in surfaceIds)
@@ -321,16 +341,44 @@ namespace vTools.Commands
                     var flat = uv != null ? ff.Pushup(uv, tol) : null;
                     if (flat != null) mc.Add(flat);
                   }
-                  foreach (var p in points)
-                    if (sf.ClosestPoint(p.Location, out double u, out double v))
-                      mp.Add(ff.PointAt(u, v));
-                  foreach (var dot in followingDots)
-                  {
-                    if (!sf.ClosestPoint(dot.Point, out double u, out double v)) continue;
-                    var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? "", dot.Point);
-                    copy.Point = ff.PointAt(u, v);
-                    md.Add(copy);
-                  }
+                }
+
+                foreach (var point in points)
+                {
+                  if (TryMapPointToUnrolledBrep(
+                    src.Brep, unrolledBreps[0], point.Location, null,
+                    out var mappedPoint, out _))
+                    mp.Add(mappedPoint);
+                }
+
+                foreach (var dot in followingDots)
+                {
+                  int? preferredEdgeIndex = edgeMateHelperDots.TryGetValue(
+                    dot.Text ?? string.Empty, out var edgeRecord)
+                    ? edgeRecord.EdgeIndex
+                    : null;
+                  if (!TryMapPointToUnrolledBrep(
+                    src.Brep, unrolledBreps[0], dot.Point, preferredEdgeIndex,
+                    out var mappedPoint, out int mappedFace))
+                    continue;
+
+                  int mappedFlatEdge = -1;
+                  if (preferredEdgeIndex.HasValue &&
+                      TryMapPointToFlatEdge(
+                        src.Brep, unrolledBreps[0], dot.Point,
+                        preferredEdgeIndex.Value, mappedFace, mappedPoint,
+                        out var edgePoint, out mappedFlatEdge))
+                    mappedPoint = edgePoint;
+
+                  var copy = dot.Duplicate() as TextDot ??
+                    new TextDot(dot.Text ?? string.Empty, dot.Point);
+                  copy.Point = mappedPoint;
+                  md.Add(copy);
+                  if (preferredEdgeIndex.HasValue)
+                    Dbg($"part={number} edge_helper_map id={edgeRecord!.MateId}" +
+                        $" edge={preferredEdgeIndex.Value} face={mappedFace}" +
+                        $" flat_edge={mappedFlatEdge}" +
+                        $" point={P(mappedPoint)}");
                 }
                 unrolledCurves = mc.ToArray();
                 unrolledPoints = mp.ToArray();
@@ -366,6 +414,7 @@ namespace vTools.Commands
           done++;
 
           var outputIds = new List<Guid>();
+          var surfaceOutputIds = new List<Guid>();
           var followingOutputPairs = new List<(Guid srcId, Guid outId)>(); // source-ID → flat output-ID for KeepPropFollowing
           var curveOutputIds    = new List<Guid>();
           // Compute flat midpoints via UV projection (source face → flat face) — no extra geometry added to unroller.
@@ -386,7 +435,13 @@ namespace vTools.Commands
             ? (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps)
             : unrolledBreps;
           foreach (var brep in finalBreps)
-            AddValid(outputIds, doc.Objects.AddBrep(brep));
+          {
+            var surfaceId = doc.Objects.AddBrep(
+              brep,
+              new ObjectAttributes { LayerIndex = SurfaceOutputLayerIndex(doc) });
+            AddValid(outputIds, surfaceId);
+            AddValid(surfaceOutputIds, surfaceId);
+          }
 
           var edgeFlatPoints = new Dictionary<(string, int, int), Point3d>();
           if (unrolledCurves != null)
@@ -513,15 +568,21 @@ namespace vTools.Commands
           }
 
           var unrolledLabelIds = new List<Guid>();
+          double finalLabelHeight = frame?.Height ?? 1.0;
           if (frame != null && labelPoint.HasValue)
           {
+            finalLabelHeight = FitFlatLabelHeight(
+              unrolledBreps, display, labelPoint.Value, unrolledY,
+              frame.Height, doc.ModelAbsoluteTolerance);
+            Dbg($"part={number} label_fit requested={frame.Height:G6}" +
+                $" fitted={finalLabelHeight:G6}");
             if (addText)
             {
               // Keep the raw unrolled up direction as the orientation marker, but do not use
               // the raw frame normal for flat labels. If the unrolled helper frame lands with
               // a -Z normal, annotation text becomes mirrored in Top view. World +Z keeps the
               // text readable while preserving the same unrolled Y/up direction.
-              AddValid(unrolledLabelIds, AddFlatText(doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis, frame.Height, src.Id, _keepPropSurface));
+              AddValid(unrolledLabelIds, AddFlatText(doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis, finalLabelHeight, src.Id, _keepPropSurface));
             }
             else if (addDots)
             {
@@ -533,7 +594,8 @@ namespace vTools.Commands
           if (_keepPropSurface)
           {
             TransferAttributes(doc, outputIds, src.Id);
-            PutOnReferenceLayer(doc, unrolledLabelIds);
+            PutOnLayer(doc, surfaceOutputIds, SurfaceOutputLayerIndex(doc));
+            PutOnLayer(doc, unrolledLabelIds, LabelOutputLayerIndex(doc));
           }
           if (_keepPropFollowing && followingOutputPairs.Count > 0)
           {
@@ -552,18 +614,20 @@ namespace vTools.Commands
 
           if (addLabels && frame != null && (priorOutput == null || !priorOutput.MemberIds.Contains(src.Id)))
           {
-            EnsureOriginalLabel(doc, src.Id, number, display, frame, addText, addDots, _keepPropSurface);
+            EnsureOriginalLabel(doc, src.Id, number, display, frame, finalLabelHeight, addText, addDots, _keepPropSurface);
           }
 
           // Place edge mate dots on flat output
           if (edgeFlatPoints.Count > 0)
           {
-            int refLayerIdx = ReferenceLayerIndex(doc);
+            int dotLayerIdx = -1;
             foreach (var rec in UniqueEdgeMateRecords(edgeMateRecords))
             {
               var key = (rec.MateId, rec.EdgeIndex, rec.MatePartIndex);
               if (!edgeFlatPoints.TryGetValue(key, out var flatPt)) continue;
-              var dotId = AddEdgeMateDot(doc, rec, flatPt, number, refLayerIdx);
+              if (dotLayerIdx < 0)
+                dotLayerIdx = DotOutputLayerIndex(doc);
+              var dotId = AddEdgeMateDot(doc, rec, flatPt, number, dotLayerIdx);
               if (IsValidId(dotId))
                 outputIds.Add(dotId);
             }
@@ -620,6 +684,8 @@ namespace vTools.Commands
             // starts from the previous part's top-right corner and the layout drifts diagonally.
             nextPoint = new Point3d(target.X + width + _layoutSpacing, rowY, options.StartPoint.Z);
           }
+
+          LogFlatOutput(doc, number, outputIds);
         }
       }
       finally
@@ -631,6 +697,7 @@ namespace vTools.Commands
       }
 
       _xExtents = xLimit;
+      SaveSettings();
 
       if (exceeded)
       {
@@ -649,7 +716,10 @@ namespace vTools.Commands
       return done > 0 ? Result.Success : Result.Nothing;
     }
 
-    private static List<Guid>? GetSurfaceIds(RhinoDoc doc, List<Guid> preselected)
+    private static List<Guid>? GetSurfaceIds(
+      RhinoDoc doc,
+      List<Guid> preselected,
+      RunMode runMode)
     {
       preselected = Unique(preselected.Where(IsSurfaceLikeId));
       if (preselected.Count > 0)
@@ -672,7 +742,7 @@ namespace vTools.Commands
           return null;
         if (rc == GetResult.Option)
         {
-          HandleSharedOption(go, shared);
+          HandleSharedOption(doc, go, shared, runMode);
           continue;
         }
         if (go.CommandResult() != Result.Success)
@@ -681,7 +751,11 @@ namespace vTools.Commands
       }
     }
 
-    private static List<Guid>? GetFollowingIds(RhinoDoc doc, List<Guid> seedIds, List<Guid> surfaceIds)
+    private static List<Guid>? GetFollowingIds(
+      RhinoDoc doc,
+      List<Guid> seedIds,
+      List<Guid> surfaceIds,
+      RunMode runMode)
     {
       seedIds = Unique(seedIds.Where(IsFollowingLikeId));
       var surfaceSet = new HashSet<Guid>(surfaceIds);
@@ -713,7 +787,7 @@ namespace vTools.Commands
             return null;
           if (rc == GetResult.Option)
           {
-            HandleSharedOption(go, shared);
+            HandleSharedOption(doc, go, shared, runMode);
             continue;
           }
           if (go.ObjectsWerePreselected)
@@ -738,7 +812,10 @@ namespace vTools.Commands
       }
     }
 
-    private static LayoutOptions? GetLayoutOptions(RhinoDoc doc, string prompt)
+    private static LayoutOptions? GetLayoutOptions(
+      RhinoDoc doc,
+      string prompt,
+      RunMode runMode)
     {
       var gp = new GetPoint();
       gp.EnableTransparentCommands(true);
@@ -751,7 +828,7 @@ namespace vTools.Commands
       while (true)
       {
         var rc = gp.Get();
-        HandleSharedOption(gp, shared);
+        HandleSharedOption(doc, gp, shared, runMode);
         if (gp.CommandResult() == Result.Cancel)
           return null;
         if (gp.CommandResult() == Result.Nothing)
@@ -778,7 +855,10 @@ namespace vTools.Commands
         KeepPropSurface  = _keepPropSurface,
         KeepPropFollowing = _keepPropFollowing,
         LayoutSpacing  = _layoutSpacing,
-        XExtents       = _xExtents
+        XExtents       = _xExtents,
+        SurfaceLayer   = _surfaceLayer,
+        LabelLayer     = _labelLayer,
+        DotLayer       = _dotLayer
       };
     }
 
@@ -793,6 +873,9 @@ namespace vTools.Commands
       public OptionToggle? FollowingPropsOption;
       public int SpacingIndex = -1;
       public int XExtentsIndex = -1;
+      public int SurfaceLayerIndex = -1;
+      public int LabelLayerIndex = -1;
+      public int DotLayerIndex = -1;
     }
 
     private static SharedOptions AddSharedOptions(GetBaseClass getter)
@@ -813,10 +896,17 @@ namespace vTools.Commands
       getter.AddOptionToggle("KeepPropFollowing", ref state.FollowingPropsOption);
       state.SpacingIndex  = getter.AddOption("Spacing",  $"{_layoutSpacing:G}");
       state.XExtentsIndex = getter.AddOption("XExtents", $"{_xExtents:G}");
+      state.SurfaceLayerIndex = getter.AddOption("SurfaceLayer", _surfaceLayer);
+      state.LabelLayerIndex = getter.AddOption("LabelLayer", _labelLayer);
+      state.DotLayerIndex = getter.AddOption("DotLayer", _dotLayer);
       return state;
     }
 
-    private static void HandleSharedOption(GetBaseClass getter, SharedOptions state)
+    private static void HandleSharedOption(
+      RhinoDoc doc,
+      GetBaseClass getter,
+      SharedOptions state,
+      RunMode runMode)
     {
       if (state == null) return;
 
@@ -843,6 +933,9 @@ namespace vTools.Commands
           case "Labels":             RhinoApp.WriteLine("Labels: Text = annotation text, Dots = text dots, None = no label on flat output."); break;
           case "Spacing":            RhinoApp.WriteLine("Spacing: gap between flat parts in the layout row."); break;
           case "XExtents":           RhinoApp.WriteLine("XExtents: maximum row width before wrapping to a new row (0 = unlimited)."); break;
+          case "SurfaceLayer":       RhinoApp.WriteLine("SurfaceLayer: layer for generated flat surfaces."); break;
+          case "LabelLayer":         RhinoApp.WriteLine("LabelLayer: layer for number labels and failed-unroll markers."); break;
+          case "DotLayer":           RhinoApp.WriteLine("DotLayer: layer for shared-edge match dots."); break;
         }
       }
 
@@ -875,6 +968,48 @@ namespace vTools.Commands
               System.Globalization.NumberStyles.Any,
               System.Globalization.CultureInfo.InvariantCulture, out double xv) && xv >= 0)
           _xExtents = xv;
+      }
+
+      if (option != null && option.Index == state.SurfaceLayerIndex)
+      {
+        SelectOutputLayer(
+          doc, runMode, "vUnrollSrf surface layer", _surfaceLayer,
+          selected => _surfaceLayer = NormalizeOutputLayer(selected, DefaultSurfaceLayerName, DefaultSurfaceLayerPath));
+      }
+      if (option != null && option.Index == state.LabelLayerIndex)
+      {
+        SelectOutputLayer(
+          doc, runMode, "vUnrollSrf label layer", _labelLayer,
+          selected => _labelLayer = NormalizeOutputLayer(selected, DefaultLabelLayerName, DefaultLabelLayerPath));
+      }
+      if (option != null && option.Index == state.DotLayerIndex)
+      {
+        SelectOutputLayer(
+          doc, runMode, "vUnrollSrf dot layer", _dotLayer,
+          selected => _dotLayer = NormalizeOutputLayer(selected, DefaultDotLayerName, DefaultDotLayerPath));
+      }
+
+      if (option != null)
+        SaveSettings();
+    }
+
+    private static void SelectOutputLayer(
+      RhinoDoc doc,
+      RunMode runMode,
+      string title,
+      string currentValue,
+      Action<string> assign)
+    {
+      if (LayerSelector.TrySelect(
+            doc,
+            currentValue,
+            CurrentLayerOption,
+            title,
+            runMode,
+            allowNewLayer: true,
+            out var selectedLayer))
+      {
+        assign(selectedLayer);
       }
     }
 
@@ -1044,17 +1179,92 @@ namespace vTools.Commands
       var brep = brepHint ?? BrepFromGeometry(doc.Objects.FindId(objId)?.Geometry);
       if (brep != null)
       {
-        var area = AreaMassProperties.Compute(brep);
-        Point3d point;
-        if (area != null) point = area.Centroid;
-        else point = brep.GetBoundingBox(true).Center;
-        try { return brep.ClosestPoint(point); }
-        catch { return point; }
+        using var area = AreaMassProperties.Compute(brep);
+        var target = area?.Centroid ?? brep.GetBoundingBox(true).Center;
+        var interior = InteriorLabelPoint(brep, target, doc.ModelAbsoluteTolerance);
+        if (interior.HasValue)
+          return interior;
+        try { return brep.ClosestPoint(target); }
+        catch { return target; }
       }
       if (brepHint != null) return null;
       var obj = doc.Objects.FindId(objId);
       var bbox = obj?.Geometry.GetBoundingBox(true) ?? BoundingBox.Empty;
       return bbox.IsValid ? bbox.Center : (Point3d?)null;
+    }
+
+    private static Point3d? InteriorLabelPoint(
+      Brep brep,
+      Point3d target,
+      double tolerance)
+    {
+      Point3d? best = null;
+      double bestClearance = -1.0;
+      double bestTargetDistance = double.PositiveInfinity;
+
+      void Consider(BrepFace face, double u, double v)
+      {
+        try
+        {
+          if (face.IsPointOnFace(u, v) != PointFaceRelation.Interior)
+            return;
+        }
+        catch
+        {
+        }
+
+        var candidate = face.PointAt(u, v);
+        if (!candidate.IsValid)
+          return;
+        double clearance = BoundaryClearance(brep, candidate);
+        double targetDistance = candidate.DistanceToSquared(target);
+        if (clearance < bestClearance - tolerance ||
+            (Math.Abs(clearance - bestClearance) <= tolerance &&
+             targetDistance >= bestTargetDistance))
+          return;
+
+        best = candidate;
+        bestClearance = clearance;
+        bestTargetDistance = targetDistance;
+      }
+
+      foreach (var face in brep.Faces)
+      {
+        if (face.ClosestPoint(target, out double targetU, out double targetV))
+          Consider(face, targetU, targetV);
+
+        var uDomain = face.Domain(0);
+        var vDomain = face.Domain(1);
+        for (int uIndex = 0; uIndex < LabelInteriorSamples; uIndex++)
+        {
+          double u = uDomain.ParameterAt((uIndex + 0.5) / LabelInteriorSamples);
+          for (int vIndex = 0; vIndex < LabelInteriorSamples; vIndex++)
+          {
+            double v = vDomain.ParameterAt((vIndex + 0.5) / LabelInteriorSamples);
+            Consider(face, u, v);
+          }
+        }
+      }
+
+      return best;
+    }
+
+    private static double BoundaryClearance(Brep brep, Point3d point)
+    {
+      var edges = brep.Edges
+        .Where(edge => edge.Valence == EdgeAdjacency.Naked)
+        .ToList();
+      if (edges.Count == 0)
+        edges = brep.Edges.ToList();
+
+      double clearance = double.PositiveInfinity;
+      foreach (var edge in edges)
+      {
+        if (!edge.ClosestPoint(point, out double parameter))
+          continue;
+        clearance = Math.Min(clearance, point.DistanceTo(edge.PointAt(parameter)));
+      }
+      return double.IsFinite(clearance) ? clearance : 0.0;
     }
 
     private static IEnumerable<Point3d> CurveSamples(Curve curve, int count)
@@ -1117,6 +1327,12 @@ namespace vTools.Commands
       normal = Unit(normal, tol) ?? Vector3d.ZAxis;
 
       var step = Math.Max(height * TextUpStepRatio, tol * 20.0);
+      if (brep != null)
+      {
+        double clearance = BoundaryClearance(brep, point.Value);
+        if (clearance > tol * 2.0)
+          step = Math.Min(step, Math.Max(clearance * 0.5, tol * 20.0));
+      }
       var upPoint = faceHit != null
         ? SameFaceStepPoint(faceHit, y, step, tol)
         : point.Value + y * step;
@@ -1363,7 +1579,7 @@ namespace vTools.Commands
         attrs = doc.Objects.FindId(sourceId)?.Attributes.Duplicate();
       attrs ??= new ObjectAttributes();
       attrs.Name = TextObjectName;
-      attrs.LayerIndex = ReferenceLayerIndex(doc);
+      attrs.LayerIndex = LabelOutputLayerIndex(doc);
       attrs.SetUserString(LabelNumberKey, BaseNumber(labelText));
       return attrs;
     }
@@ -1372,7 +1588,7 @@ namespace vTools.Commands
     {
       var attrs = doc.Objects.FindId(sourceId)?.Attributes.Duplicate() ?? new ObjectAttributes();
       attrs.Name = FailureMarkerName;
-      attrs.LayerIndex = ReferenceLayerIndex(doc);
+      attrs.LayerIndex = LabelOutputLayerIndex(doc);
       attrs.ObjectColor = System.Drawing.Color.Red;
       attrs.ColorSource = ObjectColorSource.ColorFromObject;
       attrs.SetUserString(FailedUnrollKey, "true");
@@ -1400,19 +1616,104 @@ namespace vTools.Commands
       return text;
     }
 
-    private static int ReferenceLayerIndex(RhinoDoc doc)
+    private static int SurfaceOutputLayerIndex(RhinoDoc doc)
     {
-      var existing = doc.Layers.FindName(TextLayerName);
-      if (existing != null)
-        return existing.Index;
-      var layer = new Layer { Name = TextLayerName };
-      int index = doc.Layers.Add(layer);
-      return index >= 0 ? index : doc.Layers.CurrentLayerIndex;
+      return EnsureOutputLayer(doc, _surfaceLayer, DefaultSurfaceLayerPath);
     }
 
-    private static void PutOnReferenceLayer(RhinoDoc doc, IEnumerable<Guid> ids)
+    private static int LabelOutputLayerIndex(RhinoDoc doc)
     {
-      int layer = ReferenceLayerIndex(doc);
+      return EnsureOutputLayer(doc, _labelLayer, DefaultLabelLayerPath);
+    }
+
+    private static int DotOutputLayerIndex(RhinoDoc doc)
+    {
+      return EnsureOutputLayer(doc, _dotLayer, DefaultDotLayerPath);
+    }
+
+    private static string NormalizeOutputLayer(
+      string? value,
+      string defaultName,
+      string defaultPath)
+    {
+      var normalized = value?.Trim() ?? string.Empty;
+      if (string.IsNullOrWhiteSpace(normalized) ||
+          string.Equals(normalized, defaultName, StringComparison.OrdinalIgnoreCase) ||
+          string.Equals(normalized, defaultPath, StringComparison.OrdinalIgnoreCase))
+      {
+        return defaultPath;
+      }
+
+      if (normalized == "." || normalized == "*" ||
+          string.Equals(normalized, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
+      {
+        return CurrentLayerOption;
+      }
+
+      return normalized;
+    }
+
+    private static int EnsureOutputLayer(
+      RhinoDoc doc,
+      string configuredLayer,
+      string defaultPath)
+    {
+      var layerPath = string.IsNullOrWhiteSpace(configuredLayer)
+        ? defaultPath
+        : configuredLayer.Trim();
+      if (layerPath == "." || layerPath == "*" ||
+          string.Equals(layerPath, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
+      {
+        return doc.Layers.CurrentLayerIndex;
+      }
+
+      int existingIndex = doc.Layers.FindByFullPath(
+        layerPath, RhinoMath.UnsetIntIndex);
+      if (existingIndex >= 0)
+        return existingIndex;
+
+      if (!layerPath.Contains("::", StringComparison.Ordinal))
+      {
+        var matching = doc.Layers
+          .Where(layer => layer != null && !layer.IsDeleted &&
+            string.Equals(layer.Name, layerPath, StringComparison.OrdinalIgnoreCase))
+          .ToList();
+        if (matching.Count == 1)
+          return matching[0].Index;
+      }
+
+      Guid parentId = Guid.Empty;
+      string builtPath = string.Empty;
+      foreach (var segment in layerPath
+        .Split(new[] { "::" }, StringSplitOptions.RemoveEmptyEntries)
+        .Select(segment => segment.Trim())
+        .Where(segment => segment.Length > 0))
+      {
+        builtPath = builtPath.Length == 0 ? segment : builtPath + "::" + segment;
+        int index = doc.Layers.FindByFullPath(
+          builtPath, RhinoMath.UnsetIntIndex);
+        if (index < 0)
+        {
+          var layer = new Layer { Name = segment, ParentLayerId = parentId };
+          index = doc.Layers.Add(layer);
+          if (index < 0)
+          {
+            Dbg($"layer create failed path={builtPath}");
+            return doc.Layers.CurrentLayerIndex;
+          }
+          Dbg($"layer created path={builtPath} index={index}");
+        }
+
+        parentId = doc.Layers[index].Id;
+      }
+
+      int resolved = doc.Layers.FindByFullPath(
+        layerPath, RhinoMath.UnsetIntIndex);
+      return resolved >= 0 ? resolved : doc.Layers.CurrentLayerIndex;
+    }
+
+    private static void PutOnLayer(RhinoDoc doc, IEnumerable<Guid> ids, int layer)
+    {
       foreach (var id in Unique(ids))
       {
         var obj = doc.Objects.FindId(id);
@@ -1537,7 +1838,7 @@ namespace vTools.Commands
     private static bool TryRestorePriorFlatPlacement(
       RhinoDoc doc,
       PriorFlatOutput priorOutput,
-      IEnumerable<Guid> outputIds,
+      IList<Guid> outputIds,
       out string method)
     {
       method = "none";
@@ -1552,21 +1853,21 @@ namespace vTools.Commands
 
       if (TryMarkerPlacementTransform(doc, oldIds, newIds, out var transform, out int markerCount))
       {
-        TransformObjects(doc, newIds, transform);
+        TransformObjects(doc, outputIds, transform);
         method = $"markers:{markerCount}";
         return true;
       }
 
       if (TryTextPlacementTransform(doc, oldIds, newIds, out transform))
       {
-        TransformObjects(doc, newIds, transform);
+        TransformObjects(doc, outputIds, transform);
         method = "text";
         return true;
       }
 
       if (TryGeometryPlacementTransform(doc, oldIds, newIds, out transform))
       {
-        TransformObjects(doc, newIds, transform);
+        TransformObjects(doc, outputIds, transform);
         method = "geometry";
         return true;
       }
@@ -1577,7 +1878,7 @@ namespace vTools.Commands
           !newBox.HasValue || !newBox.Value.IsValid)
         return false;
 
-      TransformObjects(doc, newIds,
+      TransformObjects(doc, outputIds,
         Transform.Translation(oldBox.Value.Center - newBox.Value.Center));
       method = "center";
       return true;
@@ -1796,25 +2097,63 @@ namespace vTools.Commands
       int partNumber,
       string display,
       LabelFrame frame,
+      double height,
       bool addText,
       bool addDots,
       bool transferProperties)
     {
       int groupIndex = FindOriginalGroupIndex(doc, sourceId, partNumber);
+      var existingLabels = groupIndex >= 0
+        ? (doc.Groups.GroupMembers(groupIndex) ?? Array.Empty<RhinoObject>())
+          .Where(obj => obj.Attributes.Name == TextObjectName)
+          .ToList()
+        : new List<RhinoObject>();
       if (groupIndex >= 0)
       {
-        bool hasLabel = (doc.Groups.GroupMembers(groupIndex) ?? Array.Empty<RhinoObject>())
-          .Any(obj => obj.Attributes.Name == TextObjectName && PartNumberOf(obj) == partNumber);
-        if (hasLabel)
+        var existing = existingLabels.FirstOrDefault();
+        if (addText && existing?.Geometry is TextEntity)
         {
-          Dbg($"part={partNumber} original_group reused group={groupIndex} label=reused");
-          return;
+          var n = Unit(frame.Normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
+          var lift = Math.Max(height * TextLiftRatio, doc.ModelAbsoluteTolerance * 2.0);
+          var replacement = new TextEntity
+          {
+            PlainText = display,
+            Plane = TextPlane(frame.Point + n * lift, frame.Y, n, doc.ModelAbsoluteTolerance),
+            TextHeight = height,
+            Justification = TextJustification.MiddleCenter,
+            Font = Font.FromQuartetProperties(TextFont, false, false)
+          };
+          if (doc.Objects.Replace(existing.Id, replacement))
+          {
+            SetMatchNumber(doc, new[] { sourceId, existing.Id }, partNumber);
+            PutOnLayer(doc, new[] { existing.Id }, LabelOutputLayerIndex(doc));
+            foreach (var extra in existingLabels.Skip(1))
+              doc.Objects.Delete(extra.Id, true);
+            Dbg($"part={partNumber} original_group reused group={groupIndex}" +
+                $" label=updated height={height:G6}");
+            return;
+          }
         }
+        else if (addDots && existing?.Geometry is TextDot)
+        {
+          if (doc.Objects.Replace(existing.Id, new TextDot(display, frame.Point)))
+          {
+            SetMatchNumber(doc, new[] { sourceId, existing.Id }, partNumber);
+            PutOnLayer(doc, new[] { existing.Id }, LabelOutputLayerIndex(doc));
+            foreach (var extra in existingLabels.Skip(1))
+              doc.Objects.Delete(extra.Id, true);
+            Dbg($"part={partNumber} original_group reused group={groupIndex} label=updated");
+            return;
+          }
+        }
+
+        foreach (var existingLabel in existingLabels)
+          doc.Objects.Delete(existingLabel.Id, true);
       }
 
       Guid labelId = Guid.Empty;
       if (addText)
-        labelId = AddFlatText(doc, display, frame.Point, frame.Y, frame.Normal, frame.Height, sourceId, transferProperties);
+        labelId = AddFlatText(doc, display, frame.Point, frame.Y, frame.Normal, height, sourceId, transferProperties);
       else if (addDots)
         labelId = AddDot(doc, display, frame.Point, sourceId, transferProperties);
       if (!IsValidId(labelId))
@@ -2040,7 +2379,7 @@ namespace vTools.Commands
       return Math.Atan2(v.X * target.Y - v.Y * target.X, v.X * target.X + v.Y * target.Y);
     }
 
-    private static void RotateObjectsToTextUp(RhinoDoc doc, IEnumerable<Guid> ids, Point3d center, Vector3d textUp)
+    private static void RotateObjectsToTextUp(RhinoDoc doc, IList<Guid> ids, Point3d center, Vector3d textUp)
     {
       var angle = AngleToPageUp(textUp, doc.ModelAbsoluteTolerance);
       if (!angle.HasValue || Math.Abs(angle.Value) <= 1.0e-9)
@@ -2357,10 +2696,206 @@ namespace vTools.Commands
       return copy;
     }
 
-    private static void TransformObjects(RhinoDoc doc, IEnumerable<Guid> ids, Transform transform)
+    private static bool TryMapPointToUnrolledBrep(
+      Brep sourceBrep,
+      Brep flatBrep,
+      Point3d sourcePoint,
+      int? preferredEdgeIndex,
+      out Point3d flatPoint,
+      out int faceIndex)
     {
-      foreach (var id in Unique(ids))
-        doc.Objects.Transform(id, transform, true);
+      flatPoint = Point3d.Unset;
+      faceIndex = -1;
+      int faceCount = Math.Min(sourceBrep.Faces.Count, flatBrep.Faces.Count);
+      if (faceCount == 0) return false;
+
+      IEnumerable<int> candidateFaces = Enumerable.Range(0, faceCount);
+      if (preferredEdgeIndex.HasValue &&
+          preferredEdgeIndex.Value >= 0 &&
+          preferredEdgeIndex.Value < sourceBrep.Edges.Count)
+      {
+        var adjacent = sourceBrep.Edges[preferredEdgeIndex.Value]
+          .AdjacentFaces()
+          .Where(index => index >= 0 && index < faceCount)
+          .Distinct()
+          .ToArray();
+        if (adjacent.Length > 0) candidateFaces = adjacent;
+      }
+
+      double bestDistance = double.PositiveInfinity;
+      bool bestIsOnFace = false;
+      foreach (int index in candidateFaces)
+      {
+        var sourceFace = sourceBrep.Faces[index];
+        if (!sourceFace.ClosestPoint(sourcePoint, out double u, out double v))
+          continue;
+
+        var sourceCandidate = sourceFace.PointAt(u, v);
+        if (!sourceCandidate.IsValid) continue;
+        bool isOnFace;
+        try
+        {
+          isOnFace = sourceFace.IsPointOnFace(u, v) != PointFaceRelation.Exterior;
+        }
+        catch
+        {
+          isOnFace = true;
+        }
+
+        double distance = sourceCandidate.DistanceToSquared(sourcePoint);
+        if (faceIndex >= 0 &&
+            (bestIsOnFace && !isOnFace || bestIsOnFace == isOnFace && distance >= bestDistance))
+          continue;
+
+        var flatSurface = flatBrep.Faces[index].UnderlyingSurface();
+        if (flatSurface == null) continue;
+        var candidate = flatSurface.PointAt(u, v);
+        if (!candidate.IsValid) continue;
+
+        flatPoint = candidate;
+        faceIndex = index;
+        bestDistance = distance;
+        bestIsOnFace = isOnFace;
+      }
+
+      return faceIndex >= 0 && flatPoint.IsValid;
+    }
+
+    private static bool TryMapPointToFlatEdge(
+      Brep sourceBrep,
+      Brep flatBrep,
+      Point3d sourcePoint,
+      int sourceEdgeIndex,
+      int mappedFaceIndex,
+      Point3d provisionalPoint,
+      out Point3d flatPoint,
+      out int flatEdgeIndex)
+    {
+      flatPoint = Point3d.Unset;
+      flatEdgeIndex = -1;
+      if (sourceEdgeIndex < 0 || sourceEdgeIndex >= sourceBrep.Edges.Count)
+        return false;
+
+      var sourceEdge = sourceBrep.Edges[sourceEdgeIndex];
+      if (!sourceEdge.ClosestPoint(sourcePoint, out double sourceParameter))
+        return false;
+
+      double sourceLength = sourceEdge.GetLength();
+      if (sourceLength <= RhinoMath.ZeroTolerance)
+        return false;
+
+      double fraction;
+      try
+      {
+        fraction = sourceEdge.GetLength(new Interval(sourceEdge.Domain.T0, sourceParameter)) /
+                   sourceLength;
+      }
+      catch
+      {
+        fraction = sourceEdge.Domain.NormalizedParameterAt(sourceParameter);
+      }
+      fraction = Math.Max(0.0, Math.Min(1.0, fraction));
+
+      var candidateIndices = CorrespondingFlatEdgeIndices(
+        sourceBrep, flatBrep, sourceEdgeIndex, mappedFaceIndex);
+      bool hasTopologyMatch = candidateIndices.Count > 0;
+      if (!hasTopologyMatch)
+      {
+        candidateIndices = Enumerable.Range(0, flatBrep.Edges.Count)
+          .Where(index => mappedFaceIndex < 0 ||
+            flatBrep.Edges[index].AdjacentFaces().Contains(mappedFaceIndex))
+          .ToList();
+      }
+      if (candidateIndices.Count == 0)
+        candidateIndices = Enumerable.Range(0, flatBrep.Edges.Count).ToList();
+
+      double scale = Math.Max(flatBrep.GetBoundingBox(true).Diagonal.Length, sourceLength);
+      double bestScore = double.PositiveInfinity;
+      foreach (int index in candidateIndices)
+      {
+        var edge = flatBrep.Edges[index];
+        double edgeLength = edge.GetLength();
+        if (edgeLength <= RhinoMath.ZeroTolerance)
+          continue;
+
+        double lengthError = Math.Abs(edgeLength - sourceLength) / sourceLength;
+        if (!hasTopologyMatch && lengthError > 0.05)
+          continue;
+
+        Point3d forward = PointAtNormalizedEdgeLength(edge, fraction);
+        Point3d reverse = PointAtNormalizedEdgeLength(edge, 1.0 - fraction);
+        Point3d candidate = forward.DistanceToSquared(provisionalPoint) <=
+                            reverse.DistanceToSquared(provisionalPoint)
+          ? forward
+          : reverse;
+        double score = candidate.DistanceTo(provisionalPoint) + lengthError * scale * 5.0;
+        if (!hasTopologyMatch && index == sourceEdgeIndex)
+          score *= 0.1;
+        if (score >= bestScore)
+          continue;
+
+        bestScore = score;
+        flatPoint = candidate;
+        flatEdgeIndex = index;
+      }
+
+      return flatEdgeIndex >= 0 && flatPoint.IsValid;
+    }
+
+    private static List<int> CorrespondingFlatEdgeIndices(
+      Brep sourceBrep,
+      Brep flatBrep,
+      int sourceEdgeIndex,
+      int mappedFaceIndex)
+    {
+      var result = new List<int>();
+      if (mappedFaceIndex < 0 ||
+          mappedFaceIndex >= sourceBrep.Faces.Count ||
+          mappedFaceIndex >= flatBrep.Faces.Count)
+        return result;
+
+      var sourceFace = sourceBrep.Faces[mappedFaceIndex];
+      var flatFace = flatBrep.Faces[mappedFaceIndex];
+      int loopCount = Math.Min(sourceFace.Loops.Count, flatFace.Loops.Count);
+      for (int loopIndex = 0; loopIndex < loopCount; loopIndex++)
+      {
+        var sourceLoop = sourceFace.Loops[loopIndex];
+        var flatLoop = flatFace.Loops[loopIndex];
+        int trimCount = Math.Min(sourceLoop.Trims.Count, flatLoop.Trims.Count);
+        for (int trimIndex = 0; trimIndex < trimCount; trimIndex++)
+        {
+          if (sourceLoop.Trims[trimIndex].Edge?.EdgeIndex != sourceEdgeIndex)
+            continue;
+          var flatEdge = flatLoop.Trims[trimIndex].Edge;
+          if (flatEdge != null && !result.Contains(flatEdge.EdgeIndex))
+            result.Add(flatEdge.EdgeIndex);
+        }
+      }
+      return result;
+    }
+
+    private static Point3d PointAtNormalizedEdgeLength(Curve edge, double fraction)
+    {
+      fraction = Math.Max(0.0, Math.Min(1.0, fraction));
+      try
+      {
+        if (edge.NormalizedLengthParameter(fraction, out double parameter))
+          return edge.PointAt(parameter);
+      }
+      catch
+      {
+      }
+      return edge.PointAt(edge.Domain.ParameterAt(fraction));
+    }
+
+    private static void TransformObjects(RhinoDoc doc, IList<Guid> ids, Transform transform)
+    {
+      for (int index = 0; index < ids.Count; index++)
+      {
+        var transformedId = doc.Objects.Transform(ids[index], transform, true);
+        if (transformedId != Guid.Empty)
+          ids[index] = transformedId;
+      }
     }
 
     private static BoundingBox? BoundingBoxOfObjects(RhinoDoc doc, IEnumerable<Guid> ids)
@@ -2428,10 +2963,134 @@ namespace vTools.Commands
           if (xSpan > tol) caps.Add(xSpan * 0.45 / wf);
           if (ySpan > tol) caps.Add(ySpan * 0.28);
         }
+
+        if (brep != null)
+        {
+          double clearance = BoundaryClearance(brep, pt.Value);
+          double halfWidthFactor = Math.Max(0.5, display.Length * 0.65 * 0.5);
+          if (clearance > tol)
+            caps.Add(clearance * 0.80 / (TextHeightScale * halfWidthFactor));
+        }
       }
 
       if (caps.Count > 0) height = Math.Min(height, caps.Min());
       return Math.Max(height, tol * 8.0) * TextHeightScale;
+    }
+
+    private static double FitFlatLabelHeight(
+      IEnumerable<Brep> flatBreps,
+      string display,
+      Point3d point,
+      Vector3d yDirection,
+      double requestedHeight,
+      double tolerance)
+    {
+      var breps = flatBreps?.Where(brep => brep != null).ToList() ?? new List<Brep>();
+      if (breps.Count == 0 || requestedHeight <= tolerance)
+        return requestedHeight;
+
+      var y = yDirection;
+      y.Z = 0.0;
+      if (!y.Unitize()) y = Vector3d.YAxis;
+      var x = Vector3d.CrossProduct(y, Vector3d.ZAxis);
+      if (!x.Unitize()) x = Vector3d.XAxis;
+
+      var unitBounds = UnitTextBounds(display);
+      double minimum = Math.Max(tolerance * 8.0, RhinoMath.ZeroTolerance * 10.0);
+      bool Fits(double height)
+      {
+        const int divisions = 6;
+        const double margin = 0.88;
+        double minX = unitBounds.Min.X * height / margin;
+        double maxX = unitBounds.Max.X * height / margin;
+        double minY = unitBounds.Min.Y * height / margin;
+        double maxY = unitBounds.Max.Y * height / margin;
+        for (int i = 0; i <= divisions; i++)
+        {
+          double f = i / (double)divisions;
+          double sampleX = minX + (maxX - minX) * f;
+          double sampleY = minY + (maxY - minY) * f;
+          var samples = new[]
+          {
+            point + x * sampleX + y * minY,
+            point + x * sampleX + y * maxY,
+            point + x * minX + y * sampleY,
+            point + x * maxX + y * sampleY
+          };
+          if (samples.Any(sample => !FlatBrepsContainPoint(breps, sample, tolerance)))
+            return false;
+        }
+        return FlatBrepsContainPoint(breps, point, tolerance);
+      }
+
+      if (Fits(requestedHeight))
+        return requestedHeight;
+      if (!Fits(minimum))
+        return minimum;
+
+      double low = minimum;
+      double high = requestedHeight;
+      for (int i = 0; i < 24; i++)
+      {
+        double mid = (low + high) * 0.5;
+        if (Fits(mid)) low = mid;
+        else high = mid;
+      }
+      return low;
+    }
+
+    private static BoundingBox UnitTextBounds(string display)
+    {
+      try
+      {
+        using var text = new TextEntity
+        {
+          PlainText = display,
+          Plane = Plane.WorldXY,
+          TextHeight = 1.0,
+          Justification = TextJustification.MiddleCenter,
+          Font = Font.FromQuartetProperties(TextFont, false, false)
+        };
+        var bounds = text.GetBoundingBox(true);
+        if (bounds.IsValid && bounds.Diagonal.Length > RhinoMath.ZeroTolerance)
+          return bounds;
+      }
+      catch
+      {
+      }
+
+      double halfWidth = Math.Max(0.65, display.Length * 0.65) * 0.5;
+      return new BoundingBox(
+        new Point3d(-halfWidth, -0.5, 0.0),
+        new Point3d(halfWidth, 0.5, 0.0));
+    }
+
+    private static bool FlatBrepsContainPoint(
+      IEnumerable<Brep> breps,
+      Point3d point,
+      double tolerance)
+    {
+      double distanceTolerance = Math.Max(tolerance * 10.0, RhinoMath.ZeroTolerance);
+      foreach (var brep in breps)
+      {
+        foreach (var face in brep.Faces)
+        {
+          if (!face.ClosestPoint(point, out double u, out double v))
+            continue;
+          if (face.PointAt(u, v).DistanceTo(point) > distanceTolerance)
+            continue;
+          try
+          {
+            if (face.IsPointOnFace(u, v) != PointFaceRelation.Exterior)
+              return true;
+          }
+          catch
+          {
+            return true;
+          }
+        }
+      }
+      return false;
     }
 
     // ── Orientation curve resolution ───────────────────────────────────────────
@@ -2468,6 +3127,7 @@ namespace vTools.Commands
       public int? EdgeIndex;
       public int? MateEdgeIndex;
       public bool Reversed;
+      public bool UsesTopologyEdgeIndices;
       public uint RuntimeSerialNumber;
     }
 
@@ -2495,6 +3155,10 @@ namespace vTools.Commands
           EdgeIndex = TryAttributeInt(obj.Attributes, EdgeIndexKey, out int edgeIndex) ? edgeIndex : (int?)null,
           MateEdgeIndex = TryAttributeInt(obj.Attributes, MateEdgeIndexKey, out int mateEdgeIndex) ? mateEdgeIndex : (int?)null,
           Reversed = string.Equals(obj.Attributes.GetUserString(EdgeMateReversedKey), "true", StringComparison.OrdinalIgnoreCase),
+          UsesTopologyEdgeIndices = string.Equals(
+            obj.Attributes.GetUserString(EdgeIndexModeKey),
+            TopologyEdgeMode,
+            StringComparison.OrdinalIgnoreCase),
           RuntimeSerialNumber = obj.RuntimeSerialNumber
         });
       }
@@ -2557,8 +3221,70 @@ namespace vTools.Commands
         EdgeIndex = mate.MateEdgeIndex,
         MateEdgeIndex = mate.EdgeIndex,
         Reversed = !mate.Reversed,
+        UsesTopologyEdgeIndices = mate.UsesTopologyEdgeIndices,
         RuntimeSerialNumber = mate.RuntimeSerialNumber
       };
+    }
+
+    private static (int idx, Curve c)[] NakedTopologyEdges(Brep brep, double tolerance)
+    {
+      return brep.Edges
+        .Where(edge => edge.Valence == EdgeAdjacency.Naked)
+        .Select(edge => (idx: edge.EdgeIndex, c: edge.DuplicateCurve()))
+        .Where(item => item.c != null && item.c.GetLength() > tolerance)
+        .ToArray();
+    }
+
+    private static int? LegacyNakedOrdinalToTopologyIndex(Brep brep, int? ordinal)
+    {
+      if (!ordinal.HasValue || ordinal.Value < 0)
+        return ordinal;
+      var nakedIndices = brep.Edges
+        .Where(edge => edge.Valence == EdgeAdjacency.Naked)
+        .Select(edge => edge.EdgeIndex)
+        .ToList();
+      return ordinal.Value < nakedIndices.Count ? nakedIndices[ordinal.Value] : (int?)null;
+    }
+
+    private static void NormalizeExistingMateEdgeIndices(
+      RhinoDoc doc,
+      IReadOnlyList<SourceSurface> sources,
+      IReadOnlyList<int> partNumbers,
+      IEnumerable<ExistingEdgeMate> existingMates)
+    {
+      var selectedBreps = partNumbers
+        .Select((partNumber, index) => (partNumber, brep: sources[index].Brep))
+        .GroupBy(item => item.partNumber)
+        .ToDictionary(group => group.Key, group => group.First().brep);
+      var excludedIds = new HashSet<Guid>(sources.Select(source => source.Id));
+
+      Brep? BrepForPart(int partNumber)
+      {
+        return selectedBreps.TryGetValue(partNumber, out var selected)
+          ? selected
+          : FindOriginalBrepForPart(doc, partNumber, excludedIds);
+      }
+
+      foreach (var mate in existingMates.Where(mate => !mate.UsesTopologyEdgeIndices))
+      {
+        var partBrep = BrepForPart(mate.PartNumber);
+        var mateBrep = BrepForPart(mate.MatePartNumber);
+        if (partBrep == null || mateBrep == null)
+          continue;
+
+        var edgeIndex = LegacyNakedOrdinalToTopologyIndex(partBrep, mate.EdgeIndex);
+        var mateEdgeIndex = LegacyNakedOrdinalToTopologyIndex(mateBrep, mate.MateEdgeIndex);
+        if ((mate.EdgeIndex.HasValue && !edgeIndex.HasValue) ||
+            (mate.MateEdgeIndex.HasValue && !mateEdgeIndex.HasValue))
+          continue;
+
+        Dbg($"edge_mate migrate id={mate.MateId} part={mate.PartNumber}" +
+            $" edge={mate.EdgeIndex}->{edgeIndex} mate_part={mate.MatePartNumber}" +
+            $" mate_edge={mate.MateEdgeIndex}->{mateEdgeIndex}");
+        mate.EdgeIndex = edgeIndex;
+        mate.MateEdgeIndex = mateEdgeIndex;
+        mate.UsesTopologyEdgeIndices = true;
+      }
     }
 
     private static void RecoverExistingMatesFromUnselectedParts(
@@ -2594,10 +3320,7 @@ namespace vTools.Commands
           var mateBrep = FindOriginalBrepForPart(doc, priorMate.MatePartNumber, selectedIds);
           if (mateBrep == null)
             continue;
-          var mateEdges = (mateBrep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
-            .Select((curve, index) => (idx: index, c: curve))
-            .Where(item => item.c != null && item.c.GetLength() > tolerance)
-            .ToArray();
+          var mateEdges = NakedTopologyEdges(mateBrep, tolerance);
 
           (int edgeIndex, Curve edge, int mateEdgeIndex, EdgePairResult score)? best = null;
           foreach (var sourceEdge in allEdges[i])
@@ -2640,6 +3363,31 @@ namespace vTools.Commands
       }
     }
 
+    private static void LogFlatOutput(RhinoDoc doc, int partNumber, IEnumerable<Guid> outputIds)
+    {
+      foreach (var id in Unique(outputIds))
+      {
+        var obj = doc.Objects.FindId(id);
+        if (obj == null)
+          continue;
+
+        string groups = string.Join(",", obj.Attributes.GetGroupList() ?? Array.Empty<int>());
+        if (obj.Attributes.Name == EdgeMateName && obj.Geometry is TextDot edgeDot)
+        {
+          Dbg($"part={partNumber} final_marker id={edgeDot.Text}" +
+              $" attr_part={obj.Attributes.GetUserString(EdgePartNumKey)}" +
+              $" point={P(edgeDot.Point)} groups={groups}");
+        }
+        else if (obj.Attributes.Name == TextObjectName && obj.Geometry is TextEntity text)
+        {
+          Dbg($"part={partNumber} final_label text={text.PlainText}" +
+              $" height={text.TextHeight:G6} point={P(text.Plane.Origin)}" +
+              $" x={V(text.Plane.XAxis)} y={V(text.Plane.YAxis)}" +
+              $" groups={groups}");
+        }
+      }
+    }
+
     private static Brep? FindOriginalBrepForPart(
       RhinoDoc doc, int partNumber, HashSet<Guid> excludedIds)
     {
@@ -2671,6 +3419,7 @@ namespace vTools.Commands
         result.Add(new List<EdgeMateRecord>());
 
       var existingMates = ExistingEdgeMates(doc);
+      NormalizeExistingMateEdgeIndices(doc, sources, partNumbers, existingMates);
       var usedMateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
       int nextMateSequence = existingMates
         .Select(mate => MateSequence(mate.MateId))
@@ -2679,10 +3428,7 @@ namespace vTools.Commands
 
       // Collect naked edges per source, filtering out degenerate ones
       var allEdges = sources
-        .Select(s => (s.Brep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
-          .Select((c, idx) => (idx, c))
-          .Where(x => x.c != null && x.c.GetLength() > tol)
-          .ToArray())
+        .Select(source => NakedTopologyEdges(source.Brep, tol))
         .ToArray();
 
       // Build and score all candidate pairs
@@ -2857,7 +3603,62 @@ namespace vTools.Commands
       attr.SetUserString(EdgeMateReversedKey, rec.Reversed ? "true" : "false");
       attr.SetUserString(EdgeIndexKey,         rec.EdgeIndex.ToString());
       attr.SetUserString(MateEdgeIndexKey,     rec.MateEdgeIndex.ToString());
+      attr.SetUserString(EdgeIndexModeKey,      TopologyEdgeMode);
       return doc.Objects.AddTextDot(dot, attr);
+    }
+
+    private static void LoadSettings()
+    {
+      ToolsOptionStore.Read<int>(SettingsSection, section =>
+      {
+        if (ToolsOptionStore.TryGetString(section, "labelMode", out var labelMode) &&
+            Enum.TryParse(labelMode, true, out LabelMode parsedLabelMode))
+          _labelMode = parsedLabelMode;
+        if (ToolsOptionStore.TryGetBool(section, "rotateFlatParts", out var boolValue))
+          _rotateFlatParts = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, "edgeDots", out boolValue))
+          _edgeDots = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, "explode", out boolValue))
+          _explode = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, "splitFaces", out boolValue))
+          _splitFaces = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, "keepPropSurface", out boolValue))
+          _keepPropSurface = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, "keepPropFollowing", out boolValue))
+          _keepPropFollowing = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, "layoutSpacing", out var doubleValue) && doubleValue >= 0.0)
+          _layoutSpacing = doubleValue;
+        if (ToolsOptionStore.TryGetDouble(section, "xExtents", out doubleValue) && doubleValue >= 0.0)
+          _xExtents = doubleValue;
+        if (ToolsOptionStore.TryGetString(section, "surfaceLayer", out var layer))
+          _surfaceLayer = NormalizeOutputLayer(layer, DefaultSurfaceLayerName, DefaultSurfaceLayerPath);
+        if (ToolsOptionStore.TryGetString(section, "labelLayer", out layer))
+          _labelLayer = NormalizeOutputLayer(layer, DefaultLabelLayerName, DefaultLabelLayerPath);
+        if (ToolsOptionStore.TryGetString(section, "dotLayer", out layer))
+          _dotLayer = NormalizeOutputLayer(layer, DefaultDotLayerName, DefaultDotLayerPath);
+        return 0;
+      });
+    }
+
+    private static void SaveSettings()
+    {
+      var saved = ToolsOptionStore.Update(SettingsSection, section =>
+      {
+        section["labelMode"] = _labelMode.ToString();
+        section["rotateFlatParts"] = _rotateFlatParts;
+        section["edgeDots"] = _edgeDots;
+        section["explode"] = _explode;
+        section["splitFaces"] = _splitFaces;
+        section["keepPropSurface"] = _keepPropSurface;
+        section["keepPropFollowing"] = _keepPropFollowing;
+        section["layoutSpacing"] = _layoutSpacing;
+        section["xExtents"] = _xExtents;
+        section["surfaceLayer"] = _surfaceLayer;
+        section["labelLayer"] = _labelLayer;
+        section["dotLayer"] = _dotLayer;
+      });
+      if (!saved)
+        RhinoApp.WriteLine($"vUnrollSrf: failed to save options: {ToolsOptionStore.LastError}");
     }
 
     private class LayoutOptions
@@ -2872,6 +3673,9 @@ namespace vTools.Commands
       public bool KeepPropFollowing;
       public double LayoutSpacing;
       public double XExtents;
+      public string SurfaceLayer = DefaultSurfaceLayerPath;
+      public string LabelLayer = DefaultLabelLayerPath;
+      public string DotLayer = DefaultDotLayerPath;
     }
 
     private class SourceSurface

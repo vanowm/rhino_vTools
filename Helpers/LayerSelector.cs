@@ -43,7 +43,7 @@ internal static class LayerSelector
     try
     {
       using var dialog = new LayerSelectorDialog(
-        doc, selectedValue, currentLayerValue, title);
+        doc, selectedValue, currentLayerValue, title, allowNewLayer);
       if (!dialog.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow))
         return false;
 
@@ -325,7 +325,8 @@ internal static class LayerSelector
       RhinoDoc doc,
       string selectedValue,
       string currentLayerValue,
-      string title)
+      string title,
+      bool allowNewLayer)
     {
       Title = title;
       Resizable = true;
@@ -334,6 +335,18 @@ internal static class LayerSelector
       MinimumSize = new Size(300, 260);
 
       _allItems = BuildItems(doc, currentLayerValue);
+      if (allowNewLayer &&
+          !string.IsNullOrWhiteSpace(selectedValue) &&
+          !_allItems.Any(item => string.Equals(
+            item.Value, selectedValue, StringComparison.OrdinalIgnoreCase)))
+      {
+        _allItems.Insert(0, new LayerListItem(
+          selectedValue,
+          selectedValue,
+          selectedValue,
+          Colors.White,
+          false));
+      }
 
       _layerList = new GridView
       {

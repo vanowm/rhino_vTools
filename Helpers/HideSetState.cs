@@ -72,6 +72,7 @@ internal static class HideSetState
 
   private static bool _polling;
   private static HidePollContext? _hidePollContext;
+  private static readonly Dictionary<uint, HashSet<Guid>> VisibleCleanupCandidates = new();
 
   public static bool NativeAccessAvailable =>
     ObjectPointerMethod != null &&
@@ -86,7 +87,11 @@ internal static class HideSetState
     Command.BeginCommand += OnBeginCommand;
     Command.EndCommand += OnEndCommand;
     RhinoDoc.ModifyObjectAttributes += OnModifyObjectAttributes;
+    RhinoDoc.EndOpenDocument += OnEndOpenDocument;
     _polling = true;
+
+    foreach (var doc in RhinoDoc.OpenDocuments(false))
+      CleanupVisibleTracking(doc, null, "startup");
   }
 
   public static void StopPolling()
@@ -97,7 +102,9 @@ internal static class HideSetState
     Command.BeginCommand -= OnBeginCommand;
     Command.EndCommand -= OnEndCommand;
     RhinoDoc.ModifyObjectAttributes -= OnModifyObjectAttributes;
+    RhinoDoc.EndOpenDocument -= OnEndOpenDocument;
     _hidePollContext = null;
+    VisibleCleanupCandidates.Clear();
     _polling = false;
   }
 
@@ -302,20 +309,41 @@ internal static class HideSetState
     RhinoModifyObjectAttributesEventArgs e)
   {
     var context = _hidePollContext;
-    if (context == null ||
-        context.DocumentSerialNumber != e.Document.RuntimeSerialNumber)
+    if (context != null &&
+        context.DocumentSerialNumber == e.Document.RuntimeSerialNumber)
+    {
+      CapturePreviousNativeName(context, e.RhinoObject);
+    }
+
+    if (e.OldAttributes.Mode != ObjectMode.Hidden ||
+        e.NewAttributes.Mode == ObjectMode.Hidden ||
+        (!HasTracking(e.OldAttributes) && !HasTracking(e.NewAttributes)))
     {
       return;
     }
 
-    CapturePreviousNativeName(context, e.RhinoObject);
+    if (!VisibleCleanupCandidates.TryGetValue(
+          e.Document.RuntimeSerialNumber,
+          out var candidates))
+    {
+      candidates = new HashSet<Guid>();
+      VisibleCleanupCandidates[e.Document.RuntimeSerialNumber] = candidates;
+    }
+    candidates.Add(e.RhinoObject.Id);
   }
 
   private static void OnEndCommand(object? sender, CommandEventArgs e)
   {
-    if (!string.Equals(e.CommandEnglishName, "Hide", StringComparison.OrdinalIgnoreCase))
-      return;
+    if (string.Equals(e.CommandEnglishName, "Hide", StringComparison.OrdinalIgnoreCase))
+      CompleteHidePolling(e);
 
+    var candidates = TakeVisibleCleanupCandidates(e.Document);
+    if (candidates != null)
+      CleanupVisibleTracking(e.Document, candidates, e.CommandEnglishName);
+  }
+
+  private static void CompleteHidePolling(CommandEventArgs e)
+  {
     var context = _hidePollContext;
     _hidePollContext = null;
     var doc = e.Document;
@@ -361,6 +389,57 @@ internal static class HideSetState
       $"  polling default Hide end result={e.CommandResult}" +
       $" affected={context.PreviousNativeNames.Count}" +
       $" named={namedCount} unnamed={unnamedCount}");
+  }
+
+  private static void OnEndOpenDocument(object? sender, DocumentOpenEventArgs e)
+  {
+    CleanupVisibleTracking(e.Document, null, "document-open");
+  }
+
+  private static IEnumerable<Guid>? TakeVisibleCleanupCandidates(RhinoDoc doc)
+  {
+    if (!VisibleCleanupCandidates.Remove(doc.RuntimeSerialNumber, out var candidates))
+      return null;
+    return candidates;
+  }
+
+  private static void CleanupVisibleTracking(
+    RhinoDoc doc,
+    IEnumerable<Guid>? candidateIds,
+    string source)
+  {
+    var objects = candidateIds == null
+      ? doc.Objects.Where(obj => obj != null && HasTracking(obj.Attributes)).ToList()
+      : candidateIds
+        .Distinct()
+        .Select(doc.Objects.FindId)
+        .Where(obj => obj != null)
+        .Cast<RhinoObject>()
+        .ToList();
+
+    int cleared = 0;
+    foreach (var obj in objects)
+    {
+      if (IsHidden(obj) || !HasTracking(obj.Attributes))
+        continue;
+
+      if (!SetTrackedName(doc, obj.Id, string.Empty))
+        continue;
+
+      var currentObject = doc.Objects.FindId(obj.Id);
+      if (currentObject != null)
+        RemoveNativeName(currentObject);
+      cleared++;
+    }
+
+    if (cleared > 0)
+      Log.Write(Tag, $"  cleared visible tracking source={source} objects={cleared}");
+  }
+
+  private static bool HasTracking(ObjectAttributes attributes)
+  {
+    return !string.IsNullOrEmpty(attributes.GetUserString(TrackingKey)) ||
+           !string.IsNullOrEmpty(attributes.GetUserString(TrackingOrderKey));
   }
 
   private static void CapturePreviousNativeName(

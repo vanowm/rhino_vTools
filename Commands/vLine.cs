@@ -626,7 +626,6 @@ public sealed class vLine : Command
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
     getPoint.AcceptNothing(true);
-    if (canUndo) getPoint.AcceptUndo(true);
     if (canUndo || canRedo) getPoint.AcceptCustomMessage(true);
     getPoint.DynamicDraw += (_, e) =>
       DrawHiddenLayerWarning(e, doc, layerSession);
@@ -1080,8 +1079,6 @@ public sealed class vLine : Command
     var angleLock = new OptionToggle(initialAngleLock, "No", "Yes");
     var angleRelative = new OptionToggle(initialAngleRelative, "Absolute", "Relative");
     var debugToggle = new OptionToggle(_debugMode, "Off", "On");
-    if (canUndo) getPoint.AcceptUndo(true);
-
     var mode = initialMode;
     var originalStartPoint = startPoint;
     var originalStartConstraint = startConstraint;
@@ -4932,25 +4929,15 @@ public sealed class vLine : Command
 
     private static bool RunSilentHistoryCommand(uint docSerial, string command)
     {
-      var captureWasEnabled = RhinoApp.CommandWindowCaptureEnabled;
-      try
-      {
-        if (!captureWasEnabled)
-        {
-          _ = RhinoApp.CapturedCommandWindowStrings(true);
-          RhinoApp.CommandWindowCaptureEnabled = true;
-        }
-
-        return RhinoApp.RunScript(docSerial, command, false);
-      }
-      finally
-      {
-        if (!captureWasEnabled)
-        {
-          _ = RhinoApp.CapturedCommandWindowStrings(true);
-          RhinoApp.CommandWindowCaptureEnabled = false;
-        }
-      }
+      var restoreEcho = Rhino.ApplicationSettings.AppearanceSettings
+        .EchoCommandsToHistoryWindow;
+      var script = restoreEcho
+        ? $"_NoEcho {command} _Echo"
+        : $"_NoEcho {command}";
+      return RhinoApp.RunScript(
+        docSerial,
+        script,
+        false);
     }
   }
 

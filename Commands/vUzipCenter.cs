@@ -548,9 +548,9 @@ public sealed class vUzipCenter : Command
     protected override void DrawOverlay(DrawEventArgs e)
     {
       if (Curve != null)
-        e.Display.DrawCurve(Curve, CenterColor, 2);
+        PreviewDisplay.DrawCurve(e.Display, Curve, CenterColor, 1);
       foreach (var (crv, col) in SideCurves)
-        e.Display.DrawCurve(crv, col, 1);
+        PreviewDisplay.DrawCurve(e.Display, crv, col);
     }
   }
 

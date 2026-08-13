@@ -258,10 +258,10 @@ public sealed class vTitle : Command
     var c3 = pt + xAxis * (-ohw) + yAxis * ( ohh);
 
     var boxColor = Color.FromArgb(180, 180, 220, 60);
-    e.Display.DrawLine(c0, c1, boxColor, 1);
-    e.Display.DrawLine(c1, c2, boxColor, 1);
-    e.Display.DrawLine(c2, c3, boxColor, 1);
-    e.Display.DrawLine(c3, c0, boxColor, 1);
+    PreviewDisplay.DrawLine(e.Display, c0, c1, boxColor);
+    PreviewDisplay.DrawLine(e.Display, c1, c2, boxColor);
+    PreviewDisplay.DrawLine(e.Display, c2, c3, boxColor);
+    PreviewDisplay.DrawLine(e.Display, c3, c0, boxColor);
   }
 
   private static void PlaceTitle(RhinoDoc doc, Point3d center,
@@ -424,10 +424,10 @@ public sealed class vTitle : Command
       var xa = te.Plane.XAxis;
       var ya = te.Plane.YAxis;
       var hc = Color.FromArgb(220, 255, 220, 40);
-      e.Display.DrawLine(o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), hc, 2);
-      e.Display.DrawLine(o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), hc, 2);
-      e.Display.DrawLine(o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), hc, 2);
-      e.Display.DrawLine(o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), hc, 2);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), hc, 1);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), hc, 1);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), hc, 1);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), hc, 1);
     }
   }
 

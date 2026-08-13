@@ -614,7 +614,7 @@ public sealed class vSplitAtCorners : Command
         if (obj?.CurveGeometry == null || IsIgnoredNotch(obj, _ignoreNotches))
           continue;
 
-        display.DrawCurve(obj.CurveGeometry, Color.FromArgb(120, 200, 200, 200), 1);
+        PreviewDisplay.DrawCurve(display, obj.CurveGeometry, Color.FromArgb(120, 200, 200, 200));
       }
 
       foreach (var kv in _autoByCurve)

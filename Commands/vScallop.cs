@@ -376,7 +376,7 @@ public sealed class vScallop : Command
       {
         var preview = BuildPreviewArc(doc, pointA, pointB, e.CurrentPoint);
         if (preview != null)
-          e.Display.DrawCurve(preview, Color.DeepSkyBlue, 2);
+          PreviewDisplay.DrawCurve(e.Display, preview, Color.DeepSkyBlue, 1);
       };
 
       gp.DynamicDraw += draw;

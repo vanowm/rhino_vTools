@@ -351,9 +351,9 @@ public sealed class vMiddleCurve : Command
         if (previewBuild == null)
           return;
 
-        e.Display.DrawCurve(previewBuild.Curve, Color.DeepSkyBlue, 2);
+        PreviewDisplay.DrawCurve(e.Display, previewBuild.Curve, Color.DeepSkyBlue, 1);
         foreach (var connectorLine in previewLines)
-          e.Display.DrawCurve(connectorLine, Color.Gold, 1);
+          PreviewDisplay.DrawCurve(e.Display, connectorLine, Color.Gold);
       };
 
       gp.DynamicDraw += drawPreview;

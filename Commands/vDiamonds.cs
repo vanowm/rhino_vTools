@@ -158,7 +158,7 @@ public sealed class vDiamonds : Command
           if (g == null) continue;
           g.Transform(xform);
           if (g is Curve c)
-            e.Display.DrawCurve(c, color, 1);
+            PreviewDisplay.DrawCurve(e.Display, c, color);
           else if (g is AnnotationBase ann)
             e.Display.DrawAnnotation(ann, color);
         }

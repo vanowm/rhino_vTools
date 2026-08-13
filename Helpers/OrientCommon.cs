@@ -161,13 +161,13 @@ internal static class OrientCommon
     {
       foreach (var segment in previewSegments)
       {
-        e.Display.DrawLine(segment.Start, segment.End, faintColor, 1);
+        PreviewDisplay.DrawLine(e.Display, segment.Start, segment.End, faintColor);
         e.Display.DrawDottedLine(segment.Start, segment.End, faintColor);
       }
 
       if (traceFrom.HasValue)
       {
-        e.Display.DrawLine(traceFrom.Value, e.CurrentPoint, faintColor, 1);
+        PreviewDisplay.DrawLine(e.Display, traceFrom.Value, e.CurrentPoint, faintColor);
         e.Display.DrawDottedLine(traceFrom.Value, e.CurrentPoint, faintColor);
       }
     };

@@ -1547,12 +1547,12 @@ public sealed class vFacing : Command
   {
     switch (geom)
     {
-      case Curve c:                       display.DrawCurve(c, color, 2);                      break;
+      case Curve c:                       PreviewDisplay.DrawCurve(display, c, color, 1);      break;
       case TextEntity te:                 display.DrawAnnotation(te, color);                   break;
       case TextDot td:                    display.DrawDot(td, color, Color.Black, color);      break;
       case Rhino.Geometry.Point pt:       display.DrawPoint(pt.Location, color);               break;
       case Mesh m:                        display.DrawMeshWires(m, color);                     break;
-      case Brep b:                        display.DrawBrepWires(b, color, 1);                  break;
+      case Brep b:                        PreviewDisplay.DrawBrepWires(display, b, color);      break;
     }
   }
 

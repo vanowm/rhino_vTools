@@ -767,9 +767,9 @@ public sealed class vGroup : Command
       foreach (var boundary in solve.Boundaries)
       {
         foreach (var line in boundary.HatchLines)
-          e.Display.DrawLine(line.From, line.To, HatchColor, 1);
+          PreviewDisplay.DrawLine(e.Display, line.From, line.To, HatchColor);
 
-        e.Display.DrawCurve(boundary.Curve, OutlineColor, 2);
+        PreviewDisplay.DrawCurve(e.Display, boundary.Curve, OutlineColor, 1);
       }
     }
   }

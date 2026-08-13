@@ -24,6 +24,7 @@ public sealed class vLine : Command
   private const string AngleRelativeKey  = "angleRelative";
   private const string LayerKey          = "layer";
   private const string CurrentLayerOption = "*Current*";
+  private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
   private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" };
   private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" };
@@ -62,7 +63,11 @@ public sealed class vLine : Command
   {
     Log.Write("vLine", "begin");
     LoadPersistedOptions();
-    var layerSession = new LineLayerSession(doc, _layer);
+    var undoSession = new LineUndoRecordSession(doc);
+    var layerSession = new LineLayerSession(doc, _layer, undoSession.Token);
+
+    try
+    {
 
     var startResult = ResolveFirstPoint(
       doc, layerSession, initialBothSides: false, initialChainMode: _chainMode, mode);
@@ -506,6 +511,11 @@ public sealed class vLine : Command
 
     doc.Views.Redraw();
     return Result.Success;
+    }
+    finally
+    {
+      undoSession.QueueFinalization();
+    }
   }
 
   private static void LoadPersistedOptions()
@@ -1070,7 +1080,10 @@ public sealed class vLine : Command
     if (canUndo) getPoint.AcceptUndo(true);
 
     var mode = initialMode;
+    var originalStartPoint = startPoint;
+    var originalStartConstraint = startConstraint;
     var fromFirstPoint = initialFromFirstPoint;
+    var fromPointActive = false;
     Vector3d? parallelDir = startDirection;
     GeometryBase? projectToGeometry = null;
     EndAnchor? endAnchor = null;
@@ -1265,7 +1278,11 @@ public sealed class vLine : Command
 
       string Prompt(string value)
       {
-        var lockSuffix = fromFirstPoint ? " [FromFirstPoint]" : string.Empty;
+        var lockSuffix = fromFirstPoint
+          ? fromPointActive
+            ? " [FromPoint]"
+            : " [FromFirstPoint]"
+          : string.Empty;
         return layerSession.DecoratePrompt(doc, value + lockSuffix);
       }
 
@@ -1903,10 +1920,11 @@ public sealed class vLine : Command
           var hoveredCurve = HoveredConstraintCurve();
           if (hoveredCurve != null)
           {
-            e.Display.DrawCurve(
+            PreviewDisplay.DrawCurve(
+              e.Display,
               hoveredCurve,
               HoverFeedbackColor,
-              3);
+              2);
           }
         }
 
@@ -1925,12 +1943,12 @@ public sealed class vLine : Command
 
           var a = previewStart - vec;
           var b = previewStart + vec;
-          e.Display.DrawLine(a, b, previewColor, 1);
+          PreviewDisplay.DrawLine(e.Display, a, b, previewColor);
           e.Display.DrawDottedLine(a, b, previewColor);
         }
         else
         {
-          e.Display.DrawLine(previewStart, ep, previewColor, 1);
+          PreviewDisplay.DrawLine(e.Display, previewStart, ep, previewColor);
           e.Display.DrawDottedLine(previewStart, ep, previewColor);
         }
 
@@ -1985,7 +2003,11 @@ public sealed class vLine : Command
         var idxPriority = mode == "auto"
           ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
           : -1;
-        var idxFromFirstPoint = startConstraint.HasValue && !fromFirstPoint
+        var idxFromPoint = startConstraint?.Kind == EndpointConstraintKind.Perpendicular
+          ? getPoint.AddOption("FromPoint")
+          : -1;
+        var idxFromFirstPoint = originalStartConstraint.HasValue &&
+                                (!fromFirstPoint || fromPointActive)
           ? getPoint.AddOption("FromFirstPoint")
           : -1;
         var idxAuto = getPoint.AddOption("Auto");
@@ -2112,12 +2134,43 @@ public sealed class vLine : Command
 
           if (option.Index == idxFromFirstPoint)
           {
+            startConstraint = originalStartConstraint;
+            startPoint = originalStartPoint;
             fromFirstPoint = true;
+            fromPointActive = false;
+            getPoint.SetBasePoint(startPoint, true);
+            lastPreviewResolvedStart = Point3d.Unset;
+            lastPreviewResolvedEnd = Point3d.Unset;
             Log.Write(
               "vLine",
               $"FromFirstPoint activated start={startPoint} " +
               $"constraint={startConstraint?.Kind.ToString() ?? "none"}");
             ApplyModePrompt();
+            continue;
+          }
+
+          if (option.Index == idxFromPoint && startConstraint.HasValue)
+          {
+            if (TryPickConstraintStartPoint(
+                  doc,
+                  layerSession,
+                  startConstraint.Value,
+                  out var updatedConstraint,
+                  out var selectedStart))
+            {
+              startConstraint = updatedConstraint;
+              startPoint = selectedStart;
+              fromFirstPoint = true;
+              fromPointActive = true;
+              getPoint.SetBasePoint(startPoint, true);
+              lastPreviewResolvedStart = Point3d.Unset;
+              lastPreviewResolvedEnd = Point3d.Unset;
+              Log.Write(
+                "vLine",
+                $"FromPoint selected start={startPoint} seed={updatedConstraint.SeedParameter:R}");
+              ApplyModePrompt();
+              doc.Views.Redraw();
+            }
             continue;
           }
 
@@ -3346,16 +3399,17 @@ public sealed class vLine : Command
       var curve = CurveFromScreenPick(doc, hovered.Value);
       if (curve != null)
       {
-        e.Display.DrawCurve(
+        PreviewDisplay.DrawCurve(
+          e.Display,
           curve,
           HoverFeedbackColor,
-          3);
+          2);
       }
 
       if (biTangentPreview.HasValue)
       {
         var previewColor = layerSession?.ResolveColor(doc) ?? Color.Cyan;
-        e.Display.DrawLine(biTangentPreview.Value, previewColor, 1);
+        PreviewDisplay.DrawLine(e.Display, biTangentPreview.Value, previewColor);
         e.Display.DrawDottedLine(
           biTangentPreview.Value.From,
           biTangentPreview.Value.To,
@@ -3449,7 +3503,8 @@ public sealed class vLine : Command
       return null;
     }
 
-    var candidates = new List<string>();
+    var candidates = new List<ScreenCurveCandidate>();
+    var rejected = new List<string>();
 
     foreach (var objRef in picked)
     {
@@ -3468,40 +3523,90 @@ public sealed class vLine : Command
           var componentIndex = new ComponentIndex(
             ComponentIndexType.BrepEdge,
             edgeIndex);
-          diagnostic =
-            $"picked={picked.Length} curveId={objRef.ObjectId} " +
-            $"component={componentIndex} curveType=BrepEdge " +
-            $"pick={edgePoint} depth={edgeDepth:G6} distance={edgeDistance:G6}";
-          return new ScreenCurvePick(
-            objRef.ObjectId,
-            componentIndex,
-            edgePoint);
+          var edge = brep.Edges[edgeIndex];
+          var endpointHit = edge.ClosestPoint(edgePoint, out var edgeParameter) &&
+                            IsCurveEndpointParameter(edge, edgeParameter);
+          candidates.Add(new ScreenCurveCandidate(
+            new ScreenCurvePick(objRef.ObjectId, componentIndex, edgePoint),
+            edgeDistance,
+            edgeDepth,
+            endpointHit,
+            "BrepEdge"));
+          continue;
         }
 
-        candidates.Add($"{objRef.ObjectId}:{objRef.Object()?.ObjectType.ToString() ?? "unknown"}");
+        rejected.Add($"{objRef.ObjectId}:{objRef.Object()?.ObjectType.ToString() ?? "unknown"}");
         continue;
       }
 
-      var pickPoint = objRef.SelectionPoint();
-      if (!pickPoint.IsValid)
+      using var pickNurbs = curve.ToNurbsCurve();
+      if (pickNurbs == null ||
+          !pickContext.PickFrustumTest(
+            pickNurbs,
+            out var curveParameter,
+            out var curveDepth,
+            out var curveDistance))
       {
-        using var pickCurve = new LineCurve(pickLine);
-        if (!curve.ClosestPoints(pickCurve, out pickPoint, out _))
-          pickPoint = curve.PointAtNormalizedLength(0.5);
+        rejected.Add($"{objRef.ObjectId}:{curve.GetType().Name}:frustum-failed");
+        continue;
       }
 
-      diagnostic =
-        $"picked={picked.Length} curveId={objRef.ObjectId} " +
-        $"component={objRef.GeometryComponentIndex} " +
-        $"curveType={curve.GetType().Name} pick={pickPoint}";
-      return new ScreenCurvePick(
-        objRef.ObjectId,
-        objRef.GeometryComponentIndex,
-        pickPoint);
+      var pickPoint = pickNurbs.PointAt(curveParameter);
+      candidates.Add(new ScreenCurveCandidate(
+        new ScreenCurvePick(
+          objRef.ObjectId,
+          objRef.GeometryComponentIndex,
+          pickPoint),
+        curveDistance,
+        curveDepth,
+        IsCurveEndpointParameter(pickNurbs, curveParameter),
+        curve.GetType().Name));
     }
 
-    diagnostic = $"picked={picked.Length} no curves candidates=[{string.Join(",", candidates)}]";
-    return null;
+    if (candidates.Count == 0)
+    {
+      diagnostic = $"picked={picked.Length} no curves rejected=[{string.Join(",", rejected)}]";
+      return null;
+    }
+
+    candidates.Sort(CompareScreenCurveCandidates);
+    var chosen = candidates[0];
+    diagnostic =
+      $"picked={picked.Length} chosen={chosen.Pick.ObjectId} " +
+      $"component={chosen.Pick.ComponentIndex} curveType={chosen.CurveType} " +
+      $"pick={chosen.Pick.PickPoint} depth={chosen.Depth:G6} " +
+      $"distance={chosen.Distance:G6} endpoint={chosen.EndpointHit} " +
+      $"ranked=[{string.Join(",", candidates.Select(candidate =>
+        $"{candidate.Pick.ObjectId}:{candidate.Distance:G6}:{candidate.Depth:G6}:{(candidate.EndpointHit ? "end" : "body")}"))}]";
+    return chosen.Pick;
+  }
+
+  private static int CompareScreenCurveCandidates(
+    ScreenCurveCandidate left,
+    ScreenCurveCandidate right)
+  {
+    const double distanceTieTolerance = 1.0e-9;
+    var distanceDifference = left.Distance - right.Distance;
+    if (Math.Abs(distanceDifference) > distanceTieTolerance)
+      return distanceDifference < 0.0 ? -1 : 1;
+
+    if (left.EndpointHit != right.EndpointHit)
+      return left.EndpointHit ? 1 : -1;
+
+    var depthDifference = left.Depth - right.Depth;
+    if (Math.Abs(depthDifference) > 1.0e-12)
+      return depthDifference < 0.0 ? -1 : 1;
+
+    return left.Pick.ObjectId.CompareTo(right.Pick.ObjectId);
+  }
+
+  private static bool IsCurveEndpointParameter(Curve curve, double parameter)
+  {
+    if (curve.IsClosed)
+      return false;
+
+    var normalized = curve.Domain.NormalizedParameterAt(parameter);
+    return normalized <= 1.0e-6 || normalized >= 1.0 - 1.0e-6;
   }
 
   private static bool TryPickBrepEdge(
@@ -3775,6 +3880,54 @@ public sealed class vLine : Command
     return constrainedPoint.IsValid;
   }
 
+  private static bool TryPickConstraintStartPoint(
+    RhinoDoc doc,
+    LineLayerSession layerSession,
+    EndpointConstraint constraint,
+    out EndpointConstraint updatedConstraint,
+    out Point3d selectedStart)
+  {
+    updatedConstraint = constraint;
+    selectedStart = Point3d.Unset;
+
+    using var getPoint = new GetPoint();
+    getPoint.EnableTransparentCommands(true);
+    getPoint.SetCommandPrompt(
+      layerSession.DecoratePrompt(doc, "Select perpendicular starting point"));
+    if (!getPoint.Constrain(constraint.Curve, true))
+      return false;
+
+    getPoint.DynamicDraw += (_, e) =>
+    {
+      DrawCurveConstraintHelper(
+        e.Display,
+        doc,
+        constraint with { HintPoint = e.CurrentPoint },
+        e.CurrentPoint);
+      DrawHiddenLayerWarning(e, doc, layerSession);
+    };
+
+    var result = getPoint.Get();
+    layerSession.ObserveCurrentLayer(doc);
+    if (result != GetResult.Point || getPoint.CommandResult() != Result.Success)
+      return false;
+
+    var point = getPoint.Point();
+    if (!constraint.Curve.ClosestPoint(point, out var parameter))
+      return false;
+
+    selectedStart = constraint.Curve.PointAt(parameter);
+    if (!selectedStart.IsValid)
+      return false;
+
+    updatedConstraint = constraint with
+    {
+      SeedParameter = parameter,
+      HintPoint = selectedStart
+    };
+    return true;
+  }
+
   private static bool TryResolveConstraintToDirection(
     EndpointConstraint constraint,
     Vector3d direction,
@@ -4015,11 +4168,11 @@ public sealed class vLine : Command
     display.PushDepthWriting(false);
     try
     {
-      display.DrawLine(
+      PreviewDisplay.DrawLine(
+        display,
         point - (tangent * halfLength),
         point + (tangent * halfLength),
-        Color.White,
-        1);
+        Color.White);
       if (constraint.HintPoint.IsValid)
         display.DrawPoint(constraint.HintPoint, Color.White);
       display.DrawPoint(point, Color.Red);
@@ -4353,26 +4506,26 @@ public sealed class vLine : Command
     switch (geometry)
     {
       case Curve curve:
-        display.DrawCurve(curve, color, thickness);
+        PreviewDisplay.DrawCurve(display, curve, color, thickness - 1);
         break;
       case Brep brep:
-        display.DrawBrepWires(brep, color, thickness);
+        PreviewDisplay.DrawBrepWires(display, brep, color, thickness - 1);
         break;
       case Mesh mesh:
-        display.DrawMeshWires(mesh, color, thickness);
+        PreviewDisplay.DrawMeshWires(display, mesh, color, thickness - 1);
         break;
       case Extrusion extrusion:
       {
         using var brep = extrusion.ToBrep();
         if (brep != null)
-          display.DrawBrepWires(brep, color, thickness);
+          PreviewDisplay.DrawBrepWires(display, brep, color, thickness - 1);
         break;
       }
       case Surface surface:
       {
         using var brep = surface.ToBrep();
         if (brep != null)
-          display.DrawBrepWires(brep, color, thickness);
+          PreviewDisplay.DrawBrepWires(display, brep, color, thickness - 1);
         break;
       }
     }
@@ -4409,6 +4562,296 @@ public sealed class vLine : Command
       _ = doc.Objects.Delete(id, true);
   }
 
+  private sealed class LineUndoRecordSession
+  {
+    private static readonly Queue<PendingLineFinalization> PendingFinalizations = new();
+    private static readonly Queue<PendingLineFinalization> PendingRecordCreations = new();
+    private static bool _idleHandlerAttached;
+    private static bool _recordCreationHandlerAttached;
+
+    private readonly uint _docSerial;
+    private bool _queued;
+
+    public LineUndoRecordSession(RhinoDoc doc)
+    {
+      _docSerial = doc.RuntimeSerialNumber;
+      Token = Guid.NewGuid().ToString("N");
+    }
+
+    public string Token { get; }
+
+    public void QueueFinalization()
+    {
+      if (_queued)
+        return;
+      _queued = true;
+
+      var doc = RhinoDoc.FromRuntimeSerialNumber(_docSerial);
+      if (doc == null)
+        return;
+
+      var snapshots = doc.Objects
+        .GetObjectList(ObjectType.Curve)
+        .Where(obj =>
+          obj != null &&
+          !obj.IsDeleted &&
+          string.Equals(
+            obj.Attributes.GetUserString(UndoSessionMarkerKey),
+            Token,
+            StringComparison.Ordinal))
+        .OrderBy(obj => obj.RuntimeSerialNumber)
+        .Select(CreateSnapshot)
+        .Where(snapshot => snapshot != null)
+        .Cast<LineOutputSnapshot>()
+        .ToList();
+
+      if (snapshots.Count == 0)
+      {
+        Log.Write("vLine", "undo finalization skipped: no surviving outputs");
+        return;
+      }
+
+      PendingFinalizations.Enqueue(new PendingLineFinalization(_docSerial, snapshots));
+      Log.Write("vLine", "undo finalization queued outputs={0}", snapshots.Count);
+      if (_idleHandlerAttached)
+        return;
+
+      _idleHandlerAttached = true;
+      RhinoApp.Idle += OnFinalizeIdle;
+    }
+
+    private static LineOutputSnapshot? CreateSnapshot(RhinoObject obj)
+    {
+      if (obj.Geometry is not Curve curve)
+        return null;
+
+      var duplicate = curve.DuplicateCurve();
+      if (duplicate == null)
+        return null;
+
+      var attributes = obj.Attributes.Duplicate();
+      attributes.DeleteUserString(UndoSessionMarkerKey);
+      return new LineOutputSnapshot(
+        obj.Id,
+        duplicate,
+        attributes,
+        curve is PolylineCurve);
+    }
+
+    private static void OnFinalizeIdle(object? sender, EventArgs e)
+    {
+      RhinoApp.Idle -= OnFinalizeIdle;
+      _idleHandlerAttached = false;
+
+      while (PendingFinalizations.TryDequeue(out var pending))
+      {
+        if (RollbackCombinedRecord(pending))
+          PendingRecordCreations.Enqueue(pending);
+      }
+
+      if (PendingRecordCreations.Count > 0 && !_recordCreationHandlerAttached)
+      {
+        _recordCreationHandlerAttached = true;
+        RhinoApp.Idle += OnCreateRecordsIdle;
+      }
+    }
+
+    private static bool RollbackCombinedRecord(PendingLineFinalization pending)
+    {
+      var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
+      if (doc == null)
+        return false;
+
+      var presentCount = pending.Outputs.Count(output => IsPresent(doc, output.OriginalId));
+      var rolledBack = presentCount == 0;
+      var undoResult = false;
+      if (presentCount == pending.Outputs.Count)
+      {
+        undoResult = RhinoApp.RunScript("_Undo", false);
+        rolledBack = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
+      }
+
+      Log.Write(
+        "vLine",
+        "undo finalization rollback present={0}/{1} undo_result={2} rolled_back={3}",
+        presentCount,
+        pending.Outputs.Count,
+        undoResult,
+        rolledBack);
+
+      if (!rolledBack)
+      {
+        RhinoApp.WriteLine("vLine: could not separate the completed objects into individual undo records.");
+        return false;
+      }
+
+      doc.Views.Redraw();
+      return true;
+    }
+
+    private static void OnCreateRecordsIdle(object? sender, EventArgs e)
+    {
+      RhinoApp.Idle -= OnCreateRecordsIdle;
+      _recordCreationHandlerAttached = false;
+
+      var retry = new List<PendingLineFinalization>();
+      while (PendingRecordCreations.TryDequeue(out var pending))
+      {
+        CreateIndividualRecords(pending, out var continuation);
+        if (continuation != null)
+          retry.Add(continuation);
+      }
+
+      foreach (var pending in retry)
+      {
+        if (pending.Attempts >= 5)
+        {
+          RestoreCombinedResult(pending);
+          continue;
+        }
+
+        PendingRecordCreations.Enqueue(pending);
+      }
+
+      if (PendingRecordCreations.Count > 0 && !_recordCreationHandlerAttached)
+      {
+        _recordCreationHandlerAttached = true;
+        RhinoApp.Idle += OnCreateRecordsIdle;
+      }
+    }
+
+    private static void RestoreCombinedResult(PendingLineFinalization pending)
+    {
+      var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
+      if (doc == null)
+        return;
+
+      var restored = false;
+      if (pending.NextOutputIndex == 0)
+      {
+        var redoResult = RhinoApp.RunScript("_Redo", false);
+        restored = redoResult && pending.Outputs.All(output => IsPresent(doc, output.OriginalId));
+        Log.Write(
+          "vLine",
+          "undo record creation fallback redo_result={0} restored={1}",
+          redoResult,
+          restored);
+      }
+
+      if (!restored)
+      {
+        foreach (var output in pending.Outputs.Skip(pending.NextOutputIndex))
+        {
+          _ = doc.Objects.AddCurve(
+            output.Curve.DuplicateCurve(),
+            output.Attributes.Duplicate());
+        }
+
+        Log.Write(
+          "vLine",
+          "undo record creation fallback restored snapshots={0}",
+          pending.Outputs.Count - pending.NextOutputIndex);
+      }
+
+      RhinoApp.WriteLine("vLine: separate undo records were unavailable; restored the completed geometry.");
+      doc.Views.Redraw();
+    }
+
+    private static void CreateIndividualRecords(
+      PendingLineFinalization pending,
+      out PendingLineFinalization? continuation)
+    {
+      continuation = null;
+      var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
+      if (doc == null)
+        return;
+
+      if (doc.UndoRecordingIsActive || doc.UndoActive || doc.RedoActive)
+      {
+        Log.Write(
+          "vLine",
+          "undo record creation deferred attempts={0} recording_active={1} undo_active={2} redo_active={3}",
+          pending.Attempts,
+          doc.UndoRecordingIsActive,
+          doc.UndoActive,
+          doc.RedoActive);
+        continuation = pending with { Attempts = pending.Attempts + 1 };
+        return;
+      }
+
+      var added = 0;
+      for (var index = pending.NextOutputIndex; index < pending.Outputs.Count; index++)
+      {
+        var output = pending.Outputs[index];
+        var description = output.IsPolyline ? "vLine Polyline" : "vLine";
+        var undoRecord = doc.BeginUndoRecord(description);
+        if (undoRecord == 0)
+        {
+          Log.Write(
+            "vLine",
+            "undo record creation deferred attempts={0} begin returned zero type={1} added={2}",
+            pending.Attempts,
+            output.IsPolyline ? "polyline" : "line",
+            added);
+          continuation = pending with
+          {
+            NextOutputIndex = index,
+            Attempts = pending.Attempts + 1
+          };
+          return;
+        }
+
+        var objectId = Guid.Empty;
+        try
+        {
+          objectId = doc.Objects.AddCurve(
+            output.Curve.DuplicateCurve(),
+            output.Attributes.Duplicate());
+        }
+        finally
+        {
+          if (undoRecord != 0)
+            doc.EndUndoRecord(undoRecord);
+        }
+
+        if (objectId == Guid.Empty)
+        {
+          Log.Write("vLine", "undo finalization add failed type={0}", description);
+          continue;
+        }
+
+        added++;
+        Log.Write(
+          "vLine",
+          "undo record created type={0} record={1} object={2}",
+          output.IsPolyline ? "polyline" : "line",
+          undoRecord,
+          objectId);
+      }
+
+      Log.Write("vLine", "undo finalization completed records={0}", added);
+      doc.Views.Redraw();
+    }
+
+    private static bool IsPresent(RhinoDoc doc, Guid objectId)
+    {
+      var obj = doc.Objects.FindId(objectId);
+      return obj != null && !obj.IsDeleted;
+    }
+  }
+
+  private sealed record PendingLineFinalization(
+    uint DocSerial,
+    IReadOnlyList<LineOutputSnapshot> Outputs,
+    int NextOutputIndex = 0,
+    int Attempts = 0);
+
+  private sealed record LineOutputSnapshot(
+    Guid OriginalId,
+    Curve Curve,
+    ObjectAttributes Attributes,
+    bool IsPolyline);
+
   private static int ClampIndex(int value, int count)
   {
     if (count <= 0)
@@ -4420,12 +4863,14 @@ public sealed class vLine : Command
 
   private sealed class LineLayerSession
   {
+    private readonly string _undoSessionToken;
     private int _observedCurrentLayerIndex;
     private int? _externalLayerOverride;
 
-    public LineLayerSession(RhinoDoc doc, string optionLayerName)
+    public LineLayerSession(RhinoDoc doc, string optionLayerName, string undoSessionToken)
     {
       OptionLayerName = NormalizeLayerOption(optionLayerName);
+      _undoSessionToken = undoSessionToken;
       _observedCurrentLayerIndex = doc.Layers.CurrentLayerIndex;
     }
 
@@ -4475,7 +4920,9 @@ public sealed class vLine : Command
 
     public ObjectAttributes CreateAttributes(RhinoDoc doc)
     {
-      return new ObjectAttributes { LayerIndex = ResolveLayerIndex(doc) };
+      var attributes = new ObjectAttributes { LayerIndex = ResolveLayerIndex(doc) };
+      attributes.SetUserString(UndoSessionMarkerKey, _undoSessionToken);
+      return attributes;
     }
 
     public Color ResolveColor(RhinoDoc doc)
@@ -4601,6 +5048,13 @@ public sealed class vLine : Command
     Guid ObjectId,
     ComponentIndex ComponentIndex,
     Point3d PickPoint);
+
+  private readonly record struct ScreenCurveCandidate(
+    ScreenCurvePick Pick,
+    double Distance,
+    double Depth,
+    bool EndpointHit,
+    string CurveType);
 
   private readonly record struct PickedCurve(
     Curve Curve,

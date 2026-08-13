@@ -371,7 +371,10 @@ public sealed class vChamfer : Command
     ptA = ptB = Point3d.Unset;
     tA = tB = double.NaN;
     if (!pickedPoint.IsValid || offset < 0.0)
+    {
+      Log.Write("vChamfer", $"PointOffset  invalid input point={P(pickedPoint)} offset={offset:G6}");
       return false;
+    }
 
     double length = c1.GetLength();
     const int sampleCount = 48;
@@ -400,7 +403,10 @@ public sealed class vChamfer : Command
     }
 
     if (double.IsNaN(bestStation))
+    {
+      Log.Write("vChamfer", "PointOffset  no valid reference station");
       return false;
+    }
 
     double refineLo = Math.Max(0.0, bestStation - sampleStep);
     double refineHi = Math.Min(length, bestStation + sampleStep);
@@ -418,65 +424,95 @@ public sealed class vChamfer : Command
     if (!TryEvaluatePointStation(
           c1, c1AtStart, c2, c2AtStart, referenceStation,
           out var refA, out var refB, out _, out _))
+    {
+      Log.Write("vChamfer", $"PointOffset  reference evaluation failed station={referenceStation:G6}");
       return false;
+    }
     var referenceMidpoint = (refA + refB) * 0.5;
 
     double targetStation = referenceStation;
+    var targetDirection = "reference";
     if (offset > RhinoMath.ZeroTolerance)
     {
-      double nearStation = referenceStation;
-      double farStation = double.NaN;
-      const int offsetSamples = 64;
-
-      for (int i = 1; i <= offsetSamples; i++)
+      bool TryFindOffsetStation(double endStation, out double stationAtOffset)
       {
-        double station = referenceStation * (offsetSamples - i) / offsetSamples;
-        if (!TryEvaluatePointStation(
-              c1, c1AtStart, c2, c2AtStart, station,
-              out var candidateA, out var candidateB, out _, out _))
-          continue;
+        stationAtOffset = double.NaN;
+        double nearStation = referenceStation;
+        double farStation = double.NaN;
+        const int offsetSamples = 96;
 
-        double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
-        if (distance >= offset)
+        for (int i = 1; i <= offsetSamples; i++)
         {
-          farStation = station;
-          break;
-        }
-        nearStation = station;
-      }
+          double station = referenceStation +
+            ((endStation - referenceStation) * i / offsetSamples);
+          if (!TryEvaluatePointStation(
+                c1, c1AtStart, c2, c2AtStart, station,
+                out var candidateA, out var candidateB, out _, out _))
+            continue;
 
-      if (double.IsNaN(farStation))
-        return false;
-
-      for (int i = 0; i < 44; i++)
-      {
-        double station = 0.5 * (farStation + nearStation);
-        if (!TryEvaluatePointStation(
-              c1, c1AtStart, c2, c2AtStart, station,
-              out var candidateA, out var candidateB, out _, out _))
-        {
-          farStation = station;
-          continue;
-        }
-
-        double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
-        if (distance >= offset)
-          farStation = station;
-        else
+          double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
+          if (distance >= offset)
+          {
+            farStation = station;
+            break;
+          }
           nearStation = station;
+        }
+
+        if (double.IsNaN(farStation))
+          return false;
+
+        for (int i = 0; i < 44; i++)
+        {
+          double station = 0.5 * (farStation + nearStation);
+          if (!TryEvaluatePointStation(
+                c1, c1AtStart, c2, c2AtStart, station,
+                out var candidateA, out var candidateB, out _, out _))
+          {
+            farStation = station;
+            continue;
+          }
+
+          double distance = referenceMidpoint.DistanceTo((candidateA + candidateB) * 0.5);
+          if (distance >= offset)
+            farStation = station;
+          else
+            nearStation = station;
+        }
+
+        stationAtOffset = 0.5 * (farStation + nearStation);
+        return true;
       }
-      targetStation = 0.5 * (farStation + nearStation);
+
+      if (TryFindOffsetStation(0.0, out targetStation))
+      {
+        targetDirection = "toward-corner";
+      }
+      else if (TryFindOffsetStation(length, out targetStation))
+      {
+        targetDirection = "away-from-corner";
+      }
+      else
+      {
+        Log.Write("vChamfer",
+          $"PointOffset  no offset solution referenceStation={referenceStation:G6} " +
+          $"length={length:G6} offset={offset:G6}");
+        return false;
+      }
     }
 
     if (!TryEvaluatePointStation(
           c1, c1AtStart, c2, c2AtStart, targetStation,
           out ptA, out ptB, out tA, out tB))
+    {
+      Log.Write("vChamfer", $"PointOffset  target evaluation failed station={targetStation:G6}");
       return false;
+    }
 
     var targetMidpoint = (ptA + ptB) * 0.5;
     Log.Write("vChamfer",
       $"PointOffset  referenceStation={referenceStation:G6} " +
-      $"targetStation={targetStation:G6} offset={offset:G6} " +
+      $"targetStation={targetStation:G6} direction={targetDirection} offset={offset:G6} " +
       $"actual={referenceMidpoint.DistanceTo(targetMidpoint):G6} " +
       $"projection={pickedPoint.DistanceTo(referenceMidpoint):G6} " +
       $"ptA={P(ptA)} ptB={P(ptB)}");
@@ -500,26 +536,36 @@ public sealed class vChamfer : Command
     /// <summary>Whether to draw cut-off geometry in red (Trim=Yes).</summary>
     public bool   ShowTrim    { get; set; }
 
+    public void Clear(bool showTrim)
+    {
+      ChamferLine = null;
+      Ext1 = null;
+      Ext2 = null;
+      CutOff1 = null;
+      CutOff2 = null;
+      ShowTrim = showTrim;
+    }
+
     protected override void DrawOverlay(DrawEventArgs e)
     {
       // Extension stubs that survive trimming (cyan - part of the kept curve)
       if (Ext1 is { } ext1)
-        e.Display.DrawLine(ext1, Color.Cyan, 2);
+        PreviewDisplay.DrawLine(e.Display, ext1, Color.Cyan, 1);
       if (Ext2 is { } ext2)
-        e.Display.DrawLine(ext2, Color.Cyan, 2);
+        PreviewDisplay.DrawLine(e.Display, ext2, Color.Cyan, 1);
 
       // Corner pieces removed by trim - red
       if (ShowTrim)
       {
         if (CutOff1 != null)
-          e.Display.DrawCurve(CutOff1, Color.Red, 2);
+          PreviewDisplay.DrawCurve(e.Display, CutOff1, Color.Red, 1);
         if (CutOff2 != null)
-          e.Display.DrawCurve(CutOff2, Color.Red, 2);
+          PreviewDisplay.DrawCurve(e.Display, CutOff2, Color.Red, 1);
       }
 
       // Chamfer line - cyan, drawn on top
       if (ChamferLine is { } line)
-        e.Display.DrawLine(line, Color.Cyan, 2);
+        PreviewDisplay.DrawLine(e.Display, line, Color.Cyan, 1);
     }
   }
 
@@ -669,17 +715,20 @@ public sealed class vChamfer : Command
           var pickedPt = get.Point();
           Log.Write("vChamfer", $"PointPick  click={P(pickedPt)}  currentPtA={P(ptA.IsValid?(Point3d?)ptA:null)}");
 
+          pickedReferencePoint = pickedPt;
+          pointActive = true;
+
           if (!ComputeChamferFromPoint(
                 work1, c1AtStart, work2, c2AtStart,
                 pickedPt, runLength,
                 out ptA, out ptB, out tA, out tB))
           {
+            conduit.Clear(_trim);
+            doc.Views.Redraw();
             RhinoApp.WriteLine("vChamfer: cannot place the chamfer that far from the point.");
             continue;
           }
 
-          pickedReferencePoint = pickedPt;
-          pointActive = true;
           UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
           doc.Views.Redraw();
           continue;
@@ -689,8 +738,8 @@ public sealed class vChamfer : Command
         {
           if (!ptA.IsValid || !ptB.IsValid)
           {
-            RhinoApp.WriteLine("vChamfer: no valid chamfer - adjust Length first.");
-            continue;
+            RhinoApp.WriteLine("vChamfer: no valid chamfer was created.");
+            return Result.Nothing;
           }
           break;
         }
@@ -702,6 +751,8 @@ public sealed class vChamfer : Command
           if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
                 out ptA, out ptB, out tA, out tB))
             UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
+          else
+            conduit.Clear(_trim);
           doc.Views.Redraw();
           continue;
         }
@@ -730,7 +781,6 @@ public sealed class vChamfer : Command
 
         if (res == GetResult.Number || res == GetResult.Option)
         {
-          bool recomputed = false;
           if (pointActive && pickedReferencePoint.IsValid)
           {
             if (ComputeChamferFromPoint(
@@ -739,19 +789,21 @@ public sealed class vChamfer : Command
                   out ptA, out ptB, out tA, out tB))
             {
               UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
-              recomputed = true;
             }
-            else { conduit.ShowTrim = _trim; }
+            else
+            {
+              conduit.Clear(_trim);
+              RhinoApp.WriteLine("vChamfer: cannot place the chamfer that far from the point.");
+            }
           }
-
-          if (!recomputed)
+          else
           {
             if (ComputeChamfer(work1, c1AtStart, work2, c2AtStart, runLength,
                   out ptA, out ptB, out tA, out tB))
               UpdateConduit(conduit, crv1, work1, c1AtStart, crv2, work2, c2AtStart, tA, tB, ptA, ptB);
             else
             {
-              conduit.ShowTrim = _trim;   // still reflect trim toggle even when invalid
+              conduit.Clear(_trim);
               RhinoApp.WriteLine("vChamfer: length too large for this corner.");
             }
           }

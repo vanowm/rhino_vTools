@@ -29,6 +29,15 @@
     "layerCut": "CUT1",
     "layerRef": "Reference"
   },
+  "vDupBorder": {
+    "groupIfNone": false,
+    "removeSource": false,
+    "layer": "*Current*"
+  },
+  "vDupEdge": {
+    "groupIfNone": false,
+    "layer": "*Current*"
+  },
   "vFacing": {
     "size": 3.0
   },
@@ -98,6 +107,9 @@
     "multiple_distance": 0.0,
     "multiple_use_distance": false,
     "curve_sides": []
+  },
+  "vOffset": {
+    "autoTrim": false
   },
   "vOverlaps": {
     "tolerance": 0.001,

@@ -1638,7 +1638,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           if (!s.CurveEnabled[i]) continue;
           var hgeom = NotchGeometry(s.Curves[i], hoverLengths[i], nl, no, sides[i], nt, nw, null, null);
           if (hgeom == null) continue;
-          if (canNotch) foreach (var c in hgeom) e.Display.DrawCurve(c, System.Drawing.Color.Cyan, 2);
+          if (canNotch) foreach (var c in hgeom) PreviewDisplay.DrawCurve(e.Display, c, System.Drawing.Color.Cyan, 1);
           if (canLabel && firstPos)
           {
             GetCurveTangentAndDirection(s.Curves[i], hoverLengths[i], sides[i], null, null,
@@ -1670,7 +1670,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (canNotch)
       {
         foreach (var component in geom)
-          e.Display.DrawCurve(component, System.Drawing.Color.Cyan, 2);
+          PreviewDisplay.DrawCurve(e.Display, component, System.Drawing.Color.Cyan, 1);
       }
 
       if (canLabel)
@@ -4393,7 +4393,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       protected override void DrawForeground(DrawEventArgs e)
       {
         if (Curve != null)
-          e.Display.DrawCurve(Curve, System.Drawing.Color.Gold, 4);
+          PreviewDisplay.DrawCurve(e.Display, Curve, System.Drawing.Color.Gold, 3);
       }
     }
 

@@ -161,7 +161,7 @@ namespace vTools.Commands
         if (_activeEdge != null && SourceDot != null && MateDot != null)
         {
           DrawMateHighlight(_doc, e.Display, MateDot);
-          e.Display.DrawCurve(_activeEdge.Curve, SourceEdgeHighlightColor, 3);
+          PreviewDisplay.DrawCurve(e.Display, _activeEdge.Curve, SourceEdgeHighlightColor, 2);
           DrawDotHighlight(_doc, e.Display, SourceDot, SourceDotHighlightColor);
         }
 
@@ -809,14 +809,14 @@ namespace vTools.Commands
           {
             case Brep brep:
               display.DrawBrepShaded(brep, material);
-              display.DrawBrepWires(brep, MatePartHighlightColor, 2);
+              PreviewDisplay.DrawBrepWires(display, brep, MatePartHighlightColor, 1);
               break;
             case Extrusion extrusion:
               var extrusionBrep = extrusion.ToBrep();
               if (extrusionBrep != null)
               {
                 display.DrawBrepShaded(extrusionBrep, material);
-                display.DrawBrepWires(extrusionBrep, MatePartHighlightColor, 2);
+                PreviewDisplay.DrawBrepWires(display, extrusionBrep, MatePartHighlightColor, 1);
               }
               break;
             case Surface surface:
@@ -824,15 +824,15 @@ namespace vTools.Commands
               if (surfaceBrep != null)
               {
                 display.DrawBrepShaded(surfaceBrep, material);
-                display.DrawBrepWires(surfaceBrep, MatePartHighlightColor, 2);
+                PreviewDisplay.DrawBrepWires(display, surfaceBrep, MatePartHighlightColor, 1);
               }
               break;
             case Mesh mesh:
               display.DrawMeshShaded(mesh, material);
-              display.DrawMeshWires(mesh, MatePartHighlightColor, 2);
+              PreviewDisplay.DrawMeshWires(display, mesh, MatePartHighlightColor, 1);
               break;
             case Curve curve:
-              display.DrawCurve(curve, MatePartHighlightColor, 2);
+              PreviewDisplay.DrawCurve(display, curve, MatePartHighlightColor, 1);
               break;
           }
         }

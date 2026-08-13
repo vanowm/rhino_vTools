@@ -148,11 +148,11 @@ internal static class HistoryBreakWarning
             break;
           }
           case Mesh mesh:
-            e.Display.DrawMeshWires(mesh, Outline, 4);
+            PreviewDisplay.DrawMeshWires(e.Display, mesh, Outline, 3);
             break;
           case Curve curve:
-            e.Display.DrawCurve(curve, Outline, 5);
-            e.Display.DrawCurve(curve, Orange, 2);
+            PreviewDisplay.DrawCurve(e.Display, curve, Outline, 4);
+            PreviewDisplay.DrawCurve(e.Display, curve, Orange, 1);
             break;
           case Rhino.Geometry.Point point:
             e.Display.DrawPoint(point.Location, PointStyle.RoundSimple, 7, Outline);
@@ -165,7 +165,7 @@ internal static class HistoryBreakWarning
     private static void DrawBrepEdges(DisplayPipeline display, Brep brep)
     {
       foreach (var edge in brep.Edges)
-        display.DrawCurve(edge, Outline, 4);
+        PreviewDisplay.DrawCurve(display, edge, Outline, 3);
     }
   }
 }

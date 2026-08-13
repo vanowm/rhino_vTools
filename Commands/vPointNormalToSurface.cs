@@ -78,7 +78,7 @@ internal static class PointNormalToSurfaceWorkflow
           return;
 
         _ = previewNormal;
-        drawEvent.Display.DrawLine(drawEvent.CurrentPoint, onSurface, previewLineColor, 1);
+        PreviewDisplay.DrawLine(drawEvent.Display, drawEvent.CurrentPoint, onSurface, previewLineColor);
         drawEvent.Display.DrawPoint(onSurface, Rhino.Display.PointStyle.ActivePoint, 3, previewPointColor);
       };
 

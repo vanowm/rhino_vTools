@@ -193,7 +193,7 @@ public sealed class vRectangle : Command
         if (w <= 0.0 || h <= 0.0)
           return;
         var poly = BuildRectanglePolyline(e.CurrentPoint, w, h);
-        e.Display.DrawPolyline(poly, Color.Cyan, 2);
+        PreviewDisplay.DrawPolyline(e.Display, poly, Color.Cyan, 1);
       };
 
       gp.DynamicDraw += drawPreview;

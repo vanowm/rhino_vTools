@@ -250,7 +250,7 @@ public sealed class vSetPt : Command
     protected override void DrawOverlay(DrawEventArgs e)
     {
       foreach (var curve in _curves)
-        e.Display.DrawCurve(curve, Color.Cyan, 1);
+        PreviewDisplay.DrawCurve(e.Display, curve, Color.Cyan);
     }
   }
 

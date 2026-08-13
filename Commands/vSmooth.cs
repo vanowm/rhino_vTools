@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Linq;
 using Rhino;
 using Rhino.Commands;
@@ -56,6 +57,7 @@ public sealed class vSmooth : Command
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(true);
     go.AcceptNumber(true, true);
+    go.AcceptString(true);
 
     RhinoObject? targetObj = ChoosePreselectedTarget(preselectedCurves, tol);
     if (targetObj != null)
@@ -90,10 +92,16 @@ public sealed class vSmooth : Command
       if (res == GetResult.Option) continue;
       if (res == GetResult.Number)
       {
-        double value = Math.Clamp(go.Number(), 0.0, 2.0);
-        _strengthStart = value;
-        _strengthEnd = value;
+        _strengthStart = Math.Clamp(go.Number(), 0.0, 2.0);
         SaveOptions();
+        continue;
+      }
+      if (res == GetResult.String)
+      {
+        if (TryApplyStrengthInput(go.StringResult(), out var error))
+          SaveOptions();
+        else
+          RhinoApp.WriteLine($"vSmooth: {error}");
         continue;
       }
       if (res == GetResult.Object)
@@ -180,6 +188,7 @@ public sealed class vSmooth : Command
     goNb.SetCustomGeometryFilter((obj, _, _) => allIds.Contains(obj.Id) || obj.Id == targetId);
     goNb.AcceptNothing(true);
     goNb.AcceptNumber(true, true);
+    goNb.AcceptString(true);
 
     bool accepted = false;
     bool restart  = false;
@@ -219,9 +228,22 @@ public sealed class vSmooth : Command
 
         if (res == GetResult.Number)
         {
-          double v = Math.Clamp(goNb.Number(), 0.0, 2.0);
-          _strengthStart = v; _strengthEnd = v;
+          _strengthStart = Math.Clamp(goNb.Number(), 0.0, 2.0);
           SaveOptions(); Refresh();
+          continue;
+        }
+
+        if (res == GetResult.String)
+        {
+          if (TryApplyStrengthInput(goNb.StringResult(), out var error))
+          {
+            SaveOptions();
+            Refresh();
+          }
+          else
+          {
+            RhinoApp.WriteLine($"vSmooth: {error}");
+          }
           continue;
         }
 
@@ -574,6 +596,73 @@ public sealed class vSmooth : Command
     foreach (var jc in joined) doc.Objects.AddCurve(jc);
   }
 
+  private static bool TryApplyStrengthInput(string? input, out string error)
+  {
+    error = "enter strength as start, start,end, or ,end.";
+    var value = input?.Trim() ?? string.Empty;
+    if (value.Length == 0)
+      return false;
+
+    var parts = value.Split(',');
+    if (parts.Length > 2)
+      return false;
+
+    if (parts.Length == 1)
+    {
+      if (!TryParseStrength(parts[0], out var start))
+        return false;
+      _strengthStart = start;
+      return true;
+    }
+
+    var hasStart = !string.IsNullOrWhiteSpace(parts[0]);
+    var hasEnd = !string.IsNullOrWhiteSpace(parts[1]);
+    if (!hasStart && !hasEnd)
+      return false;
+
+    double? parsedStart = null;
+    double? parsedEnd = null;
+    if (hasStart)
+    {
+      if (!TryParseStrength(parts[0], out var start))
+        return false;
+      parsedStart = start;
+    }
+    if (hasEnd)
+    {
+      if (!TryParseStrength(parts[1], out var end))
+        return false;
+      parsedEnd = end;
+    }
+
+    if (parsedStart.HasValue)
+      _strengthStart = parsedStart.Value;
+    if (parsedEnd.HasValue)
+      _strengthEnd = parsedEnd.Value;
+
+    return true;
+  }
+
+  private static bool TryParseStrength(string input, out double strength)
+  {
+    if (!double.TryParse(
+          input.Trim(),
+          NumberStyles.Float,
+          CultureInfo.CurrentCulture,
+          out strength) &&
+        !double.TryParse(
+          input.Trim(),
+          NumberStyles.Float,
+          CultureInfo.InvariantCulture,
+          out strength))
+    {
+      return false;
+    }
+
+    strength = Math.Clamp(strength, 0.0, 2.0);
+    return true;
+  }
+
   private static void LoadOptions()
   {
     ToolsOptionStore.Read(SectionName, section =>
@@ -606,8 +695,8 @@ public sealed class vSmooth : Command
     public void SetCurves(Curve? first, Curve? second) { _first = first; _second = second; }
     protected override void DrawForeground(DrawEventArgs e)
     {
-      if (_first  != null) e.Display.DrawCurve(_first,  Color.FromArgb(0, 210, 90),  3); // green
-      if (_second != null) e.Display.DrawCurve(_second, Color.FromArgb(30, 144, 255), 3); // blue
+      if (_first  != null) PreviewDisplay.DrawCurve(e.Display, _first,  Color.FromArgb(0, 210, 90),  2); // green
+      if (_second != null) PreviewDisplay.DrawCurve(e.Display, _second, Color.FromArgb(30, 144, 255), 2); // blue
     }
   }
 
@@ -622,10 +711,14 @@ public sealed class vSmooth : Command
     }
     protected override void DrawForeground(DrawEventArgs e)
     {
-      foreach (var curve in _smoothed) e.Display.DrawCurve(curve, Color.Cyan, 2);
+      foreach (var curve in _smoothed) PreviewDisplay.DrawCurve(e.Display, curve, Color.Cyan, 1);
       if (_original != null)
         // Bright gold before any neighbour picked; faint when preview is shown
-        e.Display.DrawCurve(_original, _smoothed.Count > 0 ? Color.FromArgb(100, 100, 25) : Color.FromArgb(240, 200, 0), _smoothed.Count > 0 ? 1 : 2);
+        PreviewDisplay.DrawCurve(
+          e.Display,
+          _original,
+          _smoothed.Count > 0 ? Color.FromArgb(100, 100, 25) : Color.FromArgb(240, 200, 0),
+          _smoothed.Count > 0 ? 0 : 1);
     }
   }
 }

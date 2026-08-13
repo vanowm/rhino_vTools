@@ -454,7 +454,7 @@ public sealed class vProjectToSurface : Command
       RefreshCacheIfNeeded();
 
       foreach (var curve in _curves)
-        e.Display.DrawCurve(curve, PreviewCurveColor, 3);
+        PreviewDisplay.DrawCurve(e.Display, curve, PreviewCurveColor, 2);
 
       foreach (var point in _points)
         e.Display.DrawPoint(point, PointStyle.ActivePoint, 5, PreviewPointColor);

@@ -1,17 +1,19 @@
-# vTools  ·  v26.8.12.2049
+# vTools  ·  v26.8.13.1304
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (48):
+- Native commands (50):
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
   - [vCurveToSpline](#vcurvetospline-flow) *(26.4.24.934)* — converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement
   - [vDiamonds](#vdiamonds-flow) *(26.5.14.928)* — draws an argyle diamond pattern with optional bounding rectangle and size/count labels; supports BySize centering mode
+  - [vDupBorder](#vdupborder-flow) *(26.8.13.829)* — duplicates whole-object or selected-face borders onto a chosen layer while carrying source groups, with optional source removal and grouping for ungrouped inputs
+  - [vDupEdge](#vdupedge-flow) *(26.8.13.829)* — duplicates selected Brep, mesh, extrusion, or SubD edges onto a chosen layer while carrying source groups and optionally grouping ungrouped inputs
   - [vFacing](#vfacing-flow) *(26.5.29.1333)* — builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview
   - [vFilterExec](#vfilterexec-flow) *(26.7.30.1223)* — runs a command with a temporary selection filter and restores the previous filter afterward
   - [vFitBox](#vfitbox-flow) *(26.4.24.934)* — finds the minimum bounding box for selected objects by optimizing rotation angle
@@ -24,7 +26,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one
   - [vNotches](#vnotches-flow) *(26.6.1.1529)* — places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview
-  - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in Offset in a continuous loop, clearing selection after each run
+  - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in Offset continuously and can trim or extend new offsets to curves touching the source endpoints
   - [vOrient2pt](#vorient2pt-flow) *(26.4.24.934)* — orients objects from a source two-point frame to a target two-point frame
   - [vOrient3pt](#vorient3pt-flow) *(26.4.24.934)* — orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient)
   - [vOverlaps](#voverlaps-flow) *(26.7.3.2104)* — finds all visible curves that follow the same path or are fully covered by another and selects them (duplicates/subsets); one original per duplicate group is kept unselected
@@ -101,7 +103,7 @@ Release output is written to:
 
 All command options persist by default unless stated otherwise.
 
-Native commands (48): [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (50): [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -194,6 +196,28 @@ Closed source curves and closed joined chains are created as closed splines.
 
 1. Current bounding box dimensions print to command history on every preview update.
 1. Pick the placement point to commit. All objects are grouped. Output layers: `PLOT` (diamond lines), `CUT1` (boundary rect), `Reference` (labels).
+
+### vDupBorder flow
+
+1. Preselect or select open surfaces, polysurfaces, meshes, SubDs, hatches, or individual Brep/mesh/SubD faces. Group selection is disabled so sources are chosen individually.
+1. The command duplicates each whole-object border; selected Brep faces produce individual face borders, while selected mesh or SubD face sets produce their combined outer boundary.
+1. Existing source groups are always applied to every resulting curve.
+
+Options:
+
+- `GroupIfNone`: when `Yes`, an ungrouped source and all curves created from it are placed into a new group.
+- `RemoveSource`: deletes each source only after its border curves were created successfully.
+- `Layer`: uses the shared searchable picker. `*Current*` follows the current document layer; a named choice persists by full path. `-vDupBorder` accepts the layer directly.
+
+### vDupEdge flow
+
+1. Preselect or select Brep, extrusion, mesh, or SubD edge subobjects. Normal Rhino multi-edge and double-click chain selection remains available.
+1. Each duplicated curve inherits every group assigned to its source object.
+
+Options:
+
+- `GroupIfNone`: when `Yes`, an ungrouped source and all edges duplicated from it are placed into a new group.
+- `Layer`: uses the shared searchable picker. `*Current*` follows the current document layer; a named choice persists by full path. `-vDupEdge` accepts the layer directly.
 
 ### vFacing flow
 
@@ -303,7 +327,8 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
     - `PerpNear`: solve perpendicular against the nearest curve or surface/polysurface edge.
     - `TanNear`: solve against the nearest curve or surface/polysurface edge and use the valid tangent point nearest the cursor.
     - `Auto`: choose perpendicular/tangent solution using `Priority`.
-    - `FromFirstPoint`: locks a curve-constrained start to the initially clicked point instead of allowing the solver to move it along the first curve.
+    - `FromPoint`: for a perpendicular-from-curve start, picks and locks an exact starting point on the source curve; run it again to change that point.
+    - `FromFirstPoint`: for a perpendicular- or tangent-from-curve start, locks the start to the initially clicked point instead of allowing the solver to move it along the first curve.
     - `ProjectTo`: picks a curve, surface, polysurface, or mesh and constrains the endpoint to its nearest projected point.
     - `Priority`: auto-mode choice policy.
       - `Closest`: whichever solution is closer to cursor.
@@ -408,10 +433,13 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 ### vOffset flow
 
 1. Run `vOffset`.
-1. The built-in `_Offset` command runs interactively.
-1. After each completed offset, selection is cleared and `_Offset` starts again automatically.
+1. Select one source curve; `AutoTrim` is available during this step.
+1. The selected curve is passed to the built-in `_Offset` command, which runs interactively.
+1. After each completed offset, selection is cleared and `vOffset` starts again automatically.
 1. Press Escape to exit the loop.
 1. Press Enter to repeat `vOffset` for a new loop.
+
+`AutoTrim=Yes` checks each open source endpoint independently. When an endpoint touches another curve, the corresponding end of every new offset is trimmed back if it crosses that curve, left unchanged if already touching, or extended to the curve when it falls short. The setting persists.
 
 ### vOrient2pt flow
 
@@ -546,7 +574,7 @@ Behavior:
     - `Copy`: when `Yes`, a new curve is created and the original is kept; when `No` (default) the original is replaced in-place.
     - `Join`: when `Yes`, the smoothed curve and its connected neighbours are joined into a single polycurve; the separate originals are deleted.
     - `SmoothAll`: when `No` (default), only the target curve changes. When `Yes`, the tangent correction is shared between the target and each selected neighbour so the transition is spread across both curves.
-    - Typing a number sets both `StrengthStart` and `StrengthEnd` simultaneously.
+    - Direct input accepts `start`, `start,end`, or `,end` to change only `StrengthStart`, both strengths, or only `StrengthEnd` respectively.
 
 1. Press Enter to commit. If the input curve belongs to a group the output curve inherits that group.
 

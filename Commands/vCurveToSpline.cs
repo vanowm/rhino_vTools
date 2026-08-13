@@ -1192,7 +1192,7 @@ private static SegmentEndpoint OtherEndpoint(EndpointPair pair, int segmentIndex
       RefreshCacheIfNeeded();
 
       foreach (var curve in _previewCurves)
-        e.Display.DrawCurve(curve, _color, 3);
+        PreviewDisplay.DrawCurve(e.Display, curve, _color, 2);
     }
 
     /// <summary>

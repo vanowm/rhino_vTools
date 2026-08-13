@@ -545,7 +545,7 @@ public sealed class vUzip : Command
         draw.Transform(xform);
         switch (draw)
         {
-          case Curve c:       e.Display.DrawCurve(c, color, 1); break;
+          case Curve c:       PreviewDisplay.DrawCurve(e.Display, c, color); break;
           case TextEntity te: e.Display.DrawAnnotation(te, color); break;
           case Rhino.Geometry.Point p: e.Display.DrawPoint(p.Location, Rhino.Display.PointStyle.Simple, 2, color); break;
         }
@@ -583,7 +583,7 @@ public sealed class vUzip : Command
     {
       conduit.CurrentPoint = e.CurrentPoint; var move = e.CurrentPoint - basePoint; var xform = Transform.Translation(move);
       foreach (var (geom, color) in previewItems)
-      { var draw = geom.Duplicate(); if (draw == null) continue; draw.Transform(xform); if (draw is Curve c) e.Display.DrawCurve(c, color, 1); else if (draw is TextEntity te) e.Display.DrawAnnotation(te, color); }
+      { var draw = geom.Duplicate(); if (draw == null) continue; draw.Transform(xform); if (draw is Curve c) PreviewDisplay.DrawCurve(e.Display, c, color); else if (draw is TextEntity te) e.Display.DrawAnnotation(te, color); }
     };
     while (true)
     {
@@ -653,9 +653,9 @@ public sealed class vUzip : Command
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
-      if (Curve != null) e.Display.DrawCurve(Curve, CenterColor, 2);
-      foreach (var (crv, col) in SideCurves) e.Display.DrawCurve(crv, col, 1);
-      foreach (var crv in PartsHighlight) e.Display.DrawCurve(crv, PartsHighlightColor, 2);
+      if (Curve != null) PreviewDisplay.DrawCurve(e.Display, Curve, CenterColor, 1);
+      foreach (var (crv, col) in SideCurves) PreviewDisplay.DrawCurve(e.Display, crv, col);
+      foreach (var crv in PartsHighlight) PreviewDisplay.DrawCurve(e.Display, crv, PartsHighlightColor, 1);
     }
   }
 

@@ -266,8 +266,8 @@ public class vUzipParts : Command
         draw.Transform(xform);
         switch (draw)
         {
-          case Curve c:       e.Display.DrawCurve(c, color, 1); break;
-          case Brep b:        e.Display.DrawBrepWires(b, color, 1); break;
+          case Curve c:       PreviewDisplay.DrawCurve(e.Display, c, color); break;
+          case Brep b:        PreviewDisplay.DrawBrepWires(e.Display, b, color); break;
           case Mesh m:        e.Display.DrawMeshWires(m, color); break;
           case TextEntity te: e.Display.DrawAnnotation(te, color); break;
           case Point p:       e.Display.DrawPoint(p.Location, Rhino.Display.PointStyle.Simple, 2, color); break;
@@ -356,8 +356,8 @@ public class vUzipParts : Command
         draw.Transform(xform);
         switch (draw)
         {
-          case Curve c:       e.Display.DrawCurve(c, color, 1); break;
-          case Brep b:        e.Display.DrawBrepWires(b, color, 1); break;
+          case Curve c:       PreviewDisplay.DrawCurve(e.Display, c, color); break;
+          case Brep b:        PreviewDisplay.DrawBrepWires(e.Display, b, color); break;
           case Mesh m:        e.Display.DrawMeshWires(m, color); break;
           case TextEntity te: e.Display.DrawAnnotation(te, color); break;
           case Point p:       e.Display.DrawPoint(p.Location, Rhino.Display.PointStyle.Simple, 2, color); break;

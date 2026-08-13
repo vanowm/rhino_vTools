@@ -88,7 +88,24 @@ public sealed class vTextAligned : Command
       var idxRotate = getter.AddOption("Rotate");
       var idxBothSides = getter.AddOptionToggle("BothSides", ref optBothSides);
 
-      var result = getter.Get();
+      var activeTextCull = activeTextId.HasValue
+        ? new ActiveTextCullConduit(activeTextId.Value)
+        : null;
+      GetResult result;
+      try
+      {
+        if (activeTextCull != null)
+          activeTextCull.Enabled = true;
+        result = getter.Get();
+      }
+      finally
+      {
+        if (activeTextCull != null)
+        {
+          activeTextCull.Enabled = false;
+          doc.Views.Redraw();
+        }
+      }
       var commandResult = getter.CommandResult();
 
       if (commandResult != Result.Success)
@@ -133,24 +150,6 @@ public sealed class vTextAligned : Command
           heightUserChanged = true;
         _offset = optOffset.CurrentValue;
         _bothSides = optBothSides.CurrentValue;
-
-        if (activeTextId.HasValue)
-        {
-          var obj = doc.Objects.FindId(activeTextId.Value);
-          if (obj?.Geometry is TextEntity te)
-          {
-            var updated = te.Duplicate() as TextEntity;
-            if (updated != null)
-            {
-              var effTextOpt   = textUserChanged   || selectedObjText == null                      ? _text   : selectedObjText;
-              var effHeightOpt = heightUserChanged || selectedObjHeight <= RhinoMath.ZeroTolerance ? _height : selectedObjHeight;
-              SetTextEntityValue(updated, effTextOpt);
-              ApplyHeightOverride(doc, updated, effHeightOpt);
-              _ = doc.Objects.Replace(activeTextId.Value, updated);
-              doc.Views.Redraw();
-            }
-          }
-        }
 
         SavePersistedOptions();
         continue;
@@ -1449,24 +1448,12 @@ public sealed class vTextAligned : Command
       }
     }
 
-    protected override void OnMouseMove(GetPointMouseEventArgs e)
-    {
-      UpdateState(e.Point);
-
-      if (PreviewPlane.HasValue && _activeTextId.HasValue && _curveIsLocked)
-      {
-        _ = ApplySettingsToTextObject(_doc, _activeTextId.Value, _text, _height, PreviewPlane.Value);
-      }
-
-      base.OnMouseMove(e);
-    }
-
     protected override void OnDynamicDraw(GetPointDrawEventArgs e)
     {
       UpdateState(e.CurrentPoint);
 
       if (HoverCurve.HasValue)
-        e.Display.DrawCurve(HoverCurve.Value.Curve, System.Drawing.Color.Orange, 3);
+        PreviewDisplay.DrawCurve(e.Display, HoverCurve.Value.Curve, System.Drawing.Color.Orange, 2);
 
       // Overdraw hovered text in gold to override Rhino's layer-color pre-selection display.
       if (HoverIntentIsText && HoverText.HasValue)
@@ -1486,16 +1473,8 @@ public sealed class vTextAligned : Command
         {
           try
           {
-            var bounds = PreviewTextBounds;
-            if (bounds.HasValue)
-            {
-              var (minx, maxx, miny, maxy) = bounds.Value;
-              // Use the current-frame preview plane so the box stays in sync with
-              // the floating cursor preview, not the one-frame-behind doc object.
-              var boxPlane = PreviewPlane ?? activeText.Plane;
-              var localBbox = new BoundingBox(minx, miny, 0, maxx, maxy, 0);
-              e.Display.DrawBox(new Box(boxPlane, localBbox), System.Drawing.Color.Cyan, 2);
-            }
+            var previewPlane = PreviewPlane ?? activeText.Plane;
+            DrawPreviewText(e.Display, previewPlane);
           }
           catch
           {
@@ -1503,14 +1482,9 @@ public sealed class vTextAligned : Command
         }
       }
 
-      // Draw gold box around the text object currently under cursor.
       if (PreviewPlane.HasValue)
       {
-        if (_activeTextId.HasValue)
-        {
-          e.Display.DrawPoint(PreviewPlane.Value.Origin, Rhino.Display.PointStyle.RoundSimple, 3, System.Drawing.Color.Cyan);
-        }
-        else
+        if (!_activeTextId.HasValue)
         {
           try
           {
@@ -1550,13 +1524,30 @@ public sealed class vTextAligned : Command
         else
         {
           foreach (var outline in _previewTextOutlines)
-            display.DrawCurve(outline, System.Drawing.Color.Cyan, 1);
+            PreviewDisplay.DrawCurve(display, outline, System.Drawing.Color.Cyan);
         }
       }
       finally
       {
         display.PopModelTransform();
       }
+    }
+  }
+
+  private sealed class ActiveTextCullConduit : Rhino.Display.DisplayConduit
+  {
+    private readonly Guid _objectId;
+
+    public ActiveTextCullConduit(Guid objectId)
+    {
+      _objectId = objectId;
+      SetObjectIdFilter(objectId);
+    }
+
+    protected override void ObjectCulling(Rhino.Display.CullObjectEventArgs e)
+    {
+      if (e.RhinoObject?.Id == _objectId)
+        e.CullObject = true;
     }
   }
 }

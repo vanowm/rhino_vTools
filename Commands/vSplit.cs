@@ -24,9 +24,8 @@ public sealed class vSplit : Command
   private const int PointOutlineWidth = 1;
 
   private static readonly string[] PointDisplayModeNames = ["Default", "ControlPoints", "EditPoints", "Hidden"];
-  private static readonly Color SetPointColor = Color.FromArgb(255, 214, 32);
-  private static readonly Color RemovePointColor = Color.FromArgb(32, 190, 255);
-  private static readonly Color PointHaloColor = Color.Black;
+  private static readonly Color SetPointColor = Color.Red;
+  private static readonly Color RemovePointColor = Color.Cyan;
   private static readonly Color PointOutlineColor = Color.Pink;
 
   public override string EnglishName => "vSplit";
@@ -218,24 +217,17 @@ public sealed class vSplit : Command
 
   private static void DrawSplitPoint(DisplayPipeline display, Point3d point, Color fillColor)
   {
-    DrawSplitPoint(display, point, fillColor, DisplayPointRadii(display), false);
+    DrawSplitPoint(display, point, fillColor, DisplayPointRadii(display));
   }
 
   private static void DrawSplitPoint(
     DisplayPipeline display,
     Point3d point,
     Color fillColor,
-    (int OutlineRadius, int FillRadius) radii,
-    bool removePreview)
+    (int OutlineRadius, int FillRadius) radii)
   {
-    display.DrawPoint(point, PointStyle.RoundSimple, radii.OutlineRadius + 1, PointHaloColor);
     display.DrawPoint(point, PointStyle.RoundSimple, radii.OutlineRadius, PointOutlineColor);
     display.DrawPoint(point, PointStyle.RoundSimple, radii.FillRadius, fillColor);
-    if (removePreview)
-    {
-      display.DrawPoint(point, PointStyle.X, radii.OutlineRadius + 3, PointHaloColor);
-      display.DrawPoint(point, PointStyle.X, radii.OutlineRadius + 2, RemovePointColor);
-    }
   }
 
   private static void DeleteSplitPointObjects(RhinoDoc doc, IEnumerable<SplitTarget> targets)
@@ -997,8 +989,7 @@ public sealed class vSplit : Command
               e.Display,
               item.Target.Curve.PointAt(item.Parameter),
               RemovePointColor,
-              radii,
-              true);
+              radii);
           }
         };
 
@@ -1397,8 +1388,7 @@ public sealed class vSplit : Command
               e.Display,
               target.Curve.PointAt(parameter),
               IsRemovePreview(target, parameter) ? RemovePointColor : SetPointColor,
-              radii,
-              IsRemovePreview(target, parameter));
+              radii);
           }
         }
       }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Display;
@@ -174,11 +173,6 @@ public sealed class vLineLength : Command
     var extendToggle = new OptionToggle(_extendWithLine, "Smooth", "Line");
     var modeIndex = _mode;
 
-    var addPreviewColor = Color.FromArgb(255, 225, 95);
-    var subtractPreviewColor = Color.FromArgb(255, 100, 50);
-    var startColor = Color.FromArgb(85, 200, 95);
-    var endColor = Color.FromArgb(255, 30, 30);
-
     var preview = new LineLengthPreviewConduit { Enabled = true };
 
     EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
@@ -188,46 +182,44 @@ public sealed class vLineLength : Command
       if (!TryFindOpenCurveAtPoint(doc, e.CurrentPoint, out RhinoObject? _, out var curve) || curve == null)
         return;
 
-      var movingEnd = ResolveMovingEndForMode(curve, e.CurrentPoint, modeIndex);
       var currentLength = curve.GetLength();
       var targetLength = ComputeTargetLength(currentLength, Math.Abs(lengthOption.CurrentValue), modeIndex);
+      var movingEnd = ResolveMovingEndForMode(
+        curve,
+        e.CurrentPoint,
+        modeIndex,
+        currentLength,
+        targetLength);
       var style = extendToggle.CurrentValue ? CurveExtensionStyle.Line : CurveExtensionStyle.Smooth;
 
       var previewCurve = ResizeCurve(curve, targetLength, movingEnd, style, doc.ModelAbsoluteTolerance);
       if (previewCurve == null)
         return;
 
-      var curveItems = new List<CurvePreviewItem>();
-      var lineItems = new List<LinePreviewItem>();
-      var pointItems = new List<PointPreviewItem>();
+      var changeMode = targetLength < currentLength ? ModeSubtract : ModeAdd;
+      var changedSegment = BuildChangedSegment(
+        curve,
+        previewCurve,
+        currentLength,
+        targetLength,
+        movingEnd,
+        changeMode);
 
-      if (modeIndex != ModeTotal)
+      if (changedSegment == null)
       {
         var originalMovingPoint = movingEnd == CurveEnd.Start ? curve.PointAtStart : curve.PointAtEnd;
         var previewMovingPoint = movingEnd == CurveEnd.Start ? previewCurve.PointAtStart : previewCurve.PointAtEnd;
-        var previewColor = modeIndex == ModeSubtract ? subtractPreviewColor : addPreviewColor;
-
-        var changedSegment = BuildChangedSegment(curve, previewCurve, currentLength, targetLength, movingEnd, modeIndex);
-        if (changedSegment != null)
-          curveItems.Add(new CurvePreviewItem(changedSegment, previewColor, 3));
-        else
-          lineItems.Add(new LinePreviewItem(originalMovingPoint, previewMovingPoint, previewColor, 3));
-
-        pointItems.Add(new PointPreviewItem(originalMovingPoint, PointStyle.Circle, 4, startColor));
-        pointItems.Add(new PointPreviewItem(previewMovingPoint, PointStyle.Circle, 4, endColor));
-        preview.SetPreview(curveItems, lineItems, pointItems);
-        return;
+        if (originalMovingPoint.DistanceTo(previewMovingPoint) > doc.ModelAbsoluteTolerance)
+          changedSegment = new LineCurve(originalMovingPoint, previewMovingPoint);
       }
 
-      var previewStart = previewCurve.PointAtStart;
-      var previewEnd = previewCurve.PointAtEnd;
-      var previewMoving = movingEnd == CurveEnd.Start ? previewStart : previewEnd;
-
-      curveItems.Add(new CurvePreviewItem(previewCurve, addPreviewColor, 3));
-      pointItems.Add(new PointPreviewItem(previewStart, PointStyle.Circle, 4, startColor));
-      pointItems.Add(new PointPreviewItem(previewEnd, PointStyle.Circle, 4, startColor));
-      pointItems.Add(new PointPreviewItem(previewMoving, PointStyle.Circle, 4, endColor));
-      preview.SetPreview(curveItems, lineItems, pointItems);
+      if (changedSegment != null)
+      {
+        preview.SetPreview(new List<CurvePreviewItem>
+        {
+          new(changedSegment, changeMode == ModeAdd)
+        });
+      }
     };
 
     gp.DynamicDraw += drawPreview;
@@ -339,7 +331,17 @@ public sealed class vLineLength : Command
           continue;
         }
 
-        var movingEnd = ResolveMovingEndForMode(hitCurve, gp.Point(), modeIndex);
+        var currentLength = hitCurve.GetLength();
+        var targetLength = ComputeTargetLength(
+          currentLength,
+          Math.Abs(lengthOption.CurrentValue),
+          modeIndex);
+        var movingEnd = ResolveMovingEndForMode(
+          hitCurve,
+          gp.Point(),
+          modeIndex,
+          currentLength,
+          targetLength);
 
         _desiredLength = Math.Abs(lengthOption.CurrentValue);
         _extendWithLine = extendToggle.CurrentValue;
@@ -439,10 +441,15 @@ public sealed class vLineLength : Command
       : previewCurve.Trim(new Interval(split, previewDomain.T1));
   }
 
-  private static CurveEnd ResolveMovingEndForMode(Curve curve, Point3d pickPoint, int mode)
+  private static CurveEnd ResolveMovingEndForMode(
+    Curve curve,
+    Point3d pickPoint,
+    int mode,
+    double currentLength,
+    double targetLength)
   {
     var hoveredEnd = PickCurveEndFromPoint(curve, pickPoint);
-    if (mode == ModeTotal)
+    if (mode == ModeTotal && targetLength < currentLength)
       return hoveredEnd == CurveEnd.Start ? CurveEnd.End : CurveEnd.Start;
 
     return hoveredEnd;
@@ -510,30 +517,20 @@ public sealed class vLineLength : Command
 
   private readonly record struct UndoRecord(Guid ObjectId, Curve OriginalCurve);
 
-  private readonly record struct CurvePreviewItem(Curve Curve, Color Color, int Thickness);
-
-  private readonly record struct LinePreviewItem(Point3d Start, Point3d End, Color Color, int Thickness);
-
-  private readonly record struct PointPreviewItem(Point3d Point, PointStyle Style, int Size, Color Color);
+  private readonly record struct CurvePreviewItem(Curve Curve, bool IsAdded);
 
   private sealed class LineLengthPreviewConduit : DisplayConduit
   {
     private List<CurvePreviewItem> _curveItems = new();
-    private List<LinePreviewItem> _lineItems = new();
-    private List<PointPreviewItem> _pointItems = new();
 
     public void ClearPreview()
     {
       _curveItems = new List<CurvePreviewItem>();
-      _lineItems = new List<LinePreviewItem>();
-      _pointItems = new List<PointPreviewItem>();
     }
 
-    public void SetPreview(List<CurvePreviewItem>? curveItems, List<LinePreviewItem>? lineItems, List<PointPreviewItem>? pointItems)
+    public void SetPreview(List<CurvePreviewItem>? curveItems)
     {
       _curveItems = curveItems ?? new List<CurvePreviewItem>();
-      _lineItems = lineItems ?? new List<LinePreviewItem>();
-      _pointItems = pointItems ?? new List<PointPreviewItem>();
     }
 
     protected override void DrawOverlay(DrawEventArgs e)
@@ -544,13 +541,12 @@ public sealed class vLineLength : Command
       try
       {
         foreach (var item in _curveItems)
-          e.Display.DrawCurve(item.Curve, item.Color, item.Thickness);
-
-        foreach (var item in _lineItems)
-          e.Display.DrawLine(item.Start, item.End, item.Color, item.Thickness);
-
-        foreach (var item in _pointItems)
-          e.Display.DrawPoint(item.Point, item.Style, item.Size, item.Color);
+        {
+          if (item.IsAdded)
+            PreviewDisplay.DrawAddedCurve(e.Display, item.Curve);
+          else
+            PreviewDisplay.DrawRemovedCurve(e.Display, item.Curve);
+        }
       }
       finally
       {

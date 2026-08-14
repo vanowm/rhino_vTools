@@ -104,7 +104,7 @@ public sealed class vTrim : Command
 
       Log.Write(
         "vTrim",
-        "click mode={0} preview={1} target={2} point=({3:G17},{4:G17},{5:G17}) cutters={6} preview_length={7:G17} preview_failure={8}",
+        "click mode={0} preview={1} target={2} point=({3:G17},{4:G17},{5:G17}) cutters={6} target_length={7:G17} pick_position={8:G17} removed_length={9:G17} output_lengths={10} preview_failure={11}",
         pick.ExtendMode ? "extend" : "trim",
         pick.HadValidPreview,
         pick.TargetObject.Id,
@@ -112,7 +112,10 @@ public sealed class vTrim : Command
         pick.PickPoint.Y,
         pick.PickPoint.Z,
         cutters.AutoMode ? "auto" : cutters.CutterIds.Count.ToString(),
+        TargetCurveLength(pick),
+        PickPosition(pick),
         PreviewCurveLength(pick),
+        PreviewOutputLengths(pick),
         string.IsNullOrWhiteSpace(pick.PreviewFailure) ? "none" : pick.PreviewFailure);
 
       var changed = false;
@@ -315,6 +318,55 @@ public sealed class vTrim : Command
     {
       return 0.0;
     }
+  }
+
+  private static double TargetCurveLength(TargetPick pick)
+  {
+    try
+    {
+      return pick.TargetCurve?.GetLength() ?? 0.0;
+    }
+    catch
+    {
+      return 0.0;
+    }
+  }
+
+  private static double PickPosition(TargetPick pick)
+  {
+    try
+    {
+      if (pick.TargetCurve == null ||
+          !pick.TargetCurve.ClosestPoint(pick.PickPoint, out var parameter))
+        return double.NaN;
+
+      return pick.TargetCurve.Domain.NormalizedParameterAt(parameter);
+    }
+    catch
+    {
+      return double.NaN;
+    }
+  }
+
+  private static string PreviewOutputLengths(TargetPick pick)
+  {
+    if (pick.ExtendMode)
+    {
+      var extendedCurve = pick.PreviewExtendPlan?.ExtendedCurve;
+      if (extendedCurve == null)
+        return "none";
+
+      var length = TryGetCurveLength(extendedCurve);
+      return length.HasValue ? length.Value.ToString("G17") : "none";
+    }
+
+    if (pick.PreviewTrimPlan == null)
+      return "none";
+
+    return string.Join(
+      ",",
+      pick.PreviewTrimPlan.Output.Select(curve =>
+        (TryGetCurveLength(curve) ?? 0.0).ToString("G17")));
   }
 
   private sealed class CurveSnapshot
@@ -811,29 +863,29 @@ public sealed class vTrim : Command
           pickPoint = targetCurve.PointAtStart;
       }
 
-      // Single source of truth: the extend mode the preview was showing is what gets executed.
-      var pickedExtendMode = preview.HoverExtendMode;
       var clickHover = hover.LastClick;
+      var pickedExtendMode = clickHover.HasCapture
+        ? clickHover.ExtendMode
+        : preview.HoverExtendMode;
+      var previewMatchesTarget = clickHover.HasCapture &&
+                                 clickHover.ObjectId.HasValue &&
+                                 clickHover.ObjectId.Value == targetObj.Id;
 
-      // Use click-time hover object/point first so execution matches preview even with nearby-object disambiguation.
-      if (clickHover.HasCapture && clickHover.ObjectId.HasValue)
+      if (previewMatchesTarget && clickHover.Point.IsValid)
+        pickPoint = clickHover.Point;
+
+      var trimPlan = previewMatchesTarget ? clickHover.TrimPlan : null;
+      var extendPlan = previewMatchesTarget ? clickHover.ExtendPlan : null;
+      var previewFailure = previewMatchesTarget
+        ? clickHover.PreviewFailure ?? string.Empty
+        : string.Empty;
+
+      if ((pickedExtendMode && extendPlan == null) || (!pickedExtendMode && trimPlan == null))
       {
-        var clickedObj = doc.Objects.FindId(clickHover.ObjectId.Value);
-        if (clickedObj?.Geometry is Curve clickedCurve)
-        {
-          targetObj = clickedObj;
-          targetCurve = clickedCurve;
-          if (clickHover.Point.IsValid)
-            pickPoint = clickHover.Point;
-        }
-      }
-      else if (!clickHover.HasCapture)
-      {
-        var hoverPoint = preview.HoverPoint;
-        if (preview.HoverObjectId.HasValue && preview.HoverObjectId.Value == targetObj.Id && hoverPoint.IsValid)
-        {
-          pickPoint = hoverPoint;
-        }
+        preview.SetHover(targetObj, targetCurve, pickPoint, pickedExtendMode);
+        trimPlan = pickedExtendMode ? null : preview.CurrentTrimPlan;
+        extendPlan = pickedExtendMode ? preview.CurrentExtendPlan : null;
+        previewFailure = preview.CurrentPreviewFailure;
       }
 
       pick.State = PickerState.Ok;
@@ -843,10 +895,10 @@ public sealed class vTrim : Command
       pick.ExtendMode = pickedExtendMode;
       pick.ExtendAsLine = extendAsLine;
       pick.JoinAfterTrim = joinAfterTrim;
-      pick.HadValidPreview = clickHover.HasCapture && clickHover.HadValidPreview;
-      pick.PreviewTrimPlan = clickHover.TrimPlan;
-      pick.PreviewExtendPlan = clickHover.ExtendPlan;
-      pick.PreviewFailure = clickHover.PreviewFailure ?? string.Empty;
+      pick.HadValidPreview = previewMatchesTarget && clickHover.HadValidPreview;
+      pick.PreviewTrimPlan = trimPlan;
+      pick.PreviewExtendPlan = extendPlan;
+      pick.PreviewFailure = previewFailure;
       return pick;
     }
   }
@@ -913,15 +965,77 @@ public sealed class vTrim : Command
       HoverCurve = curve;
       HoverPoint = point;
       HoverExtendMode = extendMode;
+      ResolveCurrentAction(extendMode);
     }
 
-    protected override void DrawOverlay(Rhino.Display.DrawEventArgs e)
+    public void ResolveCurrentAction(bool extendMode)
     {
+      HoverExtendMode = extendMode;
       HasValidActionPreview = false;
       CurrentTrimPlan = null;
       CurrentExtendPlan = null;
       CurrentPreviewFailure = string.Empty;
 
+      if (HoverObject == null || HoverCurve == null || !HoverPoint.IsValid)
+      {
+        CurrentPreviewFailure = "hover target is unavailable";
+        return;
+      }
+
+      if (HoverExtendMode)
+      {
+        if (TryBuildExtendPlan(
+              _doc,
+              HoverObject,
+              HoverCurve,
+              HoverPoint,
+              ExtendAsLine,
+              _autoMode,
+              _cutterIds,
+              out var extendPlan,
+              out var extendFailure) && extendPlan != null)
+        {
+          HasValidActionPreview = true;
+          CurrentExtendPlan = extendPlan;
+        }
+        else
+        {
+          CurrentPreviewFailure = extendFailure;
+        }
+
+        return;
+      }
+
+      var cutters = ResolveCuttersForTarget(
+        _doc,
+        HoverObject,
+        HoverCurve,
+        HoverPoint,
+        _autoMode,
+        _cutterIds);
+      if (TryBuildTrimPlan(
+            _doc,
+            HoverCurve,
+            HoverPoint,
+            cutters,
+            allowViewProjection: !_autoMode,
+            allowBoundaryExtend: false,
+            extendAsLine: ExtendAsLine,
+            joinAfterTrim: JoinAfterTrim,
+            out var trimPlan,
+            out var trimFailure) && trimPlan != null)
+      {
+        HasValidActionPreview = true;
+        CurrentTrimPlan = trimPlan;
+      }
+      else
+      {
+        CurrentPreviewFailure = trimFailure;
+      }
+    }
+
+    protected override void DrawOverlay(Rhino.Display.DrawEventArgs e)
+    {
       // Draw explicit cutter curves highlighted so the user can see them
       // even after they are deselected.
       if (!_autoMode && _cutterIds.Count > 0)
@@ -946,51 +1060,24 @@ public sealed class vTrim : Command
         LayerColorForObject(_doc, HoverObject),
         1);
 
+      ResolveCurrentAction(HoverExtendMode);
+
       if (HoverExtendMode)
       {
-        if (TryBuildExtendPlan(
-              _doc,
-              HoverObject,
-              HoverCurve,
-              HoverPoint,
-              ExtendAsLine,
-              _autoMode,
-              _cutterIds,
-              out var extendPlan,
-              out var extendFailure) && extendPlan != null)
+        if (CurrentExtendPlan != null)
         {
-          HasValidActionPreview = true;
-          CurrentExtendPlan = extendPlan;
-          PreviewDisplay.DrawAddedCurve(e.Display, extendPlan.AddedPiece);
-          if (NeedsEndpointCue(e.Viewport, e.Display, extendPlan.AddedPiece))
-            PreviewDisplay.DrawAddedPoint(e.Display, ExtensionEndpoint(extendPlan.AddedPiece));
-        }
-        else
-        {
-          CurrentPreviewFailure = extendFailure;
+          PreviewDisplay.DrawAddedCurve(e.Display, CurrentExtendPlan.AddedPiece);
+          if (NeedsEndpointCue(e.Viewport, e.Display, CurrentExtendPlan.AddedPiece))
+            PreviewDisplay.DrawAddedPoint(e.Display, ExtensionEndpoint(CurrentExtendPlan.AddedPiece));
         }
       }
       else
       {
-        var cutters = ResolveCuttersForTarget(_doc, HoverObject, HoverCurve, HoverPoint, _autoMode, _cutterIds);
-        if (TryBuildTrimPlan(
-              _doc,
-              HoverCurve,
-              HoverPoint,
-              cutters,
-              allowBoundaryExtend: false,
-              extendAsLine: ExtendAsLine,
-              joinAfterTrim: JoinAfterTrim,
-              out var trimPlan,
-              out var trimFailure) && trimPlan != null)
+        if (CurrentTrimPlan != null)
         {
-          HasValidActionPreview = true;
-          CurrentTrimPlan = trimPlan;
-          PreviewDisplay.DrawRemovedCurve(e.Display, trimPlan.RemovedPiece);
-        }
-        else
-        {
-          CurrentPreviewFailure = trimFailure;
+          PreviewDisplay.DrawRemovedCurve(e.Display, CurrentTrimPlan.RemovedPiece);
+          if (NeedsEndpointCue(e.Viewport, e.Display, CurrentTrimPlan.RemovedPiece))
+            PreviewDisplay.DrawRemovedPoint(e.Display, CurveMidpoint(CurrentTrimPlan.RemovedPiece));
         }
       }
     }
@@ -1027,12 +1114,30 @@ public sealed class vTrim : Command
         ? curve.PointAt(parameter).DistanceTo(point)
         : double.PositiveInfinity;
     }
+
+    private static Point3d CurveMidpoint(Curve curve)
+    {
+      try
+      {
+        var length = curve.GetLength();
+        if (length > RhinoMath.ZeroTolerance &&
+            curve.LengthParameter(length * 0.5, out var parameter))
+          return curve.PointAt(parameter);
+      }
+      catch
+      {
+      }
+
+      return curve.PointAt(curve.Domain.ParameterAt(0.5));
+    }
   }
 
   private sealed class TrimHoverMouseCallback : MouseCallback
   {
     private readonly RhinoDoc _doc;
     private readonly TrimPreviewConduit _preview;
+    private RhinoObject? _lastHoverObject;
+    private Curve? _lastHoverCurve;
     private Guid? _lastHoverObjectId;
     private Point3d _lastHoverPoint = Point3d.Unset;
 
@@ -1058,7 +1163,15 @@ public sealed class vTrim : Command
       {
       }
 
-      _preview.HoverExtendMode = shiftDown;
+      if (_lastHoverObjectId.HasValue && _lastHoverPoint.IsValid)
+      {
+        _preview.SetHover(_lastHoverObject, _lastHoverCurve, _lastHoverPoint, shiftDown);
+      }
+      else
+      {
+        _preview.ResolveCurrentAction(shiftDown);
+      }
+
       var trimPlan = shiftDown ? null : _preview.CurrentTrimPlan;
       var extendPlan = shiftDown ? _preview.CurrentExtendPlan : null;
 
@@ -1081,45 +1194,22 @@ public sealed class vTrim : Command
       var view = e.View;
       var viewport = view?.ActiveViewport;
       var vpClient = e.ViewportPoint;
-      var vpPoint = new Point2d(vpClient.X, vpClient.Y);
       if (viewport == null)
       {
         base.OnMouseMove(e);
         return;
       }
 
-      var pickTol = PickboxRadiusPixels();
-      var tol2 = pickTol * pickTol;
-
-      RhinoObject? bestObj = null;
-      Curve? bestCurve = null;
-      Point3d bestPoint = Point3d.Unset;
-      double? bestD2 = null;
-
-      // bbox early-reject margin: pick tolerance + 8px safety for perspective distortion
-      var bboxMargin = pickTol + 8.0;
-
-      foreach (var (obj, curve) in EnumerateDocCurves(_doc))
-      {
-        if (!CurveBboxNearCursor(curve, viewport, vpPoint, bboxMargin))
-          continue;
-
-        var sample = CurveBestScreenPick(curve, viewport, vpPoint);
-        if (!sample.Point.IsValid || !sample.DistanceSquared.HasValue)
-          continue;
-
-        if (!bestD2.HasValue || sample.DistanceSquared.Value < bestD2.Value)
-        {
-          bestD2 = sample.DistanceSquared.Value;
-          bestObj = obj;
-          bestCurve = curve;
-          bestPoint = sample.Point;
-        }
-      }
-
-      var hoverObj = bestD2.HasValue && bestD2.Value <= tol2 ? bestObj : null;
-      var hoverCurve = hoverObj != null ? bestCurve : null;
-      var hoverPoint = hoverObj != null ? bestPoint : Point3d.Unset;
+      var screenPoint = new System.Drawing.Point(
+        (int)Math.Round((double)vpClient.X),
+        (int)Math.Round((double)vpClient.Y));
+      TryPickCurveWithRhino(
+        _doc,
+        viewport,
+        screenPoint,
+        out var hoverObj,
+        out var hoverCurve,
+        out var hoverPoint);
 
       // Skip redraw when still nothing is hovered — no visual state changed.
       if (hoverObj == null && _lastHoverObjectId == null)
@@ -1129,6 +1219,8 @@ public sealed class vTrim : Command
       }
 
       _lastHoverObjectId = hoverObj?.Id;
+      _lastHoverObject = hoverObj;
+      _lastHoverCurve = hoverCurve;
       _lastHoverPoint = hoverPoint;
 
       // HoverExtendMode is owned by the shift timer — do not overwrite it here.
@@ -1136,6 +1228,87 @@ public sealed class vTrim : Command
       _doc.Views.Redraw();
 
       base.OnMouseMove(e);
+    }
+
+    private static bool TryPickCurveWithRhino(
+      RhinoDoc doc,
+      Rhino.Display.RhinoViewport viewport,
+      System.Drawing.Point screenPoint,
+      out RhinoObject? pickedObject,
+      out Curve? pickedCurve,
+      out Point3d pickedPoint)
+    {
+      pickedObject = null;
+      pickedCurve = null;
+      pickedPoint = Point3d.Unset;
+
+      var view = viewport.ParentView;
+      if (view == null ||
+          !viewport.GetFrustumLine(screenPoint.X, screenPoint.Y, out var pickLine))
+        return false;
+
+      using var pickContext = new PickContext
+      {
+        View = view,
+        PickLine = pickLine,
+        PickStyle = PickStyle.PointPick,
+        PickMode = PickMode.Wireframe,
+        PickGroupsEnabled = false,
+        SubObjectSelectionEnabled = false
+      };
+      pickContext.SetPickTransform(viewport.GetPickTransform(screenPoint));
+      pickContext.UpdateClippingPlanes();
+
+      var picked = doc.Objects.PickObjects(pickContext);
+      if (picked == null)
+        return false;
+
+      foreach (var objRef in picked)
+      {
+        var obj = objRef.Object();
+        var curve = objRef.Curve();
+        if (obj == null || curve == null || obj.Geometry is not Curve)
+          continue;
+
+        var point = Point3d.Unset;
+        try
+        {
+          using var nurbs = curve.ToNurbsCurve();
+          if (nurbs != null &&
+              pickContext.PickFrustumTest(
+                nurbs,
+                out var parameter,
+                out _,
+                out _))
+          {
+            point = nurbs.PointAt(parameter);
+          }
+        }
+        catch
+        {
+        }
+
+        if (!point.IsValid)
+          point = objRef.SelectionPoint();
+        if (!point.IsValid)
+        {
+          var fallback = CurveBestScreenPick(
+            curve,
+            viewport,
+            new Point2d(screenPoint.X, screenPoint.Y));
+          point = fallback.Point;
+        }
+
+        if (!point.IsValid)
+          continue;
+
+        pickedObject = obj;
+        pickedCurve = curve;
+        pickedPoint = point;
+        return true;
+      }
+
+      return false;
     }
 
     private static double PickboxRadiusPixels()
@@ -1511,14 +1684,55 @@ public sealed class vTrim : Command
     }
   }
 
-  private static List<double> CollectInteriorCurveCurveParams(Curve curveA, Curve curveB, double d0, double d1, double endTol, RhinoDoc doc)
+  private static double StrictCurveContactTolerance(RhinoDoc doc, Curve curveA, Curve curveB)
+  {
+    var documentTolerance = Math.Max(RhinoMath.ZeroTolerance, doc.ModelAbsoluteTolerance);
+    var shortestLength = double.PositiveInfinity;
+
+    foreach (var curve in new[] { curveA, curveB })
+    {
+      try
+      {
+        var length = curve.GetLength();
+        if (double.IsFinite(length) && length > RhinoMath.ZeroTolerance)
+          shortestLength = Math.Min(shortestLength, length);
+      }
+      catch
+      {
+      }
+    }
+
+    if (!double.IsFinite(shortestLength))
+      return documentTolerance;
+
+    var scaleTolerance = Math.Max(RhinoMath.ZeroTolerance, shortestLength * 1.0e-6);
+    return Math.Min(documentTolerance, scaleTolerance);
+  }
+
+  private static List<double> CollectInteriorCurveCurveParams(
+    Curve curveA,
+    Curve curveB,
+    double d0,
+    double d1,
+    double endTol,
+    RhinoDoc doc,
+    bool includeEndpoints = false,
+    double? intersectionTolerance = null)
   {
     var result = new List<double>();
-    var events = Rhino.Geometry.Intersect.Intersection.CurveCurve(curveA, curveB, doc.ModelAbsoluteTolerance, doc.ModelAbsoluteTolerance);
+    var tolerance = Math.Max(
+      RhinoMath.ZeroTolerance,
+      intersectionTolerance ?? doc.ModelAbsoluteTolerance);
+    var events = Rhino.Geometry.Intersect.Intersection.CurveCurve(
+      curveA,
+      curveB,
+      tolerance,
+      tolerance);
     if (events == null)
       return result;
 
     var isClosed = curveA.IsClosed;
+    var endpointTolerance = tolerance;
 
     void AddParameter(double parameter)
     {
@@ -1530,6 +1744,27 @@ public sealed class vTrim : Command
         result.Add(parameter >= d1 - endTol ? d0 : Math.Max(d0, parameter));
         return;
       }
+
+      if (includeEndpoints)
+      {
+        if (parameter >= d0 - endTol && parameter <= d1 + endTol)
+          result.Add(Math.Max(d0, Math.Min(d1, parameter)));
+        return;
+      }
+
+      Point3d point;
+      try
+      {
+        point = curveA.PointAt(parameter);
+      }
+      catch
+      {
+        return;
+      }
+
+      if (point.DistanceTo(curveA.PointAtStart) <= endpointTolerance ||
+          point.DistanceTo(curveA.PointAtEnd) <= endpointTolerance)
+        return;
 
       if (parameter > d0 + endTol && parameter < d1 - endTol)
         result.Add(parameter);
@@ -1648,17 +1883,33 @@ public sealed class vTrim : Command
     return viewParams;
   }
 
-  private static List<double> CollectSplitParameters(RhinoDoc doc, Curve targetCurve, IReadOnlyList<Curve> cutterCurves, Point3d pickPoint)
+  private static List<double> CollectSplitParameters(
+    RhinoDoc doc,
+    Curve targetCurve,
+    IReadOnlyList<Curve> cutterCurves,
+    Point3d pickPoint,
+    bool allowViewProjection)
   {
     if (!TryGetDomain(targetCurve, out var d0, out var d1))
       return new List<double>();
 
     var endTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-9);
-    var viewPlane = ActiveViewPlane(doc);
+    var viewPlane = allowViewProjection ? ActiveViewPlane(doc) : null;
 
     var parameters = new List<double>();
     foreach (var cutter in cutterCurves)
-      parameters.AddRange(ParamsClosestSource(doc, targetCurve, cutter, pickPoint, d0, d1, endTol, viewPlane));
+    {
+      parameters.AddRange(allowViewProjection
+        ? ParamsClosestSource(doc, targetCurve, cutter, pickPoint, d0, d1, endTol, viewPlane)
+        : CollectInteriorCurveCurveParams(
+          targetCurve,
+          cutter,
+          d0,
+          d1,
+          endTol,
+          doc,
+          intersectionTolerance: StrictCurveContactTolerance(doc, targetCurve, cutter)));
+    }
 
     if (parameters.Count == 0)
       return new List<double>();
@@ -1689,6 +1940,7 @@ public sealed class vTrim : Command
     Curve targetCurve,
     IReadOnlyList<Curve> cutterCurves,
     Point3d pickPoint,
+    bool allowViewProjection,
     out Curve workingCurve)
   {
     workingCurve = targetCurve;
@@ -1697,12 +1949,12 @@ public sealed class vTrim : Command
     {
       return SanitizeSplitParameters(
         targetCurve,
-        CollectSplitParameters(doc, targetCurve, cutterCurves, pickPoint));
+        CollectSplitParameters(doc, targetCurve, cutterCurves, pickPoint, allowViewProjection));
     }
 
     var initial = SanitizeSplitParameters(
       targetCurve,
-      CollectSplitParameters(doc, targetCurve, cutterCurves, pickPoint));
+      CollectSplitParameters(doc, targetCurve, cutterCurves, pickPoint, allowViewProjection));
     if (initial.Count < 2 || !TryGetDomain(targetCurve, out var d0, out var d1))
       return initial;
 
@@ -1739,7 +1991,7 @@ public sealed class vTrim : Command
 
       var split = SanitizeSplitParameters(
         reseamed,
-        CollectSplitParameters(doc, reseamed, cutterCurves, pickPoint));
+        CollectSplitParameters(doc, reseamed, cutterCurves, pickPoint, allowViewProjection));
       if (split.Count > bestSplit.Count)
       {
         bestCurve = reseamed;
@@ -1932,6 +2184,7 @@ public sealed class vTrim : Command
     Curve targetCurve,
     Point3d pickPoint,
     IReadOnlyList<Curve> cutterCurves,
+    bool allowViewProjection,
     bool allowBoundaryExtend,
     bool extendAsLine,
     bool joinAfterTrim,
@@ -1946,6 +2199,7 @@ public sealed class vTrim : Command
       targetCurve,
       cutterCurves,
       pickPoint,
+      allowViewProjection,
       out var workingCurve);
 
     if (split.Count == 0 && allowBoundaryExtend)
@@ -1958,6 +2212,7 @@ public sealed class vTrim : Command
           extended,
           cutterCurves,
           pickPoint,
+          allowViewProjection,
           out workingCurve);
       }
     }
@@ -2136,7 +2391,6 @@ public sealed class vTrim : Command
       return new List<Curve>();
 
     var endTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-9);
-    var viewPlane = ActiveViewPlane(doc);
     var ranked = new List<(double Distance, Curve Curve)>();
 
     foreach (var (obj, curve) in EnumerateDocCurves(doc))
@@ -2144,7 +2398,15 @@ public sealed class vTrim : Command
       if (obj.Id == targetId)
         continue;
 
-      var paramsForCurve = ParamsClosestSource(doc, targetCurve, curve, pickPoint, d0, d1, endTol, viewPlane);
+      var paramsForCurve = CollectInteriorCurveCurveParams(
+        targetCurve,
+        curve,
+        d0,
+        d1,
+        endTol,
+        doc,
+        includeEndpoints: true,
+        intersectionTolerance: StrictCurveContactTolerance(doc, targetCurve, curve));
       if (paramsForCurve.Count == 0)
         continue;
 
@@ -2155,7 +2417,10 @@ public sealed class vTrim : Command
       ranked.Add((nearest.Value, curve));
     }
 
-    return ranked.OrderBy(r => r.Distance).Select(r => r.Curve).ToList();
+    var closest = ranked.OrderBy(r => r.Distance).FirstOrDefault();
+    return closest.Curve == null
+      ? new List<Curve>()
+      : new List<Curve> { closest.Curve };
   }
 
   private static bool TryGetExtendAnchor(Curve curve, Point3d pickPoint, out CurveEnd movingEnd, out Point3d anchor)
@@ -2474,6 +2739,7 @@ public sealed class vTrim : Command
     Vector3d direction,
     Guid targetId,
     IReadOnlyCollection<Guid>? candidateIds,
+    bool allowViewProjection,
     out Point3d hitPoint,
     out double extensionDistance)
   {
@@ -2481,14 +2747,16 @@ public sealed class vTrim : Command
     extensionDistance = double.PositiveInfinity;
 
     var minForward = 1.0e-9;
-    var pathTol = Math.Max(doc.ModelAbsoluteTolerance * 10.0, 1.0e-4);
+    var pathTol = allowViewProjection
+      ? Math.Max(doc.ModelAbsoluteTolerance * 10.0, 1.0e-4)
+      : Math.Max(RhinoMath.ZeroTolerance, doc.ModelAbsoluteTolerance * 1.0e-3);
     var rayLength = Math.Max(10000.0, 100000.0 * doc.ModelAbsoluteTolerance);
 
     var line = new Line(anchor, anchor + (direction * rayLength));
     var lineCurve = new LineCurve(line);
 
-    var viewPlane = ActiveViewPlane(doc);
-    var projectedLine = ProjectCurveToPlane(lineCurve, viewPlane);
+    var viewPlane = allowViewProjection ? ActiveViewPlane(doc) : null;
+    var projectedLine = allowViewProjection ? ProjectCurveToPlane(lineCurve, viewPlane) : null;
     var useViewportFallback = candidateIds != null && candidateIds.Count > 0;
     var viewport = doc.Views.ActiveView?.ActiveViewport;
 
@@ -2503,7 +2771,14 @@ public sealed class vTrim : Command
       var candidateBest = double.PositiveInfinity;
       var candidatePoint = Point3d.Unset;
 
-      var worldEvents = Rhino.Geometry.Intersect.Intersection.CurveCurve(lineCurve, curve, doc.ModelAbsoluteTolerance, doc.ModelAbsoluteTolerance);
+      var worldTolerance = allowViewProjection
+        ? doc.ModelAbsoluteTolerance
+        : StrictCurveContactTolerance(doc, lineCurve, curve);
+      var worldEvents = Rhino.Geometry.Intersect.Intersection.CurveCurve(
+        lineCurve,
+        curve,
+        worldTolerance,
+        worldTolerance);
       if (worldEvents != null)
       {
         foreach (var ev in worldEvents)
@@ -2845,6 +3120,16 @@ public sealed class vTrim : Command
       return MaybeValidate(candidate, source);
     }
 
+    if (targetCurve.IsLinear(StrictCurveContactTolerance(doc, targetCurve, targetCurve)))
+    {
+      var exactLine = movingEnd == CurveEnd.Start
+        ? new LineCurve(hitPoint, targetCurve.PointAtEnd)
+        : new LineCurve(targetCurve.PointAtStart, hitPoint);
+      var validatedExactLine = MaybeValidateExactHit(exactLine, "exact line");
+      if (validatedExactLine != null)
+        return validatedExactLine;
+    }
+
     try
     {
       var byHitPoint = targetCurve.Extend(movingEnd, style, hitPoint);
@@ -2855,16 +3140,6 @@ public sealed class vTrim : Command
     catch (Exception ex)
     {
       failures.Add($"hit point: {ex.GetType().Name}");
-    }
-
-    if (targetCurve.IsLinear(Math.Max(doc.ModelAbsoluteTolerance, 1.0e-8)))
-    {
-      var exactLine = movingEnd == CurveEnd.Start
-        ? new LineCurve(hitPoint, targetCurve.PointAtEnd)
-        : new LineCurve(targetCurve.PointAtStart, hitPoint);
-      var validatedExactLine = MaybeValidateExactHit(exactLine, "exact line");
-      if (validatedExactLine != null)
-        return validatedExactLine;
     }
 
     if (drivers.Count > 0)
@@ -2974,6 +3249,7 @@ public sealed class vTrim : Command
       direction,
       targetObj.Id,
       candidateIds,
+      allowViewProjection: !autoMode,
       out var hitPoint,
       out var extensionDistance);
     if (!hasForwardHit)

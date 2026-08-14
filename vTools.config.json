@@ -173,6 +173,9 @@
     "box": true,
     "layer": "Reference"
   },
+  "vTogglePerpGumball": {
+    "enabled": false
+  },
   "vTrim": {
     "extendAsLine": true,
     "joinAfterTrim": true
@@ -187,9 +190,9 @@
     "keepPropFollowing": true,
     "layoutSpacing": 1.0,
     "xExtents": 0.0,
-    "surfaceLayer": "Surface::Unrolled_surface",
-    "labelLayer": "Surface::Unrolled_label",
-    "dotLayer": "Surface::Unrolled_dot"
+    "surfaceLayer": "Unrolled_surface",
+    "labelLayer": "Unrolled_label",
+    "dotLayer": "Unrolled_dot"
   },
   "vUzip": {
     "label": "",

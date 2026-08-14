@@ -331,6 +331,11 @@ public sealed class vBiminiParts : Command
       .Where(o => o?.Geometry is Curve)
       .Cast<RhinoObject>()
       .ToList();
+    var sourceGroupIndices = selectedCurveObjects
+      .SelectMany(o => o.Attributes.GetGroupList() ?? Array.Empty<int>())
+      .Where(groupIndex => groupIndex >= 0)
+      .Distinct()
+      .ToArray();
     var selectedHasPlotCurve = selectedCurveObjects.Any(o => o.Attributes.LayerIndex == plotIdx);
 
     var inwardCandidate = OffsetToward(boundary, centroid, _seamAllowance, tol);
@@ -438,6 +443,7 @@ public sealed class vBiminiParts : Command
     // Mark the picker/build run in the shared plug-in log.
     L($"── vBiminiParts {DateTime.Now} ──");
     L($"tol={doc.ModelAbsoluteTolerance}  selIds={selIds.Count}  seamIds={seamIds.Count}  finIds={finIds.Count}  excludeInterior={excludeInterior.Count}");
+    L($"sourceGroups={sourceGroupIndices.Length}");
     L($"seamCandidates: {seamSegs.Count} segs, {seamDocIds.Count} docIds");
     for (var _si = 0; _si < seamSegs.Count; _si++)
       L($"  seamSeg[{_si}]: id={(_si < seamDocIds.Count ? seamDocIds[_si] : Guid.Empty)}  len={seamSegs[_si].GetLength():F2}  start={seamSegs[_si].PointAtStart}  end={seamSegs[_si].PointAtEnd}");
@@ -592,14 +598,15 @@ public sealed class vBiminiParts : Command
         ctrPts.Sort((a, b) => sortByX ? a.X.CompareTo(b.X) : a.Y.CompareTo(b.Y));
         for (var i = 0; i < ctrPts.Count - 1; i++)
           doc.Objects.AddLine(ctrPts[i], ctrPts[i + 1],
-                              new ObjectAttributes { LayerIndex = refIdxCL });
+                              MakeAttr(refIdxCL, sourceGroupIndices));
       }
     }
 
     // ── Stage 7: Extra rectangle for 1-1/2" pipe ────────────────────────────
 
     if (_extraRect != null && mainPicks.Count > 0)
-      BuildExtraRect(doc, mainPicks, seamParts, centroid, cut1Idx, _extraRect, tol);
+      BuildExtraRect(doc, mainPicks, seamParts, centroid, cut1Idx, _extraRect, tol,
+                     sourceGroupIndices);
 
     // Remove temporary picker segments.
     foreach (var id in finTempIds) if (id != Guid.Empty) doc.Objects.Delete(id, false);
@@ -607,10 +614,12 @@ public sealed class vBiminiParts : Command
 
     // Add permanent boundaries only if the command generated them. Existing document curves stay untouched.
     if (!finishedIsExisting)
-      FindOrAddCurve(doc, finishedCrv, plotIdx, plotAttr, toExclude, doc.ModelAbsoluteTolerance);
+      FindOrAddCurve(doc, finishedCrv, plotIdx, MakeAttr(plotIdx, sourceGroupIndices),
+                     toExclude, doc.ModelAbsoluteTolerance);
 
     if (!seamIsExisting)
-      FindOrAddCurve(doc, seamCrv, cut1Idx, cut1Attr, toExclude, doc.ModelAbsoluteTolerance);
+      FindOrAddCurve(doc, seamCrv, cut1Idx, MakeAttr(cut1Idx, sourceGroupIndices),
+                     toExclude, doc.ModelAbsoluteTolerance);
 
     doc.Views.Redraw();
     return Result.Success;
@@ -1693,7 +1702,8 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
 
   private static void BuildExtraRect(
     RhinoDoc doc, List<(Curve Curve, Point3d Center)> mainPicks,
-    Parts seam, Point3d centroid, int cut1Idx, ExtraRectConfig cfg, double tol)
+    Parts seam, Point3d centroid, int cut1Idx, ExtraRectConfig cfg, double tol,
+    IReadOnlyCollection<int> sourceGroupIndices)
   {
     foreach (var (mc, _) in mainPicks)
     {
@@ -1719,7 +1729,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
                      new Interval(-rectLen / 2.0, rectLen / 2.0),
                      new Interval(0.0, cfg.Height));
 
-      doc.Objects.AddCurve(rect.ToNurbsCurve(), MakeAttr(cut1Idx));
+      doc.Objects.AddCurve(rect.ToNurbsCurve(), MakeAttr(cut1Idx, sourceGroupIndices));
       L($"  extraRect: seamLen={seamLen:F3}  rectLen={rectLen:F3}  h={cfg.Height}  offset={offset:F3}");
     }
   }
@@ -2052,8 +2062,16 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
     return doc.Layers.Add(new Layer { Name = name, Color = color });
   }
 
-  private static ObjectAttributes MakeAttr(int layerIdx) =>
-    new ObjectAttributes { LayerIndex = layerIdx };
+  private static ObjectAttributes MakeAttr(
+    int layerIdx,
+    IEnumerable<int>? groupIndices = null)
+  {
+    var attributes = new ObjectAttributes { LayerIndex = layerIdx };
+    if (groupIndices != null)
+      foreach (var groupIndex in groupIndices)
+        attributes.AddToGroup(groupIndex);
+    return attributes;
+  }
 
   /// <summary>Returns true if any Point object already exists within <paramref name="tol"/> of <paramref name="pt"/>.</summary>
   private static bool NearbyPointExists(RhinoDoc doc, Point3d pt, double tol)
@@ -2181,38 +2199,68 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
   }
 
   /// <summary>
-  /// Splits a closed curve at every G1-discontinuity that exceeds <paramref name="angleDeg"/>.
+  /// Splits a closed boundary at its four strongest G1 joins, supplementing the configured
+  /// corner threshold when shallow side joins would otherwise remain attached.
   /// </summary>
   private static List<Curve> BreakAtCorners(Curve crv, double angleDeg)
   {
     var dom = crv.Domain;
     var eps = Math.Max((dom.T1 - dom.T0) * 1e-6, RhinoMath.ZeroTolerance * 10.0);
-    var cps = new List<double>();
+    var corners = new List<(double Parameter, double Angle)>();
 
     var seek = dom.T0 + eps;
     while (crv.GetNextDiscontinuity(Continuity.G1_continuous, seek, dom.T1, out var t))
     {
-      if (IsSharpCorner(crv, t, angleDeg, dom, eps)) cps.Add(t);
+      if (TryGetCornerAngle(crv, t, dom, eps, out var angle))
+        corners.Add((t, angle));
       seek = t + eps;
       if (seek >= dom.T1) break;
     }
 
     // Closed-curve seam is never reported by GetNextDiscontinuity — test explicitly
-    if (crv.IsClosed && IsSharpCorner(crv, dom.T0, angleDeg, dom, eps))
-      cps.Add(dom.T0);
+    if (crv.IsClosed && TryGetCornerAngle(crv, dom.T0, dom, eps, out var seamAngle))
+      corners.Add((dom.T0, seamAngle));
 
+    if (corners.Count == 0)
+      return new List<Curve> { crv.DuplicateCurve() };
+
+    var selected = corners
+      .Where(c => c.Angle >= angleDeg)
+      .ToList();
+
+    // Bimini boundaries have four logical edges. Shallow side joins can fall below
+    // the configured corner angle, so use the four strongest actual G1 joins.
+    if (corners.Count >= 4 && selected.Count != 4)
+    {
+      selected = corners
+        .OrderByDescending(c => c.Angle)
+        .Take(4)
+        .ToList();
+      L($"BreakAtCorners: selected four strongest joins; threshold={angleDeg:F1} angles={string.Join(",", selected.Select(c => c.Angle.ToString("F2")))}");
+    }
+
+    var cps = selected
+      .Select(c => c.Parameter)
+      .Distinct()
+      .OrderBy(v => v)
+      .ToList();
     if (cps.Count == 0)
       return new List<Curve> { crv.DuplicateCurve() };
 
-    cps = cps.Distinct().OrderBy(v => v).ToList();
     var split = crv.Split(cps.ToArray());
     return split != null && split.Length > 0
            ? new List<Curve>(split)
            : new List<Curve> { crv.DuplicateCurve() };
   }
 
-  private static bool IsSharpCorner(Curve crv, double t, double angleDeg, Interval dom, double eps)
+  private static bool TryGetCornerAngle(
+    Curve crv,
+    double t,
+    Interval dom,
+    double eps,
+    out double angleDeg)
   {
+    angleDeg = 0.0;
     Vector3d tA, tB;
     if (crv.IsClosed && Math.Abs(t - dom.T0) < eps * 10)
     {
@@ -2226,7 +2274,8 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
     }
     if (!tA.Unitize() || !tB.Unitize()) return false;
     var dot = Math.Max(-1.0, Math.Min(1.0, tA * tB));
-    return RhinoMath.ToDegrees(Math.Acos(dot)) >= angleDeg;
+    angleDeg = RhinoMath.ToDegrees(Math.Acos(dot));
+    return angleDeg > RhinoMath.SqrtEpsilon;
   }
 
   // ── Segment classification ──────────────────────────────────────────────────
@@ -2237,10 +2286,8 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
   }
 
   /// <summary>
-  /// Classifies up to 4 segments as Top / Bottom / Left / Right using their
-  /// bounding-box orientation relative to <paramref name="centroid"/>.
-  /// Horizontal segments (wider than tall) → Top or Bottom.
-  /// Vertical segments (taller than wide) → Left or Right.
+  /// Classifies up to four segments as Top / Bottom / Left / Right by midpoint position.
+  /// This keeps shallow side segments separate even when they are wider than they are tall.
   /// </summary>
   private static Parts Classify(List<Curve> segs, Point3d centroid)
   {
@@ -2249,27 +2296,22 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
 
     var items = segs.Select(s =>
     {
-      var bb = s.GetBoundingBox(false);
-      return (Curve: s, BBox: bb, Mid: s.PointAtNormalizedLength(0.5));
+      return (Curve: s, Mid: s.PointAtNormalizedLength(0.5));
     }).ToList();
 
     if (segs.Count == 4)
     {
-      foreach (var item in items)
-      {
-        double w = item.BBox.Max.X - item.BBox.Min.X;
-        double h = item.BBox.Max.Y - item.BBox.Min.Y;
-        if (w >= h)  // horizontal → Top / Bottom
-        {
-          if (item.Mid.Y >= centroid.Y) p.Top    ??= item.Curve;
-          else                          p.Bottom ??= item.Curve;
-        }
-        else         // vertical → Left / Right
-        {
-          if (item.Mid.X <= centroid.X) p.Left   ??= item.Curve;
-          else                          p.Right  ??= item.Curve;
-        }
-      }
+      var byX = items.OrderBy(item => item.Mid.X).ToList();
+      p.Left = byX[0].Curve;
+      p.Right = byX[^1].Curve;
+
+      var horizontal = items
+        .Where(item => !ReferenceEquals(item.Curve, p.Left) &&
+                       !ReferenceEquals(item.Curve, p.Right))
+        .OrderBy(item => item.Mid.Y)
+        .ToList();
+      p.Bottom = horizontal[0].Curve;
+      p.Top = horizontal[^1].Curve;
     }
     else
     {

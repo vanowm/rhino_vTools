@@ -35,6 +35,8 @@ public sealed class vTogglePerpGumball : Command
 internal static class PerpGumballMonitor
 {
   private const string Tag = "vTogglePerpGumball";
+  private const string OptionsSectionName = "vTogglePerpGumball";
+  private const string EnabledKey = "enabled";
   private const int IdlePollMs = 100;
   private const int IdleSettleTicks = 2;
   private const string BadgeLabel = "PG";
@@ -67,6 +69,29 @@ internal static class PerpGumballMonitor
 
   private static StatusBadgeConduit? _badge;
 
+  internal static void Start()
+  {
+    lock (Sync)
+    {
+      var enabled = ToolsOptionStore.Read(
+        OptionsSectionName,
+        section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var saved) && saved);
+      if (enabled)
+        Enable(RhinoDoc.ActiveDoc);
+    }
+  }
+
+  internal static void Stop()
+  {
+    lock (Sync)
+    {
+      _enabled = false;
+      DetachHandlers();
+      DetachBadge(RhinoDoc.ActiveDoc);
+      ClearCache();
+    }
+  }
+
   internal static bool Toggle(RhinoDoc doc)
   {
     lock (Sync)
@@ -76,11 +101,12 @@ internal static class PerpGumballMonitor
       else
         Enable(doc);
 
+      SaveEnabled();
       return _enabled;
     }
   }
 
-  private static void Enable(RhinoDoc doc)
+  private static void Enable(RhinoDoc? doc)
   {
     if (_enabled)
       return;
@@ -90,11 +116,14 @@ internal static class PerpGumballMonitor
     ClearCache();
     _enabled = true;
 
-    UpdateGumballForActiveGrip(doc, force: true, allowCommandFallback: true);
-    doc.Views.Redraw();
+    if (doc != null)
+    {
+      UpdateGumballForActiveGrip(doc, force: true, allowCommandFallback: true);
+      doc.Views.Redraw();
+    }
   }
 
-  private static void Disable(RhinoDoc doc)
+  private static void Disable(RhinoDoc? doc)
   {
     if (!_enabled)
       return;
@@ -102,9 +131,20 @@ internal static class PerpGumballMonitor
     _enabled = false;
     DetachHandlers();
     DetachBadge(doc);
-    ResetGumballDefault(doc);
+    if (doc != null)
+      ResetGumballDefault(doc);
     ClearCache();
-    doc.Views.Redraw();
+    doc?.Views.Redraw();
+  }
+
+  private static void SaveEnabled()
+  {
+    if (ToolsOptionStore.Update(
+          OptionsSectionName,
+          section => section[EnabledKey] = _enabled))
+      return;
+
+    Log.Write(Tag, "could not save enabled state: {0}", ToolsOptionStore.LastError);
   }
 
   private static void ClearCache()
@@ -739,21 +779,21 @@ internal static class PerpGumballMonitor
     }
   }
 
-  private static void AttachBadge(RhinoDoc doc)
+  private static void AttachBadge(RhinoDoc? doc)
   {
     if (_badge == null)
       _badge = new StatusBadgeConduit();
 
     _badge.Enabled = true;
-    doc.Views.Redraw();
+    doc?.Views.Redraw();
   }
 
-  private static void DetachBadge(RhinoDoc doc)
+  private static void DetachBadge(RhinoDoc? doc)
   {
     if (_badge != null)
       _badge.Enabled = false;
 
-    doc.Views.Redraw();
+    doc?.Views.Redraw();
   }
 
   private static bool ShouldDrawBadge(DrawEventArgs e)

@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.13.1635
+# vTools  ·  v26.8.14.1343
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -123,6 +123,7 @@ Native commands (50): [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flo
     - **Center reference line** through all pocket center points.
 
 1. Output layers: `PLOT` (finished curve segments), `CUT1` (seam and pocket outlines), `Reference` (center points and center line).
+1. Standalone generated curves inherit the selected boundary curves' groups. Facing and pocket parts remain in their own generated groups.
 
 Options:
 
@@ -692,6 +693,7 @@ Notes:
 ### vTogglePerpGumball flow
 
 1. Run `vTogglePerpGumball` to toggle monitor state (`ON`/`OFF`).
+2. The monitor restores its last state when the plug-in loads.
 1. While `ON`, select one or more grips in a supported viewport.
 1. The command auto-orients gumball so it stays perpendicular and view-stable without changing the viewport CPlane. Multiple curve endpoints use their shared perpendicular direction and keep the gumball at the selection center.
 1. `Perspective` viewports keep default gumball, including when switched to `Parallel` projection.
@@ -723,7 +725,7 @@ Notes:
 
 1. Select surfaces, polysurfaces, or extrusions to unroll, then optionally select curves, points, or dots that should follow their nearest surface.
 1. Choose the output start point and adjust label, rotation, explode, split-face, property, spacing, extents, and output-layer options. `SurfaceLayer`, `LabelLayer`, and `DotLayer` use the shared searchable layer picker and are saved immediately when changed.
-1. Flat parts receive matching labels and shared-edge `M###` dots for use with `vMatch`. The default output layers are `Surface::Unrolled_surface`, `Surface::Unrolled_label`, and `Surface::Unrolled_dot`; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly, ruled single-face parts retain their original UV control structure, and unsupported forms use RhinoCommon's tolerance-based unroller.
+1. Flat parts receive matching labels and shared-edge `M###` dots for use with `vMatch`. The default top-level output layers are `Unrolled_surface`, `Unrolled_label`, and `Unrolled_dot`, ordered immediately below `Surface`; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly; other parts and their following geometry use Rhino's UV-preserving unroll command, with RhinoCommon retained only as a failure fallback.
 1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds. Pressing Enter at placement keeps each replacement in its prior flat-part position and orientation; specifying a point lays out the results from that point.
 
 Options persist to `vTools.config.json` under the `vUnrollSrf` section.

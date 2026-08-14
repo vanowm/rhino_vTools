@@ -7,26 +7,44 @@ namespace vTools;
 
 internal static class PreviewDisplay
 {
-  private readonly record struct CurveHighlightStyle(
-    Color StrokeColor,
-    int StrokeEmphasis,
-    Color OutlineColor,
-    int OutlineEmphasis);
+  // Thickness values are pixel increments above Rhino's current default curve thickness.
+  private const int MinimumCurveThickness = 1;
 
+  // Added geometry uses a green center stroke over a wider black outline.
+  // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
   private static readonly CurveHighlightStyle AddedStyle = new(
     StrokeColor: Color.LimeGreen,
     StrokeEmphasis: 1,
     OutlineColor: Color.Black,
     OutlineEmphasis: 3);
 
+  // Removed geometry uses a red center stroke over a wider black outline.
+  // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
   private static readonly CurveHighlightStyle RemovedStyle = new(
     StrokeColor: Color.Red,
     StrokeEmphasis: 1,
     OutlineColor: Color.Black,
     OutlineEmphasis: 3);
 
+  // Generic outlined curves use these defaults unless the caller supplies different thickness values.
+  private static readonly Color OutlinedCurveOutlineColor = Color.Black;
+  private const int OutlinedCurveStrokeEmphasis = 1;
+  private const int OutlinedCurveOutlineExtra = 2;
+
+  // Highlight point markers use their curve style's colors and these pixel-size settings.
+  private const PointStyle HighlightPointStyle = PointStyle.RoundSimple;
+  private const int HighlightPointMinimumSize = 4;
+  private const int HighlightPointThicknessEmphasis = 2;
+  private const int HighlightPointOutlineExtra = 2;
+
+  private readonly record struct CurveHighlightStyle(
+    Color StrokeColor,
+    int StrokeEmphasis,
+    Color OutlineColor,
+    int OutlineEmphasis);
+
   public static int Thickness(DisplayPipeline display, int emphasis = 0) =>
-    Math.Max(1, display.DefaultCurveThickness + emphasis);
+    Math.Max(MinimumCurveThickness, display.DefaultCurveThickness + emphasis);
 
   public static void DrawCurve(
     DisplayPipeline display,
@@ -87,12 +105,12 @@ internal static class PreviewDisplay
     DisplayPipeline display,
     Curve curve,
     Color color,
-    int emphasis = 1,
-    int outlineExtra = 2)
+    int emphasis = OutlinedCurveStrokeEmphasis,
+    int outlineExtra = OutlinedCurveOutlineExtra)
   {
     display.DrawCurve(
       curve,
-      Color.Black,
+      OutlinedCurveOutlineColor,
       Thickness(display, emphasis + Math.Max(1, outlineExtra)));
     display.DrawCurve(curve, color, Thickness(display, emphasis));
   }
@@ -115,21 +133,32 @@ internal static class PreviewDisplay
   public static void DrawAddedCurve(DisplayPipeline display, Curve curve) =>
     DrawHighlightCurve(display, curve, AddedStyle);
 
-  public static void DrawAddedPoint(DisplayPipeline display, Point3d point)
+  private static void DrawHighlightPoint(
+    DisplayPipeline display,
+    Point3d point,
+    CurveHighlightStyle style)
   {
-    var size = Math.Max(4, Thickness(display, 2));
+    var size = Math.Max(
+      HighlightPointMinimumSize,
+      Thickness(display, HighlightPointThicknessEmphasis));
     display.DrawPoint(
       point,
-      PointStyle.RoundSimple,
-      size + 2,
-      AddedStyle.OutlineColor);
+      HighlightPointStyle,
+      size + HighlightPointOutlineExtra,
+      style.OutlineColor);
     display.DrawPoint(
       point,
-      PointStyle.RoundSimple,
+      HighlightPointStyle,
       size,
-      AddedStyle.StrokeColor);
+      style.StrokeColor);
   }
+
+  public static void DrawAddedPoint(DisplayPipeline display, Point3d point) =>
+    DrawHighlightPoint(display, point, AddedStyle);
 
   public static void DrawRemovedCurve(DisplayPipeline display, Curve curve) =>
     DrawHighlightCurve(display, curve, RemovedStyle);
+
+  public static void DrawRemovedPoint(DisplayPipeline display, Point3d point) =>
+    DrawHighlightPoint(display, point, RemovedStyle);
 }

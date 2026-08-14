@@ -702,6 +702,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       try
       {
+        s.Panel?.SetViewportPointerActive();
+
         var vp = e.Viewport;
         if (vp == null)
           return;
@@ -3299,8 +3301,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     readonly CheckBox _multipleStartOffsetCheck, _multipleEndOffsetCheck;
     readonly RadioButton _multipleNumberMode, _multipleDistanceMode;
     readonly Button      _multipleAddButton;
-    readonly HashSet<Control> _multipleHoveredControls = [];
-    readonly HashSet<Control> _multipleFocusedControls = [];
+    readonly HashSet<Control> _multipleFocusedInputs = [];
     readonly Label       _fromStartLbl, _fromEndLbl, _fromPrevLbl;
     readonly Button      _undoBtn, _redoBtn, _selectCurvesButton;
     System.Windows.Controls.CheckBox? _keepSelectionCheck;
@@ -3314,6 +3315,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     Scrollable? _curveScrollable;
     Control? _layoutRoot;
     bool _curveSelectionInProgress;
+    bool _multipleSectionHovered;
+    bool _viewportPointerActive;
     bool _selectButtonBrushesCaptured;
     System.Windows.Media.Brush? _selectButtonBackground;
     System.Windows.Media.Brush? _selectButtonBorder;
@@ -3573,15 +3576,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         _multipleStartOffsetStepper,
         _multipleEndOffsetStepper,
-        _multipleStartOffsetCheck,
-        _multipleEndOffsetCheck,
         _multipleNumberStepper,
         _multipleDistanceStepper,
-        _multipleNumberMode,
-        _multipleDistanceMode,
-        _multipleAddButton,
       })
-        AttachMultiplePreviewInteraction(control);
+        AttachMultipleInputPreviewFocus(control);
 
       // Distance labels
       _fromStartLbl = new Label { Text = "-" };
@@ -3617,6 +3615,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       MinimumSize = new Eto.Drawing.Size(280, 0);
       ApplyDynamic();
       Shown += (_, __) => Application.Instance.AsyncInvoke(() => ResizePanelToContent());
+      MouseEnter += (_, __) =>
+      {
+        _viewportPointerActive = false;
+        RefreshMultiplePreview();
+      };
+      MouseLeave += (_, __) =>
+      {
+        _viewportPointerActive = true;
+        RefreshMultiplePreview();
+      };
 
       KeyDown += (_, e) =>
       {
@@ -3699,6 +3707,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       var multipleGroup = new GroupBox { Text = "", Content = multipleTable };
       InstallCollapsibleGroupHeader(multipleGroup, multipleTable, "Multiple",
         () => _s.MultipleCollapsed, value => _s.MultipleCollapsed = value);
+      multipleGroup.MouseEnter += (_, __) =>
+      {
+        _multipleSectionHovered = true;
+        RefreshMultiplePreview();
+      };
+      multipleGroup.MouseLeave += (_, __) =>
+      {
+        _multipleSectionHovered = false;
+        RefreshMultiplePreview();
+      };
 
       // ── Label group ──────────────────────────────────────────────────────
       var labelHeader = new TableLayout { Spacing = new Eto.Drawing.Size(4, 0) };
@@ -4549,34 +4567,24 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       finally { _updatingMultipleControls = false; }
     }
 
-    void AttachMultiplePreviewInteraction(Control control)
+    void AttachMultipleInputPreviewFocus(Control control)
     {
-      control.MouseEnter += (_, __) =>
-      {
-        _multipleHoveredControls.Add(control);
-        RefreshMultiplePreview();
-      };
-      control.MouseLeave += (_, __) =>
-      {
-        _multipleHoveredControls.Remove(control);
-        RefreshMultiplePreview();
-      };
       control.GotFocus += (_, __) =>
       {
-        _multipleFocusedControls.Add(control);
+        _multipleFocusedInputs.Add(control);
         RefreshMultiplePreview();
       };
       control.LostFocus += (_, __) =>
       {
-        _multipleFocusedControls.Remove(control);
+        _multipleFocusedInputs.Remove(control);
         RefreshMultiplePreview();
       };
     }
 
     void RefreshMultiplePreview()
     {
-      bool requested = _multipleHoveredControls.Count > 0 ||
-                       _multipleFocusedControls.Count > 0;
+      bool requested = !_viewportPointerActive &&
+                       (_multipleSectionHovered || _multipleFocusedInputs.Count > 0);
       if (!requested)
       {
         ClearMultiplePreview();
@@ -4587,6 +4595,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _s.MultipleHoverLengthsList = positions;
       _s.MultipleHoverPreviewActive = positions != null;
       Redraw();
+    }
+
+    public void SetViewportPointerActive()
+    {
+      if (_viewportPointerActive)
+        return;
+
+      _viewportPointerActive = true;
+      RefreshMultiplePreview();
     }
 
     void ClearMultiplePreview()

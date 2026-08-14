@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Globalization;
 using System.Linq;
 using Rhino;
 using Rhino.Commands;
@@ -133,6 +132,7 @@ public sealed class vOffset : Command
       getter.GeometryFilter = ObjectType.Curve;
       getter.GroupSelect = false;
       getter.SubObjectSelect = false;
+      getter.AlreadySelectedObjectSelect = true;
       getter.EnablePreSelect(true, true);
       getter.DeselectAllBeforePostSelect = false;
       getter.EnableClearObjectsOnEntry(false);
@@ -584,26 +584,55 @@ public sealed class vOffset : Command
     if (distance <= RhinoMath.ZeroTolerance)
       return new List<Curve>();
 
-    var preview = OffsetToward(
-      source.SourceCurve,
-      sidePoint,
-      plane.ZAxis,
-      distance,
-      tolerance,
-      doc.ModelAngleToleranceRadians,
-      settings);
-
-    if (settings.BothSides)
+    List<Curve> preview;
+    if (settings.BothSides && TryGetBothSideProbePoints(
+          source.SourceCurve,
+          plane,
+          distance,
+          tolerance,
+          out var firstSidePoint,
+          out var secondSidePoint))
     {
-      var oppositePoint = OppositeSidePoint(source.SourceCurve, plane, sidePoint);
+      preview = OffsetToward(
+        source.SourceCurve,
+        firstSidePoint,
+        plane.ZAxis,
+        distance,
+        tolerance,
+        doc.ModelAngleToleranceRadians,
+        settings);
       preview.AddRange(OffsetToward(
         source.SourceCurve,
-        oppositePoint,
+        secondSidePoint,
         plane.ZAxis,
         distance,
         tolerance,
         doc.ModelAngleToleranceRadians,
         settings));
+    }
+    else
+    {
+      preview = OffsetToward(
+        source.SourceCurve,
+        sidePoint,
+        plane.ZAxis,
+        distance,
+        tolerance,
+        doc.ModelAngleToleranceRadians,
+        settings);
+
+      if (settings.BothSides)
+      {
+        var oppositePoint = OppositeSidePoint(source.SourceCurve, plane, sidePoint);
+        preview.AddRange(OffsetToward(
+          source.SourceCurve,
+          oppositePoint,
+          plane.ZAxis,
+          distance,
+          tolerance,
+          doc.ModelAngleToleranceRadians,
+          settings));
+      }
     }
 
     return settings.AutoTrim && !source.SourceCurve.IsClosed
@@ -889,6 +918,47 @@ public sealed class vOffset : Command
     return source.PointAtStart + (source.PointAtStart - projectedPoint);
   }
 
+  private static bool TryGetBothSideProbePoints(
+    Curve source,
+    Plane plane,
+    double offsetDistance,
+    double tolerance,
+    out Point3d firstSidePoint,
+    out Point3d secondSidePoint)
+  {
+    firstSidePoint = Point3d.Unset;
+    secondSidePoint = Point3d.Unset;
+    var normal = plane.ZAxis;
+    if (!normal.Unitize())
+      return false;
+
+    foreach (var normalizedParameter in new[] { 0.5, 0.25, 0.75, 0.0, 1.0 })
+    {
+      var parameter = source.Domain.ParameterAt(normalizedParameter);
+      var tangent = source.TangentAt(parameter);
+      tangent -= normal * (tangent * normal);
+      if (!tangent.Unitize())
+        continue;
+
+      var perpendicular = Vector3d.CrossProduct(normal, tangent);
+      if (!perpendicular.Unitize())
+        continue;
+
+      var anchor = plane.ClosestPoint(source.PointAt(parameter));
+      var bounds = source.GetBoundingBox(true);
+      var scale = bounds.IsValid ? bounds.Diagonal.Length : offsetDistance;
+      var clearance = Math.Max(
+        tolerance * 10.0,
+        Math.Max(offsetDistance * 1.0e-6, scale * 1.0e-9));
+      var probeDistance = offsetDistance + clearance;
+      firstSidePoint = anchor + perpendicular * probeDistance;
+      secondSidePoint = anchor - perpendicular * probeDistance;
+      return true;
+    }
+
+    return false;
+  }
+
   private static List<Curve> OffsetToward(
     Curve source,
     Point3d sidePoint,
@@ -967,61 +1037,19 @@ public sealed class vOffset : Command
     return adjustedCurves;
   }
 
-  private static string BuildNativeOffsetScript(RhinoDoc doc, PendingOffset pending)
+  private static ObjectAttributes BuildOffsetOutputAttributes(
+    RhinoDoc doc,
+    PendingOffset pending)
   {
-    var settings = pending.Settings;
-    var plane = OffsetPlane(doc, pending.SourceCurve, settings.InCPlane);
-    var distance = settings.ThroughPoint && settings.BothSides
-      ? ThroughPointDistance(
-          pending.SourceCurve,
-          plane,
-          pending.SidePoint,
-          settings.Tolerance > 0.0 ? settings.Tolerance : doc.ModelAbsoluteTolerance)
-      : settings.Distance;
-    var parts = new List<string>
-    {
-      "_-Offset",
-      $"_Distance={Number(distance)}",
-      $"_Loose={YesNo(settings.Loose)}"
-    };
-
-    if (!settings.Loose)
-    {
-      parts.Add($"_Corner=_{CornerNames[ClampIndex(settings.Corner, CornerNames.Length)]}");
-      parts.Add($"_Tolerance={Number(settings.Tolerance)}");
-    }
-
-    parts.Add($"_Trim={YesNo(settings.Trim)}");
-    parts.Add($"_InCPlane={YesNo(settings.InCPlane)}");
-    parts.Add($"_Cap=_{CapNames[ClampIndex(settings.Cap, CapNames.Length)]}");
-    parts.Add($"_OutputLayer=_{OutputLayerNames[ClampIndex(settings.OutputLayer, OutputLayerNames.Length)]}");
-
-    if (settings.BothSides)
-    {
-      parts.Add("_BothSides");
-    }
-    else if (settings.ThroughPoint)
-    {
-      parts.Add("_ThroughPoint");
-      parts.Add(WorldPoint(pending.SidePoint));
-    }
-    else
-    {
-      parts.Add(WorldPoint(pending.SidePoint));
-    }
-
-    return string.Join(" ", parts);
+    var sourceObject = doc.Objects.FindId(pending.SourceId);
+    var attributes = sourceObject?.Attributes.Duplicate() ?? new ObjectAttributes();
+    attributes.RemoveFromAllGroups();
+    attributes.LayerIndex = ClampIndex(pending.Settings.OutputLayer, OutputLayerNames.Length) == 1 &&
+                            sourceObject != null
+      ? sourceObject.Attributes.LayerIndex
+      : doc.Layers.CurrentLayerIndex;
+    return attributes;
   }
-
-  private static string Number(double value) =>
-    value.ToString("R", CultureInfo.InvariantCulture);
-
-  private static string YesNo(bool value) => value ? "_Yes" : "_No";
-
-  private static string WorldPoint(Point3d point) =>
-    string.Create(
-      CultureInfo.InvariantCulture,
-      $"w{point.X:R},{point.Y:R},{point.Z:R}");
 
   private static void OnLaunchOffsetOnIdle(object? sender, EventArgs e)
   {
@@ -1047,74 +1075,29 @@ public sealed class vOffset : Command
       return;
     }
 
-    var objectIdsBefore = CurrentObjectIds(doc);
-    doc.Objects.UnselectAll();
-    if (!doc.Objects.Select(pending.SourceId))
-    {
-      RhinoApp.WriteLine("vOffset: failed to preselect the source curve.");
-      return;
-    }
-
-    doc.Views.Redraw();
-
-    var recordingWasEnabled = doc.UndoRecordingEnabled;
-    var temporaryOutputIds = new List<Guid>();
-    var finalSnapshots = new List<OffsetOutputSnapshot>();
-    var sourceDeletedByNative = false;
-    var nativeResult = false;
+    var preview = BuildOffsetPreview(doc, pending.Source, pending.SidePoint, pending.Settings);
+    var outputIds = new List<Guid>();
     try
     {
-      doc.UndoRecordingEnabled = false;
-      var nativeScript = BuildNativeOffsetScript(doc, pending);
-      Log.Write("vOffset", "native handoff {0}", nativeScript);
-      nativeResult = RhinoApp.RunScript(nativeScript, false);
-
-      temporaryOutputIds = doc.Objects
-        .GetObjectList(ObjectType.Curve)
-        .Where(obj => obj != null && !objectIdsBefore.Contains(obj.Id))
-        .Select(obj => obj.Id)
-        .ToList();
-
-      if (pending.AutoTrim && !pending.SourceCurve.IsClosed && temporaryOutputIds.Count > 0)
-        _ = ApplyAutoTrim(doc, pending, temporaryOutputIds);
-
-      finalSnapshots = CaptureOffsetOutputs(doc, temporaryOutputIds);
-      sourceDeletedByNative = IsSourceDeleted(doc, pending);
-
-      foreach (var outputId in temporaryOutputIds)
-      {
-        var output = doc.Objects.FindId(outputId);
-        if (output != null && !doc.Objects.Purge(output.RuntimeSerialNumber))
-          Log.Write("vOffset", "Temporary output purge failed output={0}", outputId);
-      }
-
-      if (sourceDeletedByNative &&
-          pending.SourceRuntimeSerialNumber != 0 &&
-          !doc.Objects.Undelete(pending.SourceRuntimeSerialNumber))
-      {
-        Log.Write(
-          "vOffset",
-          "Could not restore source after native DeleteInput source={0} runtime_serial={1}",
-          pending.SourceId,
-          pending.SourceRuntimeSerialNumber);
-      }
+      if (preview.Count > 0)
+        outputIds = RecordFinalOffset(
+          doc,
+          pending,
+          preview,
+          BuildOffsetOutputAttributes(doc, pending));
     }
     finally
     {
-      doc.UndoRecordingEnabled = recordingWasEnabled;
+      foreach (var curve in preview)
+        curve.Dispose();
     }
-
-    var outputIds = finalSnapshots.Count > 0
-      ? RecordFinalOffset(doc, pending, finalSnapshots, sourceDeletedByNative)
-      : new List<Guid>();
 
     Log.Write(
       "vOffset",
-      "Native offset result={0} temporary_outputs={1} final_outputs={2} delete_input={3}",
-      nativeResult,
-      temporaryOutputIds.Count,
-      outputIds.Count,
-      sourceDeletedByNative);
+      "Committed preview source={0} preview_outputs={1} final_outputs={2}",
+      pending.SourceId,
+      preview.Count,
+      outputIds.Count);
 
     doc.Objects.UnselectAll();
     doc.Views.Redraw();
@@ -1139,59 +1122,21 @@ public sealed class vOffset : Command
     _restartingAfterOffsetDelegate = false;
   }
 
-  private static HashSet<Guid> CurrentObjectIds(RhinoDoc doc)
-  {
-    return doc.Objects
-      .GetObjectList(ObjectType.AnyObject)
-      .Where(obj => obj != null)
-      .Select(obj => obj.Id)
-      .ToHashSet();
-  }
-
-  private static List<OffsetOutputSnapshot> CaptureOffsetOutputs(
-    RhinoDoc doc,
-    IReadOnlyList<Guid> outputIds)
-  {
-    var snapshots = new List<OffsetOutputSnapshot>();
-    foreach (var outputId in outputIds)
-    {
-      var obj = doc.Objects.FindId(outputId);
-      if (obj?.Geometry is not Curve curve)
-        continue;
-
-      var duplicate = curve.DuplicateCurve();
-      if (duplicate == null)
-        continue;
-
-      snapshots.Add(new OffsetOutputSnapshot(duplicate, obj.Attributes.Duplicate()));
-    }
-
-    return snapshots;
-  }
-
-  private static bool IsSourceDeleted(RhinoDoc doc, PendingOffset pending)
-  {
-    var source = pending.SourceRuntimeSerialNumber == 0
-      ? doc.Objects.FindId(pending.SourceId)
-      : doc.Objects.Find(pending.SourceRuntimeSerialNumber);
-    return source == null || source.IsDeleted;
-  }
-
   private static List<Guid> RecordFinalOffset(
     RhinoDoc doc,
     PendingOffset pending,
-    IReadOnlyList<OffsetOutputSnapshot> snapshots,
-    bool deleteSource)
+    IReadOnlyList<Curve> curves,
+    ObjectAttributes attributes)
   {
     var outputIds = new List<Guid>();
     var undoRecord = doc.BeginUndoRecord("vOffset");
     try
     {
-      foreach (var snapshot in snapshots)
+      foreach (var curve in curves)
       {
         var outputId = doc.Objects.AddCurve(
-          snapshot.Curve.DuplicateCurve(),
-          snapshot.Attributes.Duplicate());
+          curve.DuplicateCurve(),
+          attributes.Duplicate());
         if (outputId != Guid.Empty)
           outputIds.Add(outputId);
         else
@@ -1200,9 +1145,6 @@ public sealed class vOffset : Command
 
       if (pending.Group && outputIds.Count > 0)
         ApplyOutputGroups(doc, pending, outputIds);
-
-      if (deleteSource && !doc.Objects.Delete(pending.SourceId, true))
-        Log.Write("vOffset", "Recorded DeleteInput failed source={0}", pending.SourceId);
     }
     finally
     {
@@ -1212,10 +1154,9 @@ public sealed class vOffset : Command
 
     Log.Write(
       "vOffset",
-      "Recorded final offset undo_record={0} outputs={1} delete_input={2}",
+      "Recorded final offset undo_record={0} outputs={1}",
       undoRecord,
-      string.Join(",", outputIds),
-      deleteSource);
+      string.Join(",", outputIds));
     return outputIds;
   }
 
@@ -1295,116 +1236,6 @@ public sealed class vOffset : Command
     }
 
     return drivers;
-  }
-
-  private static bool ApplyAutoTrim(
-    RhinoDoc doc,
-    PendingOffset pending,
-    IReadOnlyList<Guid> outputIds)
-  {
-    Log.Write(
-      "vOffset",
-      "AutoTrim source={0} start={1} end={2} start_drivers={3} end_drivers={4}",
-      pending.SourceId,
-      FormatPoint(pending.SourceCurve.PointAtStart),
-      FormatPoint(pending.SourceCurve.PointAtEnd),
-      pending.StartDrivers.Count,
-      pending.EndDrivers.Count);
-
-    if (pending.StartDrivers.Count == 0 && pending.EndDrivers.Count == 0)
-    {
-      Log.Write("vOffset", "AutoTrim source={0} skipped: no touching endpoint curves", pending.SourceId);
-      return false;
-    }
-
-    var plans = new List<OffsetAdjustment>();
-    foreach (var outputId in outputIds)
-    {
-      var obj = doc.Objects.FindId(outputId);
-      if (obj?.Geometry is not Curve output || output.IsClosed)
-        continue;
-
-      var adjusted = output.DuplicateCurve();
-      if (adjusted == null)
-        continue;
-
-      var sameDirection = SameEndpointDirection(pending.SourceCurve, adjusted);
-      Log.Write(
-        "vOffset",
-        "AutoTrim output={0} start={1} end={2} same_direction={3}",
-        outputId,
-        FormatPoint(adjusted.PointAtStart),
-        FormatPoint(adjusted.PointAtEnd),
-        sameDirection);
-
-      var changed = false;
-      if (pending.StartDrivers.Count > 0)
-      {
-        var offsetEnd = sameDirection ? CurveEnd.Start : CurveEnd.End;
-        adjusted = AdjustOffsetEnd(
-          doc,
-          adjusted,
-          offsetEnd,
-          pending.StartDrivers,
-          out var endChanged,
-          out var action);
-        changed |= endChanged;
-        Log.Write(
-          "vOffset",
-          "AutoTrim output={0} source_end=start offset_end={1} action={2}",
-          outputId,
-          offsetEnd,
-          action);
-      }
-
-      if (pending.EndDrivers.Count > 0)
-      {
-        var offsetEnd = sameDirection ? CurveEnd.End : CurveEnd.Start;
-        adjusted = AdjustOffsetEnd(
-          doc,
-          adjusted,
-          offsetEnd,
-          pending.EndDrivers,
-          out var endChanged,
-          out var action);
-        changed |= endChanged;
-        Log.Write(
-          "vOffset",
-          "AutoTrim output={0} source_end=end offset_end={1} action={2}",
-          outputId,
-          offsetEnd,
-          action);
-      }
-
-      if (changed)
-        plans.Add(new OffsetAdjustment(outputId, adjusted));
-    }
-
-    if (plans.Count == 0)
-      return false;
-
-    var affectedHistory = plans
-      .SelectMany(plan => HistoryBreakWarning.CaptureAffectedRecords(doc, plan.ObjectId))
-      .ToHashSet();
-    if (!HistoryBreakWarning.Confirm(doc, "Offset", affectedHistory))
-      return false;
-
-    var replaced = 0;
-    foreach (var plan in plans)
-    {
-      if (doc.Objects.Replace(plan.ObjectId, plan.Curve))
-        replaced++;
-      else
-        Log.Write("vOffset", "AutoTrim output={0} replace failed", plan.ObjectId);
-    }
-
-    Log.Write(
-      "vOffset",
-      "AutoTrim source={0} outputs={1} adjusted={2}",
-      pending.SourceId,
-      outputIds.Count,
-      replaced);
-    return replaced > 0;
   }
 
   private static bool SameEndpointDirection(Curve source, Curve offset)
@@ -1666,10 +1497,6 @@ public sealed class vOffset : Command
     public bool Group => Settings.Group;
     public bool AutoTrim => Settings.AutoTrim;
   }
-
-  private sealed record OffsetAdjustment(Guid ObjectId, Curve Curve);
-
-  private sealed record OffsetOutputSnapshot(Curve Curve, ObjectAttributes Attributes);
 
   private sealed record PendingHistoryAction(uint DocSerial, bool Redo);
 

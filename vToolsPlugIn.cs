@@ -35,6 +35,7 @@ public class vToolsPlugIn : PlugIn
     FpsDisplay.Start();
     CommandFailSoundMonitor.Start();
     HideSetState.StartPolling();
+    PerpGumballMonitor.Start();
 
     var commandNames = CollectRegisteredCommandNames();
     Log.Write($"startup  commands ({commandNames.Count}): {string.Join(", ", commandNames)}");
@@ -49,6 +50,7 @@ public class vToolsPlugIn : PlugIn
     FpsDisplay.Stop();
     CommandFailSoundMonitor.Stop();
     HideSetState.StopPolling();
+    PerpGumballMonitor.Stop();
     base.OnShutdown();
   }
 

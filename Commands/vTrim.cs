@@ -854,6 +854,23 @@ public sealed class vTrim : Command
         return pick;
       }
 
+      var clickHover = hover.LastClick;
+      if (clickHover.HasCapture && clickHover.ObjectId.HasValue)
+      {
+        var capturedObject = doc.Objects.FindId(clickHover.ObjectId.Value);
+        if (capturedObject?.Geometry is Curve capturedCurve)
+        {
+          if (capturedObject.Id != targetObj.Id)
+            Log.Write(
+              "vTrim",
+              "using highlighted click target={0} instead of native pick={1}",
+              capturedObject.Id,
+              targetObj.Id);
+          targetObj = capturedObject;
+          targetCurve = capturedCurve;
+        }
+      }
+
       var pickPoint = objRef.SelectionPoint();
       if (!pickPoint.IsValid)
       {
@@ -863,7 +880,6 @@ public sealed class vTrim : Command
           pickPoint = targetCurve.PointAtStart;
       }
 
-      var clickHover = hover.LastClick;
       var pickedExtendMode = clickHover.HasCapture
         ? clickHover.ExtendMode
         : preview.HoverExtendMode;
@@ -895,7 +911,7 @@ public sealed class vTrim : Command
       pick.ExtendMode = pickedExtendMode;
       pick.ExtendAsLine = extendAsLine;
       pick.JoinAfterTrim = joinAfterTrim;
-      pick.HadValidPreview = previewMatchesTarget && clickHover.HadValidPreview;
+      pick.HadValidPreview = trimPlan != null || extendPlan != null;
       pick.PreviewTrimPlan = trimPlan;
       pick.PreviewExtendPlan = extendPlan;
       pick.PreviewFailure = previewFailure;
@@ -953,6 +969,11 @@ public sealed class vTrim : Command
     public TrimPlan? CurrentTrimPlan { get; private set; }
     public ExtendPlan? CurrentExtendPlan { get; private set; }
     public string CurrentPreviewFailure { get; private set; } = string.Empty;
+    private Guid? _lastValidObjectId;
+    private Point3d _lastValidPoint = Point3d.Unset;
+    private bool _lastValidExtendMode;
+    private TrimPlan? _lastValidTrimPlan;
+    private ExtendPlan? _lastValidExtendPlan;
 
     public void SetHover(RhinoObject? obj, Curve? curve, Point3d point, bool extendMode)
     {
@@ -997,10 +1018,12 @@ public sealed class vTrim : Command
         {
           HasValidActionPreview = true;
           CurrentExtendPlan = extendPlan;
+          CacheCurrentAction();
         }
         else
         {
           CurrentPreviewFailure = extendFailure;
+          RestoreCachedActionIfApplicable();
         }
 
         return;
@@ -1027,11 +1050,60 @@ public sealed class vTrim : Command
       {
         HasValidActionPreview = true;
         CurrentTrimPlan = trimPlan;
+        CacheCurrentAction();
       }
       else
       {
         CurrentPreviewFailure = trimFailure;
+        RestoreCachedActionIfApplicable();
       }
+    }
+
+    private void CacheCurrentAction()
+    {
+      _lastValidObjectId = HoverObjectId;
+      _lastValidPoint = HoverPoint;
+      _lastValidExtendMode = HoverExtendMode;
+      _lastValidTrimPlan = CurrentTrimPlan;
+      _lastValidExtendPlan = CurrentExtendPlan;
+    }
+
+    private void RestoreCachedActionIfApplicable()
+    {
+      if (!HoverObjectId.HasValue ||
+          HoverObjectId != _lastValidObjectId ||
+          HoverCurve == null ||
+          !HoverPoint.IsValid ||
+          !_lastValidPoint.IsValid ||
+          HoverExtendMode != _lastValidExtendMode)
+        return;
+
+      if (HoverExtendMode)
+      {
+        if (_lastValidExtendPlan == null ||
+            !TryGetExtendAnchor(HoverCurve, HoverPoint, out var currentEnd, out _) ||
+            !TryGetExtendAnchor(HoverCurve, _lastValidPoint, out var cachedEnd, out _) ||
+            currentEnd != cachedEnd)
+          return;
+
+        CurrentExtendPlan = _lastValidExtendPlan;
+      }
+      else
+      {
+        if (_lastValidTrimPlan == null)
+          return;
+
+        var retainTolerance = Math.Max(
+          _doc.ModelAbsoluteTolerance * 10.0,
+          RhinoMath.ZeroTolerance * 100.0);
+        if (DistanceToCurve(_lastValidTrimPlan.RemovedPiece, HoverPoint) > retainTolerance)
+          return;
+
+        CurrentTrimPlan = _lastValidTrimPlan;
+      }
+
+      HasValidActionPreview = true;
+      CurrentPreviewFailure = string.Empty;
     }
 
     protected override void DrawOverlay(Rhino.Display.DrawEventArgs e)
@@ -1053,12 +1125,6 @@ public sealed class vTrim : Command
 
       if (HoverObject == null || HoverCurve == null || !HoverPoint.IsValid)
         return;
-
-      PreviewDisplay.DrawCurve(
-        e.Display,
-        HoverCurve,
-        LayerColorForObject(_doc, HoverObject),
-        1);
 
       ResolveCurrentAction(HoverExtendMode);
 
@@ -1210,6 +1276,31 @@ public sealed class vTrim : Command
         out var hoverObj,
         out var hoverCurve,
         out var hoverPoint);
+
+      if (_lastHoverObject != null && _lastHoverCurve != null)
+      {
+        var viewportPoint = new Point2d(screenPoint.X, screenPoint.Y);
+        var previousSample = CurveBestScreenPick(_lastHoverCurve, viewport, viewportPoint);
+        var retainRadius = PickboxRadiusPixels();
+        var previousInRange = previousSample.Point.IsValid &&
+                              previousSample.DistanceSquared.HasValue &&
+                              previousSample.DistanceSquared.Value <= retainRadius * retainRadius;
+        var pickedDistance = hoverPoint.IsValid
+          ? PixelDistanceSquared(viewport, viewportPoint, hoverPoint)
+          : null;
+        var previousIsPreferred = previousInRange &&
+          (hoverObj == null ||
+           hoverObj.Id == _lastHoverObject.Id ||
+           !pickedDistance.HasValue ||
+           previousSample.DistanceSquared!.Value <= pickedDistance.Value + 4.0);
+
+        if (previousIsPreferred)
+        {
+          hoverObj = _lastHoverObject;
+          hoverCurve = _lastHoverCurve;
+          hoverPoint = previousSample.Point;
+        }
+      }
 
       // Skip redraw when still nothing is hovered — no visual state changed.
       if (hoverObj == null && _lastHoverObjectId == null)
@@ -1568,25 +1659,6 @@ public sealed class vTrim : Command
 
       yield return (obj, curve);
     }
-  }
-
-  private static Color LayerColorForObject(RhinoDoc doc, RhinoObject obj)
-  {
-    try
-    {
-      var layerIndex = obj.Attributes.LayerIndex;
-      if (layerIndex >= 0)
-      {
-        var layer = doc.Layers[layerIndex];
-        if (layer != null)
-          return layer.Color;
-      }
-    }
-    catch
-    {
-    }
-
-    return Color.White;
   }
 
   private static List<Curve> ResolveCuttersForTarget(

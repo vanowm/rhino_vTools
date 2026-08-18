@@ -552,6 +552,20 @@ public sealed class vGroup : Command
 
       solve.BoundaryMembers.Add(members);
     }
+
+    // Propagate members of spatially-nested inner boundaries into their containing outer boundaries,
+    // so the isSubset check in CreateGroups correctly eliminates the inner groups.
+    var bboxes = solve.Boundaries.Select(b => b.Curve.GetBoundingBox(false)).ToArray();
+    for (var inner = 0; inner < solve.BoundaryMembers.Count; inner++)
+    {
+      for (var outer = 0; outer < solve.BoundaryMembers.Count; outer++)
+      {
+        if (outer == inner) continue;
+        if (!bboxes[outer].Contains(bboxes[inner])) continue;
+        foreach (var id in solve.BoundaryMembers[inner])
+          solve.BoundaryMembers[outer].Add(id);
+      }
+    }
   }
 
   private static int CreateGroups(RhinoDoc doc, SelectionData selection, BoundarySolve solve)

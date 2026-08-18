@@ -45,27 +45,22 @@ public sealed class vJoin : Command
       }
     }
 
-    SelectOnly(doc, joinIds);
     Log.Write("vJoin", $"joining count={joinIds.Count} copy={_copy}");
 
-    bool joined;
-    try
+    var joined = JoinObjects(doc, joinIds, out var resultIds);
+
+    // For copy mode the duplicates were intermediate; for no-copy mode the originals are replaced.
+    DeleteObjects(doc, _copy ? joinIds : objectIds);
+
+    if (!joined || resultIds.Count == 0)
     {
-      joined = RhinoApp.RunScript("_Join", false);
-    }
-    catch (Exception ex)
-    {
-      Log.Write("vJoin", $"native Join failed: {ex}");
-      joined = false;
+      SelectOnly(doc, objectIds);
+      RhinoApp.WriteLine("vJoin: join failed.");
+      return Result.Failure;
     }
 
-    if (joined)
-      return Result.Success;
-
-    if (_copy)
-      DeleteObjects(doc, joinIds);
-    SelectOnly(doc, objectIds);
-    return Result.Failure;
+    SelectOnly(doc, resultIds);
+    return Result.Success;
   }
 
   private static Result GetObjectsToJoin(RhinoDoc doc, out List<Guid> objectIds)
@@ -148,6 +143,88 @@ public sealed class vJoin : Command
       .Select(obj => obj.Id)
       .Distinct()
       .ToList();
+  }
+
+  private static bool JoinObjects(RhinoDoc doc, List<Guid> ids, out List<Guid> resultIds)
+  {
+    resultIds = new List<Guid>();
+    var tol = doc.ModelAbsoluteTolerance;
+
+    // Split by geometry type.
+    var curves  = new List<(Guid Id, Curve Crv, ObjectAttributes Attr)>();
+    var breps   = new List<(Guid Id, Brep   Brp, ObjectAttributes Attr)>();
+    var meshes  = new List<(Guid Id, Mesh   Msh, ObjectAttributes Attr)>();
+
+    foreach (var id in ids)
+    {
+      var obj = doc.Objects.FindId(id);
+      if (obj == null) continue;
+      switch (obj.Geometry)
+      {
+        case Curve c: curves.Add((id, c, obj.Attributes)); break;
+        case Brep   b: breps.Add((id, b, obj.Attributes)); break;
+        case Mesh   m: meshes.Add((id, m, obj.Attributes)); break;
+        case Extrusion e:
+          var eb = e.ToBrep(splitKinkyFaces: false);
+          if (eb != null) breps.Add((id, eb, obj.Attributes));
+          break;
+      }
+    }
+
+    // Join curves.
+    if (curves.Count > 0)
+    {
+      var crvArray = curves.Select(t => t.Crv).ToArray();
+      var joined   = Curve.JoinCurves(crvArray, tol);
+      var attr     = curves[0].Attr.Duplicate();
+      if (joined == null || joined.Length == 0)
+      {
+        Log.Write("vJoin", "Curve.JoinCurves returned null/empty");
+        return false;
+      }
+      foreach (var jc in joined)
+      {
+        var nid = doc.Objects.AddCurve(jc, attr);
+        if (nid == Guid.Empty) return false;
+        resultIds.Add(nid);
+      }
+      Log.Write("vJoin", $"curves: {curves.Count} → {joined.Length}");
+    }
+
+    // Join breps.
+    if (breps.Count > 0)
+    {
+      var brpArray = breps.Select(t => t.Brp).ToArray();
+      var joined   = Brep.JoinBreps(brpArray, tol);
+      var attr     = breps[0].Attr.Duplicate();
+      if (joined == null || joined.Length == 0)
+      {
+        Log.Write("vJoin", "Brep.JoinBreps returned null/empty");
+        return false;
+      }
+      foreach (var jb in joined)
+      {
+        var nid = doc.Objects.AddBrep(jb, attr);
+        if (nid == Guid.Empty) return false;
+        resultIds.Add(nid);
+      }
+      Log.Write("vJoin", $"breps: {breps.Count} → {joined.Length}");
+    }
+
+    // Join meshes.
+    if (meshes.Count > 0)
+    {
+      var joined = new Mesh();
+      foreach (var (_, m, _) in meshes) joined.Append(m);
+      joined.Weld(Math.PI);
+      var attr = meshes[0].Attr.Duplicate();
+      var nid  = doc.Objects.AddMesh(joined, attr);
+      if (nid == Guid.Empty) return false;
+      resultIds.Add(nid);
+      Log.Write("vJoin", $"meshes: {meshes.Count} → 1");
+    }
+
+    return resultIds.Count > 0;
   }
 
   private static List<Guid> DuplicateObjects(RhinoDoc doc, IEnumerable<Guid> objectIds)

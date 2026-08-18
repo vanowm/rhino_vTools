@@ -64,6 +64,9 @@
     "extendWithLine": false,
     "mode": 0
   },
+  "vGroup": {
+    "flattenGroups": true
+  },
   "vJoin": {
     "copy": true
   },

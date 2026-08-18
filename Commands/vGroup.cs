@@ -19,12 +19,15 @@ public sealed class vGroup : Command
 {
   private static readonly HashSet<int> _ourGroupIndices = new();
   private static double _boundaryTolerance;
+  private static bool _removeNested;
   private const string LogName = "vGroup";
+  private const string OptionsSectionName = "vGroup";
 
   public override string EnglishName => "vGroup";
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    LoadPersistedOptions();
     var selection = SelectObjects(doc);
     if (selection == null)
       return Result.Cancel;
@@ -40,6 +43,8 @@ public sealed class vGroup : Command
       : DefaultBoundaryTolerance(doc);
 
     var solve = SolveBoundaries(doc, selection, boundaryTolerance, log: true);
+    if (solve.NearMissGap < double.MaxValue)
+      Log.Write(LogName, $"  near-miss: open chain with gap={solve.NearMissGap:G4} (raise Tolerance to close)");
     if (!ConfirmBoundaryTolerance(doc, selection, ref boundaryTolerance, ref solve))
       return Result.Cancel;
 
@@ -115,8 +120,15 @@ public sealed class vGroup : Command
         go.AcceptNothing(true);
         go.AcceptNumber(true, true);
         go.AddOptionDouble("Tolerance", ref toleranceOption);
+        var removeNestedToggle = new OptionToggle(_removeNested, "No", "Yes");
+        go.AddOptionToggle("RemoveNested", ref removeNestedToggle);
 
         var result = go.Get();
+        if (removeNestedToggle.CurrentValue != _removeNested)
+        {
+          _removeNested = removeNestedToggle.CurrentValue;
+          SavePersistedOptions();
+        }
         if (go.CommandResult() != Result.Success)
           return false;
 
@@ -136,7 +148,10 @@ public sealed class vGroup : Command
         boundaryTolerance = nextTolerance;
         solve = SolveBoundaries(doc, selection, boundaryTolerance, log: true);
         conduit.Solve = solve;
-        RhinoApp.WriteLine($"vGroup: {solve.Boundaries.Count} boundar{(solve.Boundaries.Count == 1 ? "y" : "ies")} found | Tolerance {boundaryTolerance:G}");
+        var nearMissHint = solve.NearMissGap < double.MaxValue
+          ? $" | Nearest open-chain gap: {solve.NearMissGap:G4} — raise Tolerance to close it"
+          : string.Empty;
+        RhinoApp.WriteLine($"vGroup: {solve.Boundaries.Count} boundar{(solve.Boundaries.Count == 1 ? "y" : "ies")} found | Tolerance {boundaryTolerance:G}{nearMissHint}");
         doc.Views.Redraw();
       }
     }
@@ -166,8 +181,12 @@ public sealed class vGroup : Command
     if (selection.Curves.Count == 0)
       return solve;
 
-    var splitParams = CollectSplitParameters(selection, tol, boundaryTolerance, log);
-    SplitInputCurves(selection, splitParams, solve.CoreSegments, solve.CoreOriginIndices, log);
+    // Exclude very short curves (notches, tick marks) from boundary topology — still used for member detection.
+    // Exclude notch objects from boundary topology — still used for member detection.
+    var boundarySel = FilterNotches(doc, selection, log);
+
+    var splitParams = CollectSplitParameters(boundarySel, tol, boundaryTolerance, log);
+    SplitInputCurves(boundarySel, splitParams, solve.CoreSegments, solve.CoreOriginIndices, log);
     TrimDeadEnds(solve.CoreSegments, solve.CoreOriginIndices, boundaryTolerance, log);
     JoinCoreSegments(solve, doc, tol, boundaryTolerance, log);
     BuildBoundaryMembers(doc, selection, solve, tol);
@@ -176,6 +195,24 @@ public sealed class vGroup : Command
       Log.Write(LogName, $"  boundaries found: {solve.Boundaries.Count}");
 
     return solve;
+  }
+
+  private static SelectionData FilterNotches(RhinoDoc doc, SelectionData source, bool log)
+  {
+    var filtered = new SelectionData();
+    var skipped = 0;
+    for (var i = 0; i < source.Curves.Count; i++)
+    {
+      var obj = doc.Objects.FindId(source.CurveIds[i]);
+      if (obj?.Attributes.GetUserString("notch.notch_id") != null)
+      { skipped++; continue; }
+      filtered.Curves.Add(source.Curves[i]);
+      filtered.CurveIds.Add(source.CurveIds[i]);
+    }
+    filtered.AllIds.AddRange(source.AllIds);
+    if (log && skipped > 0)
+      Log.Write(LogName, $"  notch filter: {skipped} notch object(s) excluded from topology");
+    return skipped > 0 ? filtered : source;
   }
 
   private static void LogInputCurves(SelectionData selection, double tol)
@@ -425,15 +462,27 @@ public sealed class vGroup : Command
 
       if (log)
       {
+        var len = curve.GetLength();
+        var bbox = curve.GetBoundingBox(accurate: false);
         Log.Write(LogName,
           $"  joined[{i}] {curve.GetType().Name} IsClosed={curve.IsClosed} TryGetPlane={hasPlane}" +
-          $" start=({start.X:F3},{start.Y:F3},{start.Z:F3})" +
-          $" end=({end.X:F3},{end.Y:F3},{end.Z:F3})" +
+          $" len={len:F3}" +
+          $" bbox={bbox.Min.X:F1},{bbox.Min.Y:F1}..{bbox.Max.X:F1},{bbox.Max.Y:F1}" +
           $" gap={start.DistanceTo(end):G4}");
       }
 
       if (!curve.IsClosed || !hasPlane)
+      {
+        // Track the gap of the largest open chain — most likely the intended outer boundary.
+        var gap = curve.PointAtStart.DistanceTo(curve.PointAtEnd);
+        if (gap > 0 && curve.GetLength() > (solve.NearMissGap > 0 ? 0 : 0) &&
+            (solve.NearMissSourceLength < curve.GetLength()))
+        {
+          solve.NearMissGap = gap;
+          solve.NearMissSourceLength = curve.GetLength();
+        }
         continue;
+      }
 
       solve.Boundaries.Add(new BoundaryInfo(curve, plane, BuildHatchLines(curve, plane, doc.ModelAbsoluteTolerance, boundaryTolerance)));
     }
@@ -447,7 +496,7 @@ public sealed class vGroup : Command
     var start = curve.PointAtStart;
     var end = curve.PointAtEnd;
     var gap = start.DistanceTo(end);
-    if (gap <= 0.0 || gap >= boundaryTolerance)
+    if (gap <= 0.0 || gap >= Math.Max(boundaryTolerance, curve.GetLength() * 0.05))
       return curve;
 
     var bridge = new LineCurve(end, start);
@@ -476,7 +525,8 @@ public sealed class vGroup : Command
       for (var i = 0; i < solve.CoreSegments.Count; i++)
       {
         var midpoint = solve.CoreSegments[i].PointAt(solve.CoreSegments[i].Domain.Mid);
-        if (boundary.Curve.Contains(midpoint, boundary.Plane, tol) == PointContainment.Coincident)
+        var containment = boundary.Curve.Contains(midpoint, boundary.Plane, tol);
+        if (containment == PointContainment.Coincident)
           members.Add(selection.CurveIds[solve.CoreOriginIndices[i]]);
       }
 
@@ -489,13 +539,11 @@ public sealed class vGroup : Command
         if (obj == null)
           continue;
 
-        var point = RepresentativePoint(obj);
-        if (!point.HasValue)
-          continue;
-
-        if (boundary.Curve.Contains(point.Value, boundary.Plane, tol) is PointContainment.Inside or PointContainment.Coincident)
+        if (AnyPointInsideBoundary(obj, boundary.Curve, boundary.Plane, tol))
           members.Add(id);
       }
+
+      Log.Write(LogName, $"  boundary members={members.Count}/{selection.AllIds.Count}");
 
       solve.BoundaryMembers.Add(members);
     }
@@ -531,25 +579,70 @@ public sealed class vGroup : Command
         continue;
 
       Log.Write(LogName, $"  boundary[{i}] members={members.Count} -> group");
+      if (_removeNested)
+        RemoveExistingGroupMemberships(doc, members);
       var groupIndex = doc.Groups.Add();
       if (groupIndex < 0)
+      {
+        Log.Write(LogName, $"  boundary[{i}] doc.Groups.Add() failed");
         continue;
+      }
 
+      var committed = 0;
       foreach (var id in members)
       {
         var obj = doc.Objects.FindId(id);
-        if (obj == null)
-          continue;
+        if (obj == null) continue;
+        var attr = obj.Attributes.Duplicate();
+        attr.AddToGroup(groupIndex);
+        if (doc.Objects.ModifyAttributes(obj, attr, quiet: true))
+          committed++;
+        else
+          Log.Write(LogName, $"  boundary[{i}] ModifyAttributes failed for {id}");
+      }
 
-        obj.Attributes.AddToGroup(groupIndex);
-        obj.CommitChanges();
+      if (committed == 0)
+      {
+        doc.Groups.Delete(groupIndex);
+        Log.Write(LogName, $"  boundary[{i}] no members committed — group deleted");
+        continue;
       }
 
       _ourGroupIndices.Add(groupIndex);
       groupCount++;
+      Log.Write(LogName, $"  boundary[{i}] group created index={groupIndex} committed={committed}/{members.Count}");
     }
 
     return groupCount;
+  }
+
+  private static void RemoveExistingGroupMemberships(RhinoDoc doc, IEnumerable<Guid> ids)
+  {
+    var removed = 0;
+    foreach (var id in ids)
+    {
+      var obj = doc.Objects.FindId(id);
+      if (obj == null) continue;
+      var groups = obj.Attributes.GetGroupList();
+      if (groups == null || groups.Length == 0) continue;
+      var attr = obj.Attributes.Duplicate();
+      attr.RemoveFromAllGroups();
+      if (doc.Objects.ModifyAttributes(obj, attr, quiet: true))
+        removed++;
+    }
+    Log.Write(LogName, $"  RemoveNested: stripped group memberships from {removed} object(s)");
+  }
+
+  private static void LoadPersistedOptions()
+  {
+    _removeNested = ToolsOptionStore.Read(
+      OptionsSectionName,
+      section => ToolsOptionStore.TryGetBool(section, "removeNested", out var v) && v);
+  }
+
+  private static void SavePersistedOptions()
+  {
+    ToolsOptionStore.Update(OptionsSectionName, section => section["removeNested"] = _removeNested);
   }
 
   private static void ClearPreviousGroups(RhinoDoc doc)
@@ -580,6 +673,30 @@ public sealed class vGroup : Command
     foreach (var index in _ourGroupIndices)
       doc.Groups.Delete(index);
     _ourGroupIndices.Clear();
+  }
+
+  // Returns true if any part of the object is inside or on the boundary.
+  private static bool AnyPointInsideBoundary(RhinoObject obj, Curve boundary, Plane plane, double tol)
+  {
+    PointContainment Check(Point3d pt) =>
+      boundary.Contains(pt, plane, tol);
+
+    if (obj.Geometry is Curve crv)
+    {
+      // Fast check: any of 5 evenly-spaced samples inside?
+      foreach (var t in new[] { 0.0, 0.25, 0.5, 0.75, 1.0 })
+      {
+        var c = Check(crv.PointAtNormalizedLength(t));
+        if (c is PointContainment.Inside or PointContainment.Coincident)
+          return true;
+      }
+      // Fallback: curve crosses the boundary (straddles it).
+      var events = Intersection.CurveCurve(crv, boundary, tol, 0);
+      return events != null && events.Count > 0;
+    }
+
+    var p = RepresentativePoint(obj);
+    return p.HasValue && Check(p.Value) is PointContainment.Inside or PointContainment.Coincident;
   }
 
   private static Point3d? RepresentativePoint(RhinoObject obj)
@@ -747,6 +864,9 @@ public sealed class vGroup : Command
     public List<Curve> CoreSegments { get; } = new();
     public List<int> CoreOriginIndices { get; } = new();
     public List<HashSet<Guid>> BoundaryMembers { get; } = new();
+    // Gap of the nearest open chain that could close into a boundary if tolerance were raised.
+    public double NearMissGap { get; set; } = double.MaxValue;
+    public double NearMissSourceLength { get; set; } = 0;
   }
 
   private sealed record BoundaryInfo(Curve Curve, Plane Plane, List<Line> HatchLines);
@@ -764,11 +884,23 @@ public sealed class vGroup : Command
       if (solve == null)
         return;
 
-      foreach (var boundary in solve.Boundaries)
+      var bboxes = solve.Boundaries.Select(b => b.Curve.GetBoundingBox(false)).ToArray();
+
+      for (var i = 0; i < solve.Boundaries.Count; i++)
       {
+        // Skip boundaries whose bbox is contained inside a larger boundary (nested preview).
+        var isNested = false;
+        for (var j = 0; j < solve.Boundaries.Count; j++)
+        {
+          if (j == i) continue;
+          if (bboxes[j].Contains(bboxes[i]))
+          { isNested = true; break; }
+        }
+        if (isNested) continue;
+
+        var boundary = solve.Boundaries[i];
         foreach (var line in boundary.HatchLines)
           PreviewDisplay.DrawLine(e.Display, line.From, line.To, HatchColor);
-
         PreviewDisplay.DrawCurve(e.Display, boundary.Curve, OutlineColor, 1);
       }
     }

@@ -306,38 +306,154 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     var res = go.GetMultiple(1, 0);
     if (go.CommandResult() != Result.Success || res != GetResult.Object)
       return false;
-    var rawCurves = new List<Curve>();
-    var rawIds    = new List<Guid>();
-    var rawPicks  = new List<Point3d>();
+    var selectedObjects = new List<RhinoObject>();
+    var selectionPoints = new Dictionary<Guid, Point3d>();
     for (int i = 0; i < go.ObjectCount; i++)
     {
-      var crv = go.Object(i).Curve();
-      if (crv == null) return false;
-      rawCurves.Add(crv);
-      rawIds.Add(go.Object(i).ObjectId);
-      rawPicks.Add(go.Object(i).SelectionPoint());
+      var objRef = go.Object(i);
+      var obj = objRef?.Object();
+      if (obj?.Geometry is not Curve)
+        return false;
+      selectedObjects.Add(obj);
+      var point = objRef!.SelectionPoint();
+      if (point.IsValid)
+        selectionPoints[obj.Id] = point;
     }
-    if (rawCurves.Count == 0) return false;
+    if (selectedObjects.Count == 0) return false;
 
-    // If all selected curves form one connected chain, join them into a PolyCurve.
-    if (rawCurves.Count > 1 &&
-        TryJoinConnectedChain(doc, rawCurves, rawIds, rawPicks[0], out var joined, out var joinedIds))
+    foreach (var logical in BuildLogicalCurveSelections(
+      doc, selectedObjects, selectionPoints, existingSession: null))
     {
-      curves.Add(joined);
-      curveIds.Add(rawIds[0]);
-      curveSourceIds.Add(joinedIds);
-    }
-    else
-    {
-      for (int i = 0; i < rawCurves.Count; i++)
-      {
-        curves.Add(OrientCurveToPickPoint(rawCurves[i], rawPicks[i]));
-        curveIds.Add(rawIds[i]);
-        curveSourceIds.Add(new List<Guid> { rawIds[i] });
-      }
+      curves.Add(logical.Curve);
+      curveIds.Add(logical.PrimaryObject.Id);
+      curveSourceIds.Add(logical.SourceIds);
     }
     return true;
   }
+
+  sealed record LogicalCurveSelection(
+    Curve Curve,
+    RhinoObject PrimaryObject,
+    List<Guid> SourceIds);
+
+  static List<LogicalCurveSelection> BuildLogicalCurveSelections(
+    RhinoDoc doc,
+    IReadOnlyList<RhinoObject> selectedObjects,
+    IReadOnlyDictionary<Guid, Point3d> selectionPoints,
+    NotchSession? existingSession)
+  {
+    var sourceCurves = selectedObjects
+      .Select(obj => obj.Geometry as Curve)
+      .ToList();
+    if (sourceCurves.Any(curve => curve == null))
+      return [];
+
+    var curves = sourceCurves.Select(curve => curve!).ToList();
+    var result = new List<LogicalCurveSelection>();
+    foreach (var component in ConnectedCurveComponents(
+      curves, doc.ModelAbsoluteTolerance))
+    {
+      var componentObjects = component.Select(index => selectedObjects[index]).ToList();
+      var componentCurves = component.Select(index => curves[index]).ToList();
+      var componentIds = componentObjects.Select(obj => obj.Id).ToList();
+      string componentKey = CurveSetKey(componentIds);
+
+      Point3d startPick = Point3d.Unset;
+      foreach (var obj in componentObjects)
+      {
+        if (selectionPoints.TryGetValue(obj.Id, out var point) && point.IsValid)
+        {
+          startPick = point;
+          break;
+        }
+      }
+
+      if (!startPick.IsValid && existingSession != null)
+      {
+        for (int i = 0; i < existingSession.PerCurveSourceIds.Count; i++)
+        {
+          if (i >= existingSession.Curves.Count ||
+              CurveSetKey(existingSession.PerCurveSourceIds[i]) != componentKey)
+            continue;
+          startPick = existingSession.Curves[i].PointAtStart;
+          break;
+        }
+      }
+      if (!startPick.IsValid)
+        startPick = componentCurves[0].PointAtStart;
+
+      if (component.Count > 1 && TryJoinConnectedChain(
+        doc,
+        componentCurves,
+        componentIds,
+        startPick,
+        out var joined,
+        out var joinedIds))
+      {
+        result.Add(new LogicalCurveSelection(
+          joined,
+          componentObjects.First(obj => obj.Id == joinedIds[0]),
+          joinedIds));
+        continue;
+      }
+
+      foreach (int index in component)
+      {
+        var obj = selectedObjects[index];
+        var source = curves[index].DuplicateCurve();
+        Point3d pick = selectionPoints.TryGetValue(obj.Id, out var point) && point.IsValid
+          ? point
+          : source.PointAtStart;
+        result.Add(new LogicalCurveSelection(
+          OrientCurveToPickPoint(source, pick),
+          obj,
+          [obj.Id]));
+      }
+    }
+    return result;
+  }
+
+  static List<List<int>> ConnectedCurveComponents(
+    IReadOnlyList<Curve> curves,
+    double tolerance)
+  {
+    var result = new List<List<int>>();
+    var remaining = new HashSet<int>(Enumerable.Range(0, curves.Count));
+    while (remaining.Count > 0)
+    {
+      int seed = remaining.Min();
+      remaining.Remove(seed);
+      var component = new List<int> { seed };
+      var queue = new Queue<int>();
+      queue.Enqueue(seed);
+
+      while (queue.Count > 0)
+      {
+        int current = queue.Dequeue();
+        foreach (int candidate in remaining.ToArray())
+        {
+          if (!CurveEndsTouch(curves[current], curves[candidate], tolerance))
+            continue;
+          remaining.Remove(candidate);
+          component.Add(candidate);
+          queue.Enqueue(candidate);
+        }
+      }
+
+      component.Sort();
+      result.Add(component);
+    }
+    return result;
+  }
+
+  static bool CurveEndsTouch(Curve first, Curve second, double tolerance) =>
+    first.PointAtStart.DistanceTo(second.PointAtStart) <= tolerance ||
+    first.PointAtStart.DistanceTo(second.PointAtEnd) <= tolerance ||
+    first.PointAtEnd.DistanceTo(second.PointAtStart) <= tolerance ||
+    first.PointAtEnd.DistanceTo(second.PointAtEnd) <= tolerance;
+
+  static string CurveSetKey(IEnumerable<Guid> ids) =>
+    string.Join(",", ids.Distinct().OrderBy(id => id).Select(id => id.ToString("N")));
 
   static bool TryJoinConnectedChain(
     RhinoDoc doc, List<Curve> curves, List<Guid> ids, Point3d startPick,
@@ -347,18 +463,36 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     orderedIds = new List<Guid>();
     double tol = doc.ModelAbsoluteTolerance;
 
-    // Find the endpoint closest to the click to determine chain start.
-    int firstIdx = 0;
-    double bestDist = double.MaxValue;
+    var endpoints = new List<(int CurveIndex, bool AtEnd, Point3d Point, bool Outer)>();
     for (int i = 0; i < curves.Count; i++)
     {
-      double d = Math.Min(
-        curves[i].PointAtStart.DistanceTo(startPick),
-        curves[i].PointAtEnd.DistanceTo(startPick));
-      if (d < bestDist) { bestDist = d; firstIdx = i; }
+      foreach (var endpoint in new[]
+      {
+        (AtEnd: false, Point: curves[i].PointAtStart),
+        (AtEnd: true, Point: curves[i].PointAtEnd),
+      })
+      {
+        bool outer = true;
+        for (int other = 0; other < curves.Count && outer; other++)
+        {
+          if (other == i) continue;
+          outer = endpoint.Point.DistanceTo(curves[other].PointAtStart) > tol &&
+                  endpoint.Point.DistanceTo(curves[other].PointAtEnd) > tol;
+        }
+        endpoints.Add((i, endpoint.AtEnd, endpoint.Point, outer));
+      }
     }
 
-    var firstCurve = OrientCurveToPickPoint(curves[firstIdx].DuplicateCurve(), startPick);
+    bool hasOuterEndpoint = endpoints.Any(endpoint => endpoint.Outer);
+    var firstEndpoint = (hasOuterEndpoint
+        ? endpoints.Where(endpoint => endpoint.Outer)
+        : endpoints)
+      .OrderBy(endpoint => endpoint.Point.DistanceTo(startPick))
+      .First();
+    int firstIdx = firstEndpoint.CurveIndex;
+    var firstCurve = curves[firstIdx].DuplicateCurve();
+    if (firstEndpoint.AtEnd)
+      firstCurve.Reverse();
     var orderedCurves = new List<Curve> { firstCurve };
     orderedIds.Add(ids[firstIdx]);
 
@@ -366,15 +500,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     while (remaining.Count > 0)
     {
       Point3d currentEnd = orderedCurves[^1].PointAtEnd;
-      int nextIdx = -1;
-      bool flip   = false;
+      var matches = new List<(int Index, bool Flip)>();
       foreach (int ri in remaining)
       {
-        if (curves[ri].PointAtStart.DistanceTo(currentEnd) <= tol) { nextIdx = ri; flip = false; break; }
-        if (curves[ri].PointAtEnd  .DistanceTo(currentEnd) <= tol) { nextIdx = ri; flip = true;  break; }
+        if (curves[ri].PointAtStart.DistanceTo(currentEnd) <= tol)
+          matches.Add((ri, false));
+        if (curves[ri].PointAtEnd.DistanceTo(currentEnd) <= tol)
+          matches.Add((ri, true));
       }
-      if (nextIdx < 0) return false; // gap — keep curves separate
+      if (matches.Count == 0 || (hasOuterEndpoint && matches.Count > 1))
+        return false; // gap or branch — keep curves separate
 
+      var (nextIdx, flip) = matches[0];
       var next = curves[nextIdx].DuplicateCurve();
       if (flip) next.Reverse();
       orderedCurves.Add(next);
@@ -476,33 +613,21 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (selectedById.ContainsKey(id) && getSelectionIds.Add(id))
         getSelectionOrder.Add(id);
 
-    bool sameCurveSet = selectedById.Count == s.CurveIds.Count &&
-      selectedById.Keys.ToHashSet().SetEquals(s.CurveIds);
-    bool explicitlyReselected = getSelectionOrder.Count > 0 &&
+    var existingSourceOrder = s.PerCurveSourceIds.SelectMany(ids => ids).ToList();
+    var existingSourceSet = existingSourceOrder.ToHashSet();
+    bool sameSourceSet = selectedById.Count == existingSourceSet.Count &&
+      selectedById.Keys.ToHashSet().SetEquals(existingSourceSet);
+    bool explicitlyReselected = getSelectionOrder.Count == selectedById.Count &&
+      getSelectionOrder.Count > 0 &&
       getSelectionOrder.All(selectionPoints.ContainsKey);
-    bool sequenceChanged = sameCurveSet &&
-      explicitlyReselected &&
-      getSelectionOrder.Count == s.CurveIds.Count &&
-      !getSelectionOrder.SequenceEqual(s.CurveIds);
-    bool clickedEndChanged = selectionPoints.Any(entry =>
-    {
-      int curveIndex = s.CurveIds.IndexOf(entry.Key);
-      return curveIndex >= 0 && curveIndex < s.Curves.Count &&
-        PickTargetsCurveEnd(s.Curves[curveIndex], entry.Value);
-    });
-    bool selectionDefinitionChanged = sequenceChanged || clickedEndChanged;
-
-    var orientedCurvesById = new Dictionary<Guid, Curve>();
-    for (int i = 0; i < s.CurveIds.Count && i < s.Curves.Count; i++)
-      orientedCurvesById[s.CurveIds[i]] = s.Curves[i].DuplicateCurve();
 
     var orderedIds = new HashSet<Guid>();
     var selectedObjects = new List<RhinoObject>();
 
-    // Retained curves keep their existing sequence. Newly selected curves follow
-    // GetObject's click order instead of document object-table order.
-    if (!sequenceChanged)
-      foreach (var id in s.CurveIds)
+    // Retained source curves keep their chain order. A complete explicit reselection
+    // deliberately replaces that order and can also change the chain's clicked end.
+    if (!explicitlyReselected)
+      foreach (var id in existingSourceOrder)
         if (selectedById.TryGetValue(id, out var retained) && orderedIds.Add(id))
           selectedObjects.Add(retained);
     foreach (var id in getSelectionOrder)
@@ -512,15 +637,32 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (orderedIds.Add(selected.Id))
         selectedObjects.Add(selected);
 
+    var desiredCurves = BuildLogicalCurveSelections(
+      doc, selectedObjects, selectionPoints, s);
+    var existingKeys = s.PerCurveSourceIds.Select(CurveSetKey).ToList();
+    var desiredKeys = desiredCurves.Select(curve => CurveSetKey(curve.SourceIds)).ToList();
+    bool sequenceChanged = sameSourceSet && explicitlyReselected &&
+      !desiredKeys.SequenceEqual(existingKeys);
+    bool clickedEndChanged = desiredCurves.Any(desired =>
+    {
+      int existingIndex = existingKeys.IndexOf(CurveSetKey(desired.SourceIds));
+      return existingIndex >= 0 && existingIndex < s.Curves.Count &&
+        desired.Curve.PointAtStart.DistanceTo(s.Curves[existingIndex].PointAtStart) >
+          doc.ModelAbsoluteTolerance;
+    });
+    bool selectionDefinitionChanged = sequenceChanged || clickedEndChanged;
+
     vTools.Log.Write("vNotches", "selection order: " + string.Join(", ",
       selectedObjects.Select((obj, i) => $"{i + 1}:{obj.Id.ToString("N")[..8]}")) +
-      $" sameSet={sameCurveSet} reselected={explicitlyReselected} " +
-      $"sequenceChanged={sequenceChanged} clickedEndChanged={clickedEndChanged}");
+      $" sameSources={sameSourceSet} reselected={explicitlyReselected} " +
+      $"logical={desiredCurves.Count} sequenceChanged={sequenceChanged} " +
+      $"clickedEndChanged={clickedEndChanged}");
 
-    var selectedIds = selectedObjects.Select(obj => obj.Id).ToHashSet();
+    var desiredKeySet = desiredKeys.ToHashSet();
     bool changed = false;
     var removedIndices = Enumerable.Range(0, s.CurveIds.Count)
-      .Where(i => selectionDefinitionChanged || !selectedIds.Contains(s.CurveIds[i]))
+      .Where(i => selectionDefinitionChanged ||
+        i >= existingKeys.Count || !desiredKeySet.Contains(existingKeys[i]))
       .ToList();
 
     for (int removed = removedIndices.Count - 1; removed >= 0; removed--)
@@ -529,34 +671,17 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       changed = true;
     }
 
-    var retainedIds = s.CurveIds.ToHashSet();
-    foreach (var rhObj in selectedObjects)
+    var retainedKeys = s.PerCurveSourceIds.Select(CurveSetKey).ToHashSet();
+    foreach (var desired in desiredCurves)
     {
-      if (retainedIds.Contains(rhObj.Id) || rhObj.Geometry is not Curve sourceCurve)
+      string key = CurveSetKey(desired.SourceIds);
+      if (retainedKeys.Contains(key))
         continue;
 
-      Curve curve;
-      if (selectionPoints.TryGetValue(rhObj.Id, out var pick))
-      {
-        curve = sourceCurve.DuplicateCurve();
-        curve = OrientCurveToPickPoint(curve, pick, out bool reversed);
-        vTools.Log.Write("vNotches",
-          $"curve {s.Curves.Count + 1} picked {(reversed ? "end" : "start")}");
-      }
-      else if (orientedCurvesById.TryGetValue(rhObj.Id, out var orientedCurve))
-      {
-        curve = orientedCurve.DuplicateCurve();
-        vTools.Log.Write("vNotches",
-          $"curve {s.Curves.Count + 1} retained its current start");
-      }
-      else
-      {
-        curve = sourceCurve.DuplicateCurve();
-        vTools.Log.Write("vNotches",
-          $"curve {s.Curves.Count + 1} has no selection point; source direction retained");
-      }
-      AddSessionCurve(s, rhObj, curve);
-      retainedIds.Add(rhObj.Id);
+      AddSessionCurve(s, desired.PrimaryObject, desired.Curve, desired.SourceIds);
+      retainedKeys.Add(key);
+      vTools.Log.Write("vNotches",
+        $"added logical curve {s.Curves.Count} from {desired.SourceIds.Count} source curve(s)");
       changed = true;
     }
 
@@ -2853,6 +2978,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       rec.LengthsFromStart[idx] = Clamp(total - old, 0.0, total);
     }
     s.Curves[idx].Reverse();
+    if (idx < s.PerCurveSourceIds.Count)
+      s.PerCurveSourceIds[idx].Reverse();
     s.CurveSides[idx] = !s.CurveSides[idx]; // side flips with reverse
     RebuildCurveNotches(doc, s, idx);
     SelectBothCurves(doc, s);
@@ -3279,6 +3406,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   sealed class NotchPanel : Eto.Forms.Form
   {
+    sealed record CurveRowInfo(
+      int LogicalIndex,
+      Guid SourceId,
+      Curve Curve,
+      bool LinkedToPrevious);
+
     readonly NotchSession _s;
     bool _suppress;
     bool _updatingMultipleControls;
@@ -3310,6 +3443,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     CheckBox[] _enableChecks = [];
     Label[]    _curveLengthLabels = [];
     Panel[]    _curveLengthBadges = [];
+    CurveRowInfo[] _curveRows = [];
     readonly CurveRowHoverConduit _curveHoverConduit = new();
     Scrollable? _scrollable;
     Scrollable? _curveScrollable;
@@ -3819,25 +3953,28 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void CreateCurveRowControls(RhinoDoc doc)
     {
-      _sideChecks = new CheckBox[_s.Curves.Count];
-      _reverseButtons = new Button[_s.Curves.Count];
-      _enableChecks = new CheckBox[_s.Curves.Count];
-      _curveLengthLabels = new Label[_s.Curves.Count];
-      _curveLengthBadges = new Panel[_s.Curves.Count];
+      _curveRows = BuildCurveRowInfos();
+      _sideChecks = new CheckBox[_curveRows.Length];
+      _reverseButtons = new Button[_curveRows.Length];
+      _enableChecks = new CheckBox[_curveRows.Length];
+      _curveLengthLabels = new Label[_curveRows.Length];
+      _curveLengthBadges = new Panel[_curveRows.Length];
 
-      for (int i = 0; i < _s.Curves.Count; i++)
+      for (int i = 0; i < _curveRows.Length; i++)
       {
-        int curveIndex = i;
+        int rowIndex = i;
+        int curveIndex = _curveRows[i].LogicalIndex;
         _sideChecks[i] = new CheckBox
         {
           Text = $"Side {i + 1}",
-          Checked = _s.CurveSides[i],
+          Checked = _s.CurveSides[curveIndex],
         };
         _sideChecks[i].CheckedChanged += (_, __) =>
         {
           if (_suppress) return;
           _s.RedoBatches.Clear();
-          _s.CurveSides[curveIndex] = _sideChecks[curveIndex].Checked == true;
+          _s.CurveSides[curveIndex] = _sideChecks[rowIndex].Checked == true;
+          SyncLinkedSideChecks(curveIndex);
           RebuildCurveNotches(doc, _s, curveIndex);
           SelectBothCurves(doc, _s);
           UpdateUndoEnabled();
@@ -3849,16 +3986,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         _reverseButtons[i].Click += (_, __) =>
         {
           ReverseCurve(doc, _s, curveIndex);
-          _suppress = true;
-          try { _sideChecks[curveIndex].Checked = _s.CurveSides[curveIndex]; }
-          finally { _suppress = false; }
+          RefreshCurveRows();
           Redraw();
           Persist();
         };
 
         _curveLengthLabels[i] = new Label
         {
-          Text = FormatPanelNumber(_s.Curves[i].GetLength()),
+          Text = FormatPanelNumber(_curveRows[i].Curve.GetLength()),
           VerticalAlignment = VerticalAlignment.Center,
           TextAlignment = TextAlignment.Right,
         };
@@ -3872,13 +4007,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         {
           _enableChecks[i] = new CheckBox
           {
-            Checked = i < _s.CurveEnabled.Length && _s.CurveEnabled[i],
+            Checked = curveIndex < _s.CurveEnabled.Length && _s.CurveEnabled[curveIndex],
             ToolTip = "Enable notch on this curve",
           };
           _enableChecks[i].CheckedChanged += (_, __) =>
           {
             if (_suppress) return;
-            _s.CurveEnabled[curveIndex] = _enableChecks[curveIndex].Checked == true;
+            _s.CurveEnabled[curveIndex] = _enableChecks[rowIndex].Checked == true;
+            SyncLinkedEnableChecks(curveIndex);
             UpdateMultipleState();
             Redraw();
             Persist();
@@ -3888,6 +4024,53 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ApplyCurveLengthHighlights();
     }
 
+    CurveRowInfo[] BuildCurveRowInfos()
+    {
+      var rows = new List<CurveRowInfo>();
+      for (int curveIndex = 0; curveIndex < _s.Curves.Count; curveIndex++)
+      {
+        IReadOnlyList<Guid> sourceIds =
+          curveIndex < _s.PerCurveSourceIds.Count &&
+          _s.PerCurveSourceIds[curveIndex].Count > 0
+            ? _s.PerCurveSourceIds[curveIndex]
+            : [_s.CurveIds[curveIndex]];
+        foreach (var sourceId in sourceIds)
+        {
+          var sourceCurve = _s.Doc.Objects.FindId(sourceId)?.Geometry as Curve;
+          rows.Add(new CurveRowInfo(
+            curveIndex,
+            sourceId,
+            sourceCurve?.DuplicateCurve() ?? _s.Curves[curveIndex].DuplicateCurve(),
+            rows.Count > 0 && rows[^1].LogicalIndex == curveIndex));
+        }
+      }
+      return rows.ToArray();
+    }
+
+    void SyncLinkedSideChecks(int curveIndex)
+    {
+      _suppress = true;
+      try
+      {
+        for (int i = 0; i < _curveRows.Length; i++)
+          if (_curveRows[i].LogicalIndex == curveIndex)
+            _sideChecks[i].Checked = _s.CurveSides[curveIndex];
+      }
+      finally { _suppress = false; }
+    }
+
+    void SyncLinkedEnableChecks(int curveIndex)
+    {
+      _suppress = true;
+      try
+      {
+        for (int i = 0; i < _curveRows.Length; i++)
+          if (_curveRows[i].LogicalIndex == curveIndex && _enableChecks[i] != null)
+            _enableChecks[i].Checked = _s.CurveEnabled[curveIndex];
+      }
+      finally { _suppress = false; }
+    }
+
     StackLayout BuildCurveRows()
     {
       var curveStack = new StackLayout
@@ -3895,9 +4078,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         Orientation = Orientation.Vertical,
         Spacing = 2,
       };
-      for (int i = 0; i < _s.Curves.Count; i++)
+      for (int i = 0; i < _curveRows.Length; i++)
       {
-        int curveIndex = i;
+        int rowIndex = i;
         var row = new StackLayout
         {
           Orientation = Orientation.Horizontal,
@@ -3916,20 +4099,85 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         }, false));
         row.Items.Add(new StackLayoutItem(null, true));
         row.Items.Add(new StackLayoutItem(_curveLengthBadges[i], false));
-        row.MouseEnter += (_, __) => SetCurveRowHover(curveIndex);
+        row.MouseEnter += (_, __) => SetCurveRowHover(rowIndex);
         row.MouseLeave += (_, __) =>
         {
-          if (_curveHoverConduit.CurveIndex == curveIndex)
+          if (_curveHoverConduit.CurveIndex == rowIndex)
             ClearCurveRowHover();
         };
         curveStack.Items.Add(new StackLayoutItem(row));
       }
+      curveStack.Load += (_, __) => InstallCurveLinkOverlay(curveStack);
       return curveStack;
+    }
+
+    void InstallCurveLinkOverlay(StackLayout curveStack)
+    {
+      if (curveStack.ControlObject is not System.Windows.FrameworkElement nativeStack)
+        return;
+
+      var linkedRows = Enumerable.Range(1, _curveRows.Length - 1)
+        .Where(index => _curveRows[index].LinkedToPrevious)
+        .ToArray();
+      if (linkedRows.Length == 0)
+        return;
+
+      nativeStack.Dispatcher.BeginInvoke(new Action(() =>
+      {
+        var layer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(nativeStack);
+        if (layer == null)
+          return;
+        foreach (var existing in layer.GetAdorners(nativeStack)?.OfType<CurveLinkAdorner>() ?? [])
+          layer.Remove(existing);
+        layer.Add(new CurveLinkAdorner(nativeStack, linkedRows));
+      }), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    sealed class CurveLinkAdorner : System.Windows.Documents.Adorner
+    {
+      const double RowPitch = 28.0;
+      readonly int[] _linkedRows;
+
+      public CurveLinkAdorner(System.Windows.UIElement adornedElement, int[] linkedRows)
+        : base(adornedElement)
+      {
+        _linkedRows = linkedRows;
+        IsHitTestVisible = false;
+      }
+
+      protected override void OnRender(System.Windows.Media.DrawingContext drawingContext)
+      {
+        base.OnRender(drawingContext);
+        var pen = new System.Windows.Media.Pen(
+          System.Windows.SystemColors.ControlTextBrush,
+          1.25);
+
+        foreach (int rowIndex in _linkedRows)
+        {
+          const double x = 7.0;
+          double y = (rowIndex * RowPitch) - 1.0;
+          drawingContext.PushTransform(
+            new System.Windows.Media.RotateTransform(-35.0, x, y));
+          drawingContext.DrawRoundedRectangle(
+            null,
+            pen,
+            new System.Windows.Rect(x - 6.0, y - 3.0, 7.0, 6.0),
+            3.0,
+            3.0);
+          drawingContext.DrawRoundedRectangle(
+            null,
+            pen,
+            new System.Windows.Rect(x - 1.0, y - 3.0, 7.0, 6.0),
+            3.0,
+            3.0);
+          drawingContext.Pop();
+        }
+      }
     }
 
     int CurveViewportHeight()
     {
-      int visibleRows = Math.Clamp(_s.Curves.Count, 1, 3);
+      int visibleRows = Math.Clamp(_curveRows.Length, 1, 3);
       return (visibleRows * 26) + ((visibleRows - 1) * 2) + 2;
     }
 
@@ -3941,7 +4189,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
 
       native.HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Disabled;
-      native.VerticalScrollBarVisibility = _s.Curves.Count <= 3
+      native.VerticalScrollBarVisibility = _curveRows.Length <= 3
         ? System.Windows.Controls.ScrollBarVisibility.Hidden
         : System.Windows.Controls.ScrollBarVisibility.Auto;
     }
@@ -4020,10 +4268,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void SetCurveRowHover(int curveIndex)
     {
-      if (curveIndex < 0 || curveIndex >= _s.Curves.Count)
+      if (curveIndex < 0 || curveIndex >= _curveRows.Length)
         return;
       _curveHoverConduit.CurveIndex = curveIndex;
-      _curveHoverConduit.Curve = _s.Curves[curveIndex];
+      _curveHoverConduit.Curve = _curveRows[curveIndex].Curve;
       _curveHoverConduit.Enabled = true;
       Redraw();
     }
@@ -4710,15 +4958,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
 
       double tolerance = ModelUnitsFromInches(_s.Doc, 1.0 / 16.0);
-      var ordered = Enumerable.Range(0, _s.Curves.Count)
-        .OrderBy(i => _s.Curves[i].GetLength())
+      var ordered = Enumerable.Range(0, _curveRows.Length)
+        .OrderBy(i => _curveRows[i].Curve.GetLength())
         .ToList();
       var groupStarts = new List<double>();
-      var groupByCurve = new int[_s.Curves.Count];
+      var groupByCurve = new int[_curveRows.Length];
 
       foreach (int curveIndex in ordered)
       {
-        double length = _s.Curves[curveIndex].GetLength();
+        double length = _curveRows[curveIndex].Curve.GetLength();
         int groupIndex = groupStarts.Count - 1;
         if (groupIndex < 0 || length - groupStarts[groupIndex] > tolerance)
         {
@@ -4784,11 +5032,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         _multipleDistanceStepper.Value    = RoundPanelNumber(_s.MultipleDistance);
         UpdateMultipleModeIndicator();
         for (int i = 0; i < _sideChecks.Length; i++)
-          if (i < _s.CurveSides.Length) _sideChecks[i].Checked = _s.CurveSides[i];
+          if (i < _curveRows.Length && _curveRows[i].LogicalIndex < _s.CurveSides.Length)
+            _sideChecks[i].Checked = _s.CurveSides[_curveRows[i].LogicalIndex];
         if (_s.Curves.Count > 1)
           for (int i = 0; i < _enableChecks.Length; i++)
-            if (_enableChecks[i] != null && i < _s.CurveEnabled.Length)
-              _enableChecks[i].Checked = _s.CurveEnabled[i];
+            if (_enableChecks[i] != null && i < _curveRows.Length &&
+                _curveRows[i].LogicalIndex < _s.CurveEnabled.Length)
+              _enableChecks[i].Checked = _s.CurveEnabled[_curveRows[i].LogicalIndex];
         ApplyDynamic();
         UpdateUndoEnabled();
       }

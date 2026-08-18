@@ -199,19 +199,24 @@ public sealed class vGroup : Command
 
   private static SelectionData FilterNotches(RhinoDoc doc, SelectionData source, bool log)
   {
+    // Only exclude short notch marks — long curves with notch tags are structural seam segments.
+    var maxNotchLen = Math.Max(source.Curves.Count > 0
+      ? source.Curves.Max(c => c.GetLength()) * 0.1
+      : 10.0, 10.0);
     var filtered = new SelectionData();
     var skipped = 0;
     for (var i = 0; i < source.Curves.Count; i++)
     {
       var obj = doc.Objects.FindId(source.CurveIds[i]);
-      if (obj?.Attributes.GetUserString("notch.notch_id") != null)
+      if (obj?.Attributes.GetUserString("notch.notch_id") != null &&
+          source.Curves[i].GetLength() < maxNotchLen)
       { skipped++; continue; }
       filtered.Curves.Add(source.Curves[i]);
       filtered.CurveIds.Add(source.CurveIds[i]);
     }
     filtered.AllIds.AddRange(source.AllIds);
     if (log && skipped > 0)
-      Log.Write(LogName, $"  notch filter: {skipped} notch object(s) excluded from topology");
+      Log.Write(LogName, $"  notch filter: {skipped} notch object(s) excluded from topology (maxNotchLen={maxNotchLen:F1})");
     return skipped > 0 ? filtered : source;
   }
 

@@ -1444,7 +1444,7 @@ public sealed class vLine : Command
       if (modeName is "perp" or "perp_any")
       {
         DebugLog($"PerpNear: hint=({curveHint.X:F3},{curveHint.Y:F3},{curveHint.Z:F3}) curve={curve.GetType().Name} preview={preview}");
-        var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 8 : 18);
+        var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18);
         if (pt.HasValue)
         {
           DebugLog($"PerpNear: found ({pt.Value.X:F3},{pt.Value.Y:F3},{pt.Value.Z:F3})");
@@ -1457,12 +1457,12 @@ public sealed class vLine : Command
       }
 
       if (modeName is "tangent" or "tangent_any")
-        return TangentPointFromStart(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 8 : 18);
+        return TangentPointFromStart(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18);
 
       if (modeName == "auto")
       {
-        var perp = PerpPointFromStartWithHint(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 8 : 18);
-        var tan = TangentPointFromStart(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 8 : 18);
+        var perp = PerpPointFromStartWithHint(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18);
+        var tan = TangentPointFromStart(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18);
 
         if (!perp.HasValue)
           perp = PerpFallbackToPointedSegment(startPoint, curve, cursorPoint, preview);
@@ -2877,7 +2877,7 @@ public sealed class vLine : Command
     if (bestSeg == null)
       return null;
 
-    var pt = PerpPointFromStartWithHint(startPoint, bestSeg, hintPoint, preview ? 80 : 240, preview ? 8 : 18);
+    var pt = PerpPointFromStartWithHint(startPoint, bestSeg, hintPoint, preview ? 80 : 240, preview ? 16 : 18);
     if (pt.HasValue)
       return pt;
 
@@ -3426,13 +3426,12 @@ public sealed class vLine : Command
       return null;
 
     Curve? pickedCurve = null;
-    var pickedPoint = getPoint.Point();
+    var pickedPoint = getPoint.Point();  // always use Rhino's snapped point so the visual marker matches
     var pickedObjectId = Guid.Empty;
     var pickedComponentIndex = ComponentIndex.Unset;
     if (hovered.HasValue)
     {
       pickedCurve = CurveFromScreenPick(doc, hovered.Value);
-      pickedPoint = hovered.Value.PickPoint;
       pickedObjectId = hovered.Value.ObjectId;
       pickedComponentIndex = hovered.Value.ComponentIndex;
     }

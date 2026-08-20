@@ -23,11 +23,19 @@ public sealed class vUzip : Command
   public override string EnglishName => "vUzip";
 
   private const string SettingsSection            = "vUzip";
-  private const double DefaultLeft                = 2.375;
-  private const double DefaultRight               = 2.375;
-  private const double DefaultBottom              = 1.125;
-  private const double DefaultRadius              = 12.0;
-  private const double ZipperValue                = DefaultLeft;
+  private const double DefaultLeft                = 2.375; // Left offset in model units; zero or greater.
+  private const double DefaultRight               = 2.375; // Right offset in model units; zero or greater.
+  private const double DefaultBottom              = 1.125; // Bottom offset in model units; zero or greater.
+  private const double DefaultRadius              = 12.0; // Corner radius in model units; zero or greater.
+  private const bool DefaultGlass                 = false; // true creates the glass offset; false omits it.
+  private const double DefaultGlassOffset         = 0.25; // Glass offset in model units; signed values allowed.
+  private const string DefaultGlassLayer          = "Glass"; // Rhino layer name or full layer path.
+  private const bool DefaultVis                   = false; // true creates the visibility offset; false omits it.
+  private const double DefaultVisOffset           = 0.75; // Visibility-line offset in model units; signed values allowed.
+  private const string DefaultVisLayer            = "Vis-Line"; // Rhino layer name or full layer path.
+  private const string DefaultCenterLayer         = "Reference"; // Rhino layer name or full layer path.
+  private const bool DefaultParts                 = false; // true creates separate part outputs; false creates only the main result.
+  private const double ZipperValue                = DefaultLeft; // Reference zipper offset in model units used by generated geometry.
 
   private static string LayerCut       = DefaultLayerCutName;
   private static string LayerPlot      = DefaultLayerPlotName;
@@ -42,14 +50,14 @@ public sealed class vUzip : Command
     public double Right       { get; set; } = DefaultRight;
     public double Bottom      { get; set; } = DefaultBottom;
     public double Radius      { get; set; } = DefaultRadius;
-    public bool   Glass       { get; set; } = false;
-    public double GlassOffset { get; set; } = 0.25;
-    public string GlassLayer  { get; set; } = "Glass";
-    public bool   Vis         { get; set; } = false;
-    public double VisOffset   { get; set; } = 0.75;
-    public string VisLayer    { get; set; } = "Vis-Line";
-    public string CenterLayer { get; set; } = "Reference";
-    public bool   Parts       { get; set; } = false;
+    public bool   Glass       { get; set; } = DefaultGlass;
+    public double GlassOffset { get; set; } = DefaultGlassOffset;
+    public string GlassLayer  { get; set; } = DefaultGlassLayer;
+    public bool   Vis         { get; set; } = DefaultVis;
+    public double VisOffset   { get; set; } = DefaultVisOffset;
+    public string VisLayer    { get; set; } = DefaultVisLayer;
+    public string CenterLayer { get; set; } = DefaultCenterLayer;
+    public bool   Parts       { get; set; } = DefaultParts;
     public string Label       { get; set; } = DefaultLabel;
     public double Tail        { get; set; } = DefaultTail;
   }
@@ -649,7 +657,7 @@ public sealed class vUzip : Command
     // Parts-selection highlight: curves drawn in bright yellow so they are visible
     // without relying on doc.Objects.Select (which blocks re-clicking selected objects)
     public List<Curve> PartsHighlight { get; } = new();
-    private static readonly Color PartsHighlightColor = Color.FromArgb(255, 215, 0);
+    private static readonly Color PartsHighlightColor = Color.FromArgb(255, 215, 0); // Preview highlight color for generated parts.
 
     protected override void DrawOverlay(DrawEventArgs e)
     {

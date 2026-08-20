@@ -12,7 +12,7 @@ namespace vTools.Commands;
 /// </summary>
 internal static class ToolsOptionStore
 {
-  private const string ToolsConfigFileName = "vTools.config.json";
+  private const string ToolsConfigFileName = "vTools.config.json"; // Relative shared configuration filename beside the DLL.
   private static readonly object Sync = new();
 
   private static readonly JsonSerializerOptions JsonOptions = new()

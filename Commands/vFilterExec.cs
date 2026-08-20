@@ -16,6 +16,9 @@ namespace vTools.Commands;
 [CommandStyle(Style.Transparent)]
 public sealed class vFilterExec : Command
 {
+  // Defaults
+  private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.
+
   private const string Tag = "vFilterExec";
 
   private static readonly FilterDefinition[] FilterDefinitions =
@@ -126,7 +129,7 @@ public sealed class vFilterExec : Command
     getter.SetCommandPrompt("Selection filter");
     getter.AcceptNothing(true);
     getter.EnableTransparentCommands(true);
-    getter.SetDefaultString("Curves");
+    getter.SetDefaultString(DefaultFilter);
 
     var optionFilters = new Dictionary<int, string>();
     foreach (var definition in FilterDefinitions)
@@ -143,7 +146,7 @@ public sealed class vFilterExec : Command
 
     var filterSpec = result switch
     {
-      GetResult.Nothing => "Curves",
+      GetResult.Nothing => DefaultFilter,
       GetResult.String => getter.StringResult(),
       GetResult.Option when optionFilters.TryGetValue(getter.Option().Index, out var optionFilter) => optionFilter,
       _ => string.Empty

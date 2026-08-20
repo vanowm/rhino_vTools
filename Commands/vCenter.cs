@@ -21,8 +21,11 @@ public sealed class vCenter : Command
   private const string OptionsSectionName = "vCenter";
   private const string MethodKey = "method";
 
-  private static readonly string[] MethodNames = ["BoundingBox", "Mass", "Objects"];
-  private static CenterMethod _method = CenterMethod.BoundingBox;
+  // Option defaults
+  private const CenterMethod DefaultMethod = CenterMethod.BoundingBox; // CenterMethod enum: BoundingBox, Mass, or Objects.
+
+  private static readonly string[] MethodNames = ["BoundingBox", "Mass", "Objects"]; // Command option names in method-index order.
+  private static CenterMethod _method = DefaultMethod;
 
   private enum CenterMethod
   {

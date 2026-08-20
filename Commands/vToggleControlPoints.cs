@@ -16,7 +16,7 @@ namespace vTools.Commands;
 public sealed class vToggleControlPoints : Command
 {
   private const string Tag = "vToggleControlPoints";
-  private const double OnGeometryToleranceFactor = 0.01;
+  private const double OnGeometryToleranceFactor = 0.01; // Fraction of curve scale used to distinguish edit from control points.
 
   public override string EnglishName => Tag;
 

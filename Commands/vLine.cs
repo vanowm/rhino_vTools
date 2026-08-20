@@ -23,31 +23,40 @@ public sealed class vLine : Command
   private const string AngleKey          = "angle";
   private const string AngleRelativeKey  = "angleRelative";
   private const string LayerKey          = "layer";
-  private const string CurrentLayerOption = "*Current*";
+  private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves output to Rhino's current layer.
   private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
-  private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" };
-  private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" };
-  private static readonly Color SourceFeedbackColor = Color.Orange;
-  private static readonly Color HoverFeedbackColor = Color.Orange;
+  private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" }; // Command option names in chain-mode index order.
+  private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" }; // Constraint-solution priorities in persisted index order.
+  private static readonly Color SourceFeedbackColor = Color.Orange; // Highlight color for a locked source curve.
+  private static readonly Color HoverFeedbackColor = Color.Orange; // Highlight color for a candidate curve under the cursor.
 
-  private const int ModeSingle = 0;
-  private const int ModeMultiple = 1;
-  private const int ModeChained = 2;
-  private const int ModePolyline = 3;
+  private const int ModeSingle = 0; // Persisted index for one independent line.
+  private const int ModeMultiple = 1; // Persisted index for repeated independent lines.
+  private const int ModeChained = 2; // Persisted index for endpoint-chained lines.
+  private const int ModePolyline = 3; // Persisted index for one joined polyline.
 
-  private const int PriorityClosest = 0;
-  private const int PriorityPerpFirst = 1;
-  private const int PriorityTanFirst = 2;
-  private const int PriorityKeepCurrent = 3;
+  private const int PriorityClosest = 0; // Persisted index for the solution nearest the cursor.
+  private const int PriorityPerpFirst = 1; // Persisted index preferring perpendicular solutions.
+  private const int PriorityTanFirst = 2; // Persisted index preferring tangent solutions.
+  private const int PriorityKeepCurrent = 3; // Persisted index preferring the current solution branch.
 
-  private static int _chainMode = ModeSingle;
-  private static int _priority = PriorityClosest;
-  private static bool _persistConstraint;
-  private static double _length;
-  private static double _angle;
-  private static bool   _angleRelative;
-  private static string _layer = CurrentLayerOption;
+  // Option defaults
+  private const int DefaultChainMode = ModeSingle; // Mode constant: Single, Multiple, Chained, or Polyline.
+  private const int DefaultPriority = PriorityClosest; // Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.
+  private const bool DefaultPersistConstraint = false; // true carries the active constraint to the next line; false resets it.
+  private const double DefaultLength = 0.0; // Model units; zero leaves line length unlocked.
+  private const double DefaultAngle = 0.0; // Angle in degrees.
+  private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
+  private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+
+  private static int _chainMode = DefaultChainMode;
+  private static int _priority = DefaultPriority;
+  private static bool _persistConstraint = DefaultPersistConstraint;
+  private static double _length = DefaultLength;
+  private static double _angle = DefaultAngle;
+  private static bool   _angleRelative = DefaultAngleRelative;
+  private static string _layer = DefaultLayer;
 
   private static bool _debugMode = false;
 
@@ -3584,7 +3593,7 @@ public sealed class vLine : Command
     ScreenCurveCandidate left,
     ScreenCurveCandidate right)
   {
-    const double distanceTieTolerance = 1.0e-9;
+    const double distanceTieTolerance = 1.0e-9; // Model-unit epsilon for equal-distance constraint candidates.
     var distanceDifference = left.Distance - right.Distance;
     if (Math.Abs(distanceDifference) > distanceTieTolerance)
       return distanceDifference < 0.0 ? -1 : 1;
@@ -3693,7 +3702,7 @@ public sealed class vLine : Command
     if (da.T1 <= da.T0 || db.T1 <= db.T0)
       return false;
 
-    const int samples = 64;
+    const int samples = 64; // Coarse samples used to seed curve constraint solving; four or greater.
     var candidates = new List<(double TA, double TB, double Error, double PickScore)>();
 
     for (var ia = 0; ia <= samples; ia++)
@@ -4155,7 +4164,7 @@ public sealed class vLine : Command
     if (!tangent.Unitize())
       return;
 
-    const double HalfLengthPixels = 36.0;
+    const double HalfLengthPixels = 36.0; // Half-length of tangent/perpendicular cue lines in display pixels.
     var halfLength = Math.Max(doc.ModelAbsoluteTolerance * 8.0, 0.1);
     var viewport = doc.Views.ActiveView?.ActiveViewport;
     if (viewport != null &&
@@ -4315,7 +4324,7 @@ public sealed class vLine : Command
     IReadOnlyList<CurveCacheItem> curveCache,
     double tol)
   {
-    const double rayLen = 1e6;
+    const double rayLen = 1e6; // Model-unit construction-ray length used for effectively unbounded intersections.
     var rayLine = new LineCurve(new Line(startPoint - dir * rayLen, startPoint + dir * rayLen));
 
     var cursorDist = cursorPoint.DistanceTo(startPoint);

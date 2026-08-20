@@ -23,11 +23,18 @@ public sealed class vCurveToSpline : Command
   private const string SmoothCloseKey = "smoothClose";
   private const string ReplaceOriginalKey = "replaceOriginal";
   private const string SmoothKey = "smooth";
-  private static readonly string[] JoinModes = { "None", "Connected", "All" };
-  private static int _joinModeIndex = 2;
-  private static bool _smoothClose;
-  private static bool _replaceOriginal;
-  private static bool _smooth = true;
+
+  // Option defaults
+  private const int DefaultJoinModeIndex = 2; // Zero-based JoinModes index: None, Connected, or All.
+  private const bool DefaultSmoothClose = false; // true closes joined output smoothly; false preserves a closing kink.
+  private const bool DefaultReplaceOriginal = false; // true deletes converted inputs; false keeps them.
+  private const bool DefaultSmooth = true; // true smooths joins between segments; false preserves segment transitions.
+
+  private static readonly string[] JoinModes = { "None", "Connected", "All" }; // Command option names in join-mode index order.
+  private static int _joinModeIndex = DefaultJoinModeIndex;
+  private static bool _smoothClose = DefaultSmoothClose;
+  private static bool _replaceOriginal = DefaultReplaceOriginal;
+  private static bool _smooth = DefaultSmooth;
 
   /// <summary>Unified representation of a selected curve or point object.</summary>
   private readonly struct Segment
@@ -76,7 +83,7 @@ public sealed class vCurveToSpline : Command
     var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode, out var smoothClose, out var smooth);
     _joinModeIndex = Array.IndexOf(JoinModes, joinMode);
     if (_joinModeIndex < 0)
-      _joinModeIndex = 2;
+      _joinModeIndex = DefaultJoinModeIndex;
     SavePersistedOptions();
 
     if (pickResult != Result.Success)

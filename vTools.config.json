@@ -75,6 +75,10 @@
     "randStart": true,
     "randNext": true
   },
+  "vMirror": {
+    "copy": true,
+    "flipText": true
+  },
   "vMiddleCurve": {
     "lines": true,
     "lineMode": "EqualDistance",
@@ -109,11 +113,16 @@
     "multiple_number": 2,
     "multiple_distance": 0.0,
     "multiple_use_distance": false,
+    "multiple_auto": false,
+    "multiple_curvature_sensitivity": 10,
+    "multiple_separate": false,
+    "window_width": 300,
+    "window_height": 0,
     "curve_sides": []
   },
   "vOffset": {
     "autoTrim": false,
-    "group": false,
+    "group": 1,
     "distance": 0.5,
     "loose": false,
     "corner": 1,
@@ -141,7 +150,7 @@
     "size": 1.0,
     "deleteOriginal": false,
     "free": false,
-    "auto": false,
+    "auto": true,
     "sizePercent": 5.0
   },
   "vSetPt": {

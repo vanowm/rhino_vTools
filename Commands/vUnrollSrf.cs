@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Rhino;
@@ -27,35 +27,46 @@ namespace vTools.Commands
     public override string EnglishName => "vUnrollSrf";
 
     private const string SettingsSection = "vUnrollSrf";
-    private const string CurrentLayerOption = "*Current*";
-    private const string OutputLayerAnchor = "Surface";
-    private const string DefaultSurfaceLayerName = "Unrolled_surface";
-    private const string DefaultLabelLayerName = "Unrolled_label";
-    private const string DefaultDotLayerName = "Unrolled_dot";
-    private const string DefaultSurfaceLayerPath = DefaultSurfaceLayerName;
-    private const string DefaultLabelLayerPath = DefaultLabelLayerName;
-    private const string DefaultDotLayerPath = DefaultDotLayerName;
-    private const string TextObjectName = "MultiUnroll_NumberLabel";
-    private const string FailureMarkerName = "MultiUnroll_FailedMarker";
-    private const string LabelNumberKey = "MultiUnrollLabelNumber";
-    private const string FailedUnrollKey = "MultiUnrollFailed";
-    private const string FlatGroupPrefix = "MultiUnroll_Flat";
-    private const string OriginalGroupPrefix = "MultiUnroll_Original";
-    private const string FailureMarkerText = "X";
-    private const string LabelHelperDotPrefix     = "__vTools_vUnrollSrf_LabelHelper__";
-    private const string EdgeMateHelperDotPrefix  = "__vTools_vUnrollSrf_EdgeHelper__";
-    private const string CurveHelperDotPrefix     = "__vTools_vUnrollSrf_CurveHelper__";
+    private const string CurrentLayerOption = "*Current*"; // Layer-selector sentinel that resolves output to Rhino's current layer.
+    private const string OutputLayerAnchor = "Surface"; // Top-level layer used as the ordering anchor for default output layers.
+    private const string DefaultSurfaceLayerName = "Unrolled_surface"; // Rhino layer name for flat surfaces.
+    private const string DefaultLabelLayerName = "Unrolled_label"; // Rhino layer name for flat labels.
+    private const string DefaultDotLayerName = "Unrolled_dot"; // Rhino layer name for matching dots.
+    private const string DefaultSurfaceLayerPath = DefaultSurfaceLayerName; // Rhino layer name or full layer path.
+    private const string DefaultLabelLayerPath = DefaultLabelLayerName; // Rhino layer name or full layer path.
+    private const string DefaultDotLayerPath = DefaultDotLayerName; // Rhino layer name or full layer path.
 
-    private const string TextFont = "Arial";
-    private const double TextHeightScale = 1.5;
-    private const double TextLiftRatio = 0.001;
-    private const double TextUpStepRatio = 2.5;
-    private const int TextBoundarySamples = 7;
-    private const bool TextMarkSixNine = true;
+    // Option defaults
+    private const LabelMode DefaultLabelMode = LabelMode.Text; // LabelMode enum: Text, Dots, or None.
+    private const bool DefaultRotateFlatParts = true; // true aligns flat parts to source orientation; false keeps unroller orientation.
+    private const bool DefaultExplode = false; // true explodes flat breps into faces; false keeps each unrolled brep joined.
+    private const bool DefaultKeepPropSurface = false; // true inherits source surface properties; false uses output-layer properties.
+    private const bool DefaultKeepPropFollowing = true; // true inherits properties for following geometry; false uses output layers.
+    private const double DefaultLayoutSpacing = 1.0; // Gap between flat parts in model units; zero or greater.
+    private const double DefaultXExtents = 0.0; // Row width in model units; zero disables row wrapping.
+    private const bool DefaultEdgeDots = true; // true creates matching shared-edge dots; false omits them.
+    private const bool DefaultSplitFaces = false; // true unrolls polysurface faces separately; false keeps polysurfaces together.
+    private const string TextObjectName = "MultiUnroll_NumberLabel"; // Object name assigned to generated part-number labels.
+    private const string FailureMarkerName = "MultiUnroll_FailedMarker"; // Object name assigned to failed-unroll markers.
+    private const string LabelNumberKey = "MultiUnrollLabelNumber"; // User-data key storing a reusable part number.
+    private const string FailedUnrollKey = "MultiUnrollFailed"; // User-data key identifying failed-unroll markers.
+    private const string FlatGroupPrefix = "MultiUnroll_Flat"; // Prefix for generated flat-part group names.
+    private const string OriginalGroupPrefix = "MultiUnroll_Original"; // Prefix for source-part group names.
+    private const string FailureMarkerText = "X"; // Text displayed on surfaces that could not be unrolled.
+    private const string LabelHelperDotPrefix     = "__vTools_vUnrollSrf_LabelHelper__"; // Internal following-dot name prefix for label frames.
+    private const string EdgeMateHelperDotPrefix  = "__vTools_vUnrollSrf_EdgeHelper__"; // Internal following-dot name prefix for edge mates.
+    private const string CurveHelperDotPrefix     = "__vTools_vUnrollSrf_CurveHelper__"; // Internal following-dot name prefix for curves.
 
-    private const double FollowingTolFactor = 100.0;
-    private const double FollowingDiagFactor = 1.0e-4;
-    private const int FollowingCurveSamples = 9;
+    private const string TextFont = "Arial"; // Installed font family used for generated number labels and failure markers.
+    private const double TextHeightScale = 1.5; // Label-height multiplier relative to the part-derived base height.
+    private const double TextLiftRatio = 0.001; // Surface-normal lift as a fraction of text height.
+    private const double TextUpStepRatio = 2.5; // Label up-direction probe distance as a fraction of text height.
+    private const int TextBoundarySamples = 7; // Samples per boundary curve used for label fitting; two or greater.
+    private const bool TextMarkSixNine = true; // true underlines all-6/9 labels for orientation; false leaves them plain.
+
+    private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
+    private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
+    private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
 
     private enum LabelMode
     {
@@ -64,38 +75,38 @@ namespace vTools.Commands
       None = 2
     }
 
-    private static readonly string[] LabelModeNames = { "Text", "Dots", "None" };
+    private static readonly string[] LabelModeNames = { "Text", "Dots", "None" }; // Command option names in LabelMode enum order.
 
     // Session-sticky settings. If you want persistence across Rhino restarts, move these into your plug-in settings.
-    private static LabelMode _labelMode = LabelMode.Text;
-    private static bool _rotateFlatParts = true;
-    private static bool _explode = false;
-    private static bool _keepPropSurface  = false;
-    private static bool _keepPropFollowing = true;
-    private static double _layoutSpacing = 1.0;
-    private static double _xExtents = 0.0;
-    private static bool   _edgeDots = true;
-    private static bool   _splitFaces = false;
+    private static LabelMode _labelMode = DefaultLabelMode;
+    private static bool _rotateFlatParts = DefaultRotateFlatParts;
+    private static bool _explode = DefaultExplode;
+    private static bool _keepPropSurface = DefaultKeepPropSurface;
+    private static bool _keepPropFollowing = DefaultKeepPropFollowing;
+    private static double _layoutSpacing = DefaultLayoutSpacing;
+    private static double _xExtents = DefaultXExtents;
+    private static bool _edgeDots = DefaultEdgeDots;
+    private static bool _splitFaces = DefaultSplitFaces;
     private static string _surfaceLayer = DefaultSurfaceLayerPath;
     private static string _labelLayer = DefaultLabelLayerPath;
     private static string _dotLayer = DefaultDotLayerPath;
 
     // Edge-mate dot constants (match MultiUnroll2.py / vMatch.cs)
-    private const string EdgeMateName        = vMatch.EdgeMateName;
-    private const string EdgeMateIdKey       = vMatch.EdgeMateIdKey;
-    private const string EdgePartNumKey      = vMatch.EdgePartNumKey;
-    private const string EdgeMatePartNumKey  = vMatch.EdgeMatePartNumKey;
-    private const string EdgeMateReversedKey = vMatch.EdgeMateReversedKey;
-    private const string EdgeIndexKey        = "MultiUnrollEdgeIndex";
-    private const string MateEdgeIndexKey    = "MultiUnrollMateEdgeIndex";
-    private const string EdgeIndexModeKey    = "MultiUnrollEdgeIndexMode";
-    private const string TopologyEdgeMode    = "Topology";
-    private const string EdgeMatePrefix      = "M";
-    private const int    EdgeMateDotSize     = 10;
-    private const double EdgeMateTolFactor   = 25.0;
-    private const double EdgeMateDiagFactor  = 1.0e-4;
-    private const int    EdgeMateSamples     = 7;
-    private const int    LabelInteriorSamples = 17;
+    private const string EdgeMateName        = vMatch.EdgeMateName; // Shared output object name for matching edge dots.
+    private const string EdgeMateIdKey       = vMatch.EdgeMateIdKey; // Shared user-data key for the match identifier.
+    private const string EdgePartNumKey      = vMatch.EdgePartNumKey; // Shared user-data key for the owning part number.
+    private const string EdgeMatePartNumKey  = vMatch.EdgeMatePartNumKey; // Shared user-data key for the mating part number.
+    private const string EdgeMateReversedKey = vMatch.EdgeMateReversedKey; // Shared user-data key for edge-direction reversal.
+    private const string EdgeIndexKey        = "MultiUnrollEdgeIndex"; // User-data key for a source topology-edge index.
+    private const string MateEdgeIndexKey    = "MultiUnrollMateEdgeIndex"; // User-data key for the matching topology-edge index.
+    private const string EdgeIndexModeKey    = "MultiUnrollEdgeIndexMode"; // User-data key describing how edge indexes were assigned.
+    private const string TopologyEdgeMode    = "Topology"; // Stored edge-index mode for topology-derived matches.
+    private const string EdgeMatePrefix      = "M"; // Prefix displayed before matching edge-dot numbers.
+    private const int    EdgeMateDotSize     = 10; // Text-dot font height for edge mates in display pixels.
+    private const double EdgeMateTolFactor   = 25.0; // Document-tolerance multiplier for shared-edge matching.
+    private const double EdgeMateDiagFactor  = 1.0e-4; // Edge-length fraction added to shared-edge tolerance.
+    private const int    EdgeMateSamples     = 7; // Interior samples used to validate an edge match; two or greater.
+    private const int    LabelInteriorSamples = 17; // UV grid resolution used to find interior label positions.
 
     // ── Debug logging ─────────────────────────────────────────────────────
     private static void Dbg(string msg) => vTools.Log.Write("vUnrollSrf", msg);
@@ -3251,8 +3262,8 @@ namespace vTools.Commands
       double minimum = Math.Max(tolerance * 8.0, RhinoMath.ZeroTolerance * 10.0);
       bool Fits(double height)
       {
-        const int divisions = 6;
-        const double margin = 0.88;
+        const int divisions = 6; // Candidate subdivisions per text-placement search axis; one or greater.
+        const double margin = 0.88; // Fraction of the usable interior region searched for label placement.
         double minX = unitBounds.Min.X * height / margin;
         double maxX = unitBounds.Max.X * height / margin;
         double minY = unitBounds.Min.Y * height / margin;

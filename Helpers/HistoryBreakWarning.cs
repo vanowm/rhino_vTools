@@ -80,8 +80,8 @@ internal static class HistoryBreakWarning
 
   private sealed class AffectedBodyConduit : DisplayConduit
   {
-    private static readonly Color Orange = Color.FromArgb(255, 128, 0);
-    private static readonly Color Outline = Color.FromArgb(155, 30, 100);
+    private static readonly Color Orange = Color.FromArgb(255, 128, 0); // Fill color for objects whose history will break.
+    private static readonly Color Outline = Color.FromArgb(155, 30, 100); // Wire and edge color around affected objects.
     private readonly RhinoDoc _doc;
     private readonly IReadOnlyCollection<Guid> _objectIds;
     private readonly DisplayMaterial _material = new(Orange)

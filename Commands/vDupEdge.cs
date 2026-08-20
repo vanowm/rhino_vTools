@@ -19,8 +19,12 @@ public sealed class vDupEdge : Command
   private const string GroupIfNoneKey = "groupIfNone";
   private const string LayerKey = "layer";
 
-  private static bool _groupIfNone;
-  private static string _layer = DuplicateCommandSupport.CurrentLayerOption;
+  // Option defaults
+  private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
+  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+  private static bool _groupIfNone = DefaultGroupIfNone;
+  private static string _layer = DefaultLayer;
 
   private readonly record struct EdgeCopy(Guid SourceId, Curve Curve);
 

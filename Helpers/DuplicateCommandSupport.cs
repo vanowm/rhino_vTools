@@ -9,7 +9,7 @@ namespace vTools.Commands;
 
 internal static class DuplicateCommandSupport
 {
-  internal const string CurrentLayerOption = "*Current*";
+  internal const string CurrentLayerOption = "*Current*"; // Shared sentinel that resolves output to Rhino's current layer.
 
   internal static string NormalizeLayerOption(string? layerName)
   {

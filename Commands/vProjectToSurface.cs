@@ -427,8 +427,8 @@ public sealed class vProjectToSurface : Command
 
   private sealed class ProjectionPreviewConduit : DisplayConduit
   {
-    private static readonly DrawingColor PreviewCurveColor = DrawingColor.FromArgb(230, 255, 165, 0);
-    private static readonly DrawingColor PreviewPointColor = DrawingColor.FromArgb(230, 255, 235, 120);
+    private static readonly DrawingColor PreviewCurveColor = DrawingColor.FromArgb(230, 255, 165, 0); // Projected-curve preview color and alpha.
+    private static readonly DrawingColor PreviewPointColor = DrawingColor.FromArgb(230, 255, 235, 120); // Projected-point preview color and alpha.
 
     private readonly RhinoDoc _doc;
     private readonly IReadOnlyList<Brep> _targetBreps;

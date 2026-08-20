@@ -16,6 +16,9 @@ namespace vTools.Commands;
 /// </summary>
 internal static class OrientCommon
 {
+  // Defaults
+  private const bool DefaultCopy = false; // true copies oriented objects; false transforms the originals.
+
   private const string OrientOptionsSectionName = "vOrient";
   private const string CopyOptionKey = "copy";
 
@@ -27,7 +30,7 @@ internal static class OrientCommon
   /// <summary>
   /// Loads persisted Copy option value for orient commands.
   /// </summary>
-  internal static bool LoadCopyOption(bool fallback = false)
+  internal static bool LoadCopyOption(bool fallback = DefaultCopy)
   {
     return ToolsOptionStore.Read(
       OrientOptionsSectionName,

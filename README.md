@@ -1,11 +1,12 @@
-# vTools  ·  v26.8.19.1816
+# vTools  ·  v26.8.20.1355
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (50):
+- Native commands (52):
+  - [vAlign](#valign-flow) *(26.8.20.807)* — rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
@@ -25,6 +26,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
   - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by vUnrollSrf to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one
+  - [vMirror](#vmirror-flow) *(26.8.20.703)* — mirrors selected objects across two-point, three-point, CPlane-axis, or planar-object planes, with persistent copying and text-flipping options
   - [vNotches](#vnotches-flow) *(26.6.1.1529)* — places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview
   - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in Offset continuously and can trim or extend new offsets to curves touching the source endpoints
   - [vOrient2pt](#vorient2pt-flow) *(26.4.24.934)* — orients objects from a source two-point frame to a target two-point frame
@@ -103,10 +105,21 @@ Release output is written to:
 
 All command options persist by default unless stated otherwise.
 
-Native commands (50): [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (52): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
+
+### vAlign flow
+
+1. Preselect objects or run `vAlign` and select the objects to rotate. Group members are treated as one movable object.
+1. Click the stationary reference curve or surface/polysurface edge near the end that should receive the target. Kinks of 30 degrees or more are independently selectable segments.
+1. Hover a target curve or edge within the movable selection. The target is highlighted, a thin line connects the two picked points, and the complete transformed result previews faded; click to apply it.
+1. Alignment uses World XY rotation around World Z, independent of the active view. Open curves match the clicked ends so the objects are not inadvertently reversed.
+
+Options:
+
+- `Distance`: a non-negative separation from the reference edge; the command chooses the side that minimizes overlap and places the moved objects opposite the reference object. Enter `None` to rotate in place around the selected objects' center of mass without translating them.
 
 ### vBiminiParts flow
 
@@ -385,6 +398,12 @@ Options persist to `vTools.config.json` under `vMatch`.
 1. Sample density is chosen adaptively and refined until the middle curve error is within tolerance.
 1. If both input curves belong to the same Rhino group, the new middle curve (and any connector lines) is added to that group.
 
+### vMirror flow
+
+1. Preselect objects or run `vMirror` and select them, then choose the start and end of the mirror axis in the active CPlane. Originals are deselected for placement; mirrored previews use Rhino's selected-object color, and Move mode ghosts the originals in grey.
+1. Plane options match native Mirror: `3Point`, `XAxis`, `YAxis`, `ZAxis`, and `Object` for a planar surface or face.
+1. `Copy` preserves the source objects. `FlipText` applies an additional readable-side flip to mirrored text. Both options remain available throughout object and plane selection and persist between runs.
+
 ### vNotches flow
 
 1. Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions.
@@ -412,19 +431,22 @@ Options persist to `vTools.config.json` under `vMatch`.
 1. **Multiple** group options:
 
     - `Start offset` / `End offset`: numeric steppers for the distances from each curve's respective ends to the first and last notch.
+    - `Auto`: uses curvature-aware spacing. Every enabled curve contributes to one shared curvature envelope, so turns occurring at different positions on different curves all add density at their corresponding stations. Curve kinks are preferred station candidates, use the middle kink orientation, and replace nearby regular stations. The adjacent unlabeled integer control sets sensitivity in fine whole-number steps: zero produces uniform maximum-distance spacing, while larger values make tangent changes reduce spacing more strongly. `Distance` becomes the maximum gap, and one sampled turn transition cannot create clustered duplicate stations. Unchecking Auto restores the Number or Distance mode that was selected before Auto and immediately recalculates the inactive companion value.
     - `Number`: numeric stepper for the total number of notches; minimum is 1. When `Number=1` a single notch is placed at the start offset position only.
-    - `Distance`: editable numeric stepper with a `1.0` button increment. Changing `Number` evenly distributes the fixed start/end span. Changing `Distance` repeats that spacing and uses a shorter final gap when needed to preserve the fixed end offset. The shortest enabled curve is the spacing reference.
-    - `Add`: creates an evenly spaced notch batch. Hovering over `Add` shows a live preview of the positions that will be placed. When labels are enabled, only the first notch position receives the label and auto-advance runs once.
+    - `Distance`: editable numeric stepper with a `1.0` button increment. Changing `Number` evenly distributes the fixed start/end span. In regular Distance mode it is the minimum repeated spacing; in Auto mode it is the maximum allowed spacing. Absolute stations use the shortest enabled curve as their distance base while curvature contributions remain combined from every enabled curve.
+    - `Add`: creates the previewed notch batch. Notches already added to the current curve selection reserve their locations, so proposed stations closer than the active local spacing are omitted per curve while missing companion-curve stations remain available. Its inset `Separate` checkbox applies Number, Distance, or Auto spacing independently to every physical segment in a linked sequence, then maps the expanded station count across companion curves. For example, `Number=3` on a linked pair creates three notches per segment and six on an accompanying single curve. When labels are enabled, only the first new station receives the label and auto-advance runs once.
 
 1. Other panel controls:
 
-    - `Percent`: display the click position as a percentage of total curve length in the distance readout.
+    - `Percent`: display and place by relative curve position. When disabled, the control is highlighted if selected sequence lengths differ by more than 1/16 inch.
     - `Group`: group each enabled notch and label output.
-    - `Select`: return to individual-curve selection without selecting groups or ending the command. Its inset checkbox defaults unchecked: unchecked selection replaces the current curve set; checked selection keeps the current curves so others can be added or removed. The setting is saved immediately. Existing placed notches remain in the document, and a curve restores its remembered side when re-added.
-    - Per-curve row — `Side N` checkbox: which side of the curve the notch and label are drawn on; `Reverse N` button: flip the curve's travel direction; the last column shows curve length rounded to three decimal places.
+    - `Select`: return to individual-curve selection without selecting groups or ending the command. Its inset checkbox defaults unchecked: unchecked selection replaces the current curve set; checked selection keeps the current curves so others can be added or removed. The setting is saved immediately. Existing placed notches remain in the document. Replacement curves inherit Side by sequence, retained curves preserve their source-specific Side and oriented start, and explicitly clicking another end intentionally defines a new start.
+    - Per-curve row — use the grip at the left to drag and reorder curves. The stable, optically centered curve number appears before its enable checkbox and highlights when the row or corresponding viewport curve is hovered. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. The enlarged up/down Side and dynamic single-arrow Reverse controls retain compact click areas and show borderless hover and pressed feedback. Use the borderless link button between rows to join or separate placement sequences. The centered length badges use equal compact padding and `999.999` only as their minimum-width sample for individual and combined linked lengths; cumulative values include a clipping allowance, and larger values remain fully displayable in the scrollable row. The longest and shortest sequences also show transparent-background green `(+difference)` and red `(-difference)` superscripts after the applicable length.
     - Distance info: **From start**, **From end**, **From previous** show arc-length values rounded to three decimal places.
     - **Undo** / **Redo** buttons: step backward or forward through placements.
 
+1. Created notch components are named `Notch`; created text objects are named `NotchLabel` and carry the same source, placement, geometry, layer, tangent, and label metadata as their matching notch, plus label and paired-notch identifiers.
+1. Notch, label, multiple-placement, layer, Percent, and Group settings are saved in the Rhino document and override global settings when that document is reopened. Window and selection preferences remain global.
 1. Press Enter to finish and keep all placed notches. Press Esc to cancel and remove them.
 
 The floating panel adds scrollbars when resized below its content size.
@@ -445,7 +467,7 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 
 `AutoTrim=Yes` checks each open source endpoint independently. When an endpoint touches another curve, the corresponding end of every new offset is trimmed back if it crosses that curve, left unchanged if already touching, or extended to the curve when it falls short. The setting persists.
 
-`Group=Yes` adds every completed offset to all groups containing its source curve. If the source is ungrouped, one new group is created containing the source and all outputs from that offset. The setting persists, and group changes share the offset's undo record.
+`Group=Auto` adds every completed offset to all groups containing its source curve, or creates a source/output group when the source is ungrouped. `Group=Yes` always creates a separate group containing only the source and outputs from that offset. `Group=No` leaves grouping unchanged. The setting persists, and group changes share the offset's undo record.
 
 ### vOrient2pt flow
 

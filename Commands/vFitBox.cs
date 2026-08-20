@@ -23,15 +23,21 @@ public sealed class vFitBox : Command
   private const string RotateKey = "rotate";
   private const string FitModeKey = "fitMode";
 
-  private const double MinAngleStepDeg = 0.1;
-  private const double MaxAngleStepDeg = 45.0;
-  private const int MaxNormalSamples = 5000;
-  private const double MinYawRefineStepDeg = 0.01;
-  private const double Min2dFinalStepDeg = 0.001;
+  private const double MinAngleStepDeg = 0.1; // Smallest accepted coarse search step in degrees.
+  private const double MaxAngleStepDeg = 45.0; // Largest accepted coarse search step in degrees.
+  private const int MaxNormalSamples = 5000; // Maximum sampled surface normals used by the 3D fit search.
+  private const double MinYawRefineStepDeg = 0.01; // Final 3D yaw refinement step in degrees; greater than zero.
+  private const double Min2dFinalStepDeg = 0.001; // Final planar refinement step in degrees; greater than zero.
 
-  private static double _angleStepDeg = 5.0;
-  private static bool _rotate = false;
-  private static string _fitMode = "height";
+  // Option defaults
+  private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
+  private const bool DefaultRotate = false; // true rotates selected geometry into the fitted frame; false only creates the box.
+  private const string DefaultFitMode = "height"; // Fit mode name: height, volume, or area.
+  private const string DefaultCandidateMode = "3d"; // Internal candidate mode name: 3d or 2d.
+
+  private static double _angleStepDeg = DefaultAngleStepDeg;
+  private static bool _rotate = DefaultRotate;
+  private static string _fitMode = DefaultFitMode;
 
   /// <summary>
   /// Rhino command name.
@@ -1555,7 +1561,7 @@ public sealed class vFitBox : Command
       Area = area,
       Volume = area * height,
       Mode = "3d",
-      FitMode = "height"
+      FitMode = DefaultFitMode
     };
   }
 
@@ -1783,7 +1789,7 @@ public sealed class vFitBox : Command
     public int TestedYaws { get; set; }
     public double RequestedStepDeg { get; set; }
     public double EffectiveStepDeg { get; set; }
-    public string Mode { get; set; } = "3d";
-    public string FitMode { get; set; } = "height";
+    public string Mode { get; set; } = DefaultCandidateMode;
+    public string FitMode { get; set; } = DefaultFitMode;
   }
 }

@@ -16,49 +16,96 @@ namespace vTools.Commands;
 
 /// <summary>
 /// Places notches (I, V, open-V, U, and T shapes) on one or more curves with an interactive live panel.
-/// Identical to the Notches.py script, without the auto-sync daemon.
 /// </summary>
 public sealed class vNotches : Rhino.Commands.Command
 {
   // ── Constants ────────────────────────────────────────────────────────────
 
   const string Section            = "vNotches";
-  const string SpecialLayerCurrent = "*[Current]*";
-  const string NotchDataPrefix    = "notch.";
-  const string NotchDataVersion   = "1";
-  const string OpenVNotchType     = "\\/";
-  const string NotchComponentSetKey = NotchDataPrefix + "component_set";
-  const double LabelWidthMult     = 0.9;
-  const double DefaultLabelOffIn  = 0.1; // inches
+  const string DocumentSettingsSection = "vTools"; // Rhino document-string section used for per-document command settings.
+  const string DocumentSettingsEntry = "vNotches"; // Rhino document-string entry containing serialized notch and label settings.
+  const string SpecialLayerCurrent = "*[Current]*"; // Layer-selector sentinel that resolves output to Rhino's current layer.
+  const string NotchDataPrefix    = "notch."; // Prefix for user-data keys written to notch output objects.
+  const string NotchDataVersion   = "1"; // Serialized notch metadata schema version.
+  const string OpenVNotchType     = "\\/"; // Stored and displayed code for the Open Vee notch type.
+  const string NotchObjectName = "Notch"; // Rhino object name assigned to every created notch component.
+  const string NotchLabelObjectName = "NotchLabel"; // Rhino object name assigned to every created notch label.
+  const string NotchComponentSetKey = NotchDataPrefix + "component_set"; // Metadata key linking one notch's output components.
+  const double LabelWidthMult     = 0.9; // Estimated text-width multiplier applied per character.
+  const double DefaultLabelOffIn  = 0.1; // Label offset in inches before document-unit conversion; zero or greater.
 
   // ── Persisted defaults ───────────────────────────────────────────────────
 
-  static double _notchLength    = 0.18;
-  static double _notchOffset    = 0.5;
-  static double _notchWidth     = 0.18;
-  static string _notchType      = "I";
-  static bool   _notch          = true;
-  static bool   _percent        = false;
-  static bool   _group          = false;
-  static bool   _label          = false;
-  static string _labelValue     = "A";
-  static double _labelSize      = 0.3;
-  static bool   _labelSizeAuto  = false;
-  static int    _labelSizePct   = 75;
-  static string _notchLayer     = SpecialLayerCurrent;
-  static string _labelLayer     = "PLOT";
-  static double _labelOffset    = double.NaN; // resolved to model units on first load
-  static double _labelOffsetY   = 0.0;
-  static bool   _labelAutoAdv   = true;
-  static bool   _labelSideFlip  = false;
-  static bool   _keepSelection  = false;
-  static double _multipleStartOffset = 2.0;
-  static double _multipleEndOffset   = 2.0;
-  static bool   _multipleStartOffsetEnabled = true;
-  static bool   _multipleEndOffsetEnabled   = true;
-  static int    _multipleNumber      = 2;
-  static double _multipleDistance    = 0.0;
-  static bool   _multipleUseDistance = false;
+  const double DefaultNotchLength = 0.18; // Notch depth in model units; greater than zero.
+  const double DefaultNotchOffset = 0.5; // Offset-curve distance in model units; zero or greater.
+  const double DefaultNotchWidth = 0.18; // Notch width in model units; greater than zero.
+  const string DefaultNotchType = "I"; // Notch code: I, V, \/, U, or T.
+  const bool DefaultNotchEnabled = true; // true creates notch geometry; false creates labels only.
+  const bool DefaultPercent = false; // true interprets placement as curve percentage; false uses model-unit distance.
+  const bool DefaultGroup = false; // true groups each result with its landed source; false preserves existing grouping only.
+  const bool DefaultLabelEnabled = false; // true creates notch labels; false omits them.
+  const string DefaultLabelValue = "A"; // Plain label text.
+  const double DefaultLabelSize = 0.3; // Text height in model units; zero or greater.
+  const bool DefaultLabelSizeAuto = false; // true derives label size automatically; false uses the configured size.
+  const int DefaultLabelSizePercent = 75; // Auto-size percentage; 20 through 100 in five-point steps.
+  const string DefaultNotchLayer = SpecialLayerCurrent; // Rhino layer path or the current-layer sentinel.
+  const string DefaultLabelLayer = "PLOT"; // Rhino layer name or full layer path.
+  const double DefaultLabelOffset = double.NaN; // Model units; NaN requests DefaultLabelOffIn conversion.
+  const double DefaultLabelOffsetY = 0.0; // Perpendicular label offset in model units.
+  const bool DefaultLabelAutoAdvance = true; // true increments labels after placement; false reuses the current label.
+  const bool DefaultLabelSideFlip = false; // true places labels on the opposite side; false uses the notch side.
+  const bool DefaultKeepSelection = false; // true retains current curves while selecting; false replaces the selection.
+  const double DefaultMultipleStartOffset = 2.0; // Start clearance in model units; zero or greater.
+  const double DefaultMultipleEndOffset = 2.0; // End clearance in model units; zero or greater.
+  const bool DefaultMultipleStartOffsetEnabled = true; // true reserves the start offset; false excludes a start-end notch.
+  const bool DefaultMultipleEndOffsetEnabled = true; // true reserves the end offset; false excludes an end-end notch.
+  const int DefaultMultipleNumber = 2; // Number of notches; one through 10000.
+  const double DefaultMultipleDistance = 0.0; // Minimum spacing in model units; zero or greater.
+  const bool DefaultMultipleUseDistance = false; // true drives spacing by minimum distance; false drives it by notch count.
+  const bool DefaultMultipleAuto = false; // true uses curvature-aware spacing with Distance as the maximum; false uses uniform spacing.
+  const int DefaultMultipleCurvatureSensitivity = 10; // Whole-number curvature sensitivity from zero through 1000; ten preserves the original 1.0 curvature multiplier.
+  const bool DefaultMultipleSeparate = false; // true applies the requested multiple layout to each linked physical segment; false treats each linked sequence as one curve.
+  const double MultipleCurvatureSensitivityUnit = 0.1; // Internal curvature multiplier represented by one whole-number Sensitivity step.
+  const int MultipleAutoMinimumSamples = 64; // Minimum tangent samples used by curvature-aware spacing.
+  const int MultipleAutoSamplesPerSpacing = 16; // Tangent samples taken per maximum-distance interval.
+  const int MultipleAutoMaximumSamples = 20000; // Upper sampling limit protecting interactive preview performance.
+  const double MultipleAutoKinkSnapDistanceScale = 0.5; // Fraction of maximum spacing within which a regular Auto station is replaced by a kink station.
+  const double MultipleAutoKinkMinimumAngleDegrees = 1.0; // Minimum joined-segment tangent change treated as a kink candidate, in degrees.
+  const double MultipleExistingNotchClearanceScale = 1.0; // Fraction of the proposed local spacing kept clear around notches already placed on the current curve selection.
+  const int DefaultWindowWidth = 300; // Client width in device-independent pixels; 300 or greater.
+  const int DefaultWindowHeight = 0; // Client height in device-independent pixels; zero auto-sizes to content.
+
+  static double _notchLength = DefaultNotchLength;
+  static double _notchOffset = DefaultNotchOffset;
+  static double _notchWidth = DefaultNotchWidth;
+  static string _notchType = DefaultNotchType;
+  static bool _notch = DefaultNotchEnabled;
+  static bool _percent = DefaultPercent;
+  static bool _group = DefaultGroup;
+  static bool _label = DefaultLabelEnabled;
+  static string _labelValue = DefaultLabelValue;
+  static double _labelSize = DefaultLabelSize;
+  static bool _labelSizeAuto = DefaultLabelSizeAuto;
+  static int _labelSizePct = DefaultLabelSizePercent;
+  static string _notchLayer = DefaultNotchLayer;
+  static string _labelLayer = DefaultLabelLayer;
+  static double _labelOffset = DefaultLabelOffset; // resolved to model units on first load
+  static double _labelOffsetY = DefaultLabelOffsetY;
+  static bool _labelAutoAdv = DefaultLabelAutoAdvance;
+  static bool _labelSideFlip = DefaultLabelSideFlip;
+  static bool _keepSelection = DefaultKeepSelection;
+  static double _multipleStartOffset = DefaultMultipleStartOffset;
+  static double _multipleEndOffset = DefaultMultipleEndOffset;
+  static bool _multipleStartOffsetEnabled = DefaultMultipleStartOffsetEnabled;
+  static bool _multipleEndOffsetEnabled = DefaultMultipleEndOffsetEnabled;
+  static int _multipleNumber = DefaultMultipleNumber;
+  static double _multipleDistance = DefaultMultipleDistance;
+  static bool _multipleUseDistance = DefaultMultipleUseDistance;
+  static bool _multipleAuto = DefaultMultipleAuto;
+  static int _multipleCurvatureSensitivity = DefaultMultipleCurvatureSensitivity;
+  static bool _multipleSeparate = DefaultMultipleSeparate;
+  static int _windowWidth = DefaultWindowWidth;
+  static int _windowHeight = DefaultWindowHeight;
   static bool[] _curveSides     = Array.Empty<bool>();
   static NotchSession? _activeSession;
   static GetPoint? _activeGetter;
@@ -110,41 +157,10 @@ public sealed class vNotches : Rhino.Commands.Command
   {
     ToolsOptionStore.Read<int>(Section, s =>
     {
-      if (ToolsOptionStore.TryGetDouble(s, "notch_length",    out var v)) _notchLength   = v;
-      if (ToolsOptionStore.TryGetDouble(s, "notch_offset",    out v))     _notchOffset   = v;
-      if (ToolsOptionStore.TryGetDouble(s, "notch_width",     out v))     _notchWidth    = v;
-      if (ToolsOptionStore.TryGetString(s, "notch_type",      out var t)) _notchType     = t;
-      if (ToolsOptionStore.TryGetBool  (s, "notch",           out var b)) _notch         = b;
-      if (ToolsOptionStore.TryGetBool  (s, "percent",         out b))     _percent       = b;
-      if (ToolsOptionStore.TryGetBool  (s, "group",           out b))     _group         = b;
-      if (ToolsOptionStore.TryGetBool  (s, "label",           out b))     _label         = b;
-      if (ToolsOptionStore.TryGetString(s, "label_value",     out t))     _labelValue    = t;
-      if (ToolsOptionStore.TryGetDouble(s, "label_size",      out v))     _labelSize     = v;
-      if (ToolsOptionStore.TryGetBool  (s, "label_size_auto", out b))     _labelSizeAuto = b;
-      if (ToolsOptionStore.TryGetDouble(s, "label_size_pct",  out var pctv))_labelSizePct  = (int)pctv;
-      if (ToolsOptionStore.TryGetString(s, "notch_layer",     out t))     _notchLayer    = t;
-      if (ToolsOptionStore.TryGetString(s, "label_layer",     out t))     _labelLayer    = t;
-      if (ToolsOptionStore.TryGetDouble(s, "label_offset",    out v))     _labelOffset   = v;
-      if (ToolsOptionStore.TryGetDouble(s, "label_offset_y",  out v))     _labelOffsetY  = v;
-      if (ToolsOptionStore.TryGetBool  (s, "label_auto_adv",  out b))     _labelAutoAdv  = b;
-      if (ToolsOptionStore.TryGetBool  (s, "label_side_flip", out b))     _labelSideFlip = b;
-      if (ToolsOptionStore.TryGetBool  (s, "keep_selection",  out b))     _keepSelection = b;
-      if (ToolsOptionStore.TryGetDouble(s, "multiple_start_offset", out v)) _multipleStartOffset = Math.Max(0.0, v);
-      if (ToolsOptionStore.TryGetDouble(s, "multiple_end_offset",   out v)) _multipleEndOffset   = Math.Max(0.0, v);
-      if (ToolsOptionStore.TryGetBool  (s, "multiple_start_offset_enabled", out b)) _multipleStartOffsetEnabled = b;
-      if (ToolsOptionStore.TryGetBool  (s, "multiple_end_offset_enabled",   out b)) _multipleEndOffsetEnabled   = b;
-      if (ToolsOptionStore.TryGetDouble(s, "multiple_number",       out v)) _multipleNumber      = Math.Clamp((int)Math.Round(v), 1, 10000);
-      if (ToolsOptionStore.TryGetDouble(s, "multiple_distance",     out v)) _multipleDistance    = Math.Max(0.0, v);
-      if (ToolsOptionStore.TryGetBool  (s, "multiple_use_distance", out b)) _multipleUseDistance = b;
-      if (s?["curve_sides"] is System.Text.Json.Nodes.JsonArray arr)
-      {
-        var sides = new List<bool>();
-        foreach (var el in arr)
-          if (el is System.Text.Json.Nodes.JsonValue jv && jv.TryGetValue<bool>(out var bv)) sides.Add(bv);
-        _curveSides = sides.ToArray();
-      }
+      ApplyStoredOptions(s, includeUiSettings: true);
       return 0;
     });
+    LoadDocumentOptions(doc);
     if (double.IsNaN(_labelOffset))
       _labelOffset = ModelUnitsFromInches(doc, DefaultLabelOffIn);
     if (!_notch && !_label)
@@ -152,46 +168,145 @@ public sealed class vNotches : Rhino.Commands.Command
   }
 
   static void SaveOptions(NotchSession s)
-{
-  UpdateStaticDefaultsFromSession(s);
-
-  bool ok = ToolsOptionStore.Update(Section, sec =>
   {
-    sec["notch_length"]    = _notchLength;
-    sec["notch_offset"]    = _notchOffset;
-    sec["notch_width"]     = _notchWidth;
-    sec["notch_type"]      = _notchType;
-    sec["notch"]           = _notch;
-    sec["percent"]         = _percent;
-    sec["group"]           = _group;
-    sec["label"]           = _label;
-    sec["label_value"]     = _labelValue;
-    sec["label_size"]      = _labelSize;
+    UpdateStaticDefaultsFromSession(s);
+
+    bool ok = ToolsOptionStore.Update(Section, sec =>
+    {
+      WriteBehaviorOptions(sec);
+      sec["keep_selection"] = _keepSelection;
+      sec["window_width"] = _windowWidth;
+      sec["window_height"] = _windowHeight;
+
+      var arr = new System.Text.Json.Nodes.JsonArray();
+      foreach (var b in _curveSides) arr.Add(b);
+      sec["curve_sides"] = arr;
+    });
+
+    if (!ok)
+      RhinoApp.WriteLine($"vNotches: failed to save options: {ToolsOptionStore.LastError}");
+    SaveDocumentOptions(s.Doc);
+  }
+
+  static void ApplyStoredOptions(
+    System.Text.Json.Nodes.JsonObject? s, bool includeUiSettings)
+  {
+    if (ToolsOptionStore.TryGetDouble(s, "notch_length",    out var v)) _notchLength   = v;
+    if (ToolsOptionStore.TryGetDouble(s, "notch_offset",    out v))     _notchOffset   = v;
+    if (ToolsOptionStore.TryGetDouble(s, "notch_width",     out v))     _notchWidth    = v;
+    if (ToolsOptionStore.TryGetString(s, "notch_type",      out var t)) _notchType     = t;
+    if (ToolsOptionStore.TryGetBool  (s, "notch",           out var b)) _notch         = b;
+    if (ToolsOptionStore.TryGetBool  (s, "percent",         out b))     _percent       = b;
+    if (ToolsOptionStore.TryGetBool  (s, "group",           out b))     _group         = b;
+    if (ToolsOptionStore.TryGetBool  (s, "label",           out b))     _label         = b;
+    if (ToolsOptionStore.TryGetString(s, "label_value",     out t))     _labelValue    = t;
+    if (ToolsOptionStore.TryGetDouble(s, "label_size",      out v))     _labelSize     = v;
+    if (ToolsOptionStore.TryGetBool  (s, "label_size_auto", out b))     _labelSizeAuto = b;
+    if (ToolsOptionStore.TryGetDouble(s, "label_size_pct",  out var pctv)) _labelSizePct = (int)pctv;
+    if (ToolsOptionStore.TryGetString(s, "notch_layer",     out t))     _notchLayer    = t;
+    if (ToolsOptionStore.TryGetString(s, "label_layer",     out t))     _labelLayer    = t;
+    if (ToolsOptionStore.TryGetDouble(s, "label_offset",    out v))     _labelOffset   = v;
+    if (ToolsOptionStore.TryGetDouble(s, "label_offset_y",  out v))     _labelOffsetY  = v;
+    if (ToolsOptionStore.TryGetBool  (s, "label_auto_adv",  out b))     _labelAutoAdv  = b;
+    if (ToolsOptionStore.TryGetBool  (s, "label_side_flip", out b))     _labelSideFlip = b;
+    if (ToolsOptionStore.TryGetDouble(s, "multiple_start_offset", out v)) _multipleStartOffset = Math.Max(0.0, v);
+    if (ToolsOptionStore.TryGetDouble(s, "multiple_end_offset",   out v)) _multipleEndOffset = Math.Max(0.0, v);
+    if (ToolsOptionStore.TryGetBool(s, "multiple_start_offset_enabled", out b)) _multipleStartOffsetEnabled = b;
+    if (ToolsOptionStore.TryGetBool(s, "multiple_end_offset_enabled", out b)) _multipleEndOffsetEnabled = b;
+    if (ToolsOptionStore.TryGetDouble(s, "multiple_number", out v)) _multipleNumber = Math.Clamp((int)Math.Round(v), 1, 10000);
+    if (ToolsOptionStore.TryGetDouble(s, "multiple_distance", out v)) _multipleDistance = Math.Max(0.0, v);
+    if (ToolsOptionStore.TryGetBool(s, "multiple_use_distance", out b)) _multipleUseDistance = b;
+    if (ToolsOptionStore.TryGetBool(s, "multiple_auto", out b)) _multipleAuto = b;
+    if (ToolsOptionStore.TryGetDouble(s, "multiple_curvature_sensitivity", out v))
+      _multipleCurvatureSensitivity = Math.Clamp((int)Math.Round(v), 0, 1000);
+    if (ToolsOptionStore.TryGetBool(s, "multiple_separate", out b))
+      _multipleSeparate = b;
+
+    if (!includeUiSettings)
+      return;
+    if (ToolsOptionStore.TryGetBool(s, "keep_selection", out b)) _keepSelection = b;
+    if (ToolsOptionStore.TryGetDouble(s, "window_width", out v))
+      _windowWidth = Math.Max(DefaultWindowWidth, (int)Math.Round(v));
+    if (ToolsOptionStore.TryGetDouble(s, "window_height", out v))
+      _windowHeight = Math.Max(DefaultWindowHeight, (int)Math.Round(v));
+    if (s?["curve_sides"] is System.Text.Json.Nodes.JsonArray arr)
+    {
+      var sides = new List<bool>();
+      foreach (var el in arr)
+        if (el is System.Text.Json.Nodes.JsonValue jv && jv.TryGetValue<bool>(out var bv))
+          sides.Add(bv);
+      _curveSides = sides.ToArray();
+    }
+  }
+
+  static void WriteBehaviorOptions(System.Text.Json.Nodes.JsonObject sec)
+  {
+    sec["notch_length"] = _notchLength;
+    sec["notch_offset"] = _notchOffset;
+    sec["notch_width"] = _notchWidth;
+    sec["notch_type"] = _notchType;
+    sec["notch"] = _notch;
+    sec["percent"] = _percent;
+    sec["group"] = _group;
+    sec["label"] = _label;
+    sec["label_value"] = _labelValue;
+    sec["label_size"] = _labelSize;
     sec["label_size_auto"] = _labelSizeAuto;
-    sec["label_size_pct"]  = _labelSizePct;
-    sec["notch_layer"]     = _notchLayer;
-    sec["label_layer"]     = _labelLayer;
-    sec["label_offset"]    = _labelOffset;
-    sec["label_offset_y"]  = _labelOffsetY;
-    sec["label_auto_adv"]  = _labelAutoAdv;
+    sec["label_size_pct"] = _labelSizePct;
+    sec["notch_layer"] = _notchLayer;
+    sec["label_layer"] = _labelLayer;
+    sec["label_offset"] = _labelOffset;
+    sec["label_offset_y"] = _labelOffsetY;
+    sec["label_auto_adv"] = _labelAutoAdv;
     sec["label_side_flip"] = _labelSideFlip;
-    sec["keep_selection"]  = _keepSelection;
     sec["multiple_start_offset"] = _multipleStartOffset;
-    sec["multiple_end_offset"]   = _multipleEndOffset;
+    sec["multiple_end_offset"] = _multipleEndOffset;
     sec["multiple_start_offset_enabled"] = _multipleStartOffsetEnabled;
-    sec["multiple_end_offset_enabled"]   = _multipleEndOffsetEnabled;
-    sec["multiple_number"]       = _multipleNumber;
-    sec["multiple_distance"]     = _multipleDistance;
+    sec["multiple_end_offset_enabled"] = _multipleEndOffsetEnabled;
+    sec["multiple_number"] = _multipleNumber;
+    sec["multiple_distance"] = _multipleDistance;
     sec["multiple_use_distance"] = _multipleUseDistance;
+    sec["multiple_auto"] = _multipleAuto;
+    sec["multiple_curvature_sensitivity"] = _multipleCurvatureSensitivity;
+    sec["multiple_separate"] = _multipleSeparate;
+  }
 
-    var arr = new System.Text.Json.Nodes.JsonArray();
-    foreach (var b in _curveSides) arr.Add(b);
-    sec["curve_sides"] = arr;
-  });
+  static void LoadDocumentOptions(RhinoDoc doc)
+  {
+    string? json = doc.Strings.GetValue(DocumentSettingsSection, DocumentSettingsEntry);
+    if (string.IsNullOrWhiteSpace(json))
+      return;
+    try
+    {
+      ApplyStoredOptions(
+        System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject,
+        includeUiSettings: false);
+      Log.Write("vNotches", "loaded document settings over global defaults");
+    }
+    catch (Exception ex)
+    {
+      Log.Write("vNotches", $"document settings load failed: {ex.Message}");
+    }
+  }
 
-  if (!ok)
-    RhinoApp.WriteLine($"vNotches: failed to save options: {ToolsOptionStore.LastError}");
-}
+  static void SaveDocumentOptions(RhinoDoc doc)
+  {
+    try
+    {
+      var section = new System.Text.Json.Nodes.JsonObject();
+      WriteBehaviorOptions(section);
+      string json = section.ToJsonString();
+      if (!string.Equals(
+            doc.Strings.GetValue(DocumentSettingsSection, DocumentSettingsEntry),
+            json,
+            StringComparison.Ordinal))
+        doc.Strings.SetString(DocumentSettingsSection, DocumentSettingsEntry, json);
+    }
+    catch (Exception ex)
+    {
+      Log.Write("vNotches", $"document settings save failed: {ex.Message}");
+    }
+  }
 
 static void UpdateStaticDefaultsFromSession(NotchSession s)
 {
@@ -225,6 +340,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   _multipleNumber      = s.MultipleNumber;
   _multipleDistance    = s.MultipleDistance;
   _multipleUseDistance = s.MultipleUseDistance;
+  _multipleAuto = s.MultipleAuto;
+  _multipleCurvatureSensitivity = s.MultipleCurvatureSensitivity;
+  _multipleSeparate = s.MultipleSeparate;
   _curveSides    = s.CurveSides.ToArray();
 }
   // ── Entry point ───────────────────────────────────────────────────────────
@@ -233,27 +351,31 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   {
     LoadOptions(doc);
 
-    if (!TrySelectCurves(doc, out var curves, out var curveIds, out var curveSourceIds))
+    if (!TrySelectCurves(doc, out var curves, out var curveIds,
+      out var curveSourceIds, out var curveSegments))
       return Result.Cancel;
 
-    // Print curve lengths
-    if (curves.Count == 1)
+    var selectedLengths = curveSegments
+      .SelectMany(sequence => sequence)
+      .Select(curve => curve.GetLength())
+      .ToArray();
+    if (selectedLengths.Length == 1)
     {
-      RhinoApp.WriteLine("Curve length: " + FormatFractionalInches(doc, curves[0].GetLength()));
+      RhinoApp.WriteLine(
+        "Curve length: " + FormatFractionalInches(doc, selectedLengths[0]));
     }
     else
     {
-      var la = curves[0].GetLength();
-      var lb = curves[1].GetLength();
-      var diff = Math.Abs(la - lb);
-      if (diff <= doc.ModelAbsoluteTolerance)
-        RhinoApp.WriteLine("Curve length: " + FormatFractionalInches(doc, la));
-      else
-      {
-        RhinoApp.WriteLine("Curve 1 length: " + FormatFractionalInches(doc, la));
-        RhinoApp.WriteLine("Curve 2 length: " + FormatFractionalInches(doc, lb));
-        RhinoApp.WriteLine("Length difference: " + FormatFractionalInches(doc, diff));
-      }
+      for (int index = 0; index < selectedLengths.Length; index++)
+        RhinoApp.WriteLine(
+          $"Curve {index + 1} length: " +
+          FormatFractionalInches(doc, selectedLengths[index]));
+      if (selectedLengths.Length == 2)
+        RhinoApp.WriteLine(
+          "Length difference: " +
+          FormatFractionalInches(
+            doc,
+            Math.Abs(selectedLengths[0] - selectedLengths[1])));
     }
 
     // Build initial curve sides â€” reuse stored per-curve values if count matches
@@ -273,11 +395,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _labelAutoAdv, _labelSideFlip, _keepSelection,
       _multipleStartOffset, _multipleEndOffset,
       _multipleStartOffsetEnabled, _multipleEndOffsetEnabled, _multipleNumber,
-      _multipleDistance, _multipleUseDistance);
+      _multipleDistance, _multipleUseDistance,
+      _multipleAuto, _multipleCurvatureSensitivity, _multipleSeparate);
 
     // Apply actual source IDs so SelectBothCurves highlights all segments of joined chains.
     for (int i = 0; i < curveSourceIds.Count && i < session.PerCurveSourceIds.Count; i++)
+    {
       session.PerCurveSourceIds[i] = curveSourceIds[i];
+      session.PerCurveSegments[i] = curveSegments[i]
+        .Select(curve => curve.DuplicateCurve())
+        .ToList();
+    }
+    session.ResetCurveDisplayNumbers();
 
     RunLoop(doc, session);
     SaveOptions(session);
@@ -292,11 +421,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   // ── Curve selection ───────────────────────────────────────────────────────
 
-  static bool TrySelectCurves(RhinoDoc doc, out List<Curve> curves, out List<Guid> curveIds, out List<List<Guid>> curveSourceIds)
+  static bool TrySelectCurves(RhinoDoc doc, out List<Curve> curves,
+    out List<Guid> curveIds, out List<List<Guid>> curveSourceIds,
+    out List<List<Curve>> curveSegments)
   {
     curves         = new List<Curve>();
     curveIds       = new List<Guid>();
     curveSourceIds = new List<List<Guid>>();
+    curveSegments  = new List<List<Curve>>();
     var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select one or more curves (near start)");
@@ -327,6 +459,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       curves.Add(logical.Curve);
       curveIds.Add(logical.PrimaryObject.Id);
       curveSourceIds.Add(logical.SourceIds);
+      curveSegments.Add(logical.Segments);
     }
     return true;
   }
@@ -334,7 +467,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   sealed record LogicalCurveSelection(
     Curve Curve,
     RhinoObject PrimaryObject,
-    List<Guid> SourceIds);
+    List<Guid> SourceIds,
+    List<Curve> Segments);
+
+  sealed record CurveLayoutItem(
+    Guid SourceId,
+    Curve Curve,
+    bool LinkedToPrevious);
 
   static List<LogicalCurveSelection> BuildLogicalCurveSelections(
     RhinoDoc doc,
@@ -388,12 +527,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         componentIds,
         startPick,
         out var joined,
-        out var joinedIds))
+        out var joinedIds,
+        out var joinedSegments))
       {
         result.Add(new LogicalCurveSelection(
           joined,
           componentObjects.First(obj => obj.Id == joinedIds[0]),
-          joinedIds));
+          joinedIds,
+          joinedSegments));
         continue;
       }
 
@@ -401,16 +542,42 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         var obj = selectedObjects[index];
         var source = curves[index].DuplicateCurve();
-        Point3d pick = selectionPoints.TryGetValue(obj.Id, out var point) && point.IsValid
-          ? point
-          : source.PointAtStart;
+        Point3d pick;
+        if (selectionPoints.TryGetValue(obj.Id, out var point) && point.IsValid)
+          pick = point;
+        else if (existingSession != null &&
+                 TryGetExistingSourceStart(existingSession, obj.Id, out var existingStart))
+          pick = existingStart;
+        else
+          pick = source.PointAtStart;
+        var oriented = OrientCurveToPickPoint(source, pick);
         result.Add(new LogicalCurveSelection(
-          OrientCurveToPickPoint(source, pick),
+          oriented,
           obj,
-          [obj.Id]));
+          [obj.Id],
+          [oriented.DuplicateCurve()]));
       }
     }
     return result;
+  }
+
+  static bool TryGetExistingSourceStart(
+    NotchSession session, Guid sourceId, out Point3d start)
+  {
+    for (int curveIndex = 0;
+         curveIndex < session.PerCurveSourceIds.Count;
+         curveIndex++)
+    {
+      int sourceIndex = session.PerCurveSourceIds[curveIndex].IndexOf(sourceId);
+      if (sourceIndex < 0 ||
+          curveIndex >= session.PerCurveSegments.Count ||
+          sourceIndex >= session.PerCurveSegments[curveIndex].Count)
+        continue;
+      start = session.PerCurveSegments[curveIndex][sourceIndex].PointAtStart;
+      return true;
+    }
+    start = Point3d.Unset;
+    return false;
   }
 
   static List<List<int>> ConnectedCurveComponents(
@@ -457,10 +624,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static bool TryJoinConnectedChain(
     RhinoDoc doc, List<Curve> curves, List<Guid> ids, Point3d startPick,
-    out Curve joined, out List<Guid> orderedIds)
+    out Curve joined, out List<Guid> orderedIds, out List<Curve> orderedSegments)
   {
     joined     = null!;
     orderedIds = new List<Guid>();
+    orderedSegments = new List<Curve>();
     double tol = doc.ModelAbsoluteTolerance;
 
     var endpoints = new List<(int CurveIndex, bool AtEnd, Point3d Point, bool Outer)>();
@@ -524,6 +692,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     foreach (var c in orderedCurves)
       poly.Append(c);
     joined = poly;
+    orderedSegments = orderedCurves
+      .Select(curve => curve.DuplicateCurve())
+      .ToList();
     return true;
   }
 
@@ -678,7 +849,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (retainedKeys.Contains(key))
         continue;
 
-      AddSessionCurve(s, desired.PrimaryObject, desired.Curve, desired.SourceIds);
+      AddSessionCurve(s, desired.PrimaryObject, desired.Curve,
+        desired.SourceIds, desired.Segments);
+      foreach (var sourceId in desired.SourceIds)
+        if (!existingSourceSet.Contains(sourceId) ||
+            (selectionDefinitionChanged &&
+             desired.SourceIds.Any(selectionPoints.ContainsKey)))
+          s.CurveReversedBySource[sourceId] = false;
       retainedKeys.Add(key);
       vTools.Log.Write("vNotches",
         $"added logical curve {s.Curves.Count} from {desired.SourceIds.Count} source curve(s)");
@@ -686,7 +863,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
 
     var sidesBeforeRestore = s.CurveSides.ToArray();
-    ApplyCurveSideSequence(s, sideSequence);
+    RestoreCurveSides(s, sideSequence, existingSourceSet);
 
     var rebuildIndices = new List<int>();
     for (int i = 0; i < s.CurveSides.Length; i++)
@@ -754,13 +931,18 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.Curves.RemoveAt(curveIndex);
     s.CurveIds.RemoveAt(curveIndex);
     if (curveIndex < s.PerCurveSourceIds.Count) s.PerCurveSourceIds.RemoveAt(curveIndex);
+    if (curveIndex < s.PerCurveSegments.Count) s.PerCurveSegments.RemoveAt(curveIndex);
+    if (curveIndex < s.CurveIsContinuous.Count) s.CurveIsContinuous.RemoveAt(curveIndex);
     s.CurveSides = s.CurveSides.Where((_, i) => i != curveIndex).ToArray();
     s.CurveEnabled = s.CurveEnabled.Where((_, i) => i != curveIndex).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Where((_, i) => i != curveIndex).ToArray();
     s.CurveContextGroupIndices = s.CurveContextGroupIndices.Where((_, i) => i != curveIndex).ToArray();
   }
 
-  static void AddSessionCurve(NotchSession s, RhinoObject rhObj, Curve curve, IReadOnlyList<Guid>? allSourceIds = null)
+  static void AddSessionCurve(NotchSession s, RhinoObject rhObj, Curve curve,
+    IReadOnlyList<Guid>? allSourceIds = null,
+    IReadOnlyList<Curve>? sourceSegments = null,
+    bool continuous = true)
   {
     int priorCurveCount = s.Curves.Count;
     bool initialSide = priorCurveCount > 0 && s.CurveSides[^1];
@@ -772,6 +954,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.PerCurveSourceIds.Add(allSourceIds != null
       ? new List<Guid>(allSourceIds)
       : new List<Guid> { rhObj.Id });
+    foreach (var sourceId in s.PerCurveSourceIds[^1])
+      if (!s.CurveSideBySource.ContainsKey(sourceId))
+        s.CurveSideBySource[sourceId] = initialSide;
+    s.EnsureCurveDisplayNumbers();
+    s.PerCurveSegments.Add(sourceSegments != null
+      ? sourceSegments.Select(segment => segment.DuplicateCurve()).ToList()
+      : [curve.DuplicateCurve()]);
+    s.CurveIsContinuous.Add(continuous);
     s.CurveSides = s.CurveSides.Append(initialSide).ToArray();
     s.CurveEnabled = s.CurveEnabled.Append(true).ToArray();
     s.SessionGroupIndices = s.SessionGroupIndices.Append(-1).ToArray();
@@ -794,12 +984,174 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
   }
 
-  static void ApplyCurveSideSequence(NotchSession s, IReadOnlyList<bool> sideSequence)
+  static bool ApplyCurveLayout(
+    RhinoDoc doc, NotchSession s, IReadOnlyList<CurveLayoutItem> rows)
+  {
+    if (rows.Count == 0)
+      return false;
+
+    var sideBySource = new Dictionary<Guid, bool>(s.CurveSideBySource);
+    var enabledBySource = new Dictionary<Guid, bool>();
+    for (int curveIndex = 0; curveIndex < s.PerCurveSourceIds.Count; curveIndex++)
+    {
+      foreach (var sourceId in s.PerCurveSourceIds[curveIndex])
+      {
+        if (!sideBySource.ContainsKey(sourceId))
+          sideBySource[sourceId] = curveIndex < s.CurveSides.Length && s.CurveSides[curveIndex];
+        enabledBySource[sourceId] = curveIndex >= s.CurveEnabled.Length || s.CurveEnabled[curveIndex];
+      }
+    }
+
+    while (s.Curves.Count > 0)
+      RemoveSessionCurve(s, s.Curves.Count - 1);
+
+    var groups = new List<List<CurveLayoutItem>>();
+    foreach (var row in rows)
+    {
+      if (groups.Count == 0 || !row.LinkedToPrevious)
+        groups.Add([]);
+      groups[^1].Add(row);
+    }
+
+    foreach (var group in groups)
+    {
+      var sourceIds = group.Select(row => row.SourceId).ToList();
+      var segments = group.Select(row => row.Curve.DuplicateCurve()).ToList();
+      var logicalCurve = BuildLayoutCurve(doc, segments, out bool continuous);
+      var primary = doc.Objects.FindId(sourceIds[0]);
+      if (primary == null)
+        continue;
+
+      AddSessionCurve(s, primary, logicalCurve, sourceIds, segments, continuous);
+      int logicalIndex = s.Curves.Count - 1;
+      foreach (var sourceId in sourceIds)
+        s.CurveSideBySource[sourceId] = sideBySource.GetValueOrDefault(sourceId);
+      s.CurveSides[logicalIndex] = sideBySource.GetValueOrDefault(sourceIds[0]);
+      s.CurveEnabled[logicalIndex] = enabledBySource.GetValueOrDefault(sourceIds[0], true);
+    }
+
+    s.RedoBatches.Clear();
+    s.PreviewValid = false;
+    s.PreviewLengthsFromStart.Clear();
+    SelectBothCurves(doc, s);
+    SaveOptions(s);
+    vTools.Log.Write("vNotches",
+      $"curve rows changed: rows={rows.Count} linkedSequences={s.Curves.Count}");
+    return s.Curves.Count > 0;
+  }
+
+  static Curve BuildLayoutCurve(
+    RhinoDoc doc, List<Curve> segments, out bool continuous)
+  {
+    continuous = segments.Count <= 1;
+    if (segments.Count == 0)
+      return new LineCurve(Point3d.Origin, Point3d.Origin);
+    if (segments.Count == 1)
+      return segments[0].DuplicateCurve();
+
+    double tolerance = doc.ModelAbsoluteTolerance;
+    continuous = true;
+    for (int i = 1; i < segments.Count; i++)
+    {
+      Point3d previousEnd = segments[i - 1].PointAtEnd;
+      double startDistance = previousEnd.DistanceTo(segments[i].PointAtStart);
+      if (startDistance > tolerance)
+        continuous = false;
+    }
+
+    if (!continuous)
+      return segments[0].DuplicateCurve();
+
+    var polyCurve = new PolyCurve();
+    foreach (var segment in segments)
+      if (!polyCurve.Append(segment.DuplicateCurve()))
+      {
+        continuous = false;
+        return segments[0].DuplicateCurve();
+      }
+    return polyCurve;
+  }
+
+  static double PlacementCurveLength(NotchSession s, int curveIndex)
+  {
+    if (curveIndex >= 0 && curveIndex < s.PerCurveSegments.Count &&
+        s.PerCurveSegments[curveIndex].Count > 0)
+      return s.PerCurveSegments[curveIndex].Sum(segment => segment.GetLength());
+    return curveIndex >= 0 && curveIndex < s.Curves.Count
+      ? s.Curves[curveIndex].GetLength()
+      : 0.0;
+  }
+
+  static void ResolvePlacementCurve(
+    NotchSession s, int curveIndex, double logicalLength,
+    KinkTangentChoice? kinkChoice,
+    out Curve curve, out double curveLength)
+  {
+    curve = s.Curves[curveIndex];
+    curveLength = Clamp(logicalLength, 0.0, PlacementCurveLength(s, curveIndex));
+    if (curveIndex < s.CurveIsContinuous.Count && s.CurveIsContinuous[curveIndex])
+      return;
+
+    if (curveIndex >= s.PerCurveSegments.Count || s.PerCurveSegments[curveIndex].Count == 0)
+      return;
+
+    var segments = s.PerCurveSegments[curveIndex];
+    double tolerance = Math.Max(s.Doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+    double remaining = curveLength;
+    for (int segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
+    {
+      double segmentLength = segments[segmentIndex].GetLength();
+      if (remaining < segmentLength - tolerance)
+      {
+        curve = segments[segmentIndex];
+        curveLength = remaining;
+        return;
+      }
+
+      if (Math.Abs(remaining - segmentLength) <= tolerance)
+      {
+        bool useFollowing = kinkChoice == KinkTangentChoice.After &&
+          segmentIndex + 1 < segments.Count;
+        curve = useFollowing ? segments[segmentIndex + 1] : segments[segmentIndex];
+        curveLength = useFollowing ? 0.0 : segmentLength;
+        return;
+      }
+
+      remaining -= segmentLength;
+    }
+
+    curve = segments[^1];
+    curveLength = segments[^1].GetLength();
+  }
+
+  static void RestoreCurveSides(
+    NotchSession s,
+    IReadOnlyList<bool> sideSequence,
+    IReadOnlySet<Guid> retainedSourceIds)
   {
     bool fallback = sideSequence.Count > 0 && sideSequence[^1];
-    s.CurveSides = Enumerable.Range(0, s.Curves.Count)
-      .Select(i => i < sideSequence.Count ? sideSequence[i] : fallback)
-      .ToArray();
+    var restoredSides = new bool[s.Curves.Count];
+    for (int curveIndex = 0; curveIndex < s.Curves.Count; curveIndex++)
+    {
+      bool sequenceSide = curveIndex < sideSequence.Count
+        ? sideSequence[curveIndex]
+        : fallback;
+      if (curveIndex >= s.PerCurveSourceIds.Count ||
+          s.PerCurveSourceIds[curveIndex].Count == 0)
+      {
+        restoredSides[curveIndex] = sequenceSide;
+        continue;
+      }
+
+      foreach (var sourceId in s.PerCurveSourceIds[curveIndex])
+        if (!retainedSourceIds.Contains(sourceId))
+          s.CurveSideBySource[sourceId] = sequenceSide;
+
+      Guid firstSourceId = s.PerCurveSourceIds[curveIndex][0];
+      restoredSides[curveIndex] = s.CurveSideBySource.GetValueOrDefault(
+        firstSourceId, sequenceSide);
+    }
+    s.CurveSides = restoredSides;
   }
 
   static string DescribeCurveSides(NotchSession s)
@@ -1017,13 +1369,19 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     if (idx == s.SideOptionIndex)
     {
-      int ci = cursor.HasValue ? ClosestCurveIndex(s, cursor.Value) : 0;
-      ToggleCurveSide(doc, s, ci);
+      int ci = 0;
+      double length = 0.0;
+      if (cursor.HasValue)
+        ClosestCurveHit(s, cursor.Value, out ci, out _, out length);
+      ToggleCurveSide(doc, s, ci, ResolvePlacementSourceCurveId(doc, s, ci, length, null));
     }
     else if (idx == s.ReverseOptionIndex)
     {
-      int ci = cursor.HasValue ? ClosestCurveIndex(s, cursor.Value) : 0;
-      ReverseCurve(doc, s, ci);
+      int ci = 0;
+      double length = 0.0;
+      if (cursor.HasValue)
+        ClosestCurveHit(s, cursor.Value, out ci, out _, out length);
+      ReverseSourceCurve(doc, s, ci, ResolvePlacementSourceCurveId(doc, s, ci, length, null));
     }
     else if (idx == s.UndoOptionIndex)
     {
@@ -1077,22 +1435,21 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static void PlaceNotchAtPoint(RhinoDoc doc, Point3d point, NotchSession s)
   {
-    ClosestCurveHit(s, point, out int refIdx, out var refCurve, out double refT);
+    ClosestCurveHit(s, point, out int refIdx, out var refCurve, out double lengthFromStart);
     if (refCurve == null) return;
 
     s.PreviewRefCurveIndex = refIdx;
-
-    double lengthFromStart = LengthFromStart(refCurve, refT);
 
     List<double> lengthsFromStart;
 
     if (s.PercentToggle.CurrentValue)
     {
-      double refLen = refCurve.GetLength();
+      double refLen = PlacementCurveLength(s, refIdx);
       if (refLen <= 0.0) return;
 
       double pct = lengthFromStart / refLen;
-      lengthsFromStart = s.Curves.Select(c => c.GetLength() * pct).ToList();
+      lengthsFromStart = Enumerable.Range(0, s.Curves.Count)
+        .Select(i => PlacementCurveLength(s, i) * pct).ToList();
     }
     else
     {
@@ -1115,9 +1472,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   static bool PlaceNotchWithLengths(RhinoDoc doc, NotchSession s,
     List<double> lengthsFromStart, Point3d? cursorPoint,
     bool allowLabel = true, bool manageUndo = true, bool advanceLabel = true,
-    bool updateUi = true, bool usePercentMode = true, Guid? batchId = null)
+    bool updateUi = true, bool usePercentMode = true, Guid? batchId = null,
+    bool[]? curveEnabledOverride = null,
+    KinkTangentChoice? preferredKinkChoice = null)
   {
-    var sides       = s.CurveSidesAsStrings();
     double notchLen = s.NotchLengthOpt.CurrentValue;
     double notchOff = s.NotchOffsetOpt.CurrentValue;
     string notchTyp = s.NotchTypeValues[s.NotchTypeIndex];
@@ -1134,6 +1492,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     string labelText = s.LabelValueText.Trim();
     bool canNotch    = s.NotchToggle.CurrentValue;
     bool canLabel    = allowLabel && s.LabelToggle.CurrentValue && labelText.Length > 0;
+    bool[] placementCurveEnabled = curveEnabledOverride ?? s.CurveEnabled;
     string nextLabel = labelText;
 
     var placementLabels = new List<string>();
@@ -1150,8 +1509,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     if (usePercentMode && s.PercentToggle.CurrentValue &&
         s.PreviewRefCurveIndex >= 0 && s.PreviewRefCurveIndex < s.Curves.Count)
     {
-      var refCurve = s.Curves[s.PreviewRefCurveIndex];
-      var refLen = refCurve.GetLength();
+      var refLen = PlacementCurveLength(s, s.PreviewRefCurveIndex);
       if (refLen > 0.0 && s.PreviewRefCurveIndex < lengthsFromStart.Count)
         percent = lengthsFromStart[s.PreviewRefCurveIndex] / refLen;
     }
@@ -1159,15 +1517,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ? "percent"
       : "distance";
 
-    var referenceKinkChoice = KinkTangentChoice.Default;
+    var referenceKinkChoice = preferredKinkChoice ?? KinkTangentChoice.Default;
     if (cursorPoint.HasValue &&
         s.PreviewRefCurveIndex >= 0 && s.PreviewRefCurveIndex < s.Curves.Count &&
         s.PreviewRefCurveIndex < lengthsFromStart.Count)
     {
+      ResolvePlacementCurve(s, s.PreviewRefCurveIndex,
+        lengthsFromStart[s.PreviewRefCurveIndex], null,
+        out var referenceCurve, out double referenceLength);
       referenceKinkChoice = ResolveKinkChoice(
-        s.Curves[s.PreviewRefCurveIndex],
-        lengthsFromStart[s.PreviewRefCurveIndex],
-        cursorPoint.Value);
+        referenceCurve, referenceLength, cursorPoint.Value);
     }
 
     uint undoRec = 0;
@@ -1182,12 +1541,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     List<(Guid notch, Guid? label)>? newIds = null;
     try
     {
-      newIds = AddNotchesPerCurve(doc, s, sides, activeGroupIndices,
+      newIds = AddNotchesPerCurve(doc, s, activeGroupIndices,
         lengthsFromStart, notchLen, notchOff, notchTyp, notchWid,
         canNotch, canLabel, placementLabels, resolvedLabelSize,
         effectiveNotchLayer, effectiveLabelLayer,
         s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue,
-        s.LabelSideFlip, cursorPoint, referenceKinkChoice, s.CurveEnabled,
+        s.LabelSideFlip, cursorPoint, referenceKinkChoice, placementCurveEnabled,
         placementMode);
     }
     finally
@@ -1218,7 +1577,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       LabelOffset      = s.LabelOffsetOpt.CurrentValue,
       LabelOffsetY     = s.LabelOffsetYOpt.CurrentValue,
       LengthsFromStart = new List<double>(lengthsFromStart),
-      CurveEnabled     = s.CurveEnabled.ToList(),
+      CurveEnabled     = placementCurveEnabled.ToList(),
       Percent          = percent,
       KinkChoice       = referenceKinkChoice,
     };
@@ -1260,26 +1619,139 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       .Where(i => i >= s.CurveEnabled.Length || s.CurveEnabled[i]).ToList();
     if (activeCurveIndices.Count == 0) return null;
     foreach (int ci in activeCurveIndices)
-      if (s.Curves[ci].GetLength() - startOffset - endOffset <= doc.ModelAbsoluteTolerance)
+      if (PlacementCurveLength(s, ci) - startOffset - endOffset <= doc.ModelAbsoluteTolerance)
         return null;
-    int baseCurveIndex = activeCurveIndices.OrderBy(i => s.Curves[i].GetLength()).First();
-    double baseAvailable = s.Curves[baseCurveIndex].GetLength() - startOffset - endOffset;
-    var ratios = s.MultipleUseDistance && s.MultipleDistance > doc.ModelAbsoluteTolerance
-      ? BuildMultipleRatios(
-          baseAvailable, s.MultipleDistance, doc.ModelAbsoluteTolerance,
-          s.MultipleStartOffsetEnabled, s.MultipleEndOffsetEnabled)
-      : BuildMultipleCountRatios(
-          s.MultipleNumber, s.MultipleStartOffsetEnabled, s.MultipleEndOffsetEnabled);
+    int baseCurveIndex = MultipleReferenceCurveIndex(s, activeCurveIndices);
+    double baseAvailable = PlacementCurveLength(s, baseCurveIndex) - startOffset - endOffset;
+    var ratios = BuildMultipleRatiosForSession(
+      doc, s, baseCurveIndex, startOffset, baseAvailable);
     bool usePercent = s.PercentToggle.CurrentValue;
+    bool mapByRatio = usePercent || s.MultipleSeparate;
     var result = new List<List<double>>();
     foreach (double ratio in ratios)
     {
       double baseLength = startOffset + baseAvailable * ratio;
-      result.Add(usePercent
-        ? s.Curves.Select(c => startOffset + (c.GetLength() - startOffset - endOffset) * ratio).ToList()
+      result.Add(mapByRatio
+        ? Enumerable.Range(0, s.Curves.Count)
+          .Select(i => startOffset + (PlacementCurveLength(s, i) - startOffset - endOffset) * ratio)
+          .ToList()
         : Enumerable.Repeat(baseLength, s.Curves.Count).ToList());
     }
     return result;
+  }
+
+  static List<MultiplePlacementPlan>? ComputeMultiplePlacementPlans(
+    RhinoDoc doc, NotchSession s)
+  {
+    var positions = ComputeMultiplePositions(doc, s);
+    return positions == null ? null : BuildMultiplePlacementPlans(doc, s, positions);
+  }
+
+  static List<MultiplePlacementPlan> BuildMultiplePlacementPlans(
+    RhinoDoc doc, NotchSession s, IReadOnlyList<List<double>> positions)
+  {
+    var plans = new List<MultiplePlacementPlan>();
+    var existingByCurve = Enumerable.Range(0, s.Curves.Count)
+      .Select(curveIndex => ExistingNotchLengths(doc, s, curveIndex))
+      .ToList();
+    double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+
+    for (int positionIndex = 0; positionIndex < positions.Count; positionIndex++)
+    {
+      var lengths = positions[positionIndex];
+      var curveEnabled = new bool[s.Curves.Count];
+      for (int curveIndex = 0; curveIndex < s.Curves.Count; curveIndex++)
+      {
+        bool active = curveIndex >= s.CurveEnabled.Length || s.CurveEnabled[curveIndex];
+        if (!active || curveIndex >= lengths.Count)
+          continue;
+
+        if (!s.NotchToggle.CurrentValue)
+        {
+          curveEnabled[curveIndex] = true;
+          continue;
+        }
+
+        double clearance = MultipleCandidateClearance(
+          s, positions, positionIndex, curveIndex, tolerance);
+        double candidateLength = lengths[curveIndex];
+        bool tooClose = existingByCurve[curveIndex].Any(existingLength =>
+        {
+          double distance = Math.Abs(existingLength - candidateLength);
+          return distance <= tolerance || distance < clearance - tolerance;
+        });
+        curveEnabled[curveIndex] = !tooClose;
+      }
+
+      if (curveEnabled.Any(enabled => enabled))
+        plans.Add(new MultiplePlacementPlan(new List<double>(lengths), curveEnabled));
+    }
+
+    return plans;
+  }
+
+  static List<double> ExistingNotchLengths(
+    RhinoDoc doc, NotchSession s, int curveIndex)
+  {
+    var lengths = new List<double>();
+    if (curveIndex < 0 || curveIndex >= s.NotchIdsByCurve.Count)
+      return lengths;
+
+    var notchIds = s.NotchIdsByCurve[curveIndex];
+    for (int recordIndex = 0;
+         recordIndex < s.NotchRecords.Count && recordIndex < notchIds.Count;
+         recordIndex++)
+    {
+      Guid notchId = notchIds[recordIndex];
+      if (notchId == Guid.Empty || doc.Objects.FindId(notchId) == null)
+        continue;
+      var record = s.NotchRecords[recordIndex];
+      if (!record.NotchEnabled ||
+          curveIndex >= record.LengthsFromStart.Count ||
+          (curveIndex < record.CurveEnabled.Count && !record.CurveEnabled[curveIndex]))
+        continue;
+      lengths.Add(record.LengthsFromStart[curveIndex]);
+    }
+    return lengths;
+  }
+
+  static double MultipleCandidateClearance(
+    NotchSession s,
+    IReadOnlyList<List<double>> positions,
+    int positionIndex,
+    int curveIndex,
+    double tolerance)
+  {
+    if (!s.MultipleAuto && s.MultipleUseDistance && s.MultipleDistance > tolerance)
+      return s.MultipleDistance * MultipleExistingNotchClearanceScale;
+
+    if (positionIndex < 0 || positionIndex >= positions.Count ||
+        curveIndex < 0 || curveIndex >= positions[positionIndex].Count)
+      return tolerance;
+
+    double current = positions[positionIndex][curveIndex];
+    double localSpacing = double.PositiveInfinity;
+    if (positionIndex > 0 && curveIndex < positions[positionIndex - 1].Count)
+      localSpacing = Math.Min(
+        localSpacing,
+        Math.Abs(current - positions[positionIndex - 1][curveIndex]));
+    if (positionIndex + 1 < positions.Count &&
+        curveIndex < positions[positionIndex + 1].Count)
+      localSpacing = Math.Min(
+        localSpacing,
+        Math.Abs(positions[positionIndex + 1][curveIndex] - current));
+
+    if (!double.IsFinite(localSpacing) || localSpacing <= tolerance)
+    {
+      double available = PlacementCurveLength(s, curveIndex) -
+        EffectiveMultipleStartOffset(s) - EffectiveMultipleEndOffset(s);
+      int intervalCount = Math.Max(1, s.MultipleNumber - 1);
+      localSpacing = available > tolerance ? available / intervalCount : tolerance;
+      if (s.MultipleDistance > tolerance)
+        localSpacing = Math.Min(localSpacing, s.MultipleDistance);
+    }
+
+    return Math.Max(tolerance, localSpacing * MultipleExistingNotchClearanceScale);
   }
 
   static void PlaceMultipleNotches(RhinoDoc doc, NotchSession s)
@@ -1299,7 +1771,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     foreach (int curveIndex in activeCurveIndices)
     {
-      double available = s.Curves[curveIndex].GetLength() - startOffset - endOffset;
+      double available = PlacementCurveLength(s, curveIndex) - startOffset - endOffset;
       if (available <= doc.ModelAbsoluteTolerance)
       {
         RhinoApp.WriteLine(
@@ -1308,21 +1780,26 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       }
     }
 
-    int baseCurveIndex = activeCurveIndices
-      .OrderBy(i => s.Curves[i].GetLength())
-      .First();
-    double baseAvailable = s.Curves[baseCurveIndex].GetLength() - startOffset - endOffset;
-    var ratios = s.MultipleUseDistance && s.MultipleDistance > doc.ModelAbsoluteTolerance
-      ? BuildMultipleRatios(
-          baseAvailable, s.MultipleDistance, doc.ModelAbsoluteTolerance,
-          s.MultipleStartOffsetEnabled, s.MultipleEndOffsetEnabled)
-      : BuildMultipleCountRatios(
-          s.MultipleNumber, s.MultipleStartOffsetEnabled, s.MultipleEndOffsetEnabled);
-    int count = ratios.Count;
+    int baseCurveIndex = MultipleReferenceCurveIndex(s, activeCurveIndices);
+    double baseAvailable = PlacementCurveLength(s, baseCurveIndex) - startOffset - endOffset;
+    var positions = ComputeMultiplePositions(doc, s);
+    if (positions == null)
+      return;
+    var plans = BuildMultiplePlacementPlans(doc, s, positions);
+    int count = plans.Count;
     vTools.Log.Write("vNotches",
-      $"multiple count={count} spacingMode={(s.MultipleUseDistance ? "distance" : "number")} " +
-      $"distance={s.MultipleDistance:0.###} percent={usePercent} " +
-      $"baseCurve={baseCurveIndex + 1} baseAvailable={baseAvailable:0.###}");
+      $"multiple planned={positions.Count} additions={count} " +
+      $"spacingMode={(s.MultipleAuto ? "auto" : s.MultipleUseDistance ? "distance" : "number")} " +
+      $"distance={s.MultipleDistance:0.###} sensitivity={s.MultipleCurvatureSensitivity:0.###} " +
+      $"percent={usePercent} separate={s.MultipleSeparate} " +
+      $"reference={(s.MultipleAuto ? "all" : (baseCurveIndex + 1).ToString())} " +
+      $"baseAvailable={baseAvailable:0.###}");
+
+    if (count == 0)
+    {
+      RhinoApp.WriteLine("vNotches: all multiple positions are already occupied or too close to existing notches.");
+      return;
+    }
 
     string originalLabel = s.LabelValueText;
     bool labelActive = s.LabelToggle.CurrentValue && originalLabel.Trim().Length > 0;
@@ -1336,21 +1813,19 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       for (int notchIndex = 0; notchIndex < count; notchIndex++)
       {
-        double ratio = ratios[notchIndex];
-        double baseLength = startOffset + baseAvailable * ratio;
-        var lengths = usePercent
-          ? s.Curves
-            .Select(curve => startOffset + (curve.GetLength() - startOffset - endOffset) * ratio)
-            .ToList()
-          : Enumerable.Repeat(baseLength, s.Curves.Count).ToList();
+        var plan = plans[notchIndex];
 
-        bool added = PlaceNotchWithLengths(doc, s, lengths, null,
+        bool added = PlaceNotchWithLengths(doc, s, plan.LengthsFromStart, null,
           allowLabel: notchIndex == 0,
           manageUndo: false,
           advanceLabel: false,
           updateUi: false,
           usePercentMode: usePercent,
-          batchId: batchId);
+          batchId: batchId,
+          curveEnabledOverride: plan.CurveEnabled,
+          preferredKinkChoice: s.MultipleAuto
+            ? KinkTangentChoice.Middle
+            : null);
         if (!added)
           continue;
 
@@ -1425,6 +1900,559 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     if (includeEnd)
       ratios.Add(1.0);
     return ratios;
+  }
+
+  static List<double> BuildMultipleRatiosForSession(
+    RhinoDoc doc,
+    NotchSession s,
+    int baseCurveIndex,
+    double startOffset,
+    double baseAvailable)
+  {
+    if (s.MultipleAuto)
+    {
+      if (s.MultipleDistance <= doc.ModelAbsoluteTolerance)
+        return [];
+      var activeCurveIndices = Enumerable.Range(0, s.Curves.Count)
+        .Where(index => index >= s.CurveEnabled.Length || s.CurveEnabled[index])
+        .ToList();
+      return s.MultipleSeparate
+        ? BuildCombinedSeparatedAutoRatios(doc, s, activeCurveIndices)
+        : BuildCombinedCurvatureAwareRatios(
+            s,
+            activeCurveIndices,
+            baseAvailable,
+            s.MultipleDistance,
+            s.MultipleCurvatureSensitivity * MultipleCurvatureSensitivityUnit,
+            doc.ModelAbsoluteTolerance,
+            s.MultipleStartOffsetEnabled,
+            s.MultipleEndOffsetEnabled);
+    }
+
+    if (s.MultipleSeparate)
+      return BuildSeparatedMultipleRatios(
+        doc, s, baseCurveIndex, startOffset, baseAvailable);
+
+    return s.MultipleUseDistance && s.MultipleDistance > doc.ModelAbsoluteTolerance
+      ? BuildMultipleRatios(
+          baseAvailable,
+          s.MultipleDistance,
+          doc.ModelAbsoluteTolerance,
+          s.MultipleStartOffsetEnabled,
+          s.MultipleEndOffsetEnabled)
+      : BuildMultipleCountRatios(
+          s.MultipleNumber,
+          s.MultipleStartOffsetEnabled,
+          s.MultipleEndOffsetEnabled);
+  }
+
+  static int MultipleReferenceCurveIndex(
+    NotchSession s,
+    IReadOnlyCollection<int> activeCurveIndices)
+  {
+    return s.MultipleSeparate
+      ? activeCurveIndices
+        .OrderByDescending(index => PlacementSegmentCount(s, index))
+        .ThenBy(index => PlacementCurveLength(s, index))
+        .First()
+      : activeCurveIndices
+        .OrderBy(index => PlacementCurveLength(s, index))
+        .First();
+  }
+
+  static int PlacementSegmentCount(NotchSession s, int curveIndex) =>
+    curveIndex >= 0 && curveIndex < s.PerCurveSegments.Count &&
+    s.PerCurveSegments[curveIndex].Count > 0
+      ? s.PerCurveSegments[curveIndex].Count
+      : 1;
+
+  static IReadOnlyList<Curve> PlacementSegments(NotchSession s, int curveIndex) =>
+    curveIndex >= 0 && curveIndex < s.PerCurveSegments.Count &&
+    s.PerCurveSegments[curveIndex].Count > 0
+      ? s.PerCurveSegments[curveIndex]
+      : [s.Curves[curveIndex]];
+
+  static List<double> BuildSeparatedMultipleRatios(
+    RhinoDoc doc,
+    NotchSession s,
+    int referenceCurveIndex,
+    double startOffset,
+    double referenceAvailable)
+  {
+    var result = new List<double>();
+    double cumulativeLength = 0.0;
+    double ratioTolerance = Math.Max(
+      1.0e-9,
+      doc.ModelAbsoluteTolerance / Math.Max(referenceAvailable, doc.ModelAbsoluteTolerance));
+    foreach (var segment in PlacementSegments(s, referenceCurveIndex))
+    {
+      double segmentLength = segment.GetLength();
+      double segmentAvailable = segmentLength -
+        EffectiveMultipleStartOffset(s) - EffectiveMultipleEndOffset(s);
+      if (segmentAvailable > doc.ModelAbsoluteTolerance)
+      {
+        List<double> localRatios;
+        if (s.MultipleAuto)
+        {
+          localRatios = s.MultipleDistance > doc.ModelAbsoluteTolerance
+            ? BuildCurvatureAwareCurveRatios(
+                segment,
+                EffectiveMultipleStartOffset(s),
+                segmentAvailable,
+                s.MultipleDistance,
+                s.MultipleCurvatureSensitivity * MultipleCurvatureSensitivityUnit,
+                doc.ModelAbsoluteTolerance,
+                s.MultipleStartOffsetEnabled,
+                s.MultipleEndOffsetEnabled)
+            : [];
+        }
+        else
+        {
+          localRatios = s.MultipleUseDistance &&
+              s.MultipleDistance > doc.ModelAbsoluteTolerance
+            ? BuildMultipleRatios(
+                segmentAvailable,
+                s.MultipleDistance,
+                doc.ModelAbsoluteTolerance,
+                s.MultipleStartOffsetEnabled,
+                s.MultipleEndOffsetEnabled)
+            : BuildMultipleCountRatios(
+                s.MultipleNumber,
+                s.MultipleStartOffsetEnabled,
+                s.MultipleEndOffsetEnabled);
+        }
+
+        foreach (double localRatio in localRatios)
+        {
+          double logicalLength = cumulativeLength +
+            EffectiveMultipleStartOffset(s) + segmentAvailable * localRatio;
+          double globalRatio = (logicalLength - startOffset) / referenceAvailable;
+          if (globalRatio >= -ratioTolerance && globalRatio <= 1.0 + ratioTolerance)
+            result.Add(Math.Clamp(globalRatio, 0.0, 1.0));
+          if (result.Count >= 10000)
+            return result;
+        }
+      }
+      cumulativeLength += segmentLength;
+    }
+    return result;
+  }
+
+  static List<double> BuildCombinedSeparatedAutoRatios(
+    RhinoDoc doc,
+    NotchSession s,
+    IReadOnlyCollection<int> activeCurveIndices)
+  {
+    var combined = new List<double>();
+    double startOffset = EffectiveMultipleStartOffset(s);
+    double longestAvailable = activeCurveIndices
+      .Select(index => PlacementCurveLength(s, index) -
+        startOffset - EffectiveMultipleEndOffset(s))
+      .DefaultIfEmpty(0.0)
+      .Max();
+    double ratioTolerance = Math.Max(
+      1.0e-9,
+      doc.ModelAbsoluteTolerance /
+        Math.Max(longestAvailable, doc.ModelAbsoluteTolerance));
+
+    foreach (int curveIndex in activeCurveIndices)
+    {
+      double available = PlacementCurveLength(s, curveIndex) -
+        startOffset - EffectiveMultipleEndOffset(s);
+      if (available <= doc.ModelAbsoluteTolerance)
+        continue;
+      foreach (double ratio in BuildSeparatedMultipleRatios(
+        doc, s, curveIndex, startOffset, available))
+      {
+        if (combined.Any(existing => Math.Abs(existing - ratio) <= ratioTolerance))
+          continue;
+        combined.Add(ratio);
+        if (combined.Count >= 10000)
+          return combined.OrderBy(value => value).ToList();
+      }
+    }
+
+    combined.Sort();
+    return combined;
+  }
+
+  static List<double> BuildCombinedCurvatureAwareRatios(
+    NotchSession s,
+    IReadOnlyCollection<int> activeCurveIndices,
+    double baseAvailable,
+    double maximumDistance,
+    double sensitivity,
+    double tolerance,
+    bool includeStart,
+    bool includeEnd)
+  {
+    double startOffset = EffectiveMultipleStartOffset(s);
+    double endOffset = EffectiveMultipleEndOffset(s);
+    bool mapByRatio = s.PercentToggle.CurrentValue;
+    var curveRanges = activeCurveIndices
+      .Select(index => new
+      {
+        Index = index,
+        Start = startOffset,
+        Available = mapByRatio
+          ? PlacementCurveLength(s, index) - startOffset - endOffset
+          : baseAvailable,
+      })
+      .Where(range => range.Available > tolerance)
+      .ToList();
+    var ratios = new List<double>();
+    if (curveRanges.Count == 0 || maximumDistance <= tolerance)
+      return ratios;
+
+    if (includeStart)
+      ratios.Add(0.0);
+
+    int sampleCount = curveRanges.Max(range =>
+      MultipleAutoSampleCount(range.Available, maximumDistance));
+    var previousTangents = curveRanges
+      .Select(range => TryPlacementTangentAtLength(
+        s, range.Index, range.Start, out var tangent)
+          ? (Vector3d?)tangent
+          : null)
+      .ToArray();
+    double accumulatedWeight = 0.0;
+    double nextNotchWeight = maximumDistance;
+    double previousRatio = 0.0;
+    double ratioTolerance = Math.Max(
+      1.0e-9,
+      tolerance / Math.Max(curveRanges.Max(range => range.Available), tolerance));
+    int interiorLimit = includeEnd ? 9999 : 10000;
+
+    for (int sampleIndex = 1;
+         sampleIndex <= sampleCount && ratios.Count < interiorLimit;
+         sampleIndex++)
+    {
+      double currentRatio = sampleIndex == sampleCount
+        ? 1.0
+        : (double)sampleIndex / sampleCount;
+      double ratioStep = currentRatio - previousRatio;
+      double weightedStep = 0.0;
+
+      for (int curveOffset = 0; curveOffset < curveRanges.Count; curveOffset++)
+      {
+        var range = curveRanges[curveOffset];
+        double currentLength = range.Start + range.Available * currentRatio;
+        Vector3d? currentTangent = TryPlacementTangentAtLength(
+          s, range.Index, currentLength, out var tangent)
+            ? tangent
+            : null;
+        double turnAngle = 0.0;
+        if (previousTangents[curveOffset].HasValue && currentTangent.HasValue)
+        {
+          turnAngle = Vector3d.VectorAngle(
+            previousTangents[curveOffset]!.Value,
+            currentTangent.Value);
+          if (!double.IsFinite(turnAngle))
+            turnAngle = 0.0;
+        }
+
+        double curveWeight = range.Available * ratioStep +
+          Math.Max(0.0, sensitivity) * maximumDistance * Math.Max(0.0, turnAngle);
+        weightedStep = Math.Max(weightedStep, curveWeight);
+        previousTangents[curveOffset] = currentTangent;
+      }
+
+      if (weightedStep > RhinoMath.ZeroTolerance &&
+          nextNotchWeight <= accumulatedWeight + weightedStep + tolerance)
+      {
+        double fraction = Math.Clamp(
+          (nextNotchWeight - accumulatedWeight) / weightedStep,
+          0.0,
+          1.0);
+        double ratio = previousRatio + ratioStep * fraction;
+        if (ratio > ratioTolerance && ratio < 1.0 - ratioTolerance)
+          ratios.Add(ratio);
+        do
+        {
+          nextNotchWeight += maximumDistance;
+        }
+        while (nextNotchWeight <= accumulatedWeight + weightedStep + tolerance);
+      }
+
+      accumulatedWeight += weightedStep;
+      previousRatio = currentRatio;
+    }
+
+    if (includeEnd)
+    {
+      if (ratios.Count >= 10000)
+        ratios[^1] = 1.0;
+      else
+        ratios.Add(1.0);
+    }
+    var kinkRatios = curveRanges.SelectMany(range =>
+      PlacementKinkLengths(s, range.Index, tolerance)
+        .Where(length =>
+          length > range.Start + tolerance &&
+          length < range.Start + range.Available - tolerance)
+        .Select(length => (length - range.Start) / range.Available));
+    return PreferKinkRatios(
+      ratios, kinkRatios, maximumDistance, baseAvailable, tolerance);
+  }
+
+  static List<double> BuildCurvatureAwareCurveRatios(
+    Curve curve,
+    double startOffset,
+    double available,
+    double maximumDistance,
+    double sensitivity,
+    double tolerance,
+    bool includeStart,
+    bool includeEnd)
+  {
+    var ratios = BuildCurvatureAwareRatiosCore(
+      available,
+      maximumDistance,
+      sensitivity,
+      tolerance,
+      includeStart,
+      includeEnd,
+      localLength => TryCurveTangentAtLength(
+        curve,
+        startOffset + localLength,
+        out var tangent)
+          ? tangent
+          : null);
+    var kinkRatios = CurveKinkLengths(curve, tolerance)
+      .Where(length =>
+        length > startOffset + tolerance &&
+        length < startOffset + available - tolerance)
+      .Select(length => (length - startOffset) / available);
+    return PreferKinkRatios(
+      ratios, kinkRatios, maximumDistance, available, tolerance);
+  }
+
+  static List<double> BuildCurvatureAwareRatiosCore(
+    double available,
+    double maximumDistance,
+    double sensitivity,
+    double tolerance,
+    bool includeStart,
+    bool includeEnd,
+    Func<double, Vector3d?> tangentAtLength)
+  {
+    var ratios = new List<double>();
+    if (available <= tolerance || maximumDistance <= tolerance)
+      return ratios;
+
+    if (includeStart)
+      ratios.Add(0.0);
+
+    int sampleCount = MultipleAutoSampleCount(available, maximumDistance);
+    double sampleLength = available / sampleCount;
+    double accumulatedWeight = 0.0;
+    double nextNotchWeight = maximumDistance;
+    double previousLength = 0.0;
+    Vector3d? previousTangent = tangentAtLength(previousLength);
+    double ratioTolerance = Math.Max(1.0e-9, tolerance / available);
+    int interiorLimit = includeEnd ? 9999 : 10000;
+
+    for (int sampleIndex = 1;
+         sampleIndex <= sampleCount && ratios.Count < interiorLimit;
+         sampleIndex++)
+    {
+      double currentLength = sampleIndex == sampleCount
+        ? available
+        : sampleLength * sampleIndex;
+      double physicalStep = currentLength - previousLength;
+      Vector3d? currentTangent = tangentAtLength(currentLength);
+      double turnAngle = 0.0;
+      if (previousTangent.HasValue && currentTangent.HasValue)
+      {
+        turnAngle = Vector3d.VectorAngle(
+          previousTangent.Value,
+          currentTangent.Value);
+        if (double.IsNaN(turnAngle) || double.IsInfinity(turnAngle))
+          turnAngle = 0.0;
+      }
+
+      double weightedStep = physicalStep +
+        Math.Max(0.0, sensitivity) * maximumDistance * Math.Max(0.0, turnAngle);
+      if (weightedStep > RhinoMath.ZeroTolerance)
+      {
+        if (nextNotchWeight <= accumulatedWeight + weightedStep + tolerance &&
+            ratios.Count < interiorLimit)
+        {
+          double fraction = Math.Clamp(
+            (nextNotchWeight - accumulatedWeight) / weightedStep,
+            0.0,
+            1.0);
+          double ratio = (previousLength + physicalStep * fraction) / available;
+          if (ratio > ratioTolerance && ratio < 1.0 - ratioTolerance)
+            ratios.Add(ratio);
+          do
+          {
+            nextNotchWeight += maximumDistance;
+          }
+          while (nextNotchWeight <= accumulatedWeight + weightedStep + tolerance);
+        }
+      }
+
+      accumulatedWeight += weightedStep;
+      previousLength = currentLength;
+      previousTangent = currentTangent;
+    }
+
+    if (includeEnd)
+    {
+      if (ratios.Count >= 10000)
+        ratios[^1] = 1.0;
+      else
+        ratios.Add(1.0);
+    }
+    return ratios;
+  }
+
+  static int MultipleAutoSampleCount(double available, double maximumDistance)
+  {
+    int proportionalSamples = (int)Math.Ceiling(
+      Math.Min(
+        MultipleAutoMaximumSamples,
+        (available / maximumDistance) * MultipleAutoSamplesPerSpacing));
+    return Math.Clamp(
+      Math.Max(MultipleAutoMinimumSamples, proportionalSamples),
+      1,
+      MultipleAutoMaximumSamples);
+  }
+
+  static List<double> PreferKinkRatios(
+    IReadOnlyCollection<double> regularRatios,
+    IEnumerable<double> candidateKinkRatios,
+    double maximumDistance,
+    double available,
+    double tolerance)
+  {
+    double ratioTolerance = Math.Max(
+      1.0e-9, tolerance / Math.Max(available, tolerance));
+    double snapTolerance = Math.Max(
+      ratioTolerance,
+      MultipleAutoKinkSnapDistanceScale * maximumDistance /
+      Math.Max(available, tolerance));
+    var kinks = candidateKinkRatios
+      .Where(ratio =>
+        double.IsFinite(ratio) &&
+        ratio > ratioTolerance &&
+        ratio < 1.0 - ratioTolerance)
+      .OrderBy(ratio => ratio)
+      .Aggregate(new List<double>(), (result, ratio) =>
+      {
+        if (result.Count == 0 || ratio - result[^1] > ratioTolerance)
+          result.Add(ratio);
+        return result;
+      });
+    if (kinks.Count == 0)
+      return regularRatios.OrderBy(ratio => ratio).ToList();
+
+    var combined = regularRatios
+      .Where(ratio =>
+        ratio <= ratioTolerance ||
+        ratio >= 1.0 - ratioTolerance ||
+        !kinks.Any(kink => Math.Abs(kink - ratio) <= snapTolerance))
+      .Concat(kinks)
+      .OrderBy(ratio => ratio)
+      .ToList();
+    var result = new List<double>(Math.Min(combined.Count, 10000));
+    foreach (double ratio in combined)
+    {
+      if (result.Count > 0 && ratio - result[^1] <= ratioTolerance)
+        continue;
+      result.Add(ratio);
+      if (result.Count >= 10000)
+        break;
+    }
+    return result;
+  }
+
+  static List<double> PlacementKinkLengths(
+    NotchSession s, int curveIndex, double tolerance)
+  {
+    var result = new List<double>();
+    var segments = PlacementSegments(s, curveIndex);
+    double cumulativeLength = 0.0;
+    for (int segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
+    {
+      Curve segment = segments[segmentIndex];
+      foreach (double localLength in CurveKinkLengths(segment, tolerance))
+        result.Add(cumulativeLength + localLength);
+      cumulativeLength += segment.GetLength();
+
+      if (segmentIndex + 1 >= segments.Count ||
+          segment.PointAtEnd.DistanceTo(segments[segmentIndex + 1].PointAtStart) > tolerance)
+        continue;
+      Vector3d before = segment.TangentAtEnd;
+      Vector3d after = segments[segmentIndex + 1].TangentAtStart;
+      double angle = Vector3d.VectorAngle(before, after);
+      if (double.IsFinite(angle) &&
+          angle >= RhinoMath.ToRadians(MultipleAutoKinkMinimumAngleDegrees))
+        result.Add(cumulativeLength);
+    }
+    return result;
+  }
+
+  static List<double> CurveKinkLengths(Curve curve, double tolerance)
+  {
+    var result = new List<double>();
+    Interval domain = curve.Domain;
+    double parameter = domain.T0;
+    double parameterTolerance = Math.Max(
+      RhinoMath.ZeroTolerance,
+      Math.Abs(domain.Length) * 1.0e-12);
+    int guard = 0;
+    while (guard++ < 10000 &&
+           curve.GetNextDiscontinuity(
+             Continuity.G1_continuous, parameter, domain.T1, out double kinkParameter))
+    {
+      if (kinkParameter <= parameter + parameterTolerance ||
+          kinkParameter >= domain.T1 - parameterTolerance)
+        break;
+      double length = curve.GetLength(new Interval(domain.T0, kinkParameter));
+      double curveLength = curve.GetLength();
+      if (length > tolerance && curveLength - length > tolerance)
+        result.Add(length);
+      parameter = kinkParameter;
+    }
+    return result;
+  }
+
+  static bool TryPlacementTangentAtLength(
+    NotchSession s,
+    int curveIndex,
+    double logicalLength,
+    out Vector3d tangent)
+  {
+    tangent = Vector3d.Unset;
+    if (curveIndex < 0 || curveIndex >= s.Curves.Count)
+      return false;
+    ResolvePlacementCurve(
+      s,
+      curveIndex,
+      logicalLength,
+      null,
+      out var curve,
+      out double curveLength);
+    var (_, parameter) = PointAtCurveLength(curve, curveLength);
+    if (!parameter.HasValue)
+      return false;
+    tangent = curve.TangentAt(parameter.Value);
+    return tangent.IsValid && tangent.Unitize();
+  }
+
+  static bool TryCurveTangentAtLength(
+    Curve curve,
+    double length,
+    out Vector3d tangent)
+  {
+    tangent = Vector3d.Unset;
+    var (_, parameter) = PointAtCurveLength(curve, length);
+    if (!parameter.HasValue)
+      return false;
+    tangent = curve.TangentAt(parameter.Value);
+    return tangent.IsValid && tangent.Unitize();
   }
 
   static double EffectiveMultipleStartOffset(NotchSession s) =>
@@ -1683,16 +2711,21 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.PreviewSnapPoint = snapPoint;
     s.PreviewCursorPoint = cursorPoint;
 
-    ClosestCurveHit(s, snapPoint, out int refIdx, out var refCurve, out double refT);
-    if (refCurve == null) { UpdateDistanceLabels(s, null, null, null); return; }
+    ClosestCurveHit(s, snapPoint, out int refIdx, out var refCurve, out double lfs);
+    if (refCurve == null)
+    {
+      s.Panel?.SetViewportCurveHover(-1, 0.0);
+      UpdateDistanceLabels(s, null, null, null);
+      return;
+    }
 
-    double lfs  = LengthFromStart(refCurve, refT);
-    double otherEnd = Math.Max(0.0, refCurve.GetLength() - lfs);
+    double refTotal = PlacementCurveLength(s, refIdx);
+    double otherEnd = Math.Max(0.0, refTotal - lfs);
     double? prevDelta = null;
     if (s.NotchRecords.Count > 0)
     {
       var lastRec = s.NotchRecords[^1];
-      double prevLen = LengthFromRecord(refCurve, lastRec, refIdx);
+      double prevLen = LengthFromRecord(s, lastRec, refIdx);
       prevDelta = Math.Abs(lfs - prevLen);
     }
     UpdateDistanceLabels(s, lfs, prevDelta, otherEnd);
@@ -1701,10 +2734,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     List<double> lengths;
     if (s.PercentToggle.CurrentValue)
     {
-      double refLen = refCurve.GetLength();
+      double refLen = refTotal;
       if (refLen <= 0.0) return;
       double pct = lfs / refLen;
-      lengths = s.Curves.Select(c => c.GetLength() * pct).ToList();
+      lengths = Enumerable.Range(0, s.Curves.Count)
+        .Select(i => PlacementCurveLength(s, i) * pct).ToList();
     }
     else
     {
@@ -1714,7 +2748,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.PreviewRefCurveIndex = refIdx;
     s.PreviewLengthsFromStart = new List<double>(lengths);
     s.PreviewSnapPoint = snapPoint;
-    var sides    = s.CurveSidesAsStrings();
     double nl    = s.NotchLengthOpt.CurrentValue;
     double no    = s.NotchOffsetOpt.CurrentValue;
     string nt    = s.NotchTypeValues[s.NotchTypeIndex];
@@ -1727,22 +2760,25 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     try
     {
       curveSnapActive = e.Source.PointOnCurve(out _) != null &&
-        snapPoint.DistanceTo(refCurve.PointAt(refT)) <=
+        snapPoint.DistanceTo(ClosestPointOnPlacementCurve(s, refIdx, snapPoint)) <=
           Math.Max(doc.ModelAbsoluteTolerance * 2.0, RhinoMath.ZeroTolerance * 10.0);
     }
     catch
     {
     }
+    s.Panel?.SetViewportCurveHover(curveSnapActive ? refIdx : -1, lfs);
 
+    ResolvePlacementCurve(s, refIdx, lengths[refIdx], null,
+      out var referenceCurve, out double referenceLength);
     var snappedKinkChoice = curveSnapActive
-      ? ResolveKinkChoice(refCurve, lengths[refIdx], snapPoint)
+      ? ResolveKinkChoice(referenceCurve, referenceLength, snapPoint)
       : KinkTangentChoice.Default;
     bool forceSnappedMiddle = snappedKinkChoice == KinkTangentChoice.Middle;
     var effectiveCursorPoint = forceSnappedMiddle ? snapPoint : cursorPoint;
     s.PreviewCursorPoint = effectiveCursorPoint;
     var referenceKinkChoice = forceSnappedMiddle
       ? KinkTangentChoice.Middle
-      : ResolveKinkChoice(refCurve, lengths[refIdx], effectiveCursorPoint);
+      : ResolveKinkChoice(referenceCurve, referenceLength, effectiveCursorPoint);
 
     if (s.KinkCenterSnapActive != forceSnappedMiddle)
     {
@@ -1753,27 +2789,32 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
 
     // Multiple-add hover preview: draw all positions and suppress the cursor notch.
-    if (s.MultipleHoverPreviewActive && s.MultipleHoverLengthsList != null)
+    if (s.MultipleHoverPreviewActive && s.MultipleHoverPlans != null)
     {
       s.PreviewValid = false;
-      for (int hi = 0; hi < s.MultipleHoverLengthsList.Count; hi++)
+      for (int hi = 0; hi < s.MultipleHoverPlans.Count; hi++)
       {
-        var hoverLengths = s.MultipleHoverLengthsList[hi];
+        var hoverPlan = s.MultipleHoverPlans[hi];
+        var hoverLengths = hoverPlan.LengthsFromStart;
         bool firstPos = hi == 0;
         for (int i = 0; i < s.Curves.Count; i++)
         {
-          if (!s.CurveEnabled[i]) continue;
-          var hgeom = NotchGeometry(s.Curves[i], hoverLengths[i], nl, no, sides[i], nt, nw, null, null);
+          if (i >= hoverPlan.CurveEnabled.Length || !hoverPlan.CurveEnabled[i]) continue;
+          ResolvePlacementCurve(s, i, hoverLengths[i], null,
+            out var hoverCurve, out double hoverLength);
+          string side = PlacementCurveSide(s, i, hoverLengths[i], null);
+          var hgeom = NotchGeometry(hoverCurve, hoverLength, nl, no, side, nt, nw, null, null);
           if (hgeom == null) continue;
           if (canNotch) foreach (var c in hgeom) PreviewDisplay.DrawCurve(e.Display, c, System.Drawing.Color.Cyan, 1);
           if (canLabel && firstPos)
           {
-            GetCurveTangentAndDirection(s.Curves[i], hoverLengths[i], sides[i], null, null,
+            GetCurveTangentAndDirection(hoverCurve, hoverLength, side, null, null,
               out var tangent, out var direction);
             if (!tangent.IsValid || !direction.IsValid) continue;
-            string labelCurveSide = ResolvedLabelCurveSide(sides[i], sides.Count > 0 ? sides[0] : "Left", i);
+            string firstSide = PlacementCurveSide(s, 0, hoverLengths[0], null);
+            string labelCurveSide = ResolvedLabelCurveSide(side, firstSide, i);
             if (s.LabelSideFlip) labelCurveSide = labelCurveSide == "Left" ? "Right" : "Left";
-            var (previewPlane, _, _) = ComputeLabelLayout(doc, s.Curves[i], hoverLengths[i],
+            var (previewPlane, _, _) = ComputeLabelLayout(doc, hoverCurve, hoverLength,
               direction, tangent, no, hgeom, ltext, lsize,
               s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue, labelCurveSide);
             if (!previewPlane.IsValid) continue;
@@ -1791,7 +2832,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       KinkTangentChoice? kinkChoice = referenceKinkChoice == KinkTangentChoice.Default
         ? null
         : referenceKinkChoice;
-      var geom = NotchGeometry(s.Curves[i], lengths[i], nl, no, sides[i], nt, nw,
+      ResolvePlacementCurve(s, i, lengths[i], kinkChoice,
+        out var placementCurve, out double placementLength);
+      string side = PlacementCurveSide(s, i, lengths[i], kinkChoice);
+      var geom = NotchGeometry(placementCurve, placementLength, nl, no, side, nt, nw,
         curveCursor, kinkChoice);
       if (geom == null) continue;
       if (canNotch)
@@ -1802,15 +2846,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       if (canLabel)
       {
-        GetCurveTangentAndDirection(s.Curves[i], lengths[i], sides[i], curveCursor, kinkChoice,
+        GetCurveTangentAndDirection(placementCurve, placementLength, side, curveCursor, kinkChoice,
           out var tangent, out var direction);
         if (!tangent.IsValid || !direction.IsValid) continue;
 
-        string labelCurveSide = ResolvedLabelCurveSide(sides[i], sides.Count > 0 ? sides[0] : "Left", i);
+        string firstSide = PlacementCurveSide(s, 0, lengths[0], kinkChoice);
+        string labelCurveSide = ResolvedLabelCurveSide(side, firstSide, i);
         if (s.LabelSideFlip)
           labelCurveSide = labelCurveSide == "Left" ? "Right" : "Left";
 
-        var (previewPlane, _, _) = ComputeLabelLayout(doc, s.Curves[i], lengths[i],
+        var (previewPlane, _, _) = ComputeLabelLayout(doc, placementCurve, placementLength,
           direction, tangent, no, geom, ltext, lsize,
           s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue, labelCurveSide);
         if (!previewPlane.IsValid) continue;
@@ -2353,7 +3398,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
         // Give the center choice a broad angular sector. The side choices
         // remain available only near their respective outgoing directions.
-        const double middleSectorFraction = 0.75;
+        const double middleSectorFraction = 0.75; // Fraction of kink neighborhood reserved for center snapping; zero through one.
         double middleHalfWidth = middleSectorFraction *
           Math.Min(middleToBefore, middleToAfter);
         if (middleValid && cursorToMiddle <= middleHalfWidth)
@@ -2659,15 +3704,17 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       side, notchType, notchWidth, cursorPoint, kinkChoice, logOffsetFit: true);
     if (geom == null) return (Guid.Empty, null);
 
+    var metadataAttributes = CreateNotchAttributes(doc, curve, sourceCurveId, curveIndex,
+      placementMode, lengthFromStart, notchLength, notchOffset, notchType,
+      notchWidth, side, labelEnabled, labelText, labelSize, labelOffset,
+      labelOffsetY, labelCurveSide, notchLayer, labelLayer, tangent);
+    if (groupIndex >= 0)
+      metadataAttributes.AddToGroup(groupIndex);
+
     Guid notchId = Guid.Empty;
     if (notchEnabled)
     {
-      var attrs = CreateNotchAttributes(doc, curve, sourceCurveId, curveIndex,
-        placementMode, lengthFromStart, notchLength, notchOffset, notchType,
-        notchWidth, side, labelEnabled, labelText, labelSize, labelOffset,
-        labelOffsetY, labelCurveSide, notchLayer, labelLayer, tangent);
-      if (groupIndex >= 0) attrs.AddToGroup(groupIndex);
-      notchId = AddNotchComponents(doc, geom, attrs);
+      notchId = AddNotchComponents(doc, geom, metadataAttributes);
       if (notchId == Guid.Empty)
         return (Guid.Empty, null);
     }
@@ -2691,12 +3738,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
             Justification = TextJustification.MiddleCenter,
             DimensionScale= 0.9,
           };
-          var la = new ObjectAttributes
-          {
-            LayerIndex = ResolveLayerIndex(doc, labelLayer),
-            Name = "NOTCHLABEL",
-          };
-          if (groupIndex >= 0) la.AddToGroup(groupIndex);
+          var la = metadataAttributes.Duplicate();
+          la.ObjectId = Guid.NewGuid();
+          la.LayerIndex = ResolveLayerIndex(doc, labelLayer);
+          la.Name = NotchLabelObjectName;
+          la.SetUserString(NotchDataPrefix + "object_role", "label");
+          la.SetUserString(NotchDataPrefix + "label_id", la.ObjectId.ToString());
+          la.SetUserString(NotchDataPrefix + "notch_id",
+            notchId == Guid.Empty ? string.Empty : notchId.ToString());
           var lid = doc.Objects.AddText(te, la);
           if (lid != Guid.Empty) labelId = lid;
         }
@@ -2760,7 +3809,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     {
       ObjectId = Guid.NewGuid(),
       LayerIndex = ResolveLayerIndex(doc, notchLayer),
-      Name = "NOTCH",
+      Name = NotchObjectName,
     };
 
     void Set(string key, string value) =>
@@ -2780,6 +3829,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     var (curveMid, _) = PointAtCurveLength(sourceCurve, sourceLength * 0.5);
 
     Set("version", NotchDataVersion);
+    Set("object_role", "notch");
     Set("notch_id", attrs.ObjectId.ToString());
     Set("curve_id", sourceCurveId == Guid.Empty ? string.Empty : sourceCurveId.ToString());
     Set("curve_key", sourceCurveId == Guid.Empty ? string.Empty : $"obj:{sourceCurveId}");
@@ -2808,7 +3858,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   }
 
   static List<(Guid notch, Guid? label)> AddNotchesPerCurve(
-    RhinoDoc doc, NotchSession s, List<string> sides, int[] groupIndices,
+    RhinoDoc doc, NotchSession s, int[] groupIndices,
     List<double> lengths, double notchLen, double notchOff,
     string notchTyp, double notchWid,
     bool canNotch, bool canLabel, List<string> labelValues, double labelSize,
@@ -2818,39 +3868,50 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     bool[] curveEnabled, string placementMode)
   {
     var ids = new List<(Guid, Guid?)>();
-    string firstSide = sides.Count > 0 ? sides[0] : "Left";
     int referenceIndex = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
+    KinkTangentChoice? resolvedKinkChoice = referenceKinkChoice == KinkTangentChoice.Default
+      ? null
+      : referenceKinkChoice;
+    string firstSide = lengths.Count > 0
+      ? PlacementCurveSide(s, 0, lengths[0], resolvedKinkChoice)
+      : "Left";
 
     for (int i = 0; i < s.Curves.Count; i++)
     {
       if (curveEnabled != null && i < curveEnabled.Length && !curveEnabled[i])
       { ids.Add((Guid.Empty, null)); continue; }
 
-      string labelCurveSide = ResolvedLabelCurveSide(sides[i], firstSide, i);
-      if (labelSideFlip) labelCurveSide = labelCurveSide == "Left" ? "Right" : "Left";
-
       string lv = (canLabel && i < labelValues.Count) ? labelValues[i] : "";
-      int gi    = i < groupIndices.Length ? groupIndices[i] : -1;
       Point3d? curveCursor = i == referenceIndex ? cursorPoint : null;
       KinkTangentChoice? kinkChoice = referenceKinkChoice == KinkTangentChoice.Default
         ? null
         : referenceKinkChoice;
+      ResolvePlacementCurve(s, i, lengths[i], kinkChoice,
+        out var placementCurve, out double placementLength);
+      string side = PlacementCurveSide(s, i, lengths[i], kinkChoice);
+      string labelCurveSide = ResolvedLabelCurveSide(side, firstSide, i);
+      if (labelSideFlip) labelCurveSide = labelCurveSide == "Left" ? "Right" : "Left";
+      Guid sourceCurveId = ResolvePlacementSourceCurveId(
+        doc, s, i, lengths[i], kinkChoice);
+      int gi = s.GroupToggle.CurrentValue
+        ? (i < groupIndices.Length ? groupIndices[i] : -1)
+        : SourceCurveGroupIndex(doc, sourceCurveId);
 
-      var (nid, lid) = AddNotch(doc, s.Curves[i], lengths[i],
-        notchLen, notchOff, sides[i], gi,
+      var (nid, lid) = AddNotch(doc, placementCurve, placementLength,
+        notchLen, notchOff, side, gi,
         notchTyp, notchWid,
         canNotch, canLabel, lv, labelSize,
         notchLayer, labelLayer,
         labelOffset, labelOffsetY,
         labelCurveSide, curveCursor, kinkChoice,
-        i < s.CurveIds.Count ? s.CurveIds[i] : Guid.Empty, i, placementMode);
+        sourceCurveId, i, placementMode);
 
       if (nid != Guid.Empty || lid.HasValue)
       {
-        GetCurveTangentAndDirection(s.Curves[i], lengths[i], sides[i],
+        GetCurveTangentAndDirection(placementCurve, placementLength, side,
           curveCursor, kinkChoice, out var resolvedTangent, out var resolvedDirection);
         vTools.Log.Write("vNotches",
-          $"placed curve={i + 1} side={sides[i]} ref={referenceIndex + 1} " +
+          $"placed curve={i + 1} source={sourceCurveId} side={side} ref={referenceIndex + 1} " +
           $"kink={referenceKinkChoice} " +
           $"tangent=({resolvedTangent.X:0.###},{resolvedTangent.Y:0.###}) " +
           $"direction=({resolvedDirection.X:0.###},{resolvedDirection.Y:0.###})");
@@ -2859,6 +3920,71 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ids.Add((nid, lid));
     }
     return ids;
+  }
+
+  static Guid ResolvePlacementSourceCurveId(
+    RhinoDoc doc, NotchSession s, int curveIndex, double lengthFromStart,
+    KinkTangentChoice? kinkChoice)
+  {
+    if (curveIndex < 0 || curveIndex >= s.PerCurveSourceIds.Count)
+      return curveIndex >= 0 && curveIndex < s.CurveIds.Count
+        ? s.CurveIds[curveIndex]
+        : Guid.Empty;
+
+    var sourceIds = s.PerCurveSourceIds[curveIndex];
+    if (sourceIds.Count == 0)
+      return curveIndex < s.CurveIds.Count ? s.CurveIds[curveIndex] : Guid.Empty;
+    int sourceIndex = ResolvePlacementSourceIndex(s, curveIndex, lengthFromStart, kinkChoice);
+    return sourceIds[Math.Clamp(sourceIndex, 0, sourceIds.Count - 1)];
+  }
+
+  static int ResolvePlacementSourceIndex(
+    NotchSession s, int curveIndex, double lengthFromStart,
+    KinkTangentChoice? kinkChoice)
+  {
+    if (curveIndex < 0 || curveIndex >= s.PerCurveSegments.Count ||
+        s.PerCurveSegments[curveIndex].Count == 0)
+      return 0;
+
+    var segments = s.PerCurveSegments[curveIndex];
+    double tolerance = Math.Max(s.Doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+    double remaining = Math.Max(0.0, lengthFromStart);
+    for (int sourceIndex = 0; sourceIndex < segments.Count; sourceIndex++)
+    {
+      double sourceLength = segments[sourceIndex].GetLength();
+      if (remaining < sourceLength - tolerance)
+        return sourceIndex;
+      if (Math.Abs(remaining - sourceLength) <= tolerance)
+        return kinkChoice == KinkTangentChoice.After && sourceIndex + 1 < segments.Count
+          ? sourceIndex + 1
+          : sourceIndex;
+      remaining -= sourceLength;
+    }
+    return segments.Count - 1;
+  }
+
+  static string PlacementCurveSide(
+    NotchSession s, int curveIndex, double lengthFromStart,
+    KinkTangentChoice? kinkChoice)
+  {
+    if (curveIndex >= 0 && curveIndex < s.PerCurveSourceIds.Count &&
+        s.PerCurveSourceIds[curveIndex].Count > 0)
+    {
+      int sourceIndex = ResolvePlacementSourceIndex(s, curveIndex, lengthFromStart, kinkChoice);
+      Guid sourceId = s.PerCurveSourceIds[curveIndex][Math.Clamp(
+        sourceIndex, 0, s.PerCurveSourceIds[curveIndex].Count - 1)];
+      if (s.CurveSideBySource.TryGetValue(sourceId, out bool sourceSide))
+        return sourceSide ? "Left" : "Right";
+    }
+    return curveIndex >= 0 && curveIndex < s.CurveSides.Length && s.CurveSides[curveIndex]
+      ? "Left"
+      : "Right";
+  }
+
+  static int SourceCurveGroupIndex(RhinoDoc doc, Guid sourceCurveId)
+  {
+    var groups = doc.Objects.FindId(sourceCurveId)?.Attributes.GetGroupList();
+    return groups != null && groups.Length > 0 ? groups[0] : -1;
   }
 
   // ── Rebuild curve notches (after side/reverse change) ─────────────────────
@@ -2892,10 +4018,6 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     var newIds      = new List<Guid>();
     var newLabelIds = new List<Guid?>();
-    string side     = s.CurveSides[curveIndex] ? "Left" : "Right"; // true = Left
-    string firstSide= s.CurveSides[0] ? "Left" : "Right";
-    int groupIdx    = s.SessionGroupIndices[curveIndex < s.SessionGroupIndices.Length ? curveIndex : 0];
-
     foreach (var rec in s.NotchRecords)
     {
       bool recordHadCurveEnabled =
@@ -2909,22 +4031,35 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         newLabelIds.Add(null);
         continue;
       }
-      double d = LengthFromRecord(s.Curves[curveIndex], rec, curveIndex);
+      double d = LengthFromRecord(s, rec, curveIndex);
       bool lbl = rec.LabelEnabled;
       string lv = (rec.LabelValues != null && curveIndex < rec.LabelValues.Count)
         ? rec.LabelValues[curveIndex] : "";
+      KinkTangentChoice? kinkChoice = rec.KinkChoice == KinkTangentChoice.Default
+        ? null
+        : rec.KinkChoice;
+      ResolvePlacementCurve(s, curveIndex, d, kinkChoice,
+        out var placementCurve, out double placementLength);
+      string side = PlacementCurveSide(s, curveIndex, d, kinkChoice);
+      double firstLength = LengthFromRecord(s, rec, 0);
+      string firstSide = PlacementCurveSide(s, 0, firstLength, kinkChoice);
       string labelCurveSide = ResolvedLabelCurveSide(side, firstSide, curveIndex);
       if (s.LabelSideFlip) labelCurveSide = labelCurveSide == "Left" ? "Right" : "Left";
+      Guid sourceCurveId = ResolvePlacementSourceCurveId(
+        doc, s, curveIndex, d, kinkChoice);
+      int groupIdx = rec.GroupEnabled
+        ? s.SessionGroupIndices[curveIndex < s.SessionGroupIndices.Length ? curveIndex : 0]
+        : SourceCurveGroupIndex(doc, sourceCurveId);
 
-      var (nid, lid) = AddNotch(doc, s.Curves[curveIndex], d,
+      var (nid, lid) = AddNotch(doc, placementCurve, placementLength,
         rec.NotchLength, rec.NotchOffset, side, groupIdx,
         rec.NotchType, rec.NotchWidth,
         rec.NotchEnabled, lbl, lv, rec.LabelSize,
         EffectiveLayerName(doc, rec.NotchLayer, rec.NotchLayer),
         EffectiveLayerName(doc, rec.LabelLayer, rec.NotchLayer),
         rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null,
-        rec.KinkChoice == KinkTangentChoice.Default ? null : rec.KinkChoice,
-        curveIndex < s.CurveIds.Count ? s.CurveIds[curveIndex] : Guid.Empty,
+        kinkChoice,
+        sourceCurveId,
         curveIndex, rec.Mode);
       newIds.Add(nid);
       newLabelIds.Add(lid);
@@ -2956,34 +4091,68 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   // ── Side / reverse ────────────────────────────────────────────────────────
 
-  static void ToggleCurveSide(RhinoDoc doc, NotchSession s, int idx)
+  static void ToggleCurveSide(RhinoDoc doc, NotchSession s, int idx, Guid sourceId)
   {
     if (idx < 0 || idx >= s.CurveSides.Length) return;
+    if (sourceId == Guid.Empty && idx < s.PerCurveSourceIds.Count &&
+        s.PerCurveSourceIds[idx].Count > 0)
+      sourceId = s.PerCurveSourceIds[idx][0];
+    if (sourceId == Guid.Empty) return;
     s.RedoBatches.Clear();
-    s.CurveSides[idx] = !s.CurveSides[idx];
+    bool oldSide = s.CurveSideBySource.GetValueOrDefault(sourceId, s.CurveSides[idx]);
+    s.CurveSideBySource[sourceId] = !oldSide;
+    UpdateLogicalCurveSide(s, idx);
     RebuildCurveNotches(doc, s, idx);
     SelectBothCurves(doc, s);
     s.Panel?.UpdateUndoEnabled();
   }
 
-  static void ReverseCurve(RhinoDoc doc, NotchSession s, int idx)
+  static void ReverseSourceCurve(RhinoDoc doc, NotchSession s, int idx, Guid sourceId)
   {
-    if (idx < 0 || idx >= s.Curves.Count) return;
+    if (idx < 0 || idx >= s.Curves.Count ||
+        idx >= s.PerCurveSourceIds.Count || idx >= s.PerCurveSegments.Count)
+      return;
+    int sourceIndex = s.PerCurveSourceIds[idx].IndexOf(sourceId);
+    if (sourceIndex < 0 || sourceIndex >= s.PerCurveSegments[idx].Count)
+      return;
     s.RedoBatches.Clear();
-    double total = s.Curves[idx].GetLength();
+    double prefix = s.PerCurveSegments[idx]
+      .Take(sourceIndex)
+      .Sum(segment => segment.GetLength());
+    double sourceLength = s.PerCurveSegments[idx][sourceIndex].GetLength();
+    double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
     foreach (var rec in s.NotchRecords)
     {
       if (rec.LengthsFromStart == null || idx >= rec.LengthsFromStart.Count) continue;
       double old = rec.LengthsFromStart[idx];
-      rec.LengthsFromStart[idx] = Clamp(total - old, 0.0, total);
+      if (old < prefix - tolerance || old > prefix + sourceLength + tolerance)
+        continue;
+      double local = Clamp(old - prefix, 0.0, sourceLength);
+      rec.LengthsFromStart[idx] = prefix + sourceLength - local;
     }
-    s.Curves[idx].Reverse();
-    if (idx < s.PerCurveSourceIds.Count)
-      s.PerCurveSourceIds[idx].Reverse();
-    s.CurveSides[idx] = !s.CurveSides[idx]; // side flips with reverse
+    s.PerCurveSegments[idx][sourceIndex].Reverse();
+    s.CurveReversedBySource[sourceId] =
+      !s.CurveReversedBySource.GetValueOrDefault(sourceId);
+    bool oldSide = s.CurveSideBySource.GetValueOrDefault(sourceId, s.CurveSides[idx]);
+    s.CurveSideBySource[sourceId] = !oldSide;
+    s.Curves[idx].Dispose();
+    s.Curves[idx] = BuildLayoutCurve(doc, s.PerCurveSegments[idx], out bool continuous);
+    s.CurveIsContinuous[idx] = continuous;
+    UpdateLogicalCurveSide(s, idx);
     RebuildCurveNotches(doc, s, idx);
     SelectBothCurves(doc, s);
     s.Panel?.UpdateUndoEnabled();
+  }
+
+  static void UpdateLogicalCurveSide(NotchSession s, int curveIndex)
+  {
+    if (curveIndex < 0 || curveIndex >= s.CurveSides.Length ||
+        curveIndex >= s.PerCurveSourceIds.Count ||
+        s.PerCurveSourceIds[curveIndex].Count == 0)
+      return;
+    Guid firstSourceId = s.PerCurveSourceIds[curveIndex][0];
+    s.CurveSides[curveIndex] = s.CurveSideBySource.GetValueOrDefault(
+      firstSourceId, s.CurveSides[curveIndex]);
   }
 
   static void SelectBothCurves(RhinoDoc doc, NotchSession s)
@@ -3006,32 +4175,64 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
   }
 
   static void ClosestCurveHit(NotchSession s, Point3d point,
-    out int closestIdx, out Curve? closestCurve, out double closestT)
+    out int closestIdx, out Curve? closestCurve, out double closestLength)
   {
     closestIdx   = 0;
     closestCurve = s.Curves.Count > 0 ? s.Curves[0] : null;
-    closestT     = 0.0;
+    closestLength = 0.0;
     double closestDist = double.MaxValue;
     for (int i = 0; i < s.Curves.Count; i++)
     {
-      if (!s.Curves[i].ClosestPoint(point, out double t)) continue;
-      double dist = s.Curves[i].PointAt(t).DistanceTo(point);
-      if (dist < closestDist)
+      double accumulatedLength = 0.0;
+      var segments = i < s.PerCurveSegments.Count && s.PerCurveSegments[i].Count > 0
+        ? s.PerCurveSegments[i]
+        : [s.Curves[i]];
+      foreach (var segment in segments)
       {
-        closestDist  = dist;
-        closestIdx   = i;
-        closestCurve = s.Curves[i];
-        closestT     = t;
+        if (segment.ClosestPoint(point, out double t))
+        {
+          double dist = segment.PointAt(t).DistanceTo(point);
+          if (dist < closestDist)
+          {
+            closestDist = dist;
+            closestIdx = i;
+            closestCurve = s.Curves[i];
+            closestLength = accumulatedLength + LengthFromStart(segment, t);
+          }
+        }
+        accumulatedLength += segment.GetLength();
       }
     }
   }
 
-  static double LengthFromRecord(Curve curve, NotchRecord rec, int curveIndex)
+  static Point3d ClosestPointOnPlacementCurve(
+    NotchSession s, int curveIndex, Point3d point)
+  {
+    Point3d closest = Point3d.Unset;
+    double closestDistance = double.MaxValue;
+    if (curveIndex < 0 || curveIndex >= s.PerCurveSegments.Count)
+      return closest;
+    foreach (var segment in s.PerCurveSegments[curveIndex])
+    {
+      if (!segment.ClosestPoint(point, out double parameter))
+        continue;
+      Point3d candidate = segment.PointAt(parameter);
+      double distance = candidate.DistanceTo(point);
+      if (distance < closestDistance)
+      {
+        closest = candidate;
+        closestDistance = distance;
+      }
+    }
+    return closest;
+  }
+
+  static double LengthFromRecord(NotchSession s, NotchRecord rec, int curveIndex)
   {
     if (rec.LengthsFromStart != null && curveIndex < rec.LengthsFromStart.Count)
       return rec.LengthsFromStart[curveIndex];
     if (rec.Mode == "percent" && rec.Percent.HasValue)
-      return curve.GetLength() * rec.Percent.Value;
+      return PlacementCurveLength(s, curveIndex) * rec.Percent.Value;
     return rec.LengthsFromStart?.Count > 0 ? rec.LengthsFromStart[0] : 0.0;
   }
 
@@ -3194,6 +4395,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public int    MultipleNumber;
     public double MultipleDistance;
     public bool   MultipleUseDistance;
+    public bool   MultipleAuto;
+    public int MultipleCurvatureSensitivity;
+    public bool   MultipleSeparate;
     public readonly string[] NotchTypeValues = ["I", "V", OpenVNotchType, "U", "T"];
     public readonly string[] NotchTypeOptionValues = ["I", "V", "OpenV", "U", "T"];
     public readonly string[] NotchTypeToolTips = ["Slit", "Vee", "Open Vee", "Castle", "Tee"];
@@ -3217,6 +4421,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     // Per-curve source IDs — one inner list per curve slot; multiple IDs for joined chains.
     public readonly List<List<Guid>> PerCurveSourceIds;
+    // Oriented physical source geometry in the same order as PerCurveSourceIds.
+    public readonly List<List<Curve>> PerCurveSegments;
+    public readonly List<bool> CurveIsContinuous;
+    public readonly Dictionary<Guid, int> CurveDisplayNumbers = [];
+    public readonly Dictionary<Guid, bool> CurveSideBySource = [];
+    public readonly Dictionary<Guid, bool> CurveReversedBySource = [];
 
     // Loop control
     public bool PanelClosedExit;
@@ -3249,7 +4459,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public int PreviewRefCurveIndex;
     public List<double> PreviewLengthsFromStart = [];
     public bool MultipleHoverPreviewActive;
-    public List<List<double>>? MultipleHoverLengthsList;
+    public List<MultiplePlacementPlan>? MultipleHoverPlans;
     public readonly Stack<NotchUndoBatch> RedoBatches = [];
     public NotchSession(RhinoDoc doc, List<Curve> curves, List<Guid> curveIds, bool[] sides,
       double notchLength, double notchOffset, double notchWidth, string notchType, bool notch,
@@ -3259,7 +4469,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       bool labelAutoAdv, bool labelSideFlip, bool keepSelection,
       double multipleStartOffset, double multipleEndOffset,
       bool multipleStartOffsetEnabled, bool multipleEndOffsetEnabled, int multipleNumber,
-      double multipleDistance, bool multipleUseDistance)
+      double multipleDistance, bool multipleUseDistance,
+      bool multipleAuto, int multipleCurvatureSensitivity,
+      bool multipleSeparate)
     {
       Doc      = doc;
       Curves   = curves;
@@ -3294,7 +4506,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       MultipleEndOffsetEnabled   = multipleEndOffsetEnabled;
       MultipleNumber      = Math.Clamp(multipleNumber, 1, 10000);
       MultipleDistance    = Math.Max(0.0, multipleDistance);
-      MultipleUseDistance = multipleUseDistance;
+      MultipleUseDistance = multipleAuto || multipleUseDistance;
+      MultipleAuto = multipleAuto;
+      MultipleCurvatureSensitivity = Math.Clamp(multipleCurvatureSensitivity, 0, 1000);
+      MultipleSeparate = multipleSeparate;
 
       NotchTypeIndex  = Array.IndexOf(NotchTypeValues, CanonicalNotchType(notchType));
       if (NotchTypeIndex < 0) NotchTypeIndex = 0;
@@ -3319,10 +4534,40 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       NotchIdsByCurve = curves.Select(_ => new List<Guid>()).ToList();
       LabelIdsByCurve = curves.Select(_ => new List<Guid?>()).ToList();
       PerCurveSourceIds = curveIds.Select(id => new List<Guid> { id }).ToList();
+      PerCurveSegments = curves
+        .Select(curve => new List<Curve> { curve.DuplicateCurve() })
+        .ToList();
+      CurveIsContinuous = Enumerable.Repeat(true, curves.Count).ToList();
+      for (int curveIndex = 0; curveIndex < PerCurveSourceIds.Count; curveIndex++)
+        foreach (var sourceId in PerCurveSourceIds[curveIndex])
+          CurveSideBySource[sourceId] =
+            curveIndex < CurveSides.Length && CurveSides[curveIndex];
+      EnsureCurveDisplayNumbers();
     }
 
-    public List<string> CurveSidesAsStrings() =>
-      CurveSides.Select(b => b ? "Left" : "Right").ToList();
+    public void EnsureCurveDisplayNumbers()
+    {
+      foreach (var sourceId in PerCurveSourceIds.SelectMany(ids => ids))
+        if (!CurveDisplayNumbers.ContainsKey(sourceId))
+          CurveDisplayNumbers[sourceId] = CurveDisplayNumbers.Count + 1;
+    }
+
+    public void ResetCurveDisplayNumbers()
+    {
+      CurveDisplayNumbers.Clear();
+      EnsureCurveDisplayNumbers();
+    }
+
+    public int CurveDisplayNumber(Guid sourceId)
+    {
+      if (!CurveDisplayNumbers.TryGetValue(sourceId, out int number))
+      {
+        number = CurveDisplayNumbers.Count + 1;
+        CurveDisplayNumbers[sourceId] = number;
+      }
+      return number;
+    }
+
   }
 
   // ── Notch record ──────────────────────────────────────────────────────────
@@ -3351,6 +4596,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     public double?        Percent;
     public KinkTangentChoice KinkChoice;
   }
+
+  sealed record MultiplePlacementPlan(
+    List<double> LengthsFromStart,
+    bool[] CurveEnabled);
 
   sealed class NotchUndoBatch
   {
@@ -3406,15 +4655,74 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   sealed class NotchPanel : Eto.Forms.Form
   {
+    const int CurveRowHeight = 28; // Curve-row and drag-handle height in device-independent pixels.
+    const int CurveRowSpacing = 0; // Vertical space between adjacent curve rows in device-independent pixels.
+    const int CurveRowControlSpacing = 3; // Horizontal space between compact curve-row controls in device-independent pixels.
+    const int CurveDragHandleWidth = 16; // Width of the only cursor and drag-sensitive handle area; matches link buttons.
+    const float CurveDragDotDiameter = 2.0f; // Diameter of each drawn handle dot in device-independent pixels.
+    const float CurveDragDotGap = 3.0f; // Equal edge-to-edge spacing between handle dots.
+    const int CurveIdentityMinimumWidth = 10; // Minimum width of the centered source-curve number in device-independent pixels.
+    const double CurveIdentityVerticalOffset = 1.0; // Downward optical adjustment for source-ID glyphs in device-independent pixels.
+    const int CurveSideButtonWidth = 22; // Width of the borderless up/down side control in device-independent pixels.
+    const int CurveReverseButtonWidth = 22; // Width of the borderless single-arrow reverse control in device-independent pixels.
+    const int CurveDirectionButtonHeight = 26; // Height of both native direction buttons in device-independent pixels.
+    const double CurveDirectionButtonHorizontalPadding = 0.0; // Horizontal padding around Side and Reverse arrow glyphs in device-independent pixels.
+    const double CurveDirectionButtonVerticalPadding = 1.0; // Vertical padding around Side and Reverse arrow glyphs in device-independent pixels.
+    const double CurveDirectionButtonFontSize = 18.0; // Font size of Side and Reverse arrow glyphs in device-independent pixels.
+    const int CurveLengthBadgeHorizontalPadding = 2; // Equal left/right padding inside individual and cumulative colored length badges.
+    const int CurveLengthBadgeWidthAllowance = 2; // Extra cumulative-badge width protecting the final digit from layout rounding.
+    const string CurveSideCheckedGlyph = "🠝"; // Glyph shown when the curve's Side state is enabled.
+    const string CurveSideUncheckedGlyph = "🠟"; // Glyph shown when the curve's Side state is disabled.
+    const string CurveReverseForwardGlyph = "🠞"; // Glyph shown before the source curve has been reversed.
+    const string CurveReverseBackwardGlyph = "🠜"; // Glyph shown after the source curve has been reversed.
+    const double CurveLengthDifferenceToleranceInches = 1.0 / 16.0; // Smallest longest-to-shortest span considered significant, converted to model units.
+    const string CurveLengthWidthSample = "999.999"; // Minimum-width sizing sample; longer displayed curve lengths remain unrestricted.
+    const string CurveLengthDifferenceWidthSample = "(+999.999)"; // Minimum-width sizing sample for unrestricted signed superscript differences.
+    const float CurveLengthDifferenceFontSize = 8.0f; // Font size of the signed longest/shortest superscript delta in device-independent pixels.
+    const double CurveLengthDifferenceRaise = 3.0; // Upward superscript shift applied to signed length deltas in device-independent pixels.
+    const double CurveDragRowOutlineWidth = 1.0; // Outline thickness around the row currently being dragged.
+    static readonly Eto.Drawing.Color CurveLengthLongerColor =
+      new(0.05f, 0.48f, 0.18f); // Text color for a longest-curve positive length delta.
+    static readonly Eto.Drawing.Color CurveLengthShorterColor =
+      new(0.78f, 0.08f, 0.10f); // Text color for a shortest-curve negative length delta.
+    static readonly Eto.Drawing.Color PercentLengthWarningBackground =
+      new(1.0f, 0.84f, 0.22f); // Percent checkbox background when absolute placement spans significantly different lengths.
+    static readonly Eto.Drawing.Color PercentLengthWarningForeground =
+      new(0.0f, 0.0f, 0.0f); // Percent checkbox text color while its length-difference warning is active.
+    static readonly Eto.Drawing.Color[] CurveLengthGroupBackgrounds =
+    [
+      new(0.68f, 0.08f, 0.12f),
+      new(0.02f, 0.31f, 0.66f),
+      new(0.05f, 0.45f, 0.20f),
+      new(0.48f, 0.16f, 0.62f),
+      new(0.72f, 0.32f, 0.02f),
+      new(0.00f, 0.43f, 0.45f),
+    ]; // High-contrast badge colors assigned to significantly different curve-length groups.
+    static readonly Eto.Drawing.Color CurveLengthGroupForeground =
+      new(1.0f, 1.0f, 1.0f); // Text color shown over curve-length group badges.
+    static readonly Eto.Drawing.Color CurveIdentityHoverBackground =
+      SystemColors.Highlight; // Background applied to source IDs while their curve or row is hovered.
+    static readonly Eto.Drawing.Color CurveIdentityHoverForeground =
+      SystemColors.HighlightText; // Source-ID text color while its curve or row is hovered.
+    static readonly System.Windows.Media.Brush CurveDragRowHighlightBrush =
+      new System.Windows.Media.SolidColorBrush(System.Windows.SystemColors.HighlightColor)
+      {
+        Opacity = 0.3,
+      }; // Translucent overlay applied to the row currently being dragged.
+    static readonly System.Windows.Media.Pen CurveDragRowHighlightPen =
+      new(System.Windows.SystemColors.HighlightBrush, CurveDragRowOutlineWidth); // Outline around the dragged row.
+
     sealed record CurveRowInfo(
       int LogicalIndex,
       Guid SourceId,
       Curve Curve,
-      bool LinkedToPrevious);
+      bool LinkedToPrevious,
+      int DisplayNumber);
 
     readonly NotchSession _s;
     bool _suppress;
     bool _updatingMultipleControls;
+    bool _multipleUseDistanceBeforeAuto;
     // Controls
     readonly Button[] _typeButtons;
     readonly NumericStepper _lengthStepper, _offsetStepper, _widthStepper;
@@ -3431,40 +4739,63 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     readonly NumericStepper _labelOffsetStepper, _labelOffsetYStepper;
     readonly NumericStepper _multipleStartOffsetStepper, _multipleEndOffsetStepper;
     readonly NumericStepper _multipleNumberStepper, _multipleDistanceStepper;
-    readonly CheckBox _multipleStartOffsetCheck, _multipleEndOffsetCheck;
+    readonly NumericStepper _multipleCurvatureSensitivityStepper;
+    readonly CheckBox _multipleStartOffsetCheck, _multipleEndOffsetCheck, _multipleAutoCheck;
     readonly RadioButton _multipleNumberMode, _multipleDistanceMode;
     readonly Button      _multipleAddButton;
+    System.Windows.Controls.CheckBox? _multipleSeparateCheck;
     readonly HashSet<Control> _multipleFocusedInputs = [];
     readonly Label       _fromStartLbl, _fromEndLbl, _fromPrevLbl;
     readonly Button      _undoBtn, _redoBtn, _selectCurvesButton;
     System.Windows.Controls.CheckBox? _keepSelectionCheck;
-    CheckBox[] _sideChecks = [];
+    Button[]   _sideButtons = [];
     Button[]   _reverseButtons = [];
     CheckBox[] _enableChecks = [];
+    Label[]    _curveIdentityLabels = [];
     Label[]    _curveLengthLabels = [];
     Panel[]    _curveLengthBadges = [];
+    Label?[]   _curveLengthDifferenceLabels = [];
+    Label?[]   _curveTotalLabels = [];
+    Panel?[]   _curveTotalBadges = [];
+    Label?[]   _curveTotalDifferenceLabels = [];
+    int _curveTotalColumnWidth;
     CurveRowInfo[] _curveRows = [];
     readonly CurveRowHoverConduit _curveHoverConduit = new();
     Scrollable? _scrollable;
     Scrollable? _curveScrollable;
     Control? _layoutRoot;
     bool _curveSelectionInProgress;
+    bool _windowSizePersistenceReady;
+    bool _curveRowDragInProgress;
+    int _curveDragSourceIndex = -1;
+    int _curveDropInsertionIndex = -1;
+    readonly Dictionary<int, System.Windows.FrameworkElement> _nativeCurveRows = [];
+    readonly Dictionary<int, System.Windows.Media.Brush?> _nativeCurveRowBackgrounds = [];
+    System.Windows.Documents.AdornerLayer? _curveDragHighlightLayer;
+    CurveDragRowHighlightAdorner? _curveDragHighlightAdorner;
+    int _curveDragHighlightedRowIndex = -1;
+    int _viewportCurveHoverRowIndex = -1;
     bool _multipleSectionHovered;
     bool _viewportPointerActive;
     bool _selectButtonBrushesCaptured;
     System.Windows.Media.Brush? _selectButtonBackground;
     System.Windows.Media.Brush? _selectButtonBorder;
     System.Windows.Media.Brush? _selectButtonForeground;
-    static readonly System.Windows.Style NotchTypeFocusVisualStyle = CreateOutsideFocusStyle();
+    Eto.Drawing.Color _percentDefaultBackgroundColor = Colors.Transparent;
+    Eto.Drawing.Color _percentDefaultTextColor = SystemColors.ControlText;
+    static readonly System.Windows.Style NotchTypeFocusVisualStyle = CreateOutsideFocusStyle(); // One-pixel outside focus outline for type buttons.
 
     public NotchPanel(RhinoDoc doc, NotchSession s)
     {
       _s = s;
+      _multipleUseDistanceBeforeAuto = s.MultipleUseDistance;
       Title     = "Notches";
       Padding   = new Eto.Drawing.Padding(0);
       Resizable = true;
       Topmost   = true;
-      ClientSize= new Eto.Drawing.Size(280, -1);
+      ClientSize = new Eto.Drawing.Size(
+        Math.Max(DefaultWindowWidth, _windowWidth),
+        _windowHeight > 0 ? _windowHeight : -1);
 
       // Type
       _typeButtons = new Button[s.NotchTypeValues.Length];
@@ -3519,11 +4850,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       // Percent / Group
       _percentCheck = new CheckBox { Text = "Percent", Checked = s.PercentToggle.CurrentValue };
+      _percentDefaultBackgroundColor = _percentCheck.BackgroundColor;
+      _percentDefaultTextColor = _percentCheck.TextColor;
       _percentCheck.CheckedChanged += (_, __) =>
       {
         if (_suppress) return;
         s.PercentToggle.CurrentValue = _percentCheck.Checked == true;
         UpdateMultipleState();
+        ApplyCurveLengthHighlights();
         Redraw();
         Persist();
       };
@@ -3630,6 +4964,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         s.MultipleNumber, 1.0, 10000.0, 1.0, 0);
       _multipleDistanceStepper = MakeNumberStepper(
         s.MultipleDistance, 0.0, 1e9, 1.0);
+      _multipleCurvatureSensitivityStepper = MakeNumberStepper(
+        s.MultipleCurvatureSensitivity, 0.0, 1000.0, 1.0, 0);
+      _multipleCurvatureSensitivityStepper.ToolTip =
+        "Curvature sensitivity: 0 is uniform; each whole-number step makes a small density adjustment";
+      _multipleAutoCheck = new CheckBox
+      {
+        Text = "Auto",
+        Checked = s.MultipleAuto,
+        ToolTip = "Use curvature-aware spacing with Distance as the maximum spacing",
+      };
       _multipleNumberMode = new RadioButton
       {
         Text = "Number",
@@ -3643,6 +4987,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         ToolTip = "Use distance as the minimum spacing",
       };
       _multipleAddButton = new Button { Text = "Add", Height = 26 };
+      InstallMultipleAddButtonContent();
+      _multipleAddButton.Load += (_, __) => InstallMultipleAddButtonContent();
 
       _multipleStartOffsetStepper.ValueChanged += (_, __) =>
       {
@@ -3676,6 +5022,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         if (_suppress || _updatingMultipleControls) return;
         s.MultipleNumber = Math.Clamp((int)Math.Round(_multipleNumberStepper.Value), 1, 10000);
+        s.MultipleAuto = false;
         s.MultipleUseDistance = false;
         UpdateMultipleModeIndicator();
         ApplyMultipleNumber();
@@ -3689,6 +5036,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _multipleNumberMode.CheckedChanged += (_, __) =>
       {
         if (_suppress || _updatingMultipleControls || _multipleNumberMode.Checked != true) return;
+        s.MultipleAuto = false;
         s.MultipleUseDistance = false;
         ApplyMultipleNumber();
         Persist();
@@ -3696,6 +5044,36 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _multipleDistanceMode.CheckedChanged += (_, __) =>
       {
         if (_suppress || _updatingMultipleControls || _multipleDistanceMode.Checked != true) return;
+        ApplyMultipleDistance(_multipleDistanceStepper.Value);
+      };
+      _multipleAutoCheck.CheckedChanged += (_, __) =>
+      {
+        if (_suppress || _updatingMultipleControls) return;
+        bool enableAuto = _multipleAutoCheck.Checked == true;
+        if (enableAuto)
+        {
+          if (!s.MultipleAuto)
+            _multipleUseDistanceBeforeAuto = s.MultipleUseDistance;
+          s.MultipleAuto = true;
+          s.MultipleUseDistance = true;
+          ApplyMultipleDistance(_multipleDistanceStepper.Value);
+        }
+        else
+        {
+          s.MultipleAuto = false;
+          s.MultipleUseDistance = _multipleUseDistanceBeforeAuto;
+          ApplySelectedMultipleMode();
+        }
+      };
+      _multipleCurvatureSensitivityStepper.ValueChanged += (_, __) =>
+      {
+        if (_suppress || _updatingMultipleControls) return;
+        s.MultipleCurvatureSensitivity = Math.Clamp(
+          (int)Math.Round(_multipleCurvatureSensitivityStepper.Value), 0, 1000);
+        if (!s.MultipleAuto)
+          _multipleUseDistanceBeforeAuto = s.MultipleUseDistance;
+        s.MultipleAuto = true;
+        s.MultipleUseDistance = true;
         ApplyMultipleDistance(_multipleDistanceStepper.Value);
       };
       _multipleAddButton.Click += (_, __) =>
@@ -3712,6 +5090,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         _multipleEndOffsetStepper,
         _multipleNumberStepper,
         _multipleDistanceStepper,
+        _multipleCurvatureSensitivityStepper,
       })
         AttachMultipleInputPreviewFocus(control);
 
@@ -3746,17 +5125,46 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         Content = _layoutRoot,
       };
       Content = _scrollable;
-      MinimumSize = new Eto.Drawing.Size(280, 0);
+      MinimumSize = new Eto.Drawing.Size(CurveMinimumWidth(), 0);
       ApplyDynamic();
-      Shown += (_, __) => Application.Instance.AsyncInvoke(() => ResizePanelToContent());
+      Shown += (_, __) => Application.Instance.AsyncInvoke(() =>
+      {
+        if (_windowHeight > 0)
+        {
+          ClientSize = new Eto.Drawing.Size(
+            Math.Max(CurveMinimumWidth(), _windowWidth),
+            _windowHeight);
+          _curveScrollable?.UpdateScrollSizes();
+          _scrollable?.UpdateScrollSizes();
+        }
+        else
+        {
+          ResizePanelToContent();
+          _windowWidth = ClientSize.Width;
+          _windowHeight = ClientSize.Height;
+          SaveOptions(_s);
+        }
+        _windowSizePersistenceReady = true;
+      });
+      SizeChanged += (_, __) =>
+      {
+        if (!_windowSizePersistenceReady ||
+            ClientSize.Width <= 0 || ClientSize.Height <= 0)
+          return;
+        _windowWidth = Math.Max(CurveMinimumWidth(), ClientSize.Width);
+        _windowHeight = ClientSize.Height;
+        SaveOptions(_s);
+      };
       MouseEnter += (_, __) =>
       {
         _viewportPointerActive = false;
+        ApplyCurveIdentityHighlights();
         RefreshMultiplePreview();
       };
       MouseLeave += (_, __) =>
       {
         _viewportPointerActive = true;
+        ApplyCurveIdentityHighlights(_viewportCurveHoverRowIndex);
         RefreshMultiplePreview();
       };
 
@@ -3796,7 +5204,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _multipleStartOffsetStepper.HasFocus ||
       _multipleEndOffsetStepper.HasFocus ||
       _multipleNumberStepper.HasFocus ||
-      _multipleDistanceStepper.HasFocus;
+      _multipleDistanceStepper.HasFocus ||
+      _multipleCurvatureSensitivityStepper.HasFocus;
 
     Control BuildLayout()
     {
@@ -3825,6 +5234,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       var multipleTable = new TableLayout { Padding = new Eto.Drawing.Padding(6), Spacing = new Eto.Drawing.Size(6, 4) };
       multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { new TableCell(_multipleStartOffsetCheck, false), new TableCell(_multipleStartOffsetStepper, true) } });
       multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { new TableCell(_multipleEndOffsetCheck, false), new TableCell(_multipleEndOffsetStepper, true) } });
+      multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { new TableCell(_multipleAutoCheck, false), new TableCell(_multipleCurvatureSensitivityStepper, true) } });
       multipleTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { new TableCell(_multipleNumberMode, false), new TableCell(_multipleNumberStepper, true) } });
       var distanceStack = new StackLayout
       {
@@ -3953,39 +5363,99 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void CreateCurveRowControls(RhinoDoc doc)
     {
+      SetCurveDragRowHighlight(-1, false);
       _curveRows = BuildCurveRowInfos();
-      _sideChecks = new CheckBox[_curveRows.Length];
+      _sideButtons = new Button[_curveRows.Length];
       _reverseButtons = new Button[_curveRows.Length];
       _enableChecks = new CheckBox[_curveRows.Length];
+      _curveIdentityLabels = new Label[_curveRows.Length];
       _curveLengthLabels = new Label[_curveRows.Length];
       _curveLengthBadges = new Panel[_curveRows.Length];
+      _curveLengthDifferenceLabels = new Label?[_curveRows.Length];
+      _curveTotalLabels = new Label?[_curveRows.Length];
+      _curveTotalBadges = new Panel?[_curveRows.Length];
+      _curveTotalDifferenceLabels = new Label?[_curveRows.Length];
+      _curveTotalColumnWidth = 0;
+      _nativeCurveRows.Clear();
+      _nativeCurveRowBackgrounds.Clear();
+      var logicalLengths = Enumerable.Range(0, _s.Curves.Count)
+        .Select(index => PlacementCurveLength(_s, index))
+        .ToArray();
+      double logicalSpan = logicalLengths.Length > 1
+        ? logicalLengths.Max() - logicalLengths.Min()
+        : 0.0;
+      string actualDifferenceWidthSample = logicalSpan > ModelUnitsFromInches(
+          _s.Doc, CurveLengthDifferenceToleranceInches)
+        ? $"(+{FormatPanelNumber(logicalSpan)})"
+        : "";
 
       for (int i = 0; i < _curveRows.Length; i++)
       {
         int rowIndex = i;
         int curveIndex = _curveRows[i].LogicalIndex;
-        _sideChecks[i] = new CheckBox
+        _curveIdentityLabels[i] = new Label
         {
-          Text = $"Side {i + 1}",
-          Checked = _s.CurveSides[curveIndex],
+          Text = _curveRows[i].DisplayNumber.ToString(
+            System.Globalization.CultureInfo.InvariantCulture),
+          ToolTip = $"Curve {_curveRows[i].DisplayNumber}",
+          VerticalAlignment = VerticalAlignment.Center,
+          TextAlignment = TextAlignment.Center,
         };
-        _sideChecks[i].CheckedChanged += (_, __) =>
+        _curveIdentityLabels[i].Width = Math.Max(
+          CurveIdentityMinimumWidth,
+          (int)Math.Ceiling(_curveIdentityLabels[i].GetPreferredSize().Width));
+        _curveIdentityLabels[i].Load += (_, __) =>
+          ConfigureCurveIdentityLabel(_curveIdentityLabels[rowIndex]);
+        bool initialSide = _s.CurveSideBySource.GetValueOrDefault(
+          _curveRows[i].SourceId, _s.CurveSides[curveIndex]);
+        _sideButtons[i] = new Button
         {
+          Width = CurveSideButtonWidth,
+          Height = CurveDirectionButtonHeight,
+        };
+        _sideButtons[i].Load += (_, __) =>
+          ConfigureCurveDirectionButton(_sideButtons[rowIndex]);
+        UpdateCurveSideButton(rowIndex, initialSide);
+        _sideButtons[i].Click += (_, __) =>
+        {
+          Log.Write("vNotches",
+            $"side control row={rowIndex + 1} sequence={curveIndex + 1} suppress={_suppress}");
           if (_suppress) return;
           _s.RedoBatches.Clear();
-          _s.CurveSides[curveIndex] = _sideChecks[rowIndex].Checked == true;
-          SyncLinkedSideChecks(curveIndex);
+          bool newSide = !_s.CurveSideBySource.GetValueOrDefault(
+            _curveRows[rowIndex].SourceId,
+            _s.CurveSides[curveIndex]);
+          _s.CurveSideBySource[_curveRows[rowIndex].SourceId] = newSide;
+          UpdateCurveSideButton(rowIndex, newSide);
+          UpdateLogicalCurveSide(_s, curveIndex);
           RebuildCurveNotches(doc, _s, curveIndex);
           SelectBothCurves(doc, _s);
           UpdateUndoEnabled();
+          Log.Write("vNotches",
+            $"side changed: row={rowIndex + 1} source={_curveRows[rowIndex].SourceId} " +
+            $"side={newSide}");
           Redraw();
           Persist();
         };
 
-        _reverseButtons[i] = new Button { Text = $"Reverse {i + 1}", Height = 24 };
+        _reverseButtons[i] = new Button
+        {
+          Width = CurveReverseButtonWidth,
+          Height = CurveDirectionButtonHeight,
+        };
+        _reverseButtons[i].Load += (_, __) =>
+          ConfigureCurveDirectionButton(_reverseButtons[rowIndex]);
+        UpdateCurveReverseButton(
+          rowIndex,
+          _s.CurveReversedBySource.GetValueOrDefault(_curveRows[i].SourceId));
         _reverseButtons[i].Click += (_, __) =>
         {
-          ReverseCurve(doc, _s, curveIndex);
+          Log.Write("vNotches",
+            $"reverse control row={rowIndex + 1} sequence={curveIndex + 1} suppress={_suppress}");
+          if (_suppress) return;
+          ReverseSourceCurve(doc, _s, curveIndex, _curveRows[rowIndex].SourceId);
+          Log.Write("vNotches",
+            $"reversed row={rowIndex + 1} source={_curveRows[rowIndex].SourceId}");
           RefreshCurveRows();
           Redraw();
           Persist();
@@ -3995,13 +5465,45 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         {
           Text = FormatPanelNumber(_curveRows[i].Curve.GetLength()),
           VerticalAlignment = VerticalAlignment.Center,
-          TextAlignment = TextAlignment.Right,
+          TextAlignment = TextAlignment.Center,
         };
+        ReserveLabelWidth(_curveLengthLabels[i], CurveLengthWidthSample);
+        bool linkedSequenceRow = _curveRows[i].LinkedToPrevious ||
+          (i + 1 < _curveRows.Length && _curveRows[i + 1].LinkedToPrevious);
+        if (!linkedSequenceRow)
+          _curveLengthDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(
+            CurveLengthDifferenceWidthSample, actualDifferenceWidthSample);
         _curveLengthBadges[i] = new Panel
         {
-          Padding = new Eto.Drawing.Padding(4, 0, 4, 0),
+          Padding = new Eto.Drawing.Padding(
+            CurveLengthBadgeHorizontalPadding, 0,
+            CurveLengthBadgeHorizontalPadding, 0),
           Content = _curveLengthLabels[i],
         };
+        double? totalLength = LinkedSequenceTotalForRow(i);
+        if (totalLength.HasValue)
+        {
+          _curveTotalLabels[i] = new Label
+          {
+            Text = FormatPanelNumber(totalLength.Value),
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+          };
+          ReserveLabelWidth(_curveTotalLabels[i]!, CurveLengthWidthSample);
+          _curveTotalDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(
+            CurveLengthDifferenceWidthSample, actualDifferenceWidthSample);
+          _curveTotalBadges[i] = new Panel
+          {
+            Padding = new Eto.Drawing.Padding(
+              CurveLengthBadgeHorizontalPadding, 0,
+              CurveLengthBadgeHorizontalPadding, 0),
+            Content = _curveTotalLabels[i],
+          };
+          _curveTotalColumnWidth = Math.Max(
+            _curveTotalColumnWidth,
+            (int)Math.Ceiling(_curveTotalBadges[i]!.GetPreferredSize().Width) +
+              CurveLengthBadgeWidthAllowance);
+        }
 
         if (_s.Curves.Count > 1)
         {
@@ -4024,6 +5526,155 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ApplyCurveLengthHighlights();
     }
 
+    static Label CreateCurveLengthDifferenceLabel(
+      string widthSample, string actualValueSample)
+    {
+      var label = new Label
+      {
+        Text = widthSample,
+        Font = new Eto.Drawing.Font(
+          Eto.Drawing.SystemFont.Default,
+          CurveLengthDifferenceFontSize,
+          Eto.Drawing.FontDecoration.None),
+        BackgroundColor = Colors.Transparent,
+        VerticalAlignment = VerticalAlignment.Center,
+        TextAlignment = TextAlignment.Left,
+      };
+      label.Load += (_, __) =>
+      {
+        if (label.ControlObject is System.Windows.FrameworkElement nativeLabel)
+          nativeLabel.RenderTransform = new System.Windows.Media.TranslateTransform(
+            0.0, -CurveLengthDifferenceRaise);
+      };
+      int width = (int)Math.Ceiling(label.GetPreferredSize().Width);
+      if (!string.IsNullOrEmpty(actualValueSample))
+      {
+        label.Text = actualValueSample;
+        width = Math.Max(width, (int)Math.Ceiling(label.GetPreferredSize().Width));
+      }
+      label.Width = width;
+      label.Text = "";
+      return label;
+    }
+
+    static void ReserveLabelWidth(Label label, string widthSample)
+    {
+      string text = label.Text;
+      int width = (int)Math.Ceiling(label.GetPreferredSize().Width);
+      label.Text = widthSample;
+      width = Math.Max(width, (int)Math.Ceiling(label.GetPreferredSize().Width));
+      label.Width = width;
+      label.Text = text;
+    }
+
+    static void ConfigureCurveDirectionButton(Button button)
+    {
+      if (button.ControlObject is not System.Windows.Controls.Button nativeButton)
+        return;
+      nativeButton.Template = CreateTransparentButtonTemplate();
+      nativeButton.Background = System.Windows.Media.Brushes.Transparent;
+      nativeButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
+      nativeButton.BorderThickness = new System.Windows.Thickness(0.0);
+      nativeButton.Padding = new System.Windows.Thickness(
+        CurveDirectionButtonHorizontalPadding,
+        CurveDirectionButtonVerticalPadding,
+        CurveDirectionButtonHorizontalPadding,
+        CurveDirectionButtonVerticalPadding);
+      nativeButton.FontSize = CurveDirectionButtonFontSize;
+      nativeButton.MinWidth = 0.0;
+      nativeButton.MinHeight = 0.0;
+      nativeButton.FocusVisualStyle = null;
+      nativeButton.HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center;
+      nativeButton.VerticalContentAlignment = System.Windows.VerticalAlignment.Center;
+    }
+
+    static System.Windows.Controls.ControlTemplate CreateTransparentButtonTemplate()
+    {
+      var template = new System.Windows.Controls.ControlTemplate(
+        typeof(System.Windows.Controls.Button));
+      var background = new System.Windows.FrameworkElementFactory(
+        typeof(System.Windows.Controls.Border), "ButtonBackground");
+      background.SetValue(
+        System.Windows.Controls.Border.BackgroundProperty,
+        System.Windows.Media.Brushes.Transparent);
+      var presenter = new System.Windows.FrameworkElementFactory(
+        typeof(System.Windows.Controls.ContentPresenter));
+      presenter.SetValue(
+        System.Windows.Controls.ContentPresenter.ContentSourceProperty,
+        "Content");
+      presenter.SetValue(
+        System.Windows.FrameworkElement.HorizontalAlignmentProperty,
+        System.Windows.HorizontalAlignment.Center);
+      presenter.SetValue(
+        System.Windows.FrameworkElement.VerticalAlignmentProperty,
+        System.Windows.VerticalAlignment.Center);
+      background.AppendChild(presenter);
+      template.VisualTree = background;
+
+      var hoverTrigger = new System.Windows.Trigger
+      {
+        Property = System.Windows.UIElement.IsMouseOverProperty,
+        Value = true,
+      };
+      hoverTrigger.Setters.Add(new System.Windows.Setter(
+        System.Windows.Controls.Border.BackgroundProperty,
+        System.Windows.SystemColors.ControlLightBrush,
+        "ButtonBackground"));
+      template.Triggers.Add(hoverTrigger);
+
+      var pressedTrigger = new System.Windows.Trigger
+      {
+        Property = System.Windows.Controls.Button.IsPressedProperty,
+        Value = true,
+      };
+      pressedTrigger.Setters.Add(new System.Windows.Setter(
+        System.Windows.Controls.Border.BackgroundProperty,
+        System.Windows.SystemColors.ControlDarkBrush,
+        "ButtonBackground"));
+      template.Triggers.Add(pressedTrigger);
+      return template;
+    }
+
+    static void ConfigureCurveIdentityLabel(Label label)
+    {
+      if (label.ControlObject is not System.Windows.FrameworkElement nativeLabel)
+        return;
+      nativeLabel.VerticalAlignment = System.Windows.VerticalAlignment.Center;
+      nativeLabel.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+      nativeLabel.Margin = new System.Windows.Thickness(0.0);
+      nativeLabel.RenderTransform = new System.Windows.Media.TranslateTransform(
+        0.0, CurveIdentityVerticalOffset);
+      if (nativeLabel is System.Windows.Controls.TextBlock textBlock)
+      {
+        textBlock.TextAlignment = System.Windows.TextAlignment.Center;
+        textBlock.Padding = new System.Windows.Thickness(0.0);
+      }
+    }
+
+    void UpdateCurveSideButton(int rowIndex, bool side)
+    {
+      if (rowIndex < 0 || rowIndex >= _sideButtons.Length)
+        return;
+      _sideButtons[rowIndex].Text = side
+        ? CurveSideCheckedGlyph
+        : CurveSideUncheckedGlyph;
+      _sideButtons[rowIndex].ToolTip = side
+        ? "Side: up (click to switch down)"
+        : "Side: down (click to switch up)";
+    }
+
+    void UpdateCurveReverseButton(int rowIndex, bool reversed)
+    {
+      if (rowIndex < 0 || rowIndex >= _reverseButtons.Length)
+        return;
+      _reverseButtons[rowIndex].Text = reversed
+        ? CurveReverseBackwardGlyph
+        : CurveReverseForwardGlyph;
+      _reverseButtons[rowIndex].ToolTip = reversed
+        ? "Direction: left (click to reverse)"
+        : "Direction: right (click to reverse)";
+    }
+
     CurveRowInfo[] BuildCurveRowInfos()
     {
       var rows = new List<CurveRowInfo>();
@@ -4036,27 +5687,20 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
             : [_s.CurveIds[curveIndex]];
         foreach (var sourceId in sourceIds)
         {
-          var sourceCurve = _s.Doc.Objects.FindId(sourceId)?.Geometry as Curve;
+          int sourceIndex = rows.Count(row => row.LogicalIndex == curveIndex);
+          Curve? sourceCurve = curveIndex < _s.PerCurveSegments.Count &&
+            sourceIndex < _s.PerCurveSegments[curveIndex].Count
+              ? _s.PerCurveSegments[curveIndex][sourceIndex]
+              : _s.Doc.Objects.FindId(sourceId)?.Geometry as Curve;
           rows.Add(new CurveRowInfo(
             curveIndex,
             sourceId,
             sourceCurve?.DuplicateCurve() ?? _s.Curves[curveIndex].DuplicateCurve(),
-            rows.Count > 0 && rows[^1].LogicalIndex == curveIndex));
+            rows.Count > 0 && rows[^1].LogicalIndex == curveIndex,
+            _s.CurveDisplayNumber(sourceId)));
         }
       }
       return rows.ToArray();
-    }
-
-    void SyncLinkedSideChecks(int curveIndex)
-    {
-      _suppress = true;
-      try
-      {
-        for (int i = 0; i < _curveRows.Length; i++)
-          if (_curveRows[i].LogicalIndex == curveIndex)
-            _sideChecks[i].Checked = _s.CurveSides[curveIndex];
-      }
-      finally { _suppress = false; }
     }
 
     void SyncLinkedEnableChecks(int curveIndex)
@@ -4076,7 +5720,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       var curveStack = new StackLayout
       {
         Orientation = Orientation.Vertical,
-        Spacing = 2,
+        Spacing = CurveRowSpacing,
       };
       for (int i = 0; i < _curveRows.Length; i++)
       {
@@ -4084,31 +5728,92 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         var row = new StackLayout
         {
           Orientation = Orientation.Horizontal,
-          Spacing = 6,
+          Spacing = CurveRowControlSpacing,
           VerticalContentAlignment = VerticalAlignment.Center,
-          Height = 26,
+          Height = CurveRowHeight,
         };
+        var dragHandle = CreateCurveDragHandle();
+        dragHandle.Load += (_, __) => InstallCurveRowDrag(dragHandle, rowIndex);
+        row.Items.Add(new StackLayoutItem(dragHandle, false));
+        row.Items.Add(new StackLayoutItem(_curveIdentityLabels[i], false));
         if (_s.Curves.Count > 1 && _enableChecks[i] != null)
           row.Items.Add(new StackLayoutItem(_enableChecks[i], false));
-        row.Items.Add(new StackLayoutItem(_sideChecks[i], false));
-        row.Items.Add(new StackLayoutItem(new Panel
-        {
-          Height = 26,
-          Padding = new Eto.Drawing.Padding(0, 2, 0, 0),
-          Content = _reverseButtons[i],
-        }, false));
+        row.Items.Add(new StackLayoutItem(_sideButtons[i], false));
+        row.Items.Add(new StackLayoutItem(_reverseButtons[i], false));
         row.Items.Add(new StackLayoutItem(null, true));
         row.Items.Add(new StackLayoutItem(_curveLengthBadges[i], false));
+        if (_curveTotalBadges[i] != null)
+        {
+          Control totalCell = _curveTotalBadges[i]!;
+          totalCell.Width = _curveTotalColumnWidth;
+          row.Items.Add(new StackLayoutItem(totalCell, false));
+          if (_curveTotalDifferenceLabels[i] != null)
+            row.Items.Add(new StackLayoutItem(
+              _curveTotalDifferenceLabels[i]!, false));
+        }
+        else if (_curveLengthDifferenceLabels[i] != null)
+        {
+          row.Items.Add(new StackLayoutItem(
+            _curveLengthDifferenceLabels[i]!, false));
+        }
+        else if (_curveTotalColumnWidth > 0)
+        {
+          row.Items.Add(new StackLayoutItem(
+            new Panel { Width = _curveTotalColumnWidth }, false));
+        }
         row.MouseEnter += (_, __) => SetCurveRowHover(rowIndex);
         row.MouseLeave += (_, __) =>
         {
-          if (_curveHoverConduit.CurveIndex == rowIndex)
+          if (!_curveRowDragInProgress && _curveHoverConduit.CurveIndex == rowIndex)
             ClearCurveRowHover();
+        };
+        row.Load += (_, __) =>
+        {
+          if (row.ControlObject is System.Windows.FrameworkElement nativeRow)
+          {
+            _nativeCurveRows[rowIndex] = nativeRow;
+            if (nativeRow is System.Windows.Controls.Panel nativePanel)
+              _nativeCurveRowBackgrounds[rowIndex] = nativePanel.Background;
+          }
         };
         curveStack.Items.Add(new StackLayoutItem(row));
       }
-      curveStack.Load += (_, __) => InstallCurveLinkOverlay(curveStack);
+      curveStack.Load += (_, __) =>
+      {
+        InstallCurveLinkOverlay(curveStack);
+        InstallCurveStackDrop(curveStack);
+      };
       return curveStack;
+    }
+
+    static Drawable CreateCurveDragHandle()
+    {
+      var handle = new Drawable
+      {
+        ToolTip = "Drag to reorder curve",
+        Width = CurveDragHandleWidth,
+        Height = CurveRowHeight,
+      };
+      handle.Paint += (_, e) =>
+      {
+        float clusterWidth = (CurveDragDotDiameter * 2.0f) + CurveDragDotGap;
+        float clusterHeight = (CurveDragDotDiameter * 3.0f) + (CurveDragDotGap * 2.0f);
+        float left = (CurveDragHandleWidth - clusterWidth) * 0.5f;
+        float top = (CurveRowHeight - clusterHeight) * 0.5f;
+        for (int column = 0; column < 2; column++)
+        {
+          for (int row = 0; row < 3; row++)
+          {
+            e.Graphics.FillEllipse(
+              Eto.Drawing.SystemColors.ControlText,
+              left + (column * (CurveDragDotDiameter + CurveDragDotGap)),
+              top + (row * (CurveDragDotDiameter + CurveDragDotGap)),
+              CurveDragDotDiameter,
+              CurveDragDotDiameter);
+          }
+        }
+      };
+      return handle;
     }
 
     void InstallCurveLinkOverlay(StackLayout curveStack)
@@ -4116,11 +5821,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (curveStack.ControlObject is not System.Windows.FrameworkElement nativeStack)
         return;
 
-      var linkedRows = Enumerable.Range(1, _curveRows.Length - 1)
-        .Where(index => _curveRows[index].LinkedToPrevious)
+      var boundaries = Enumerable.Range(1, Math.Max(0, _curveRows.Length - 1))
+        .Select(index => new CurveLinkBoundary(
+          index,
+          _curveRows[index].LinkedToPrevious))
         .ToArray();
-      if (linkedRows.Length == 0)
-        return;
+      if (boundaries.Length == 0) return;
 
       nativeStack.Dispatcher.BeginInvoke(new Action(() =>
       {
@@ -4129,56 +5835,430 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           return;
         foreach (var existing in layer.GetAdorners(nativeStack)?.OfType<CurveLinkAdorner>() ?? [])
           layer.Remove(existing);
-        layer.Add(new CurveLinkAdorner(nativeStack, linkedRows));
+        layer.Add(new CurveLinkAdorner(
+          nativeStack,
+          boundaries,
+          ToggleCurveLink,
+          SetCurveLinkHover,
+          ClearCurveRowHover));
       }), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
-    sealed class CurveLinkAdorner : System.Windows.Documents.Adorner
+    double? LinkedSequenceTotalForRow(int rowIndex)
     {
-      const double RowPitch = 28.0;
-      readonly int[] _linkedRows;
+      if (rowIndex < 0 || rowIndex + 1 >= _curveRows.Length ||
+          !_curveRows[rowIndex + 1].LinkedToPrevious ||
+          (rowIndex > 0 && _curveRows[rowIndex].LinkedToPrevious))
+        return null;
 
-      public CurveLinkAdorner(System.Windows.UIElement adornedElement, int[] linkedRows)
+      int end = rowIndex + 1;
+      while (end + 1 < _curveRows.Length && _curveRows[end + 1].LinkedToPrevious)
+        end++;
+      return Enumerable.Range(rowIndex, end - rowIndex + 1)
+        .Sum(index => _curveRows[index].Curve.GetLength());
+    }
+
+    List<CurveLayoutItem> CurrentCurveLayout() =>
+      _curveRows.Select(row => new CurveLayoutItem(
+        row.SourceId, row.Curve.DuplicateCurve(), row.LinkedToPrevious)).ToList();
+
+    void ToggleCurveLink(int boundaryIndex)
+    {
+      if (boundaryIndex <= 0 || boundaryIndex >= _curveRows.Length)
+        return;
+      var rows = CurrentCurveLayout();
+      rows[boundaryIndex] = rows[boundaryIndex] with
+      {
+        LinkedToPrevious = !rows[boundaryIndex].LinkedToPrevious,
+      };
+      if (!ApplyCurveLayout(_s.Doc, _s, rows))
+        return;
+      RefreshCurveRows();
+      Redraw();
+      Persist();
+    }
+
+    void ReorderCurveRow(int sourceIndex, int insertionIndex)
+    {
+      if (sourceIndex < 0 || sourceIndex >= _curveRows.Length)
+        return;
+      var rows = CurrentCurveLayout();
+
+      int linkedStart = sourceIndex;
+      while (linkedStart > 0 && rows[linkedStart].LinkedToPrevious)
+        linkedStart--;
+      int linkedEnd = sourceIndex;
+      while (linkedEnd + 1 < rows.Count && rows[linkedEnd + 1].LinkedToPrevious)
+        linkedEnd++;
+      var originalLinkedIds = linkedEnd > linkedStart
+        ? rows.Skip(linkedStart).Take(linkedEnd - linkedStart + 1)
+          .Select(row => row.SourceId).ToHashSet()
+        : [];
+
+      insertionIndex = Math.Clamp(insertionIndex, 0, rows.Count);
+      if (sourceIndex + 1 < rows.Count)
+        rows[sourceIndex + 1] = rows[sourceIndex + 1] with { LinkedToPrevious = false };
+      var moved = rows[sourceIndex] with { LinkedToPrevious = false };
+      rows.RemoveAt(sourceIndex);
+      if (sourceIndex < insertionIndex)
+        insertionIndex--;
+      insertionIndex = Math.Clamp(insertionIndex, 0, rows.Count);
+      if (insertionIndex < rows.Count)
+        rows[insertionIndex] = rows[insertionIndex] with { LinkedToPrevious = false };
+      rows.Insert(insertionIndex, moved);
+
+      if (originalLinkedIds.Count > 1)
+      {
+        var linkedPositions = Enumerable.Range(0, rows.Count)
+          .Where(index => originalLinkedIds.Contains(rows[index].SourceId))
+          .ToArray();
+        if (linkedPositions.Length == originalLinkedIds.Count &&
+            linkedPositions[^1] - linkedPositions[0] + 1 == linkedPositions.Length)
+        {
+          for (int index = linkedPositions[0]; index <= linkedPositions[^1]; index++)
+            rows[index] = rows[index] with
+            {
+              LinkedToPrevious = index > linkedPositions[0],
+            };
+        }
+      }
+
+      if (rows.Select(row => row.SourceId).SequenceEqual(
+          _curveRows.Select(row => row.SourceId)))
+        return;
+      if (!ApplyCurveLayout(_s.Doc, _s, rows))
+        return;
+      RefreshCurveRows();
+      Redraw();
+      Persist();
+    }
+
+    void InstallCurveRowDrag(Control dragSurface, int rowIndex)
+    {
+      if (dragSurface.ControlObject is not System.Windows.FrameworkElement nativeSurface)
+        return;
+      nativeSurface.Cursor = System.Windows.Input.Cursors.SizeAll;
+      System.Windows.Point dragStart = default;
+      bool dragArmed = false;
+      nativeSurface.PreviewMouseLeftButtonDown += (_, e) =>
+      {
+        if (e.OriginalSource is System.Windows.DependencyObject source &&
+            FindVisualParent<System.Windows.Controls.Primitives.ButtonBase>(source) != null)
+          return;
+        dragStart = e.GetPosition(nativeSurface);
+        dragArmed = true;
+        nativeSurface.CaptureMouse();
+      };
+      nativeSurface.PreviewMouseLeftButtonUp += (_, __) =>
+      {
+        dragArmed = false;
+        if (nativeSurface.IsMouseCaptured)
+          nativeSurface.ReleaseMouseCapture();
+      };
+      nativeSurface.GiveFeedback += (_, e) =>
+      {
+        if (!_curveRowDragInProgress)
+          return;
+        System.Windows.Input.Mouse.SetCursor(System.Windows.Input.Cursors.SizeAll);
+        e.UseDefaultCursors = false;
+        e.Handled = true;
+      };
+      nativeSurface.PreviewMouseMove += (_, e) =>
+      {
+        if (_curveRowDragInProgress || !dragArmed)
+          return;
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+          return;
+        var current = e.GetPosition(nativeSurface);
+        if (Math.Abs(current.X - dragStart.X) < System.Windows.SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - dragStart.Y) < System.Windows.SystemParameters.MinimumVerticalDragDistance)
+          return;
+        _curveRowDragInProgress = true;
+        _curveDragSourceIndex = rowIndex;
+        SetCurveRowHover(rowIndex);
+        SetCurveDragRowHighlight(rowIndex, true);
+        if (nativeSurface.IsMouseCaptured)
+          nativeSurface.ReleaseMouseCapture();
+        try
+        {
+          System.Windows.DragDrop.DoDragDrop(
+            nativeSurface, rowIndex, System.Windows.DragDropEffects.Move);
+        }
+        finally
+        {
+          ClearCurveDragPreview();
+          SetCurveDragRowHighlight(rowIndex, false);
+          _curveDragSourceIndex = -1;
+          _curveRowDragInProgress = false;
+          ClearCurveRowHover();
+          dragArmed = false;
+          dragStart = default;
+          if (nativeSurface.IsMouseCaptured)
+            nativeSurface.ReleaseMouseCapture();
+        }
+      };
+    }
+
+    void InstallCurveStackDrop(StackLayout curveStack)
+    {
+      if (curveStack.ControlObject is not System.Windows.FrameworkElement nativeStack)
+        return;
+      nativeStack.AllowDrop = true;
+      nativeStack.PreviewDragEnter += (_, e) =>
+      {
+        if (!e.Data.GetDataPresent(typeof(int))) return;
+        e.Effects = System.Windows.DragDropEffects.Move;
+        e.Handled = true;
+      };
+      nativeStack.PreviewDragOver += (_, e) =>
+      {
+        if (!e.Data.GetDataPresent(typeof(int))) return;
+        int insertionIndex = CurveInsertionIndex(
+          e.GetPosition(nativeStack).Y,
+          _curveDragSourceIndex);
+        ApplyCurveDragPreview(_curveDragSourceIndex, insertionIndex);
+        e.Effects = System.Windows.DragDropEffects.Move;
+        e.Handled = true;
+      };
+      nativeStack.PreviewDrop += (_, e) =>
+      {
+        if (e.Data.GetData(typeof(int)) is not int sourceIndex) return;
+        int insertionIndex = _curveDropInsertionIndex >= 0
+          ? _curveDropInsertionIndex
+          : CurveInsertionIndex(e.GetPosition(nativeStack).Y, sourceIndex);
+        ClearCurveDragPreview();
+        ReorderCurveRow(sourceIndex, insertionIndex);
+        e.Handled = true;
+      };
+    }
+
+    int CurveInsertionIndex(double y, int sourceIndex)
+    {
+      if (_curveRows.Length == 0)
+        return 0;
+      int rowIndex = Math.Clamp(
+        (int)Math.Floor(y / CurveRowHeight),
+        0,
+        _curveRows.Length - 1);
+      if (sourceIndex >= 0 && sourceIndex < _curveRows.Length)
+      {
+        if (rowIndex > sourceIndex)
+          return rowIndex + 1;
+        if (rowIndex < sourceIndex)
+          return rowIndex;
+      }
+      double withinRow = y - (rowIndex * CurveRowHeight);
+      return Math.Clamp(
+        rowIndex + (withinRow >= CurveRowHeight * 0.5 ? 1 : 0),
+        0,
+        _curveRows.Length);
+    }
+
+    void ApplyCurveDragPreview(
+      int sourceIndex,
+      int insertionIndex)
+    {
+      if (sourceIndex < 0 || sourceIndex >= _curveRows.Length)
+        return;
+      insertionIndex = Math.Clamp(insertionIndex, 0, _curveRows.Length);
+      if (_curveDropInsertionIndex == insertionIndex)
+        return;
+
+      ResetCurveRowTransforms();
+      _curveDropInsertionIndex = insertionIndex;
+      int adjustedInsertion = insertionIndex;
+      if (sourceIndex < adjustedInsertion)
+        adjustedInsertion--;
+      adjustedInsertion = Math.Clamp(adjustedInsertion, 0, _curveRows.Length - 1);
+
+      if (_nativeCurveRows.TryGetValue(sourceIndex, out var sourceRow))
+        sourceRow.RenderTransform = new System.Windows.Media.TranslateTransform(
+          0.0,
+          (adjustedInsertion - sourceIndex) * CurveRowHeight);
+      if (adjustedInsertion > sourceIndex)
+      {
+        for (int index = sourceIndex + 1; index <= adjustedInsertion; index++)
+          if (_nativeCurveRows.TryGetValue(index, out var row))
+            row.RenderTransform = new System.Windows.Media.TranslateTransform(0.0, -CurveRowHeight);
+      }
+      else if (adjustedInsertion < sourceIndex)
+      {
+        for (int index = adjustedInsertion; index < sourceIndex; index++)
+          if (_nativeCurveRows.TryGetValue(index, out var row))
+            row.RenderTransform = new System.Windows.Media.TranslateTransform(0.0, CurveRowHeight);
+      }
+    }
+
+    void ResetCurveRowTransforms()
+    {
+      foreach (var row in _nativeCurveRows.Values)
+      {
+        row.Visibility = System.Windows.Visibility.Visible;
+        row.RenderTransform = System.Windows.Media.Transform.Identity;
+      }
+    }
+
+    void ClearCurveDragPreview()
+    {
+      ResetCurveRowTransforms();
+      _curveDropInsertionIndex = -1;
+    }
+
+    void SetCurveDragRowHighlight(int rowIndex, bool highlighted)
+    {
+      if (_curveDragHighlightLayer != null && _curveDragHighlightAdorner != null)
+        _curveDragHighlightLayer.Remove(_curveDragHighlightAdorner);
+      _curveDragHighlightLayer = null;
+      _curveDragHighlightAdorner = null;
+      if (_curveDragHighlightedRowIndex >= 0 &&
+          _nativeCurveRows.TryGetValue(_curveDragHighlightedRowIndex, out var previousRow) &&
+          previousRow is System.Windows.Controls.Panel previousPanel)
+        previousPanel.Background = _nativeCurveRowBackgrounds.GetValueOrDefault(
+          _curveDragHighlightedRowIndex);
+      _curveDragHighlightedRowIndex = -1;
+
+      if (!highlighted || !_nativeCurveRows.TryGetValue(rowIndex, out var nativeRow))
+        return;
+      _curveDragHighlightedRowIndex = rowIndex;
+      var layer = System.Windows.Documents.AdornerLayer.GetAdornerLayer(nativeRow);
+      if (layer != null)
+      {
+        _curveDragHighlightLayer = layer;
+        _curveDragHighlightAdorner = new CurveDragRowHighlightAdorner(nativeRow);
+        layer.Add(_curveDragHighlightAdorner);
+      }
+      else if (nativeRow is System.Windows.Controls.Panel nativePanel)
+      {
+        nativePanel.Background = CurveDragRowHighlightBrush;
+      }
+    }
+
+    static T? FindVisualParent<T>(System.Windows.DependencyObject? child)
+      where T : System.Windows.DependencyObject
+    {
+      while (child != null)
+      {
+        if (child is T match) return match;
+        child = System.Windows.Media.VisualTreeHelper.GetParent(child);
+      }
+      return null;
+    }
+
+    sealed class CurveDragRowHighlightAdorner : System.Windows.Documents.Adorner
+    {
+      public CurveDragRowHighlightAdorner(System.Windows.UIElement adornedElement)
         : base(adornedElement)
       {
-        _linkedRows = linkedRows;
         IsHitTestVisible = false;
       }
 
       protected override void OnRender(System.Windows.Media.DrawingContext drawingContext)
       {
-        base.OnRender(drawingContext);
-        var pen = new System.Windows.Media.Pen(
-          System.Windows.SystemColors.ControlTextBrush,
-          1.25);
+        double inset = CurveDragRowOutlineWidth * 0.5;
+        var size = AdornedElement.RenderSize;
+        var bounds = new System.Windows.Rect(
+          inset,
+          inset,
+          Math.Max(0.0, size.Width - CurveDragRowOutlineWidth),
+          Math.Max(0.0, size.Height - CurveDragRowOutlineWidth));
+        drawingContext.DrawRectangle(
+          CurveDragRowHighlightBrush,
+          CurveDragRowHighlightPen,
+          bounds);
+      }
+    }
 
-        foreach (int rowIndex in _linkedRows)
+    sealed record CurveLinkBoundary(int RowIndex, bool Linked);
+
+    sealed class CurveLinkAdorner : System.Windows.Documents.Adorner
+    {
+      readonly System.Windows.Media.VisualCollection _visuals;
+      readonly List<(System.Windows.Controls.Button Button,
+        CurveLinkBoundary Boundary)> _items = [];
+
+      public CurveLinkAdorner(
+        System.Windows.UIElement adornedElement,
+        IReadOnlyList<CurveLinkBoundary> boundaries,
+        Action<int> toggle,
+        Action<int> hover,
+        Action clearHover)
+        : base(adornedElement)
+      {
+        _visuals = new System.Windows.Media.VisualCollection(this);
+        foreach (var boundary in boundaries)
         {
-          const double x = 7.0;
-          double y = (rowIndex * RowPitch) - 1.0;
-          drawingContext.PushTransform(
-            new System.Windows.Media.RotateTransform(-35.0, x, y));
-          drawingContext.DrawRoundedRectangle(
-            null,
-            pen,
-            new System.Windows.Rect(x - 6.0, y - 3.0, 7.0, 6.0),
-            3.0,
-            3.0);
-          drawingContext.DrawRoundedRectangle(
-            null,
-            pen,
-            new System.Windows.Rect(x - 1.0, y - 3.0, 7.0, 6.0),
-            3.0,
-            3.0);
-          drawingContext.Pop();
+          var button = CreateLinkButton(boundary.Linked);
+          button.ToolTip = boundary.Linked ? "Unlink curves" : "Link curves";
+          int rowIndex = boundary.RowIndex;
+          button.Click += (_, __) => toggle(rowIndex);
+          button.MouseEnter += (_, __) => hover(rowIndex);
+          button.MouseLeave += (_, __) => clearHover();
+          _items.Add((button, boundary));
+          _visuals.Add(button);
         }
+      }
+
+      static System.Windows.Controls.Button CreateLinkButton(bool linked)
+      {
+        var canvas = new System.Windows.Controls.Canvas { Width = 12.0, Height = 9.0 };
+        var brush = linked
+          ? System.Windows.SystemColors.HighlightBrush
+          : System.Windows.SystemColors.GrayTextBrush;
+        foreach (double left in new[] { 0.0, 5.0 })
+        {
+          var link = new System.Windows.Controls.Border
+          {
+            Width = 7.0,
+            Height = 5.0,
+            CornerRadius = new System.Windows.CornerRadius(2.5),
+            BorderThickness = new System.Windows.Thickness(1.25),
+            BorderBrush = brush,
+            RenderTransformOrigin = new System.Windows.Point(0.5, 0.5),
+            RenderTransform = new System.Windows.Media.RotateTransform(-35.0),
+          };
+          System.Windows.Controls.Canvas.SetLeft(link, left);
+          System.Windows.Controls.Canvas.SetTop(link, 2.0);
+          canvas.Children.Add(link);
+        }
+        return new System.Windows.Controls.Button
+        {
+          Width = 16.0,
+          Height = 16.0,
+          Padding = new System.Windows.Thickness(2.0),
+          BorderThickness = new System.Windows.Thickness(0.0),
+          BorderBrush = System.Windows.Media.Brushes.Transparent,
+          Background = System.Windows.Media.Brushes.Transparent,
+          Content = canvas,
+          Focusable = true,
+        };
+      }
+
+      protected override int VisualChildrenCount => _visuals.Count;
+      protected override System.Windows.Media.Visual GetVisualChild(int index) => _visuals[index];
+
+      protected override System.Windows.Media.HitTestResult? HitTestCore(
+        System.Windows.Media.PointHitTestParameters hitTestParameters) => null;
+
+      protected override System.Windows.Size ArrangeOverride(System.Windows.Size finalSize)
+      {
+        foreach (var (button, boundary) in _items)
+        {
+          double y = boundary.RowIndex * CurveRowHeight - 9.0;
+          button.Arrange(new System.Windows.Rect(0.0, y, 16.0, 16.0));
+        }
+        return finalSize;
       }
     }
 
     int CurveViewportHeight()
     {
       int visibleRows = Math.Clamp(_curveRows.Length, 1, 3);
-      return (visibleRows * 26) + ((visibleRows - 1) * 2) + 2;
+      return visibleRows * CurveRowHeight;
+    }
+
+    int CurveMinimumWidth()
+    {
+      return DefaultWindowWidth;
     }
 
     void ConfigureCurveScroller()
@@ -4218,10 +6298,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (_curveScrollable == null)
         return;
 
+      ClearCurveDragPreview();
       ClearCurveRowHover();
       CreateCurveRowControls(_s.Doc);
+      ConfigureCurveScroller();
       _curveScrollable.Content = BuildCurveRows();
       _curveScrollable.Height = CurveViewportHeight();
+      ConfigureCurveScroller();
+      MinimumSize = new Eto.Drawing.Size(CurveMinimumWidth(), 0);
+      if (ClientSize.Width < MinimumSize.Width)
+        ClientSize = new Eto.Drawing.Size(MinimumSize.Width, ClientSize.Height);
 
       SyncFromSession();
       UpdateMultipleState();
@@ -4272,18 +6358,73 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
       _curveHoverConduit.CurveIndex = curveIndex;
       _curveHoverConduit.Curve = _curveRows[curveIndex].Curve;
+      _curveHoverConduit.SecondCurve = null;
       _curveHoverConduit.Enabled = true;
+      ApplyCurveIdentityHighlights(curveIndex);
+      Redraw();
+    }
+
+    void SetCurveLinkHover(int boundaryIndex)
+    {
+      if (boundaryIndex <= 0 || boundaryIndex >= _curveRows.Length)
+        return;
+      _curveHoverConduit.CurveIndex = -1;
+      _curveHoverConduit.Curve = _curveRows[boundaryIndex - 1].Curve;
+      _curveHoverConduit.SecondCurve = _curveRows[boundaryIndex].Curve;
+      _curveHoverConduit.Enabled = true;
+      ApplyCurveIdentityHighlights(boundaryIndex - 1, boundaryIndex);
       Redraw();
     }
 
     void ClearCurveRowHover()
     {
-      if (!_curveHoverConduit.Enabled && _curveHoverConduit.Curve == null)
+      ApplyCurveIdentityHighlights(
+        _viewportPointerActive ? _viewportCurveHoverRowIndex : -1);
+      if (!_curveHoverConduit.Enabled &&
+          _curveHoverConduit.Curve == null &&
+          _curveHoverConduit.SecondCurve == null)
         return;
       _curveHoverConduit.Enabled = false;
       _curveHoverConduit.Curve = null;
+      _curveHoverConduit.SecondCurve = null;
       _curveHoverConduit.CurveIndex = -1;
       Redraw();
+    }
+
+    void ApplyCurveIdentityHighlights(params int[] rowIndices)
+    {
+      var highlighted = rowIndices.Where(index =>
+        index >= 0 && index < _curveIdentityLabels.Length).ToHashSet();
+      for (int index = 0; index < _curveIdentityLabels.Length; index++)
+      {
+        bool active = highlighted.Contains(index);
+        _curveIdentityLabels[index].BackgroundColor = active
+          ? CurveIdentityHoverBackground
+          : Colors.Transparent;
+        _curveIdentityLabels[index].TextColor = active
+          ? CurveIdentityHoverForeground
+          : SystemColors.ControlText;
+      }
+    }
+
+    public void SetViewportCurveHover(int curveIndex, double lengthFromStart)
+    {
+      int rowIndex = -1;
+      if (curveIndex >= 0 && curveIndex < _s.PerCurveSourceIds.Count)
+      {
+        int sourceIndex = ResolvePlacementSourceIndex(
+          _s, curveIndex, lengthFromStart, null);
+        if (sourceIndex >= 0 &&
+            sourceIndex < _s.PerCurveSourceIds[curveIndex].Count)
+        {
+          Guid sourceId = _s.PerCurveSourceIds[curveIndex][sourceIndex];
+          rowIndex = Array.FindIndex(
+            _curveRows, row => row.SourceId == sourceId);
+        }
+      }
+      _viewportCurveHoverRowIndex = rowIndex;
+      if (_viewportPointerActive)
+        ApplyCurveIdentityHighlights(rowIndex);
     }
 
     void ApplyDynamic()
@@ -4319,9 +6460,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     static System.Windows.FrameworkElement CreateNotchTypeGlyph(string notchType, bool active,
       double notchLength, double notchWidth)
     {
-      const double size = 12.0;
-      const double center = size * 0.5;
-      const double available = 11.25;
+      const double size = 12.0; // Notch glyph canvas width and height in WPF device-independent pixels.
+      const double center = size * 0.5; // Derived glyph center coordinate in WPF device-independent pixels.
+      const double available = 11.25; // Maximum scaled notch span inside the glyph canvas.
       double modelHeight = Math.Max(notchLength, RhinoMath.ZeroTolerance);
       double modelWidth = Math.Max(notchWidth, RhinoMath.ZeroTolerance);
       double scale = Math.Min(available / modelWidth, available / modelHeight);
@@ -4410,7 +6551,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         });
       }
 
-      const double padding = 3.0;
+      const double padding = 3.0; // Padding around each notch glyph in WPF device-independent pixels.
       var content = new System.Windows.Controls.Grid
       {
         Background = active ? System.Windows.SystemColors.ControlDarkBrush: System.Windows.Media.Brushes.Transparent,
@@ -4648,18 +6789,22 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       int height = growOnly
         ? Math.Max(ClientSize.Height, requiredHeight)
         : requiredHeight;
-      ClientSize = new Eto.Drawing.Size(Math.Max(280, ClientSize.Width), height);
+      ClientSize = new Eto.Drawing.Size(
+        Math.Max(CurveMinimumWidth(), ClientSize.Width), height);
     }
 
     sealed class CurveRowHoverConduit : DisplayConduit
     {
       public int CurveIndex { get; set; } = -1;
       public Curve? Curve { get; set; }
+      public Curve? SecondCurve { get; set; }
 
       protected override void DrawForeground(DrawEventArgs e)
       {
         if (Curve != null)
-          PreviewDisplay.DrawCurve(e.Display, Curve, System.Drawing.Color.Gold, 3);
+          PreviewDisplay.DrawCurve(e.Display, Curve, System.Drawing.Color.Black, 3);
+        if (SecondCurve != null)
+          PreviewDisplay.DrawCurve(e.Display, SecondCurve, System.Drawing.Color.Black, 3);
       }
     }
 
@@ -4711,6 +6856,48 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       nativeButton.Content = content;
       nativeButton.ToolTip = "Select curves; check the box to keep the current selection";
       ApplySelectButtonState(nativeButton);
+    }
+
+    void InstallMultipleAddButtonContent()
+    {
+      if (_multipleAddButton.ControlObject is not System.Windows.Controls.Button nativeButton)
+        return;
+      if (_multipleSeparateCheck != null)
+      {
+        _multipleSeparateCheck.IsChecked = _s.MultipleSeparate;
+        return;
+      }
+
+      var content = new System.Windows.Controls.StackPanel
+      {
+        Orientation = System.Windows.Controls.Orientation.Horizontal,
+        VerticalAlignment = System.Windows.VerticalAlignment.Center,
+        HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+      };
+      content.Children.Add(new System.Windows.Controls.TextBlock
+      {
+        Text = "Add",
+        VerticalAlignment = System.Windows.VerticalAlignment.Center,
+      });
+      _multipleSeparateCheck = new System.Windows.Controls.CheckBox
+      {
+        IsChecked = _s.MultipleSeparate,
+        // Content = "Separate",
+        Margin = new System.Windows.Thickness(7, 0, 0, 0),
+        VerticalAlignment = System.Windows.VerticalAlignment.Center,
+        ToolTip = "Apply the multiple layout separately to each linked curve segment",
+      };
+      _multipleSeparateCheck.Click += (_, e) =>
+      {
+        _s.MultipleSeparate = _multipleSeparateCheck.IsChecked == true;
+        UpdateMultipleState();
+        Persist();
+        e.Handled = true;
+      };
+      content.Children.Add(_multipleSeparateCheck);
+      nativeButton.Content = content;
+      nativeButton.ToolTip =
+        "Add multiple notches; check Separate to apply the layout to each linked curve segment";
     }
 
     void ApplyFeatureToggle(bool notch, bool enabled)
@@ -4797,6 +6984,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void UpdateMultipleState()
     {
+      if (_s.MultipleAuto)
+        _s.MultipleUseDistance = true;
       UpdateMultipleModeIndicator();
       if (_s.MultipleUseDistance && _s.MultipleDistance > _s.Doc.ModelAbsoluteTolerance)
         ApplyMultipleDistance(_s.MultipleDistance, persist: false);
@@ -4811,6 +7000,10 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         _multipleNumberMode.Checked = !_s.MultipleUseDistance;
         _multipleDistanceMode.Checked = _s.MultipleUseDistance;
+        _multipleAutoCheck.Checked = _s.MultipleAuto;
+        _multipleDistanceMode.ToolTip = _s.MultipleAuto
+          ? "Use distance as the maximum curvature-aware spacing"
+          : "Use distance as the minimum uniform spacing";
       }
       finally { _updatingMultipleControls = false; }
     }
@@ -4839,9 +7032,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
       }
 
-      var positions = ComputeMultiplePositions(_s.Doc, _s);
-      _s.MultipleHoverLengthsList = positions;
-      _s.MultipleHoverPreviewActive = positions != null;
+      var plans = ComputeMultiplePlacementPlans(_s.Doc, _s);
+      _s.MultipleHoverPlans = plans;
+      _s.MultipleHoverPreviewActive = plans != null;
       Redraw();
     }
 
@@ -4851,15 +7044,16 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
 
       _viewportPointerActive = true;
+      ApplyCurveIdentityHighlights(_viewportCurveHoverRowIndex);
       RefreshMultiplePreview();
     }
 
     void ClearMultiplePreview()
     {
       bool redraw = _s.MultipleHoverPreviewActive ||
-                    _s.MultipleHoverLengthsList != null;
+                    _s.MultipleHoverPlans != null;
       _s.MultipleHoverPreviewActive = false;
-      _s.MultipleHoverLengthsList = null;
+      _s.MultipleHoverPlans = null;
       if (redraw)
         Redraw();
     }
@@ -4893,6 +7087,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       RefreshMultiplePreview();
     }
 
+    void ApplySelectedMultipleMode()
+    {
+      if (_s.MultipleUseDistance)
+        ApplyMultipleDistance(_multipleDistanceStepper.Value, persist: false);
+      else
+        ApplyMultipleNumber();
+      Persist();
+    }
+
     bool TryGetMultipleBaseAvailable(double startOffset, double endOffset,
       out double available)
     {
@@ -4912,8 +7115,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       if (active.Count == 0)
         return false;
 
-      int baseCurveIndex = active.OrderBy(i => _s.Curves[i].GetLength()).First();
-      baseLength = _s.Curves[baseCurveIndex].GetLength();
+      int baseCurveIndex = active.OrderBy(i => PlacementCurveLength(_s, i)).First();
+      baseLength = PlacementCurveLength(_s, baseCurveIndex);
       return baseLength > _s.Doc.ModelAbsoluteTolerance;
     }
 
@@ -4934,9 +7137,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         return;
       }
 
-      int notchCount = BuildMultipleRatios(
-        available, distance, _s.Doc.ModelAbsoluteTolerance,
-        _s.MultipleStartOffsetEnabled, _s.MultipleEndOffsetEnabled).Count;
+      int notchCount = _s.MultipleAuto
+        ? ComputeMultiplePositions(_s.Doc, _s)?.Count ?? 0
+        : BuildMultipleRatios(
+            available, distance, _s.Doc.ModelAbsoluteTolerance,
+            _s.MultipleStartOffsetEnabled, _s.MultipleEndOffsetEnabled).Count;
       _s.MultipleNumber = Math.Clamp(notchCount, 1, 10000);
 
       _updatingMultipleControls = true;
@@ -4954,46 +7159,106 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
     void ApplyCurveLengthHighlights()
     {
-      if (_curveLengthLabels.Length < 2)
+      foreach (var label in _curveLengthDifferenceLabels.Concat(_curveTotalDifferenceLabels))
+        if (label != null)
+          label.Text = "";
+
+      double tolerance = ModelUnitsFromInches(
+        _s.Doc, CurveLengthDifferenceToleranceInches);
+      var logicalLengths = Enumerable.Range(0, _s.Curves.Count)
+        .Select(index => PlacementCurveLength(_s, index))
+        .ToArray();
+      double shortest = logicalLengths.Length > 0 ? logicalLengths.Min() : 0.0;
+      double longest = logicalLengths.Length > 0 ? logicalLengths.Max() : 0.0;
+      double span = longest - shortest;
+      bool significantDifference = logicalLengths.Length > 1 && span > tolerance;
+      ApplyPercentLengthWarning(significantDifference);
+
+      if (significantDifference)
+      {
+        double endpointTolerance = Math.Max(
+          _s.Doc.ModelAbsoluteTolerance, span * 1.0e-9);
+        for (int curveIndex = 0; curveIndex < logicalLengths.Length; curveIndex++)
+        {
+          int rowIndex = Array.FindIndex(
+            _curveRows, row => row.LogicalIndex == curveIndex);
+          if (rowIndex < 0)
+            continue;
+          Label? difference = _curveTotalDifferenceLabels[rowIndex] ??
+            _curveLengthDifferenceLabels[rowIndex];
+          if (difference == null)
+            continue;
+          if (Math.Abs(logicalLengths[curveIndex] - longest) <= endpointTolerance)
+          {
+            difference.Text = $"(+{FormatPanelNumber(span)})";
+            difference.TextColor = CurveLengthLongerColor;
+          }
+          else if (Math.Abs(logicalLengths[curveIndex] - shortest) <= endpointTolerance)
+          {
+            difference.Text = $"(-{FormatPanelNumber(span)})";
+            difference.TextColor = CurveLengthShorterColor;
+          }
+        }
+      }
+
+      var totalValues = Enumerable.Range(0, _curveTotalLabels.Length)
+        .Where(index => _curveTotalLabels[index] != null)
+        .Select(index => LinkedSequenceTotalForRow(index)!.Value)
+        .ToArray();
+      var allLengths = _curveRows.Select(row => row.Curve.GetLength())
+        .Concat(totalValues)
+        .OrderBy(length => length)
+        .ToArray();
+      if (allLengths.Length < 2)
         return;
 
-      double tolerance = ModelUnitsFromInches(_s.Doc, 1.0 / 16.0);
-      var ordered = Enumerable.Range(0, _curveRows.Length)
-        .OrderBy(i => _curveRows[i].Curve.GetLength())
-        .ToList();
       var groupStarts = new List<double>();
-      var groupByCurve = new int[_curveRows.Length];
-
-      foreach (int curveIndex in ordered)
+      foreach (double length in allLengths)
       {
-        double length = _curveRows[curveIndex].Curve.GetLength();
         int groupIndex = groupStarts.Count - 1;
         if (groupIndex < 0 || length - groupStarts[groupIndex] > tolerance)
-        {
           groupStarts.Add(length);
-          groupIndex = groupStarts.Count - 1;
-        }
-        groupByCurve[curveIndex] = groupIndex;
       }
 
       if (groupStarts.Count < 2)
         return;
 
-      var backgrounds = new[]
+      int ColorGroup(double length)
       {
-        new Eto.Drawing.Color(0.68f, 0.08f, 0.12f),
-        new Eto.Drawing.Color(0.02f, 0.31f, 0.66f),
-        new Eto.Drawing.Color(0.05f, 0.45f, 0.20f),
-        new Eto.Drawing.Color(0.48f, 0.16f, 0.62f),
-        new Eto.Drawing.Color(0.72f, 0.32f, 0.02f),
-        new Eto.Drawing.Color(0.00f, 0.43f, 0.45f),
-      };
-      var foreground = new Eto.Drawing.Color(1.0f, 1.0f, 1.0f);
+        for (int groupIndex = 0; groupIndex < groupStarts.Count; groupIndex++)
+          if (length - groupStarts[groupIndex] <= tolerance)
+            return groupIndex;
+        return groupStarts.Count - 1;
+      }
+
       for (int i = 0; i < _curveLengthLabels.Length; i++)
       {
-        _curveLengthBadges[i].BackgroundColor = backgrounds[groupByCurve[i] % backgrounds.Length];
-        _curveLengthLabels[i].TextColor = foreground;
+        int groupIndex = ColorGroup(_curveRows[i].Curve.GetLength());
+        _curveLengthBadges[i].BackgroundColor =
+          CurveLengthGroupBackgrounds[groupIndex % CurveLengthGroupBackgrounds.Length];
+        _curveLengthLabels[i].TextColor = CurveLengthGroupForeground;
+        if (_curveTotalLabels[i] == null || _curveTotalBadges[i] == null)
+          continue;
+        double totalLength = LinkedSequenceTotalForRow(i)!.Value;
+        int totalGroupIndex = ColorGroup(totalLength);
+        _curveTotalBadges[i]!.BackgroundColor =
+          CurveLengthGroupBackgrounds[totalGroupIndex % CurveLengthGroupBackgrounds.Length];
+        _curveTotalLabels[i]!.TextColor = CurveLengthGroupForeground;
       }
+    }
+
+    void ApplyPercentLengthWarning(bool active)
+    {
+      bool warning = active && _percentCheck.Checked != true;
+      _percentCheck.BackgroundColor = warning
+        ? PercentLengthWarningBackground
+        : _percentDefaultBackgroundColor;
+      _percentCheck.TextColor = warning
+        ? PercentLengthWarningForeground
+        : _percentDefaultTextColor;
+      _percentCheck.ToolTip = warning
+        ? "Curve lengths differ significantly; enable Percent to align relative positions"
+        : "Use the same relative position on curves of different lengths";
     }
 
     public void SyncFromSession()
@@ -5030,15 +7295,29 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         _multipleEndOffsetCheck.Checked   = _s.MultipleEndOffsetEnabled;
         _multipleNumberStepper.Value      = _s.MultipleNumber;
         _multipleDistanceStepper.Value    = RoundPanelNumber(_s.MultipleDistance);
+        _multipleCurvatureSensitivityStepper.Value =
+          RoundPanelNumber(_s.MultipleCurvatureSensitivity);
+        if (_multipleSeparateCheck != null)
+          _multipleSeparateCheck.IsChecked = _s.MultipleSeparate;
         UpdateMultipleModeIndicator();
-        for (int i = 0; i < _sideChecks.Length; i++)
+        for (int i = 0; i < _sideButtons.Length; i++)
           if (i < _curveRows.Length && _curveRows[i].LogicalIndex < _s.CurveSides.Length)
-            _sideChecks[i].Checked = _s.CurveSides[_curveRows[i].LogicalIndex];
+          {
+            UpdateCurveSideButton(
+              i,
+              _s.CurveSideBySource.GetValueOrDefault(
+                _curveRows[i].SourceId,
+                _s.CurveSides[_curveRows[i].LogicalIndex]));
+            UpdateCurveReverseButton(
+              i,
+              _s.CurveReversedBySource.GetValueOrDefault(_curveRows[i].SourceId));
+          }
         if (_s.Curves.Count > 1)
           for (int i = 0; i < _enableChecks.Length; i++)
             if (_enableChecks[i] != null && i < _curveRows.Length &&
                 _curveRows[i].LogicalIndex < _s.CurveEnabled.Length)
               _enableChecks[i].Checked = _s.CurveEnabled[_curveRows[i].LogicalIndex];
+        ApplyCurveLengthHighlights();
         ApplyDynamic();
         UpdateUndoEnabled();
       }
@@ -5076,7 +7355,12 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _s.MultipleStartOffsetEnabled = _multipleStartOffsetCheck.Checked == true;
       _s.MultipleEndOffsetEnabled = _multipleEndOffsetCheck.Checked == true;
       _s.MultipleNumber = Math.Clamp((int)Math.Round(_multipleNumberStepper.Value), 1, 10000);
-      if (_s.MultipleUseDistance)
+      _s.MultipleAuto = _multipleAutoCheck.Checked == true;
+      _s.MultipleCurvatureSensitivity = Math.Clamp(
+        (int)Math.Round(_multipleCurvatureSensitivityStepper.Value), 0, 1000);
+      if (_multipleSeparateCheck != null)
+        _s.MultipleSeparate = _multipleSeparateCheck.IsChecked == true;
+      if (_s.MultipleAuto || _s.MultipleUseDistance)
         _s.MultipleDistance = RoundPanelNumber(_multipleDistanceStepper.Value);
     }
 

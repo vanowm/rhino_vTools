@@ -22,9 +22,14 @@ public sealed class vSplitAtCorners : Command
   private const string MinLengthKey = "minLength";
   private const string IgnoreNotchesKey = "ignoreNotches";
 
-  private static double _angleDeg = 45.0;
-  private static double _minLength;
-  private static bool _ignoreNotches = true;
+  // Option defaults
+  private const double DefaultAngleDeg = 45.0; // Kink threshold in degrees; greater than 0 and less than 180.
+  private const double DefaultMinLength = 0.0; // Minimum segment length in model units; zero disables filtering.
+  private const bool DefaultIgnoreNotches = true; // true skips curves named NOTCH; false evaluates them for splitting.
+
+  private static double _angleDeg = DefaultAngleDeg;
+  private static double _minLength = DefaultMinLength;
+  private static bool _ignoreNotches = DefaultIgnoreNotches;
 
   /// <summary>
   /// Rhino command name.
@@ -504,7 +509,7 @@ public sealed class vSplitAtCorners : Command
     /// </summary>
     public void TryToggleNear(Point3d pick)
     {
-      const double PixelTol = 20.0;
+      const double PixelTol = 20.0; // Maximum manual-mark pick distance in display pixels; greater than zero.
       var viewport = _doc.Views.ActiveView?.ActiveViewport;
       double searchTol;
       if (viewport != null && viewport.GetWorldToScreenScale(pick, out var ppu) && ppu > 0.0)

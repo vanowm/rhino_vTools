@@ -20,15 +20,20 @@ public sealed class vLineLength : Command
   private const string ExtendWithLineKey = "extendWithLine";
   private const string ModeKey = "mode";
 
-  private static readonly string[] ModeNames = { "Total", "Add", "Subtract" };
+  private static readonly string[] ModeNames = { "Total", "Add", "Subtract" }; // Command option names in mode-index order.
 
-  private const int ModeTotal = 0;
-  private const int ModeAdd = 1;
-  private const int ModeSubtract = 2;
+  private const int ModeTotal = 0; // Persisted mode index that sets the final total length.
+  private const int ModeAdd = 1; // Persisted mode index that adds the entered length.
+  private const int ModeSubtract = 2; // Persisted mode index that subtracts the entered length.
 
-  private static double _desiredLength = 10.0;
-  private static bool _extendWithLine;
-  private static int _mode = ModeTotal;
+  // Option defaults
+  private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
+  private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
+  private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+
+  private static double _desiredLength = DefaultDesiredLength;
+  private static bool _extendWithLine = DefaultExtendWithLine;
+  private static int _mode = DefaultMode;
 
   /// <summary>
   /// Rhino command name.

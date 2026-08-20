@@ -16,6 +16,9 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vTogglePerpGumball : Command
 {
+  // Defaults
+  internal const bool DefaultEnabled = false; // true auto-orients eligible gumballs at startup; false leaves them unchanged.
+
   /// <summary>
   /// Rhino command name.
   /// </summary>
@@ -37,14 +40,14 @@ internal static class PerpGumballMonitor
   private const string Tag = "vTogglePerpGumball";
   private const string OptionsSectionName = "vTogglePerpGumball";
   private const string EnabledKey = "enabled";
-  private const int IdlePollMs = 100;
-  private const int IdleSettleTicks = 2;
-  private const string BadgeLabel = "PG";
-  private const int BadgeFontSize = 14;
+  private const int IdlePollMs = 100; // Monitor polling interval in milliseconds; greater than zero.
+  private const int IdleSettleTicks = 2; // Unchanged polls required before reorienting the gumball.
+  private const string BadgeLabel = "PG"; // Viewport badge text while the monitor is enabled.
+  private const int BadgeFontSize = 14; // Viewport badge font height in display pixels.
 
   private static readonly object Sync = new();
-  private static readonly Point2d BadgePos = new(2, 20);
-  private static readonly Point2d[] BadgeOutlinePoints =
+  private static readonly Point2d BadgePos = new(2, 20); // Badge origin from the viewport top-left in display pixels.
+  private static readonly Point2d[] BadgeOutlinePoints = // One-pixel outline offsets around the viewport badge text.
   {
     new Point2d(BadgePos.X - 1, BadgePos.Y - 1),
     new Point2d(BadgePos.X - 1, BadgePos.Y + 1),
@@ -52,7 +55,7 @@ internal static class PerpGumballMonitor
     new Point2d(BadgePos.X + 1, BadgePos.Y + 1)
   };
 
-  private static bool _enabled;
+  private static bool _enabled = vTogglePerpGumball.DefaultEnabled;
 
   private static EventHandler? _idleHandler;
   private static EventHandler<RhinoObjectSelectionEventArgs>? _selectHandler;
@@ -75,7 +78,9 @@ internal static class PerpGumballMonitor
     {
       var enabled = ToolsOptionStore.Read(
         OptionsSectionName,
-        section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var saved) && saved);
+        section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var saved)
+          ? saved
+          : vTogglePerpGumball.DefaultEnabled);
       if (enabled)
         Enable(RhinoDoc.ActiveDoc);
     }
@@ -885,7 +890,7 @@ internal static class PerpGumballMonitor
       if (cplaneZ.IsTiny() || cplaneY.IsTiny() || cameraDirection.IsTiny() || cameraUp.IsTiny())
         return false;
 
-      const double alignment = 0.9995;
+      const double alignment = 0.9995; // Minimum absolute axis dot product accepted as already aligned.
       var directionAligned = Math.Abs(cameraDirection * cplaneZ) >= alignment;
       var upAligned = Math.Abs(cameraUp * cplaneY) >= alignment;
       return directionAligned && upAligned;

@@ -30,6 +30,51 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vBiminiParts : Command
 {
+  // Defaults
+  private const string SectionName = "vBiminiParts";
+  private const string PipeSizeKey = "pipeSizeIdx";
+  private const string ToolsConfigFileName = "vTools.config.json"; // Relative shared configuration filename beside the DLL.
+  private const string PocketDataKey = "vBiminiPkt";
+  private const string PreviousSecondaryLengthKey = "previousSecondaryPocketLength";
+  private const string DefaultPlotLayer = "PLOT"; // Rhino layer name or full layer path.
+  private const string DefaultCutLayer = "CUT1"; // Rhino layer name or full layer path.
+  private const string DefaultReferenceLayer = "Reference"; // Rhino layer name or full layer path.
+  private const string DefaultPlotLayerColorHex = "#0F8A8A"; // RGB color in #RRGGBB format.
+  private const string DefaultCutLayerColorHex = "#CC3333"; // RGB color in #RRGGBB format.
+  private const string DefaultReferenceLayerColorHex = "#00B43C"; // RGB color in #RRGGBB format.
+  private const double DefaultSeamAllowance = 0.5; // Seam allowance in model units; zero or greater.
+  private const double DefaultFacingInset = 3.0; // Facing inset in model units; zero or greater.
+  private const double DefaultSidePocketOutward = 2.5; // Side-pocket offset in model units; zero or greater.
+  private const double DefaultCornerAngleDegrees = 30.0; // Corner threshold in degrees; 0 through 180.
+  private const double DefaultFacingMoveOut = 4.0; // Facing movement in model units; zero or greater.
+  private const double DefaultPocketSeamClearance = 4.0; // Pocket clearance in model units; zero or greater.
+  private const double DefaultMainPocketDepth = 4.0; // Main-pocket depth in model units; greater than zero.
+  private const double DefaultSecondaryPocketDepth = 4.5; // Secondary-pocket depth in model units; greater than zero.
+  private const double DefaultLargeMainPocketDepth = 5.0; // Large main-pocket depth in model units; greater than zero.
+  private const double DefaultLargeSecondaryPocketDepth = 5.5; // Large secondary-pocket depth in model units; greater than zero.
+  private const double DefaultExtraRectangleHeight = 1.5; // Extra rectangle height in model units; greater than zero.
+  private const double DefaultExtraRectangleLength = 1.0; // Extra rectangle extension in model units; zero or greater.
+  private const double DefaultPipeSize = 1.0; // Pipe diameter in model units; greater than zero.
+  private const string DefaultPipeLabel = "1"; // Plain display label for the pipe preset.
+  private const double DefaultSmallPipeSize = 0.875; // Pipe diameter in model units; greater than zero.
+  private const string DefaultSmallPipeLabel = "7/8"; // Plain display label for the pipe preset.
+  private const double DefaultLargePipeSize = 1.25; // Pipe diameter in model units; greater than zero.
+  private const string DefaultLargePipeLabel = "1-1/4"; // Plain display label for the pipe preset.
+  private const double DefaultExtraLargePipeSize = 1.5; // Pipe diameter in model units; greater than zero.
+  private const string DefaultExtraLargePipeLabel = "1-1/2"; // Plain display label for the pipe preset.
+  private const int DefaultPipeSizeIndex = 1; // Zero-based index into the default pipe preset list.
+  private static readonly Color DefaultPlotLayerColor = Color.FromArgb(15, 138, 138); // RGB fallback matching DefaultPlotLayerColorHex.
+  private static readonly Color DefaultCutLayerColor = Color.FromArgb(204, 51, 51); // RGB fallback matching DefaultCutLayerColorHex.
+  private static readonly Color DefaultReferenceLayerColor = Color.FromArgb(0, 180, 60); // RGB fallback matching DefaultReferenceLayerColorHex.
+  private static readonly JsonSerializerOptions JsonOptions = new()
+  {
+    WriteIndented = true,
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    PropertyNameCaseInsensitive = true,
+    ReadCommentHandling = JsonCommentHandling.Skip,
+    AllowTrailingCommas = true,
+  };
+
   // ── Config POCO types ────────────────────────────────────────────────────────
 
   private sealed class BiminiLayerEntry
@@ -47,28 +92,28 @@ public sealed class vBiminiParts : Command
 
   private sealed class ExtraRectConfig
   {
-    public double Height      { get; set; } = 1.5;
-    public double LengthExtra { get; set; } = 1.0;
+    public double Height      { get; set; } = DefaultExtraRectangleHeight;
+    public double LengthExtra { get; set; } = DefaultExtraRectangleLength;
   }
 
   private sealed class PipeSizeConfig
   {
-    public double  Size         { get; set; } = 1.0;
-    public string  Label        { get; set; } = "1";
-    public double  MainPktDepth { get; set; } = 4.0;
-    public double  SecPktDepth  { get; set; } = 4.5;
+    public double  Size         { get; set; } = DefaultPipeSize;
+    public string  Label        { get; set; } = DefaultPipeLabel;
+    public double  MainPktDepth { get; set; } = DefaultMainPocketDepth;
+    public double  SecPktDepth  { get; set; } = DefaultSecondaryPocketDepth;
     public ExtraRectConfig? ExtraRect { get; set; }
   }
 
   private sealed class BiminiConfigSection
   {
     public BiminiLayersConfig   Layers          { get; set; } = new();
-    public double SeamAllowance    { get; set; } = 0.5;
-    public double FacingInset      { get; set; } = 3.0;
-    public double SidePktOutward   { get; set; } = 2.5;
-    public double CornerAngleDeg   { get; set; } = 30.0;
-    public double FacingMoveOut    { get; set; } = 4.0;
-    public double PktSeamClearance { get; set; } = 4.0;
+    public double SeamAllowance    { get; set; } = DefaultSeamAllowance;
+    public double FacingInset      { get; set; } = DefaultFacingInset;
+    public double SidePktOutward   { get; set; } = DefaultSidePocketOutward;
+    public double CornerAngleDeg   { get; set; } = DefaultCornerAngleDegrees;
+    public double FacingMoveOut    { get; set; } = DefaultFacingMoveOut;
+    public double PktSeamClearance { get; set; } = DefaultPocketSeamClearance;
     public List<PipeSizeConfig> PipeSizes { get; set; } = new();
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
   }
@@ -81,32 +126,26 @@ public sealed class vBiminiParts : Command
 
   // ── Runtime fields (populated from config each run) ─────────────────────────
 
-  private const string SectionName         = "vBiminiParts";
-  private const string PipeSizeKey         = "pipeSizeIdx";
-  private const string ToolsConfigFileName = "vTools.config.json";
-  private const string PocketDataKey       = "vBiminiPkt";
-  private const string PreviousSecondaryLengthKey = "previousSecondaryPocketLength";
+  private static string _layerPlot = DefaultPlotLayer;
+  private static string _layerCut1 = DefaultCutLayer;
+  private static string _layerRef = DefaultReferenceLayer;
+  private static Color _layerPlotColor = DefaultPlotLayerColor;
+  private static Color _layerCut1Color = DefaultCutLayerColor;
+  private static Color _layerRefColor = DefaultReferenceLayerColor;
 
-  private static string _layerPlot      = "PLOT";
-  private static string _layerCut1      = "CUT1";
-  private static string _layerRef       = "Reference";
-  private static Color  _layerPlotColor = Color.FromArgb(15, 138, 138);
-  private static Color  _layerCut1Color = Color.FromArgb(204, 51, 51);
-  private static Color  _layerRefColor  = Color.FromArgb(255, 255, 255);
-
-  private static double _seamAllowance    = 0.5;
-  private static double _facingInset      = 3.0;
-  private static double _sidePktOutward   = 2.5;
-  private static double _cornerAngleDeg   = 30.0;
-  private static double _facingMoveOut    = 4.0;
-  private static double _pktSeamClearance = 4.0;
-  private static double _mainPktDepth     = 4.0;
-  private static double _secPktDepth      = 4.5;
-  private static ExtraRectConfig? _extraRect = null;
+  private static double _seamAllowance = DefaultSeamAllowance;
+  private static double _facingInset = DefaultFacingInset;
+  private static double _sidePktOutward = DefaultSidePocketOutward;
+  private static double _cornerAngleDeg = DefaultCornerAngleDegrees;
+  private static double _facingMoveOut = DefaultFacingMoveOut;
+  private static double _pktSeamClearance = DefaultPocketSeamClearance;
+  private static double _mainPktDepth = DefaultMainPocketDepth;
+  private static double _secPktDepth = DefaultSecondaryPocketDepth;
+  private static ExtraRectConfig? _extraRect;
 
   // ── Persisted state ─────────────────────────────────────────────────────────
 
-  private static int _pipeSizeIdx = 1;  // index into BiminiConfigSection.PipeSizes
+  private static int _pipeSizeIdx = DefaultPipeSizeIndex;
 
   // ── Debug logging ──────────────────────────────────────────────────────────
 
@@ -131,15 +170,6 @@ public sealed class vBiminiParts : Command
 
   // ── Config file helpers ──────────────────────────────────────────────────────
 
-  private static readonly JsonSerializerOptions _jsonOpts = new()
-  {
-    WriteIndented            = true,
-    PropertyNamingPolicy     = JsonNamingPolicy.CamelCase,
-    PropertyNameCaseInsensitive = true,
-    ReadCommentHandling      = JsonCommentHandling.Skip,
-    AllowTrailingCommas      = true,
-  };
-
   private static string GetConfigPath()
   {
     return PluginPaths.ResolveFile(ToolsConfigFileName);
@@ -154,7 +184,7 @@ public sealed class vBiminiParts : Command
         var json = File.ReadAllText(path);
         if (!string.IsNullOrWhiteSpace(json))
         {
-          var loaded = JsonSerializer.Deserialize<BiminiToolsConfigRoot>(json, _jsonOpts);
+          var loaded = JsonSerializer.Deserialize<BiminiToolsConfigRoot>(json, JsonOptions);
           if (loaded != null) return loaded;
         }
       }
@@ -167,7 +197,7 @@ public sealed class vBiminiParts : Command
   {
     try
     {
-      var json = JsonSerializer.Serialize(root, _jsonOpts);
+      var json = JsonSerializer.Serialize(root, JsonOptions);
       var tmp  = path + ".tmp";
       File.WriteAllText(tmp, json);
       File.Copy(tmp, path, overwrite: true);
@@ -178,11 +208,15 @@ public sealed class vBiminiParts : Command
 
   private static List<PipeSizeConfig> DefaultPipeSizes() => new()
   {
-    new() { Size = 0.875, Label = "7/8",   MainPktDepth = 4.0, SecPktDepth = 4.5 },
-    new() { Size = 1.0,   Label = "1",     MainPktDepth = 4.0, SecPktDepth = 4.5 },
-    new() { Size = 1.25,  Label = "1-1/4", MainPktDepth = 5.0, SecPktDepth = 5.5 },
-    new() { Size = 1.5,   Label = "1-1/2", MainPktDepth = 5.0, SecPktDepth = 5.5,
-            ExtraRect = new() { Height = 1.5, LengthExtra = 1.0 } },
+    new() { Size = DefaultSmallPipeSize, Label = DefaultSmallPipeLabel },
+    new() { Size = DefaultPipeSize, Label = DefaultPipeLabel },
+    new() { Size = DefaultLargePipeSize, Label = DefaultLargePipeLabel,
+            MainPktDepth = DefaultLargeMainPocketDepth,
+            SecPktDepth = DefaultLargeSecondaryPocketDepth },
+    new() { Size = DefaultExtraLargePipeSize, Label = DefaultExtraLargePipeLabel,
+            MainPktDepth = DefaultLargeMainPocketDepth,
+            SecPktDepth = DefaultLargeSecondaryPocketDepth,
+            ExtraRect = new() },
   };
 
   private static BiminiConfigSection EnsureSection(BiminiToolsConfigRoot root)
@@ -192,9 +226,12 @@ public sealed class vBiminiParts : Command
     if (s.PipeSizes == null || s.PipeSizes.Count == 0)
       s.PipeSizes = DefaultPipeSizes();
     s.Layers ??= new BiminiLayersConfig();
-    s.Layers.Plot      ??= new BiminiLayerEntry { Name = "PLOT",      Color = "#0F8A8A" };
-    s.Layers.Cut1      ??= new BiminiLayerEntry { Name = "CUT1",      Color = "#CC3333" };
-    s.Layers.Reference ??= new BiminiLayerEntry { Name = "Reference", Color = "#00B43C" };
+    s.Layers.Plot ??= new BiminiLayerEntry
+      { Name = DefaultPlotLayer, Color = DefaultPlotLayerColorHex };
+    s.Layers.Cut1 ??= new BiminiLayerEntry
+      { Name = DefaultCutLayer, Color = DefaultCutLayerColorHex };
+    s.Layers.Reference ??= new BiminiLayerEntry
+      { Name = DefaultReferenceLayer, Color = DefaultReferenceLayerColorHex };
     return s;
   }
 
@@ -209,12 +246,15 @@ public sealed class vBiminiParts : Command
 
   private static void ApplyConfig(BiminiConfigSection s, int idx)
   {
-    _layerPlot      = string.IsNullOrWhiteSpace(s.Layers?.Plot?.Name)      ? "PLOT"      : s.Layers!.Plot!.Name!;
-    _layerCut1      = string.IsNullOrWhiteSpace(s.Layers?.Cut1?.Name)      ? "CUT1"      : s.Layers!.Cut1!.Name!;
-    _layerRef       = string.IsNullOrWhiteSpace(s.Layers?.Reference?.Name) ? "Reference" : s.Layers!.Reference!.Name!;
-    _layerPlotColor = ParseHexColor(s.Layers?.Plot?.Color,      Color.FromArgb(15, 138, 138));
-    _layerCut1Color = ParseHexColor(s.Layers?.Cut1?.Color,      Color.FromArgb(204, 51, 51));
-    _layerRefColor  = ParseHexColor(s.Layers?.Reference?.Color, Color.FromArgb(0, 180, 60));
+    _layerPlot = string.IsNullOrWhiteSpace(s.Layers?.Plot?.Name)
+      ? DefaultPlotLayer : s.Layers!.Plot!.Name!;
+    _layerCut1 = string.IsNullOrWhiteSpace(s.Layers?.Cut1?.Name)
+      ? DefaultCutLayer : s.Layers!.Cut1!.Name!;
+    _layerRef = string.IsNullOrWhiteSpace(s.Layers?.Reference?.Name)
+      ? DefaultReferenceLayer : s.Layers!.Reference!.Name!;
+    _layerPlotColor = ParseHexColor(s.Layers?.Plot?.Color, DefaultPlotLayerColor);
+    _layerCut1Color = ParseHexColor(s.Layers?.Cut1?.Color, DefaultCutLayerColor);
+    _layerRefColor = ParseHexColor(s.Layers?.Reference?.Color, DefaultReferenceLayerColor);
     _seamAllowance    = s.SeamAllowance;
     _facingInset      = s.FacingInset;
     _sidePktOutward   = s.SidePktOutward;
@@ -642,7 +682,7 @@ public sealed class vBiminiParts : Command
   // ── Pocket curve picker ─────────────────────────────────────────────────────
 
   // snapTol: how close a GetPoint click must be to a candidate seam to count as "on" it.
-  private const double PickSnapTol = 1.0;
+  private const double PickSnapTol = 1.0; // Endpoint classification tolerance in model units; greater than zero.
 
     private static bool PickPocketCurves(
     string prompt, int maxCount, RhinoDoc doc,
@@ -1009,7 +1049,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
                                        double tol, HashSet<Guid> globalExclude)
   {
     double pocketDepth = _mainPktDepth;
-    const double extLen  = 24.0;
+    const double extLen  = 24.0; // Temporary side-extension length in model units; greater than expected gaps.
 
     L($"BuildMainPocket: pocketDepth={pocketDepth}  picks={mainPicks.Count}");
     foreach (var (mc, pktCenter) in mainPicks)
@@ -2178,7 +2218,7 @@ private static double? NearestEndpointParam(Curve source, Curve onCurve, double 
   }
   private static RhinoObject? FindNearCurve(RhinoDoc doc, Curve target, HashSet<Guid> excludeIds, double threshold)
   {
-    const int samples = 20;
+    const int samples = 20; // Curve samples used to classify pocket sides; two or greater.
     var pts = Enumerable.Range(0, samples)
                         .Select(i => target.PointAtNormalizedLength(i / (double)(samples - 1)))
                         .ToArray();

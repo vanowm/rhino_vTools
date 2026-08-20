@@ -23,11 +23,11 @@ namespace vTools.Commands
   public sealed class vMatch : Command
   {
     // ── Constants shared with vUnrollSrf / MultiUnroll2.py ────────────────
-    internal const string EdgeMateName        = "MultiUnroll_EdgeMate";
-    internal const string EdgeMateIdKey       = "MultiUnrollEdgeMateId";
-    internal const string EdgePartNumKey      = "MultiUnrollPartNumber";
-    internal const string EdgeMatePartNumKey  = "MultiUnrollMatePartNumber";
-    internal const string EdgeMateReversedKey = "MultiUnrollMateReversed";
+    internal const string EdgeMateName        = "MultiUnroll_EdgeMate"; // Object name assigned to generated matching edge dots.
+    internal const string EdgeMateIdKey       = "MultiUnrollEdgeMateId"; // User-data key for the shared match identifier.
+    internal const string EdgePartNumKey      = "MultiUnrollPartNumber"; // User-data key for the dot's owning part number.
+    internal const string EdgeMatePartNumKey  = "MultiUnrollMatePartNumber"; // User-data key for the mating part number.
+    internal const string EdgeMateReversedKey = "MultiUnrollMateReversed"; // User-data key for matching-edge direction reversal.
 
     // ── Persistent settings ───────────────────────────────────────────────
     private const string SectionName   = "vMatch";
@@ -35,17 +35,22 @@ namespace vTools.Commands
     private const string KeyRandStart  = "randStart";
     private const string KeyRandNext   = "randNext";
 
-    private static double _distance   = 2.0;
-    private static bool   _randStart  = false;
-    private static bool   _randNext   = false;
+    // Option defaults
+    private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
+    private const bool DefaultRandStart = true; // true randomizes the first layout position; false uses deterministic placement.
+    private const bool DefaultRandNext = true; // true randomizes subsequent layout positions; false uses deterministic placement.
+
+    private static double _distance   = DefaultDistance;
+    private static bool   _randStart  = DefaultRandStart;
+    private static bool   _randNext   = DefaultRandNext;
 
     private static readonly Random _rng = new Random();
 
-    private const double EdgeHoverRadiusPixels = 12.0;
-    private static readonly Color SourceEdgeHighlightColor = Color.Orange;
-    private static readonly Color SourceDotHighlightColor = Color.Gold;
-    private static readonly Color MateDotHighlightColor = Color.Magenta;
-    private static readonly Color MatePartHighlightColor = Color.Cyan;
+    private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
+    private static readonly Color SourceEdgeHighlightColor = Color.Orange; // Hovered source-edge highlight color.
+    private static readonly Color SourceDotHighlightColor = Color.Gold; // Chosen source-dot highlight color.
+    private static readonly Color MateDotHighlightColor = Color.Magenta; // Matching destination-dot highlight color.
+    private static readonly Color MatePartHighlightColor = Color.Cyan; // Matching destination-part highlight color.
 
     public override string EnglishName => "vMatch";
 

@@ -21,8 +21,12 @@ public sealed class vOverlaps : Command
   private const string TolKey      = "tolerance";
   private const string SegKey      = "segments";
 
-  private static double _tolerance = 0.001;
-  private static bool   _segments  = false;
+  // Option defaults
+  private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
+  private const bool DefaultSegments = false; // true compares polycurve segments individually; false compares whole curves.
+
+  private static double _tolerance = DefaultTolerance;
+  private static bool   _segments  = DefaultSegments;
 
   public override string EnglishName => "vOverlaps";
 

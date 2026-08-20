@@ -25,11 +25,13 @@ public sealed class vMiddleCurve : Command
   private const string MinimumLengthKey = "minimumLength";
   private const string LegacyTangentLinesKey = "tangentLines";
   private const string LegacyTangentLineIntervalKey = "tangentLineInterval";
-  private const int MinSampleCount = 12;
-  private const int MaxSampleCount = 2000;
-  private const double DefaultLineInterval = 0.5;
-  private const double DefaultSeamAllowance = 0.5;
-  private const double DefaultMinimumLength = 0.25;
+  private const int MinSampleCount = 12; // Minimum station samples along input curves; two or greater.
+  private const int MaxSampleCount = 2000; // Maximum station samples used for long curves.
+  private const double DefaultLineInterval = 0.5; // Connector spacing in model units; greater than zero.
+  private const double DefaultSeamAllowance = 0.5; // Offset in model units; zero or greater.
+  private const double DefaultMinimumLength = 0.25; // Minimum output length in model units; zero or greater.
+  private const bool DefaultAddLines = false; // true adds transverse construction lines; false creates only the middle curve.
+  private const ConnectorLineMode DefaultLineMode = ConnectorLineMode.EqualDistance; // ConnectorLineMode enum: Normal or EqualDistance.
 
   private enum ConnectorLineMode
   {
@@ -37,8 +39,8 @@ public sealed class vMiddleCurve : Command
     EqualDistance
   }
 
-  private static bool _addLines;
-  private static ConnectorLineMode _lineMode = ConnectorLineMode.EqualDistance;
+  private static bool _addLines = DefaultAddLines;
+  private static ConnectorLineMode _lineMode = DefaultLineMode;
   private static double _lineInterval = DefaultLineInterval;
   private static double _seamAllowance = DefaultSeamAllowance;
   private static double _minimumLength = DefaultMinimumLength;
@@ -1326,7 +1328,7 @@ public sealed class vMiddleCurve : Command
     var found = false;
     var bestDistance = guessDistance;
     var bestScore = double.MaxValue;
-    const int samples = 96;
+    const int samples = 96; // Samples used to locate the nearest curve correspondence; four or greater.
     for (var i = 0; i <= samples; i++)
     {
       var candidate = searchMin + (searchMax - searchMin) * i / samples;

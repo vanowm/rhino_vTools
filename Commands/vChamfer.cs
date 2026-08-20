@@ -37,9 +37,14 @@ public sealed class vChamfer : Command
   private const string TrimKey     = "trim";
   private const string JoinKey     = "join";
 
-  private static double _length = 1.0;
-  private static bool   _trim   = true;   // true = trim curves; false = add line only
-  private static bool   _join   = true;   // only used when _trim = true
+  // Option defaults
+  private const double DefaultLength = 1.0; // Chamfer setback in model units; zero or greater.
+  private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
+  private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
+
+  private static double _length = DefaultLength;
+  private static bool   _trim   = DefaultTrim; // true = trim curves; false = add line only
+  private static bool   _join   = DefaultJoin; // only used when _trim = true
 
   // -- Formatting helpers ---------------------------------------------------
   private static string P(Point3d p)  => $"({p.X:F4},{p.Y:F4},{p.Z:F4})";
@@ -630,7 +635,7 @@ public sealed class vChamfer : Command
     }
 
     double length = c1.GetLength();
-    const int sampleCount = 48;
+    const int sampleCount = 48; // Samples used to find the nearest closed-curve corner; four or greater.
     double bestStation = double.NaN;
     double bestDistance = double.MaxValue;
     double sampleStep = length / sampleCount;
@@ -692,7 +697,7 @@ public sealed class vChamfer : Command
         stationAtOffset = double.NaN;
         double nearStation = referenceStation;
         double farStation = double.NaN;
-        const int offsetSamples = 96;
+        const int offsetSamples = 96; // Samples used to locate point-driven chamfer offsets; four or greater.
 
         for (int i = 1; i <= offsetSamples; i++)
         {

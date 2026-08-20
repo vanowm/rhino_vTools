@@ -19,7 +19,10 @@ public sealed class vJoin : Command
   private const string OptionsSectionName = "vJoin";
   private const string CopyOptionKey = "copy";
 
-  private static bool _copy;
+  // Option defaults
+  private const bool DefaultCopy = false; // true joins duplicates and keeps inputs; false joins the original objects.
+
+  private static bool _copy = DefaultCopy;
 
   public override string EnglishName => "vJoin";
 
@@ -261,7 +264,9 @@ public sealed class vJoin : Command
   {
     _copy = ToolsOptionStore.Read(
       OptionsSectionName,
-      section => ToolsOptionStore.TryGetBool(section, CopyOptionKey, out var copy) && copy);
+      section => ToolsOptionStore.TryGetBool(section, CopyOptionKey, out var copy)
+        ? copy
+        : DefaultCopy);
   }
 
   private static void SavePersistedOptions()

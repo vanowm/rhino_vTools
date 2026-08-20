@@ -28,13 +28,16 @@ public sealed class vScallop : Command
   private const string AutoKey = "auto";
   private const string SizePercentKey = "sizePercent";
 
-  private const double DefaultSize = 1.0;
-  private const double DefaultSizePercent = 5.0;
+  private const double DefaultSize = 1.0; // Scallop size in model units; greater than zero.
+  private const double DefaultSizePercent = 5.0; // Automatic size as a percentage of span; greater than zero.
+  private const bool DefaultDeleteOriginal = false; // true deletes source curves after scalloping; false keeps them.
+  private const bool DefaultFree = false; // true allows unconstrained placement; false anchors scallops to the curve.
+  private const bool DefaultAuto = true; // true derives size from the selected span; false uses the configured size.
 
   private static double _size = DefaultSize;
-  private static bool _deleteOriginal;
-  private static bool _free;
-  private static bool _auto;
+  private static bool _deleteOriginal = DefaultDeleteOriginal;
+  private static bool _free = DefaultFree;
+  private static bool _auto = DefaultAuto;
   private static double _sizePercent = DefaultSizePercent;
 
   /// <summary>

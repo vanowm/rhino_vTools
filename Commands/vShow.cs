@@ -29,7 +29,7 @@ public sealed class vShow : Command
   }
 
   private const string Tag = "vShow";
-  private const string SetPrompt =
+  private const string SetPrompt = // Prompt shown when a hide-set name was not supplied directly.
     "Name of object set to show. Press Enter to show all named sets.";
 
   public override string EnglishName => Tag;

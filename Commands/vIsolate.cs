@@ -17,7 +17,7 @@ namespace vTools.Commands;
 public sealed class vIsolate : Command
 {
   private const string Tag = "vIsolate";
-  private const string HideSetPrompt =
+  private const string HideSetPrompt = // Prompt shown when an isolate-set name was not supplied directly.
     "Name of object set to isolate. Press Enter to isolate with no named set.";
 
   public override string EnglishName => Tag;

@@ -23,11 +23,18 @@ public sealed class vSmooth : Command
   private const string SmoothAllKey     = "smoothAll";
   private const string Tag              = "vSmooth";
 
-  private static double _strengthStart = 1.0;
-  private static double _strengthEnd   = 1.0;
-  private static bool   _copy;
-  private static bool   _join;
-  private static bool   _smoothAll;
+  // Option defaults
+  private const double DefaultStrengthStart = 1.0; // Start smoothing strength; 0 through 2.
+  private const double DefaultStrengthEnd = 1.0; // End smoothing strength; 0 through 2.
+  private const bool DefaultCopy = false; // true smooths copies and keeps inputs; false modifies the originals.
+  private const bool DefaultJoin = false; // true joins smoothed results; false keeps curves separate.
+  private const bool DefaultSmoothAll = false; // true spreads kink smoothing across all curves; false smooths one transition curve.
+
+  private static double _strengthStart = DefaultStrengthStart;
+  private static double _strengthEnd   = DefaultStrengthEnd;
+  private static bool   _copy = DefaultCopy;
+  private static bool   _join = DefaultJoin;
+  private static bool   _smoothAll = DefaultSmoothAll;
 
   public override string EnglishName => "vSmooth";
 

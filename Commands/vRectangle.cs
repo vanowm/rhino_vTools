@@ -27,8 +27,12 @@ public sealed class vRectangle : Command
   private const string LastBrYKey = "lastBrY";
   private const string LastBrZKey = "lastBrZ";
 
-  private static double _width = 10.0;
-  private static double _height = 5.0;
+  // Option defaults
+  private const double DefaultWidth = 10.0; // Rectangle width in model units; greater than zero.
+  private const double DefaultHeight = 5.0; // Rectangle height in model units; greater than zero.
+
+  private static double _width = DefaultWidth;
+  private static double _height = DefaultHeight;
   private static Point3d? _lastBottomLeft;
   private static Point3d? _lastBottomRight;
 

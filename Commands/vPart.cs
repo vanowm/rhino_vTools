@@ -29,9 +29,12 @@ public sealed class vPart : Command
   private const string GroupKey     = "group";
   private const string JoinPerimKey = "joinPerim";
 
-  // Persisted option defaults
-  private static bool _group    = false;
-  private static bool _joinPerim = false;
+  // Option defaults
+  private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
+  private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
+
+  private static bool _group = DefaultGroup;
+  private static bool _joinPerim = DefaultJoinPerimeter;
 
   // ── Logging ────────────────────────────────────────────────────────────
   private static void L(string message) => vTools.Log.Write("vPart", message);

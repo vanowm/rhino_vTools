@@ -17,11 +17,16 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vGroup : Command
 {
-  private static readonly HashSet<int> _ourGroupIndices = new();
-  private static double _boundaryTolerance;
-  private static bool _flattenGroups;
   private const string LogName = "vGroup";
   private const string OptionsSectionName = "vGroup";
+
+  // Option defaults
+  private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
+  private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
+
+  private static readonly HashSet<int> _ourGroupIndices = new();
+  private static double _boundaryTolerance = DefaultStoredBoundaryTolerance;
+  private static bool _flattenGroups = DefaultFlattenGroups;
 
   public override string EnglishName => "vGroup";
 
@@ -701,7 +706,9 @@ public sealed class vGroup : Command
   {
     _flattenGroups = ToolsOptionStore.Read(
       OptionsSectionName,
-      section => ToolsOptionStore.TryGetBool(section, "flattenGroups", out var v) && v);
+      section => ToolsOptionStore.TryGetBool(section, "flattenGroups", out var v)
+        ? v
+        : DefaultFlattenGroups);
   }
 
   private static void SavePersistedOptions()
@@ -931,15 +938,15 @@ public sealed class vGroup : Command
     public List<HashSet<Guid>> BoundaryMembers { get; } = new();
     // Gap of the nearest open chain that could close into a boundary if tolerance were raised.
     public double NearMissGap { get; set; } = double.MaxValue;
-    public double NearMissSourceLength { get; set; } = 0;
+    public double NearMissSourceLength { get; set; }
   }
 
   private sealed record BoundaryInfo(Curve Curve, Plane Plane, List<Line> HatchLines);
 
   private sealed class BoundaryPreviewConduit : DisplayConduit
   {
-    private static readonly Color HatchColor = Color.FromArgb(199, 148, 228, 255);
-    private static readonly Color OutlineColor = Color.FromArgb(230, 255, 60, 0);
+    private static readonly Color HatchColor = Color.FromArgb(199, 148, 228, 255); // Translucent fill for detected closed boundaries.
+    private static readonly Color OutlineColor = Color.FromArgb(230, 255, 60, 0); // Outline color for detected closed boundaries.
 
     public BoundarySolve? Solve { get; set; }
 

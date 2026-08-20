@@ -30,29 +30,39 @@ public sealed class vDiamonds : Command
   private const string LayerCutKey     = "layerCut";
   private const string LayerRefKey     = "layerRef";
 
-  private static string _layerPlot = "PLOT";
-  private static string _layerCut  = "CUT1";
-  private static string _layerRef  = "Reference";
+  // Option defaults
+  private const string DefaultLayerPlot = "PLOT"; // Rhino layer name or full layer path.
+  private const string DefaultLayerCut = "CUT1"; // Rhino layer name or full layer path.
+  private const string DefaultLayerReference = "Reference"; // Rhino layer name or full layer path.
+  private const double DefaultWidth  = 2.0; // Diamond width in model units; greater than zero.
+  private const double DefaultHeight = 2.0; // Diamond height in model units; greater than zero.
+  private const double DefaultCW     = 3.0; // Number of diamonds across; one or greater.
+  private const double DefaultCH     = 3.0; // Number of diamonds high; one or greater.
+  private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
+  private const bool DefaultShowSize = true; // true creates the size label; false omits it.
+  private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
+  private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
+  private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
 
-  private static readonly Color PlotColor = Color.FromArgb(0x0F, 0x8A, 0x8A);
-  private static readonly Color CutColor  = Color.FromArgb(0xCC, 0x33, 0x33);
-  private static readonly Color RefColor  = Color.White;
+  private static string _layerPlot = DefaultLayerPlot;
+  private static string _layerCut  = DefaultLayerCut;
+  private static string _layerRef  = DefaultLayerReference;
 
-  private const double DefaultWidth  = 2.0;
-  private const double DefaultHeight = 2.0;
-  private const double DefaultCW     = 3.0;
-  private const double DefaultCH     = 3.0;
-  private const double LabelGap      = 0.125;
+  private static readonly Color PlotColor = Color.FromArgb(0x0F, 0x8A, 0x8A); // Color assigned when the PLOT layer is created.
+  private static readonly Color CutColor  = Color.FromArgb(0xCC, 0x33, 0x33); // Color assigned when the CUT1 layer is created.
+  private static readonly Color RefColor  = Color.White; // Color assigned when the Reference layer is created.
+
+  private const double LabelGap      = 0.125; // Gap from geometry to size labels in model units; zero or greater.
 
   private static double _width        = DefaultWidth;
   private static double _height       = DefaultHeight;
   private static double _cw           = DefaultCW;
   private static double _ch           = DefaultCH;
-  private static bool   _showBoundary = true;
-  private static bool   _showSize     = true;
-  private static bool   _showCount    = true;
-  private static double _bySizeW      = 0.0;   // stored dims (always positive when ever set)
-  private static double _bySizeH      = 0.0;
+  private static bool   _showBoundary = DefaultShowBoundary;
+  private static bool   _showSize     = DefaultShowSize;
+  private static bool   _showCount    = DefaultShowCount;
+  private static double _bySizeW      = DefaultBySizeWidth; // stored dims (always positive when ever set)
+  private static double _bySizeH      = DefaultBySizeHeight;
   private static bool   _bySizeActive = false; // transient: true only during the current invocation
 
   public override string EnglishName => "vDiamonds";

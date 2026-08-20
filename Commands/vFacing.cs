@@ -24,7 +24,10 @@ public sealed class vFacing : Command
   private const string SectionName = "vFacing";
   private const string SizeKey     = "size";
 
-  private static double _size = 3.0;
+  // Option defaults
+  private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
+
+  private static double _size = DefaultSize;
 
   public override string EnglishName => "vFacing";
 

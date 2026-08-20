@@ -26,11 +26,18 @@ public sealed class vUzipCenter : Command
   public override string EnglishName => "vUzipCenter";
 
   private const string SettingsSection = "vUzipCenter";
-  private const double DefaultLeft   = 2.375;
-  private const double DefaultRight  = 2.375;
-  private const double DefaultBottom = 1.125;
-  private const double DefaultRadius = 12.0;
-  private const double ZipperValue   = DefaultLeft;
+  private const double DefaultLeft   = 2.375; // Left offset in model units; zero or greater.
+  private const double DefaultRight  = 2.375; // Right offset in model units; zero or greater.
+  private const double DefaultBottom = 1.125; // Bottom offset in model units; zero or greater.
+  private const double DefaultRadius = 12.0; // Corner radius in model units; zero or greater.
+  private const bool DefaultGlass = false; // true creates the glass offset; false omits it.
+  private const double DefaultGlassOffset = 0.25; // Glass offset in model units; signed values allowed.
+  private const string DefaultGlassLayer = "Glass"; // Rhino layer name or full layer path.
+  private const bool DefaultVis = false; // true creates the visibility offset; false omits it.
+  private const double DefaultVisOffset = 0.75; // Visibility-line offset in model units; signed values allowed.
+  private const string DefaultVisLayer = "Vis-Line"; // Rhino layer name or full layer path.
+  private const string DefaultCenterLayer = "Reference"; // Rhino layer name or full layer path.
+  private const double ZipperValue   = DefaultLeft; // Reference zipper offset in model units used by generated geometry.
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
@@ -40,13 +47,13 @@ public sealed class vUzipCenter : Command
     public double Right  { get; set; } = DefaultRight;
     public double Bottom { get; set; } = DefaultBottom;
     public double Radius { get; set; } = DefaultRadius;
-    public bool   Glass       { get; set; } = false;
-    public double GlassOffset { get; set; } = 0.25;
-    public string GlassLayer  { get; set; } = "Glass";
-    public bool   Vis         { get; set; } = false;
-    public double VisOffset   { get; set; } = 0.75;
-    public string VisLayer    { get; set; } = "Vis-Line";
-    public string CenterLayer { get; set; } = "Reference";
+    public bool   Glass       { get; set; } = DefaultGlass;
+    public double GlassOffset { get; set; } = DefaultGlassOffset;
+    public string GlassLayer  { get; set; } = DefaultGlassLayer;
+    public bool   Vis         { get; set; } = DefaultVis;
+    public double VisOffset   { get; set; } = DefaultVisOffset;
+    public string VisLayer    { get; set; } = DefaultVisLayer;
+    public string CenterLayer { get; set; } = DefaultCenterLayer;
   }
 
   private static UzipCenterSettings LoadSettings() =>

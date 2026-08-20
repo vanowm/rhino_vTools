@@ -16,13 +16,26 @@ namespace vTools.Commands;
 
 public sealed class vTitle : Command
 {
-  // ── Persistent settings ───────────────────────────────────────────────
-  private static string _text    = "";
-  private static double _size    = 20.0;
-  private static double _padding = 50.0;   // percent per side
-  private static bool   _box     = true;
-  private static string _layer   = "Reference";
-  private const string CurrentLayerOption = "*Current*";
+  private const string SectionName = "vTitle";
+  private const string KeyText    = "text";
+  private const string KeySize    = "size";
+  private const string KeyPadding = "padding";
+  private const string KeyBox     = "box";
+  private const string KeyLayer   = "layer";
+  private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves title output to Rhino's current layer.
+
+  // Option defaults
+  private const string DefaultText = ""; // Plain title text; empty prompts for text.
+  private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
+  private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
+  private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
+  private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
+
+  private static string _text = DefaultText;
+  private static double _size = DefaultSize;
+  private static double _padding = DefaultPadding; // percent per side
+  private static bool _box = DefaultBox;
+  private static string _layer = DefaultLayer;
 
   // ── Active placement tracking (for live update) ───────────────────────
   private static Guid _activeTextId  = Guid.Empty;
@@ -37,13 +50,6 @@ public sealed class vTitle : Command
   {
     RhinoDoc.ReplaceRhinoObject += OnRhinoObjectReplaced;
   }
-
-  private const string SectionName = "vTitle";
-  private const string KeyText    = "text";
-  private const string KeySize    = "size";
-  private const string KeyPadding = "padding";
-  private const string KeyBox     = "box";
-  private const string KeyLayer   = "layer";
 
   public override string EnglishName => "vTitle";
 

@@ -20,9 +20,14 @@ public sealed class vDupBorder : Command
   private const string RemoveSourceKey = "removeSource";
   private const string LayerKey = "layer";
 
-  private static bool _groupIfNone;
-  private static bool _removeSource;
-  private static string _layer = DuplicateCommandSupport.CurrentLayerOption;
+  // Option defaults
+  private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
+  private const bool DefaultRemoveSource = false; // true deletes the source after duplication; false keeps it.
+  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+  private static bool _groupIfNone = DefaultGroupIfNone;
+  private static bool _removeSource = DefaultRemoveSource;
+  private static string _layer = DefaultLayer;
 
   private sealed record BorderCopy(Guid SourceId, List<Curve> Curves);
 

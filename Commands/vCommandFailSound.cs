@@ -15,6 +15,11 @@ namespace vTools.Commands;
 [CommandStyle(Style.Transparent)]
 public sealed class vCommandFailSound : Command
 {
+  // Defaults
+  internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
+  internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
+  internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
+
   public override string EnglishName => "vCommandFailSound";
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
@@ -114,7 +119,7 @@ internal static class CommandFailSoundMonitor
   private const string SoundKey = "sound";
   private const string AudioFileKey = "audioFile";
 
-  internal static readonly string[] SoundNames =
+  internal static readonly string[] SoundNames = // Command option names in persisted sound-index order.
   {
     "Default",
     "Asterisk",
@@ -125,11 +130,11 @@ internal static class CommandFailSoundMonitor
   };
 
   private static readonly object Sync = new();
-  private static bool _enabled = true;
+  private static bool _enabled = vCommandFailSound.DefaultEnabled;
   private static bool _subscribed;
   private static bool _settingsLoaded;
-  private static int _soundIndex;
-  private static string _audioFile = string.Empty;
+  private static int _soundIndex = vCommandFailSound.DefaultSoundIndex;
+  private static string _audioFile = vCommandFailSound.DefaultAudioFile;
   private static MediaPlayer? _mediaPlayer;
 
   internal static bool Enabled
@@ -170,9 +175,9 @@ internal static class CommandFailSoundMonitor
         SettingsSection,
         section =>
         {
-          var enabled = true;
-          var soundIndex = 0;
-          var audioFile = string.Empty;
+          var enabled = vCommandFailSound.DefaultEnabled;
+          var soundIndex = vCommandFailSound.DefaultSoundIndex;
+          var audioFile = vCommandFailSound.DefaultAudioFile;
 
           if (ToolsOptionStore.TryGetBool(section, EnabledKey, out var persistedEnabled))
             enabled = persistedEnabled;

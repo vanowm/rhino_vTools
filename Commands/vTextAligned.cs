@@ -23,11 +23,18 @@ public sealed class vTextAligned : Command
   private const string Rotate90Key = "rotate90";
   private const string BothSidesKey = "bothSides";
 
-  private static string _text = "Text";
-  private static double _height = 5.0;
-  private static double _offset;
-  private static int _rotate90;
-  private static bool _bothSides;
+  // Option defaults
+  private const string DefaultText = "Text"; // Plain text content.
+  private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
+  private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
+  private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
+  private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
+
+  private static string _text = DefaultText;
+  private static double _height = DefaultHeight;
+  private static double _offset = DefaultOffset;
+  private static int _rotate90 = DefaultRotate90;
+  private static bool _bothSides = DefaultBothSides;
 
   /// <summary>
   /// Rhino command name.

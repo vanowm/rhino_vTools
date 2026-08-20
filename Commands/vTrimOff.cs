@@ -761,7 +761,7 @@ public sealed class vTrimOff : Command
 
     var edgeTol = Math.Max(tol * 20.0, Math.Min(width, height) * 0.02);
     var onBoxEdge = 0;
-    const int samples = 32;
+    const int samples = 32; // Samples used to classify a curve against its bounding box; four or greater.
 
     foreach (var ptWorld in SampleCurve(curve, samples))
     {

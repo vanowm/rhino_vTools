@@ -20,13 +20,14 @@ public sealed class vSplit : Command
 {
   private const string OptionsSectionName = "vSplit";
   private const string PointDisplayKey = "pointDisplay";
-  private const int DefaultPointRadius = 5;
-  private const int PointOutlineWidth = 1;
+  private const int DefaultPointRadius = 5; // Split-point marker radius in pixels; greater than zero.
+  private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
+  private const int PointOutlineWidth = 1; // Split-point outline width in display pixels; zero or greater.
 
-  private static readonly string[] PointDisplayModeNames = ["Default", "ControlPoints", "EditPoints", "Hidden"];
-  private static readonly Color SetPointColor = Color.Red;
-  private static readonly Color RemovePointColor = Color.Cyan;
-  private static readonly Color PointOutlineColor = Color.Pink;
+  private static readonly string[] PointDisplayModeNames = ["Default", "ControlPoints", "EditPoints", "Hidden"]; // Command option names in display-mode index order.
+  private static readonly Color SetPointColor = Color.Red; // Body color for points that will split curves.
+  private static readonly Color RemovePointColor = Color.Cyan; // Body color for points selected for removal.
+  private static readonly Color PointOutlineColor = Color.Pink; // Outline color around split-point bodies.
 
   public override string EnglishName => "vSplit";
 
@@ -75,7 +76,7 @@ public sealed class vSplit : Command
           return pointDisplayMode;
         }
 
-        return PointDisplayMode.Default;
+        return DefaultPointDisplayMode;
       });
   }
 

@@ -8,11 +8,11 @@ namespace vTools;
 internal static class PreviewDisplay
 {
   // Thickness values are pixel increments above Rhino's current default curve thickness.
-  private const int MinimumCurveThickness = 1;
+  private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
 
   // Added geometry uses a green center stroke over a wider black outline.
   // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
-  private static readonly CurveHighlightStyle AddedStyle = new(
+  private static readonly CurveHighlightStyle AddedStyle = new( // Colors and relative pixel widths for geometry being added.
     StrokeColor: Color.LimeGreen,
     StrokeEmphasis: 1,
     OutlineColor: Color.Black,
@@ -20,22 +20,22 @@ internal static class PreviewDisplay
 
   // Removed geometry uses a red center stroke over a wider black outline.
   // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
-  private static readonly CurveHighlightStyle RemovedStyle = new(
+  private static readonly CurveHighlightStyle RemovedStyle = new( // Colors and relative pixel widths for geometry being removed.
     StrokeColor: Color.Red,
     StrokeEmphasis: 1,
     OutlineColor: Color.Black,
     OutlineEmphasis: 3);
 
   // Generic outlined curves use these defaults unless the caller supplies different thickness values.
-  private static readonly Color OutlinedCurveOutlineColor = Color.Black;
-  private const int OutlinedCurveStrokeEmphasis = 1;
-  private const int OutlinedCurveOutlineExtra = 2;
+  private static readonly Color OutlinedCurveOutlineColor = Color.Black; // Default outline color for emphasized source curves.
+  private const int OutlinedCurveStrokeEmphasis = 1; // Colored-stroke pixels added to Rhino's curve thickness.
+  private const int OutlinedCurveOutlineExtra = 2; // Outline pixels added beyond the colored stroke.
 
   // Highlight point markers use their curve style's colors and these pixel-size settings.
-  private const PointStyle HighlightPointStyle = PointStyle.RoundSimple;
-  private const int HighlightPointMinimumSize = 4;
-  private const int HighlightPointThicknessEmphasis = 2;
-  private const int HighlightPointOutlineExtra = 2;
+  private const PointStyle HighlightPointStyle = PointStyle.RoundSimple; // Rhino point marker style used by shared previews.
+  private const int HighlightPointMinimumSize = 4; // Minimum point diameter in display pixels; one or greater.
+  private const int HighlightPointThicknessEmphasis = 2; // Point-size pixels added to current curve thickness.
+  private const int HighlightPointOutlineExtra = 2; // Outline pixels added beyond the colored point body.
 
   private readonly record struct CurveHighlightStyle(
     Color StrokeColor,

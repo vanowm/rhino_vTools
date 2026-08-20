@@ -22,8 +22,12 @@ public sealed class vTrim : Command
   private const string ExtendAsLineKey = "extendAsLine";
   private const string JoinAfterTrimKey = "joinAfterTrim";
 
-  private static bool _extendAsLine = true;
-  private static bool _joinAfterTrim = true;
+  // Option defaults
+  private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
+  private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
+
+  private static bool _extendAsLine = DefaultExtendAsLine;
+  private static bool _joinAfterTrim = DefaultJoinAfterTrim;
   private static bool _restartingAfterTrimDelegate;
   private static EventHandler? _nativeTrimLaunchIdleHandler;
   private static Guid[]? _pendingNativeTrimCutters;
@@ -1858,6 +1862,59 @@ public sealed class vTrim : Command
     return result;
   }
 
+  private static List<double> CollectCurveContactParams(
+    RhinoDoc doc,
+    Curve targetCurve,
+    Curve cutterCurve,
+    double d0,
+    double d1,
+    double endTol,
+    bool includeTargetEndpoints = false)
+  {
+    var parameters = CollectInteriorCurveCurveParams(
+      targetCurve,
+      cutterCurve,
+      d0,
+      d1,
+      endTol,
+      doc,
+      includeTargetEndpoints,
+      StrictCurveContactTolerance(doc, targetCurve, cutterCurve));
+
+    double contactTolerance = Math.Max(RhinoMath.ZeroTolerance, doc.ModelAbsoluteTolerance);
+    double tangentTolerance = RhinoMath.ToRadians(2.0);
+    foreach (var endpoint in new[]
+    {
+      (Point: cutterCurve.PointAtStart, Tangent: cutterCurve.TangentAtStart),
+      (Point: cutterCurve.PointAtEnd, Tangent: cutterCurve.TangentAtEnd),
+    })
+    {
+      if (!targetCurve.ClosestPoint(endpoint.Point, out double targetParameter))
+        continue;
+      Point3d targetPoint = targetCurve.PointAt(targetParameter);
+      if (targetPoint.DistanceTo(endpoint.Point) > contactTolerance)
+        continue;
+
+      if (!includeTargetEndpoints && !targetCurve.IsClosed &&
+          (targetPoint.DistanceTo(targetCurve.PointAtStart) <= contactTolerance ||
+           targetPoint.DistanceTo(targetCurve.PointAtEnd) <= contactTolerance))
+        continue;
+
+      Vector3d cutterTangent = endpoint.Tangent;
+      Vector3d targetTangent = targetCurve.TangentAt(targetParameter);
+      if (!cutterTangent.Unitize() || !targetTangent.Unitize())
+        continue;
+      double angle = Vector3d.VectorAngle(cutterTangent, targetTangent);
+      angle = Math.Min(angle, Math.PI - angle);
+      if (angle > tangentTolerance)
+        continue;
+
+      parameters.Add(targetParameter >= d1 - endTol ? d0 : targetParameter);
+    }
+
+    return UniqueParams(parameters, Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-8));
+  }
+
   private static double? NearestPickDistanceForParams(Curve targetCurve, Point3d pickPoint, IEnumerable<double> parameters)
   {
     double? best = null;
@@ -1888,7 +1945,8 @@ public sealed class vTrim : Command
     double endTol,
     Plane? viewPlane)
   {
-    var worldParams = CollectInteriorCurveCurveParams(targetCurve, cutterCurve, d0, d1, endTol, doc);
+    var worldParams = CollectCurveContactParams(
+      doc, targetCurve, cutterCurve, d0, d1, endTol);
 
     var viewParams = new List<double>();
     var targetProj = ProjectCurveToPlane(targetCurve, viewPlane);
@@ -1973,14 +2031,8 @@ public sealed class vTrim : Command
     {
       parameters.AddRange(allowViewProjection
         ? ParamsClosestSource(doc, targetCurve, cutter, pickPoint, d0, d1, endTol, viewPlane)
-        : CollectInteriorCurveCurveParams(
-          targetCurve,
-          cutter,
-          d0,
-          d1,
-          endTol,
-          doc,
-          intersectionTolerance: StrictCurveContactTolerance(doc, targetCurve, cutter)));
+        : CollectCurveContactParams(
+          doc, targetCurve, cutter, d0, d1, endTol));
     }
 
     if (parameters.Count == 0)
@@ -2334,15 +2386,7 @@ public sealed class vTrim : Command
       return true;
     }
 
-    Curve[]? pieces;
-    try
-    {
-      pieces = workingCurve.Split(split);
-    }
-    catch
-    {
-      pieces = null;
-    }
+    Curve[]? pieces = SplitTargetCurve(doc, workingCurve, split);
 
     if (pieces == null || pieces.Length < 2)
     {
@@ -2407,6 +2451,52 @@ public sealed class vTrim : Command
     return true;
   }
 
+  private static Curve[]? SplitTargetCurve(
+    RhinoDoc doc, Curve curve, IReadOnlyList<double> splitParameters)
+  {
+    try
+    {
+      var direct = curve.Split(splitParameters);
+      if (direct != null && direct.Length >= 2)
+        return direct;
+    }
+    catch
+    {
+    }
+
+    if (!curve.IsClosed || !TryGetDomain(curve, out var d0, out var d1))
+      return null;
+
+    var parameters = SanitizeSplitParameters(curve, splitParameters);
+    if (parameters.Count < 2)
+      return null;
+
+    var pieces = new List<Curve>();
+    double parameterTolerance = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-9);
+    for (int i = 0; i < parameters.Count; i++)
+    {
+      double start = parameters[i];
+      double end = parameters[(i + 1) % parameters.Count];
+      var reseamed = curve.DuplicateCurve();
+      if (reseamed == null || !reseamed.ChangeClosedCurveSeam(start))
+        continue;
+
+      Point3d endPoint = curve.PointAt(end);
+      if (!reseamed.ClosestPoint(endPoint, out double reseamedEnd))
+        continue;
+      var domain = reseamed.Domain;
+      if (reseamedEnd <= domain.T0 + parameterTolerance)
+        reseamedEnd = domain.T1;
+      var piece = reseamed.Trim(domain.T0, reseamedEnd);
+      if (piece == null || !piece.IsValid ||
+          piece.GetLength() <= doc.ModelAbsoluteTolerance)
+        continue;
+      pieces.Add(piece);
+    }
+
+    return pieces.Count >= 2 ? pieces.ToArray() : null;
+  }
+
   private static bool TrimCurveObject(
     RhinoDoc doc,
     RhinoObject targetObj,
@@ -2463,22 +2553,16 @@ public sealed class vTrim : Command
       return new List<Curve>();
 
     var endTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-9);
-    var ranked = new List<(double Distance, Curve Curve)>();
+    var ranked = new List<(double Distance, Curve Curve, List<double> Parameters)>();
 
     foreach (var (obj, curve) in EnumerateDocCurves(doc))
     {
       if (obj.Id == targetId)
         continue;
 
-      var paramsForCurve = CollectInteriorCurveCurveParams(
-        targetCurve,
-        curve,
-        d0,
-        d1,
-        endTol,
-        doc,
-        includeEndpoints: true,
-        intersectionTolerance: StrictCurveContactTolerance(doc, targetCurve, curve));
+      var paramsForCurve = CollectCurveContactParams(
+        doc, targetCurve, curve, d0, d1, endTol,
+        includeTargetEndpoints: true);
       if (paramsForCurve.Count == 0)
         continue;
 
@@ -2486,13 +2570,43 @@ public sealed class vTrim : Command
       if (!nearest.HasValue)
         continue;
 
-      ranked.Add((nearest.Value, curve));
+      ranked.Add((nearest.Value, curve, paramsForCurve));
     }
 
-    var closest = ranked.OrderBy(r => r.Distance).FirstOrDefault();
-    return closest.Curve == null
-      ? new List<Curve>()
-      : new List<Curve> { closest.Curve };
+    if (!targetCurve.IsClosed)
+    {
+      var closest = ranked.OrderBy(r => r.Distance).FirstOrDefault();
+      return closest.Curve == null
+        ? new List<Curve>()
+        : new List<Curve> { closest.Curve };
+    }
+
+    if (!targetCurve.ClosestPoint(pickPoint, out double pickParameter))
+      return ranked.OrderBy(r => r.Distance).Select(r => r.Curve).Take(2).ToList();
+
+    double period = d1 - d0;
+    double parameterTolerance = Math.Max(1.0e-9, Math.Abs(period) * 1.0e-9);
+    var contacts = ranked.SelectMany(item => item.Parameters.Select(parameter =>
+    {
+      double normalized = parameter >= d1 - parameterTolerance ? d0 : parameter;
+      double forward = normalized - pickParameter;
+      while (forward < 0.0) forward += period;
+      double backward = pickParameter - normalized;
+      while (backward < 0.0) backward += period;
+      return (item.Curve, Forward: forward, Backward: backward);
+    })).Where(contact =>
+      contact.Forward > parameterTolerance || contact.Backward > parameterTolerance).ToList();
+
+    if (contacts.Count == 0)
+      return new List<Curve>();
+
+    var selected = new List<Curve>();
+    var before = contacts.OrderBy(contact => contact.Backward).First();
+    var after = contacts.OrderBy(contact => contact.Forward).First();
+    selected.Add(before.Curve);
+    if (!ReferenceEquals(after.Curve, before.Curve))
+      selected.Add(after.Curve);
+    return selected;
   }
 
   private static bool TryGetExtendAnchor(Curve curve, Point3d pickPoint, out CurveEnd movingEnd, out Point3d anchor)
@@ -3043,7 +3157,7 @@ public sealed class vTrim : Command
     var newEndpoint = movingEnd == CurveEnd.Start
       ? extendedCandidate.PointAtStart
       : extendedCandidate.PointAtEnd;
-    const double movementTolerance = 1.0e-9;
+    const double movementTolerance = 1.0e-9; // Minimum endpoint movement in model units accepted as an extension.
     var endpointTolerance = Math.Max(doc.ModelAbsoluteTolerance * 10.0, 1.0e-8);
     var addedDistance = newEndpoint.DistanceTo(anchor);
     if (addedDistance <= movementTolerance)

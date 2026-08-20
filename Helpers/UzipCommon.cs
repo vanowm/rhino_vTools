@@ -19,18 +19,19 @@ namespace vTools.Commands;
 internal static class UzipCommon
 {
   // ── Constants ──────────────────────────────────────────────────────────────
-  internal const string ToolsConfigFileName = "vTools.config.json";
-  internal const string DefaultLayerCutName = "CUT1";
-  internal const string DefaultLayerPlotName = "PLOT";
-  internal const string DefaultLayerReferenceName = "Reference";
-  internal const string DefaultLayerCutColor = "#CC3333";
-  internal const string DefaultLayerPlotColor = "#0F8A8A";
-  internal const string DefaultLayerReferenceColor = "#FFFFFF";
-  internal const string DefaultLabel = "";
-  internal const double DefaultTail = 0.75;
-  internal const double PartGap = 0.5;
-  internal const double LabelOffsetAlong = 0.125;
-  internal const double LabelOffsetPerp = 0.125;
+  internal const string ToolsConfigFileName = "vTools.config.json"; // Relative shared configuration filename beside the DLL.
+  internal const string DefaultLayerCutName = "CUT1"; // Rhino layer name or full layer path.
+  internal const string DefaultLayerPlotName = "PLOT"; // Rhino layer name or full layer path.
+  internal const string DefaultLayerReferenceName = "Reference"; // Rhino layer name or full layer path.
+  internal const string DefaultLayerCutColor = "#CC3333"; // RGB color in #RRGGBB format.
+  internal const string DefaultLayerPlotColor = "#0F8A8A"; // RGB color in #RRGGBB format.
+  internal const string DefaultLayerReferenceColor = "#FFFFFF"; // RGB color in #RRGGBB format.
+  internal const string DefaultEmptyValue = ""; // Plain text; empty means unspecified.
+  internal const string DefaultLabel = ""; // Plain label text; empty disables label content.
+  internal const double DefaultTail = 0.75; // Tail length in model units; zero or greater.
+  internal const double PartGap = 0.5; // Gap between generated parts in model units; zero or greater.
+  internal const double LabelOffsetAlong = 0.125; // Label shift along its reference edge in model units.
+  internal const double LabelOffsetPerp = 0.125; // Label shift perpendicular to its reference edge in model units.
 
   // ── JSON options ───────────────────────────────────────────────────────────
   internal static readonly JsonSerializerOptions JsonOptions = new()
@@ -54,8 +55,8 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class LayerConfigEntry
   {
-    public string Name { get; set; } = "";
-    public string Color { get; set; } = "";
+    public string Name { get; set; } = DefaultEmptyValue;
+    public string Color { get; set; } = DefaultEmptyValue;
   }
 
   /// <summary>
@@ -138,7 +139,7 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class OffsetSpec
   {
-    public string Name { get; set; } = "";
+    public string Name { get; set; } = DefaultEmptyValue;
     public double Offset { get; set; }
     public string? Layer { get; set; }
   }
@@ -148,14 +149,14 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class PartSpec
   {
-    public string Name { get; set; } = "";
+    public string Name { get; set; } = DefaultEmptyValue;
     public string? CenterLayer { get; set; }
-    public string CenterEndMode { get; set; } = "";
-    public string Note { get; set; } = "";
+    public string CenterEndMode { get; set; } = DefaultEmptyValue;
+    public string Note { get; set; } = DefaultEmptyValue;
     public bool MirrorPart { get; set; }
     public List<OffsetSpec> Offsets { get; set; } = new();
-    public string BandInsideName { get; set; } = "";
-    public string BandOutsideName { get; set; } = "";
+    public string BandInsideName { get; set; } = DefaultEmptyValue;
+    public string BandOutsideName { get; set; } = DefaultEmptyValue;
   }
 
   // ── Config / File I/O ──────────────────────────────────────────────────────

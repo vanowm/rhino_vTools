@@ -32,6 +32,13 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vSetPt : Command
 {
+  private const string Tag = "vSetPt";
+  private const string OptionsSectionName = "vSetPt";
+  private const string PreviewKey = "preview";
+
+  // Option defaults
+  private const bool DefaultShowPreview = true; // true shows live moved-curve previews; false suppresses them.
+
   private enum PreselectedGripType
   {
     ControlPoint,
@@ -56,10 +63,7 @@ public sealed class vSetPt : Command
   private static PendingCurvePick[]? _pendingGripPicks;
   private static uint _pendingDocSerial;
 
-  private const string Tag = "vSetPt";
-  private const string OptionsSectionName = "vSetPt";
-  private const string PreviewKey = "preview";
-  private static bool _showPreview = true;
+  private static bool _showPreview = DefaultShowPreview;
 
   public override string EnglishName => Tag;
 
@@ -68,7 +72,7 @@ public sealed class vSetPt : Command
     _showPreview = ToolsOptionStore.Read(
       OptionsSectionName,
       section => ToolsOptionStore.TryGetBool(
-        section, PreviewKey, out var preview) ? preview : true);
+        section, PreviewKey, out var preview) ? preview : DefaultShowPreview);
   }
 
   private static void SavePersistedOptions()
@@ -256,8 +260,8 @@ public sealed class vSetPt : Command
 
   private sealed class EndpointCursorCallback : MouseCallback, IDisposable
   {
-    private const int PreviewIntervalMilliseconds = 24;
-    private const int SelectionDebounceMilliseconds = 24;
+    private const int PreviewIntervalMilliseconds = 24; // Minimum live-preview refresh interval in milliseconds.
+    private const int SelectionDebounceMilliseconds = 24; // Selection-change settling delay in milliseconds.
 
     private readonly RhinoDoc _doc;
     private readonly EndpointPreviewConduit _preview;

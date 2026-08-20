@@ -28,22 +28,37 @@ public sealed class vOffset : Command
   private const string CapKey = "cap";
   private const string OutputLayerKey = "outputLayer";
 
-  private static readonly string[] CornerNames = { "None", "Sharp", "Round", "Smooth", "Chamfer" };
-  private static readonly string[] CapNames = { "None", "Flat", "Round" };
-  private static readonly string[] OutputLayerNames = { "Current", "Input" };
+  private static readonly string[] CornerNames = { "None", "Sharp", "Round", "Smooth", "Chamfer" }; // Command option names in corner-style index order.
+  private static readonly string[] CapNames = { "None", "Flat", "Round" }; // Command option names in cap-style index order.
+  private static readonly string[] OutputLayerNames = { "Current", "Input" }; // Output-layer choices in persisted index order.
+  private static readonly string[] GroupNames = { "No", "Auto", "Yes" }; // Group modes: none, inherit-or-create, or create an explicit source/output group.
 
-  private static bool _autoTrim;
-  private static bool _group;
-  private static double _distance = 0.5;
-  private static bool _loose;
-  private static int _corner = 1;
-  private static bool _throughPoint;
-  private static bool _trim = true;
-  private static double _tolerance = 0.001;
-  private static bool _bothSides;
-  private static bool _inCPlane = true;
-  private static int _cap;
-  private static int _outputLayer;
+  // Option defaults
+  private const bool DefaultAutoTrim = false; // true trims or extends offset ends at touching cutters; false keeps raw offsets.
+  private const int DefaultGroupMode = 1; // Zero-based GroupNames index; Auto inherits source groups or creates one when needed.
+  private const double DefaultDistance = 0.5; // Offset distance in model units; zero or greater.
+  private const bool DefaultLoose = false; // true offsets by control points; false uses tolerance-based accurate offsetting.
+  private const int DefaultCorner = 1; // Zero-based CornerNames index.
+  private const bool DefaultThroughPoint = false; // true derives distance from the picked point; false uses the numeric distance.
+  private const bool DefaultTrim = true; // true trims offset self-intersections; false keeps the complete offset result.
+  private const double DefaultTolerance = 0.001; // Intersection tolerance in model units; greater than zero.
+  private const bool DefaultBothSides = false; // true creates offsets on both sides; false creates only the cursor side.
+  private const bool DefaultInCPlane = true; // true offsets in the active CPlane; false uses the curve's best-fit plane.
+  private const int DefaultCap = 0; // Zero-based CapNames index.
+  private const int DefaultOutputLayer = 0; // Zero-based OutputLayerNames index.
+
+  private static bool _autoTrim = DefaultAutoTrim;
+  private static int _groupMode = DefaultGroupMode;
+  private static double _distance = DefaultDistance;
+  private static bool _loose = DefaultLoose;
+  private static int _corner = DefaultCorner;
+  private static bool _throughPoint = DefaultThroughPoint;
+  private static bool _trim = DefaultTrim;
+  private static double _tolerance = DefaultTolerance;
+  private static bool _bothSides = DefaultBothSides;
+  private static bool _inCPlane = DefaultInCPlane;
+  private static int _cap = DefaultCap;
+  private static int _outputLayer = DefaultOutputLayer;
   private static bool _restartingAfterOffsetDelegate;
   private static bool _continuingAfterOffsetDelegate;
   private static EventHandler? _pendingOffsetIdleHandler;
@@ -148,7 +163,6 @@ public sealed class vOffset : Command
       var bothSidesToggle = new OptionToggle(_bothSides, "No", "Yes");
       var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
       var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
-      var groupToggle = new OptionToggle(_group, "No", "Yes");
       var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
 
       var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
@@ -161,7 +175,7 @@ public sealed class vOffset : Command
       getter.AddOptionToggle("InCPlane", ref inCPlaneToggle);
       var capOptionIndex = getter.AddOptionList("Cap", CapNames, _cap);
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
-      getter.AddOptionToggle("Group", ref groupToggle);
+      var groupOptionIndex = getter.AddOptionList("Group", GroupNames, _groupMode);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
       var result = getter.Get();
 
@@ -203,6 +217,8 @@ public sealed class vOffset : Command
           _corner = ClampIndex(option.CurrentListOptionIndex, CornerNames.Length);
         else if (option.Index == capOptionIndex)
           _cap = ClampIndex(option.CurrentListOptionIndex, CapNames.Length);
+        else if (option.Index == groupOptionIndex)
+          _groupMode = ClampIndex(option.CurrentListOptionIndex, GroupNames.Length);
 
         _loose = looseToggle.CurrentValue;
         _throughPoint = throughPointToggle.CurrentValue;
@@ -211,7 +227,6 @@ public sealed class vOffset : Command
         _bothSides = bothSidesToggle.CurrentValue;
         _inCPlane = inCPlaneToggle.CurrentValue;
         _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
-        _group = groupToggle.CurrentValue;
         _autoTrim = autoTrimToggle.CurrentValue;
         SavePersistedOptions();
         continue;
@@ -298,7 +313,6 @@ public sealed class vOffset : Command
       var bothSidesToggle = new OptionToggle(_bothSides, "No", "Yes");
       var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
       var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
-      var groupToggle = new OptionToggle(_group, "No", "Yes");
       var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
 
       var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
@@ -311,7 +325,7 @@ public sealed class vOffset : Command
       getter.AddOptionToggle("InCPlane", ref inCPlaneToggle);
       var capOptionIndex = getter.AddOptionList("Cap", CapNames, _cap);
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
-      getter.AddOptionToggle("Group", ref groupToggle);
+      var groupOptionIndex = getter.AddOptionList("Group", GroupNames, _groupMode);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
       var result = getter.Get();
 
@@ -353,6 +367,8 @@ public sealed class vOffset : Command
           _corner = ClampIndex(option.CurrentListOptionIndex, CornerNames.Length);
         else if (option.Index == capOptionIndex)
           _cap = ClampIndex(option.CurrentListOptionIndex, CapNames.Length);
+        else if (option.Index == groupOptionIndex)
+          _groupMode = ClampIndex(option.CurrentListOptionIndex, GroupNames.Length);
 
         _loose = looseToggle.CurrentValue;
         _throughPoint = throughPointToggle.CurrentValue;
@@ -361,7 +377,6 @@ public sealed class vOffset : Command
         _bothSides = bothSidesToggle.CurrentValue;
         _inCPlane = inCPlaneToggle.CurrentValue;
         _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
-        _group = groupToggle.CurrentValue;
         _autoTrim = autoTrimToggle.CurrentValue;
         SavePersistedOptions();
         doc.Views.Redraw();
@@ -386,7 +401,7 @@ public sealed class vOffset : Command
     _inCPlane,
     _cap,
     _outputLayer,
-    _group,
+    _groupMode,
     _autoTrim);
 
   private static int ClampIndex(int value, int count) =>
@@ -399,7 +414,7 @@ public sealed class vOffset : Command
       section =>
       {
         var autoTrim = _autoTrim;
-        var group = _group;
+        var groupMode = _groupMode;
         var distance = _distance;
         var loose = _loose;
         var corner = _corner;
@@ -412,7 +427,10 @@ public sealed class vOffset : Command
         var outputLayer = _outputLayer;
 
         if (ToolsOptionStore.TryGetBool(section, AutoTrimKey, out var boolValue)) autoTrim = boolValue;
-        if (ToolsOptionStore.TryGetBool(section, GroupKey, out boolValue)) group = boolValue;
+        if (ToolsOptionStore.TryGetDouble(section, GroupKey, out var groupValue))
+          groupMode = (int)Math.Round(groupValue);
+        else if (ToolsOptionStore.TryGetBool(section, GroupKey, out boolValue))
+          groupMode = boolValue ? DefaultGroupMode : 0;
         if (ToolsOptionStore.TryGetDouble(section, DistanceKey, out var doubleValue)) distance = doubleValue;
         if (ToolsOptionStore.TryGetBool(section, LooseKey, out boolValue)) loose = boolValue;
         if (ToolsOptionStore.TryGetDouble(section, CornerKey, out doubleValue)) corner = (int)Math.Round(doubleValue);
@@ -424,11 +442,11 @@ public sealed class vOffset : Command
         if (ToolsOptionStore.TryGetDouble(section, CapKey, out doubleValue)) cap = (int)Math.Round(doubleValue);
         if (ToolsOptionStore.TryGetDouble(section, OutputLayerKey, out doubleValue)) outputLayer = (int)Math.Round(doubleValue);
 
-        return (autoTrim, group, distance, loose, corner, throughPoint, trim, tolerance, bothSides, inCPlane, cap, outputLayer);
+        return (autoTrim, groupMode, distance, loose, corner, throughPoint, trim, tolerance, bothSides, inCPlane, cap, outputLayer);
       });
 
     _autoTrim = values.autoTrim;
-    _group = values.group;
+    _groupMode = ClampIndex(values.groupMode, GroupNames.Length);
     _distance = Math.Max(RhinoMath.ZeroTolerance, values.distance);
     _loose = values.loose;
     _corner = ClampIndex(values.corner, CornerNames.Length);
@@ -448,7 +466,7 @@ public sealed class vOffset : Command
       section =>
       {
         section[AutoTrimKey] = _autoTrim;
-        section[GroupKey] = _group;
+        section[GroupKey] = _groupMode;
         section[DistanceKey] = _distance;
         section[LooseKey] = _loose;
         section[CornerKey] = _corner;
@@ -1143,7 +1161,7 @@ public sealed class vOffset : Command
           Log.Write("vOffset", "Final output add failed");
       }
 
-      if (pending.Group && outputIds.Count > 0)
+      if (pending.GroupMode != 0 && outputIds.Count > 0)
         ApplyOutputGroups(doc, pending, outputIds);
     }
     finally
@@ -1165,7 +1183,7 @@ public sealed class vOffset : Command
     PendingOffset pending,
     IReadOnlyCollection<Guid> outputIds)
   {
-    if (pending.SourceGroupIndices.Count > 0)
+    if (pending.GroupMode == DefaultGroupMode && pending.SourceGroupIndices.Count > 0)
     {
       var applied = 0;
       foreach (var groupIndex in pending.SourceGroupIndices)
@@ -1190,8 +1208,9 @@ public sealed class vOffset : Command
       new[] { pending.SourceId }.Concat(outputIds));
     Log.Write(
       "vOffset",
-      "Created source/output group source={0} group={1} outputs={2}",
+      "Created source/output group source={0} mode={1} group={2} outputs={3}",
       pending.SourceId,
+      GroupNames[ClampIndex(pending.GroupMode, GroupNames.Length)],
       groupIndexCreated,
       outputIds.Count);
   }
@@ -1479,7 +1498,7 @@ public sealed class vOffset : Command
     bool InCPlane,
     int Cap,
     int OutputLayer,
-    bool Group,
+    int GroupMode,
     bool AutoTrim);
 
   private sealed record PendingOffset(
@@ -1494,7 +1513,7 @@ public sealed class vOffset : Command
     public IReadOnlyList<int> SourceGroupIndices => Source.SourceGroupIndices;
     public List<Curve> StartDrivers => Source.StartDrivers;
     public List<Curve> EndDrivers => Source.EndDrivers;
-    public bool Group => Settings.Group;
+    public int GroupMode => Settings.GroupMode;
     public bool AutoTrim => Settings.AutoTrim;
   }
 

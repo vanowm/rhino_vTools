@@ -17,11 +17,14 @@ internal static class FpsDisplay
   private const string SettingsSection = "vFPS";
   private const string EnabledKey = "enabled";
 
+  // Option defaults
+  private const bool DefaultEnabled = false; // true shows the FPS overlay at startup; false keeps it hidden.
+
   private static FpsDisplayConduit? _conduit;
   private static bool _samplingRedraw;
   private static Guid _sampleViewportId;
   private static bool _settingsLoaded;
-  private static bool _configuredEnabled;
+  private static bool _configuredEnabled = DefaultEnabled;
 
   internal static void Start()
   {
@@ -82,7 +85,9 @@ internal static class FpsDisplay
 
     _configuredEnabled = ToolsOptionStore.Read(
       SettingsSection,
-      section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var enabled) && enabled);
+      section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var enabled)
+        ? enabled
+        : DefaultEnabled);
     _settingsLoaded = true;
   }
 
@@ -138,14 +143,14 @@ internal static class FpsDisplay
 
   private sealed class FpsDisplayConduit : DisplayConduit
   {
-    private const double SampleWindowSeconds = 0.5;
-    private const double RefreshSeconds = 0.2;
-    private const double NaturalFrameGapSeconds = 0.1;
-    private const int FontSize = 12;
-    private const double TopBaseline = 6.0;
-    private const double RightMargin = 6.0;
-    private const string MaximumLabel = "999";
-    private const string FontFace = "Consolas";
+    private const double SampleWindowSeconds = 0.5; // Rolling FPS measurement window in seconds; greater than zero.
+    private const double RefreshSeconds = 0.2; // Minimum overlay refresh interval in seconds; greater than zero.
+    private const double NaturalFrameGapSeconds = 0.1; // Largest render gap treated as continuous motion, in seconds.
+    private const int FontSize = 12; // FPS label font height in display pixels; greater than zero.
+    private const double TopBaseline = 6.0; // Label offset below the viewport title, in display pixels.
+    private const double RightMargin = 6.0; // Label inset from the right viewport edge, in display pixels.
+    private const string MaximumLabel = "999"; // Widest reserved three-character FPS label.
+    private const string FontFace = "Consolas"; // Installed font family used for the stationary-width FPS label.
 
     private readonly Dictionary<Guid, ViewFrameRate> _viewRates = new();
     private bool _drawFailureLogged;

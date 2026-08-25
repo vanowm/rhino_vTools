@@ -23,6 +23,7 @@ public sealed class vMiddleCurve : Command
   private const string LineIntervalKey = "lineInterval";
   private const string SeamAllowanceKey = "seamAllowance";
   private const string MinimumLengthKey = "minimumLength";
+  private const string LayerKey = "layer";
   private const string LegacyTangentLinesKey = "tangentLines";
   private const string LegacyTangentLineIntervalKey = "tangentLineInterval";
   private const int MinSampleCount = 12; // Minimum station samples along input curves; two or greater.
@@ -32,6 +33,7 @@ public sealed class vMiddleCurve : Command
   private const double DefaultMinimumLength = 0.25; // Minimum output length in model units; zero or greater.
   private const bool DefaultAddLines = false; // true adds transverse construction lines; false creates only the middle curve.
   private const ConnectorLineMode DefaultLineMode = ConnectorLineMode.EqualDistance; // ConnectorLineMode enum: Normal or EqualDistance.
+  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private enum ConnectorLineMode
   {
@@ -44,6 +46,7 @@ public sealed class vMiddleCurve : Command
   private static double _lineInterval = DefaultLineInterval;
   private static double _seamAllowance = DefaultSeamAllowance;
   private static double _minimumLength = DefaultMinimumLength;
+  private static string _layer = DefaultLayer;
 
   /// <summary>
   /// Rhino command name.
@@ -56,8 +59,9 @@ public sealed class vMiddleCurve : Command
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadOptions(doc);
+    var layerSession = new DuplicateOutputLayerSession(doc, _layer, EnglishName);
 
-    if (!PromptTwoCurves(doc, out var curveA, out var curveB))
+    if (!PromptTwoCurves(doc, mode, layerSession, out var curveA, out var curveB))
       return Result.Cancel;
 
     // Capture shared group before SaveOptions/PreviewMiddleCurve can alter selection state.
@@ -74,10 +78,19 @@ public sealed class vMiddleCurve : Command
       return Result.Failure;
     }
 
-    if (!PreviewMiddleCurve(doc, curveA!, curveB!, build, out var middleCurve, out var connectorLines))
+    if (!PreviewMiddleCurve(
+          doc, mode, layerSession, curveA!, curveB!, build,
+          out var middleCurve, out var connectorLines))
       return Result.Cancel;
 
-    var newId = doc.Objects.AddCurve(middleCurve);
+    var simplifiedMiddleCurve = middleCurve.Simplify(
+      CurveSimplifyOptions.All,
+      doc.ModelAbsoluteTolerance,
+      doc.ModelAngleToleranceRadians);
+    if (simplifiedMiddleCurve != null)
+      middleCurve = simplifiedMiddleCurve;
+
+    var newId = doc.Objects.AddCurve(middleCurve, layerSession.CreateAttributes(doc));
     if (newId == Guid.Empty)
     {
       RhinoApp.WriteLine("vMiddleCurve: failed to add curve to document.");
@@ -88,7 +101,9 @@ public sealed class vMiddleCurve : Command
 
     foreach (var connectorLine in connectorLines)
     {
-      var lineId = doc.Objects.AddCurve(connectorLine);
+      var lineId = doc.Objects.AddCurve(
+        connectorLine,
+        layerSession.CreateAttributes(doc));
       AddToGroupIfShared(doc, lineId, sharedGroup);
     }
 
@@ -145,6 +160,7 @@ public sealed class vMiddleCurve : Command
         var interval = _lineInterval;
         var seamAllowance = _seamAllowance;
         var minimumLength = _minimumLength;
+        var layer = _layer;
 
         if (ToolsOptionStore.TryGetBool(section, LinesKey, out var persistedLines) ||
             ToolsOptionStore.TryGetBool(section, LegacyTangentLinesKey, out persistedLines))
@@ -164,8 +180,10 @@ public sealed class vMiddleCurve : Command
         if (ToolsOptionStore.TryGetDouble(section, MinimumLengthKey, out var persistedMinimumLength) &&
             persistedMinimumLength >= 0.0)
           minimumLength = persistedMinimumLength;
+        if (ToolsOptionStore.TryGetString(section, LayerKey, out var persistedLayer))
+          layer = DuplicateCommandSupport.NormalizeLayerOption(persistedLayer);
 
-        return (addLines, lineMode, interval, seamAllowance, minimumLength);
+        return (addLines, lineMode, interval, seamAllowance, minimumLength, layer);
       });
 
     _addLines = values.addLines;
@@ -173,6 +191,7 @@ public sealed class vMiddleCurve : Command
     _lineInterval = Math.Max(values.interval, tolerance);
     _seamAllowance = Math.Max(values.seamAllowance, 0.0);
     _minimumLength = Math.Max(values.minimumLength, 0.0);
+    _layer = DuplicateCommandSupport.NormalizeLayerOption(values.layer);
     SaveOptions();
   }
 
@@ -186,9 +205,15 @@ public sealed class vMiddleCurve : Command
         section[LineIntervalKey] = _lineInterval;
         section[SeamAllowanceKey] = _seamAllowance;
         section[MinimumLengthKey] = _minimumLength;
+        section[LayerKey] = _layer;
       });
 
-  private static bool PromptTwoCurves(RhinoDoc doc, out Curve? curveA, out Curve? curveB)
+  private static bool PromptTwoCurves(
+    RhinoDoc doc,
+    RunMode mode,
+    DuplicateOutputLayerSession layerSession,
+    out Curve? curveA,
+    out Curve? curveB)
   {
     curveA = null;
     curveB = null;
@@ -211,17 +236,19 @@ public sealed class vMiddleCurve : Command
     var intervalOption = new OptionDouble(_lineInterval, tolerance, double.MaxValue);
     var seamAllowanceOption = new OptionDouble(_seamAllowance, 0.0, double.MaxValue);
     var minimumLengthOption = new OptionDouble(_minimumLength, 0.0, double.MaxValue);
-    go.AddOptionToggle("Lines", ref linesToggle);
-    go.AddOptionToggle("LineMode", ref modeToggle);
-    go.AddOptionDouble("LineInterval", ref intervalOption);
-    go.AddOptionDouble("SeamAllowance", ref seamAllowanceOption);
-    go.AddOptionDouble("MinimumLength", ref minimumLengthOption);
-
     var preselectedWaitingForEnter = false;
 
     while (true)
     {
+      go.ClearCommandOptions();
+      go.AddOptionToggle("Lines", ref linesToggle);
+      go.AddOptionToggle("LineMode", ref modeToggle);
+      go.AddOptionDouble("LineInterval", ref intervalOption);
+      go.AddOptionDouble("SeamAllowance", ref seamAllowanceOption);
+      go.AddOptionDouble("MinimumLength", ref minimumLengthOption);
+      int layerOptionIndex = go.AddOption("Layer", layerSession.OptionLayerName);
       var result = go.GetMultiple(2, 2);
+      layerSession.ObserveCurrentLayer(doc);
       UpdateOptions(linesToggle, modeToggle, intervalOption, seamAllowanceOption, minimumLengthOption, tolerance);
 
       if (result == GetResult.Nothing)
@@ -252,6 +279,8 @@ public sealed class vMiddleCurve : Command
 
       if (result == GetResult.Option)
       {
+        if (go.Option()?.Index == layerOptionIndex)
+          PromptForLayer(doc, mode, layerSession);
         SaveOptions();
         continue;
       }
@@ -311,6 +340,8 @@ public sealed class vMiddleCurve : Command
 
   private static bool PreviewMiddleCurve(
     RhinoDoc doc,
+    RunMode mode,
+    DuplicateOutputLayerSession layerSession,
     Curve sourceA,
     Curve sourceB,
     MiddleCurveBuild initialBuild,
@@ -347,6 +378,7 @@ public sealed class vMiddleCurve : Command
       gp.AddOptionDouble("LineInterval", ref intervalOption);
       gp.AddOptionDouble("SeamAllowance", ref seamAllowanceOption);
       gp.AddOptionDouble("MinimumLength", ref minimumLengthOption);
+      int layerOptionIndex = gp.AddOption("Layer", layerSession.OptionLayerName);
 
       EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
       {
@@ -361,6 +393,7 @@ public sealed class vMiddleCurve : Command
       gp.DynamicDraw += drawPreview;
       var result = gp.Get();
       gp.DynamicDraw -= drawPreview;
+      layerSession.ObserveCurrentLayer(doc);
 
       UpdateOptions(linesToggle, modeToggle, intervalOption, seamAllowanceOption, minimumLengthOption, tolerance);
 
@@ -379,6 +412,8 @@ public sealed class vMiddleCurve : Command
 
       if (result == GetResult.Option)
       {
+        if (gp.Option()?.Index == layerOptionIndex)
+          PromptForLayer(doc, mode, layerSession);
         SaveOptions();
         continue;
       }
@@ -402,6 +437,26 @@ public sealed class vMiddleCurve : Command
       SaveOptions();
       return false;
     }
+  }
+
+  private static void PromptForLayer(
+    RhinoDoc doc,
+    RunMode mode,
+    DuplicateOutputLayerSession layerSession)
+  {
+    if (!LayerSelector.TrySelect(
+          doc,
+          layerSession.OptionLayerName,
+          DuplicateCommandSupport.CurrentLayerOption,
+          "vMiddleCurve target layer",
+          mode,
+          allowNewLayer: false,
+          out var selectedLayer))
+      return;
+
+    _layer = DuplicateCommandSupport.NormalizeLayerOption(selectedLayer);
+    layerSession.ApplyOption(doc, _layer);
+    SaveOptions();
   }
 
   private static Curve[]? SelectedCurveCopiesFromDoc(RhinoDoc doc)

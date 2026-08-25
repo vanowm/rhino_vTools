@@ -16,25 +16,37 @@ namespace vTools.Commands;
 /// Captures a closed perimeter (selected curves, optionally gap-bridged) and
 /// all visible objects inside it — curves are trimmed at the boundary; text,
 /// dots, points, and other types are included whole when their representative
-/// point falls inside.  The original perimeter curves are kept as individual
-/// output segments on their own layers.  Gap-bridge segments go on the current
-/// layer.  The user picks a placement point with a full DynamicDraw preview.
+/// point falls inside. The perimeter curves and any gap bridges use the chosen
+/// output layer. The user picks a placement point with a full DynamicDraw preview.
 /// Originals are not modified; the Part is added as new objects.
 /// </summary>
 public sealed class vPart : Command
 {
   public override string EnglishName => "vPart";
 
-  private const string SectionName  = "vPart";
-  private const string GroupKey     = "group";
-  private const string JoinPerimKey = "joinPerim";
-
   // Option defaults
   private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
   private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
+  private const bool DefaultCleanup = true; // true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.
+  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  private const string SourceLayerOption = "*Source*"; // Sentinel that preserves each perimeter segment's source layer; joined output and bridges use the first actual boundary source layer.
+
+  private const string SectionName  = "vPart";
+  private const string GroupKey     = "group";
+  private const string JoinPerimKey = "joinPerim";
+  private const string CleanupKey = "cleanup";
+  private const string LegacyRemoveInteriorLinesKey = "removeInteriorLines"; // Previous persisted key read once for migration to Cleanup.
+  private const string LayerKey = "layer";
+  private const string NotchObjectName = "Notch"; // Rhino object name used to exempt notch curves from interior line cleanup.
+  private const string NotchRoleKey = "notch.object_role"; // Notch metadata key whose value is "notch" for generated notch geometry.
+  private const string NotchIdKey = "notch.notch_id"; // Notch metadata key containing a nonempty notch component identifier.
+  private const int PerimeterContributionSampleCount = 17; // Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.
+  private const double InteriorLineBoundaryToleranceScale = 2.0; // Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.
 
   private static bool _group = DefaultGroup;
   private static bool _joinPerim = DefaultJoinPerimeter;
+  private static bool _cleanup = DefaultCleanup;
+  private static string _layer = DefaultLayer;
 
   // ── Logging ────────────────────────────────────────────────────────────
   private static void L(string message) => vTools.Log.Write("vPart", message);
@@ -46,6 +58,12 @@ public sealed class vPart : Command
     {
       if (ToolsOptionStore.TryGetBool(section, GroupKey,     out var g)) _group    = g;
       if (ToolsOptionStore.TryGetBool(section, JoinPerimKey, out var j)) _joinPerim = j;
+      if (ToolsOptionStore.TryGetBool(section, CleanupKey, out var cleanup) ||
+          ToolsOptionStore.TryGetBool(
+            section, LegacyRemoveInteriorLinesKey, out cleanup))
+        _cleanup = cleanup;
+      if (ToolsOptionStore.TryGetString(section, LayerKey, out var layer))
+        _layer = NormalizePerimeterLayerOption(layer);
       return 0;
     });
 
@@ -54,14 +72,19 @@ public sealed class vPart : Command
     {
       section[GroupKey]     = _group;
       section[JoinPerimKey] = _joinPerim;
+      section[CleanupKey] = _cleanup;
+      section.Remove(LegacyRemoveInteriorLinesKey);
+      section[LayerKey] = _layer;
     });
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadOptions();
+    var layerSession = new DuplicateOutputLayerSession(doc, _layer, EnglishName);
     var tol = doc.ModelAbsoluteTolerance;
     L($"=== vPart {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
-    L($"  tol={tol:G4}  group={_group}  joinPerim={_joinPerim}");
+    L($"  tol={tol:G4}  group={_group}  joinPerim={_joinPerim} " +
+      $"cleanup={_cleanup} layer={_layer}");
 
     // ── 1. Select perimeter curves ─────────────────────────────────────────
     // Dale's pattern: single GetObject instance with EnableClearObjectsOnEntry(false)
@@ -71,6 +94,7 @@ public sealed class vPart : Command
 
     var groupToggle    = new OptionToggle(_group,    "No", "Yes");
     var joinPerimToggle = new OptionToggle(_joinPerim, "No", "Yes");
+    var cleanupToggle = new OptionToggle(_cleanup, "No", "Yes");
 
     var go = new GetObject();
     go.EnableTransparentCommands(true);
@@ -83,19 +107,26 @@ public sealed class vPart : Command
     go.AlreadySelectedObjectSelect = true;
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(true);
-    go.AddOptionToggle("Group",         ref groupToggle);
-    go.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
 
     var selIter = 0;
     while (true)
     {
+      go.ClearCommandOptions();
+      go.AddOptionToggle("Group", ref groupToggle);
+      go.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
+      go.AddOptionToggle("Cleanup", ref cleanupToggle);
+      var layerOptionIndex = go.AddOption("Layer", layerSession.OptionLayerName);
       var selRes = go.GetMultiple(0, 0);
+      layerSession.ObserveCurrentLayer(doc);
       L($"sel iter {++selIter}: result={selRes}  cmdResult={go.CommandResult()}  count={go.ObjectCount}  preselected={go.ObjectsWerePreselected}");
 
       if (selRes == GetResult.Option)
       {
         _group = groupToggle.CurrentValue;
         _joinPerim = joinPerimToggle.CurrentValue;
+        _cleanup = cleanupToggle.CurrentValue;
+        if (go.Option()?.Index == layerOptionIndex)
+          PromptForLayer(doc, mode, layerSession);
         SaveOptions();
         continue;
       }
@@ -177,40 +208,59 @@ public sealed class vPart : Command
       return Result.Nothing;
     }
 
-    // ── 4. Collect inside objects (all visible types, trimmed for curves) ──
-
-    var insideObjects = CollectInsideObjects(doc, perimIds, perimeter, plane, boundaryTolerance);
-    L($"insideObjects: {insideObjects.Count}");
-
-    // ── 5. Assemble Part items ─────────────────────────────────────────────────────
-    //  • Original perimeter curves trimmed to the closed boundary — each on its own layer
-    //  • Bridge segments (gap fillers) — on current doc layer
-    //  • Inside objects — on their original layers
-
-    var currentLayerAttr = new ObjectAttributes { LayerIndex = doc.Layers.CurrentLayerIndex };
-
+    // Resolve the actual boundary pieces before classifying perimeter layers.
+    // Selected interior curves must never contribute their layers to cleanup.
     var effectivePerimeter = perimList
       .Select((item, index) => (
         Crv: index < perimeterCurves.Count ? perimeterCurves[index] : item.Crv,
         item.Attr))
       .ToList();
-
-    var trimmedPerimeter = TrimToPerimeter(
+    var rawTrimmedPerimeter = TrimToPerimeter(
       effectivePerimeter, perimeter!, plane, boundaryTolerance).ToList();
-    L($"trimmedPerimeter: {trimmedPerimeter.Count} piece(s) from {effectivePerimeter.Count} selected curve(s)");
 
-    var partItems = new List<(GeometryBase Geom, ObjectAttributes Attr)>();
-    foreach (var (crv, attr) in trimmedPerimeter)
-      partItems.Add((crv, attr));
-    foreach (var bridge in bridges)
-      partItems.Add((bridge, currentLayerAttr.Duplicate()));
-    partItems.AddRange(insideObjects);
-    L($"partItems: {partItems.Count} ({perimList.Count} perim + {bridges.Count} bridges + {insideObjects.Count} inside)");
+    var boundaryPieces = rawTrimmedPerimeter
+      .Where(item => CurveContributesToBoundary(
+        item.Crv, perimeter, boundaryTolerance))
+      .ToList();
+    var sourceBoundaryAttributes = boundaryPieces.Count > 0
+      ? boundaryPieces[0].Attr
+      : perimList[0].Attr;
+    var sourcePerimeterLayerIndices = boundaryPieces
+      .Select(item => item.Attr.LayerIndex)
+      .Where(layerIndex => layerIndex >= 0)
+      .ToHashSet();
+    if (sourcePerimeterLayerIndices.Count == 0)
+    {
+      var fallbackLayerIndex = ClosestSourceLayerIndex(
+        perimList, perimeter.PointAtNormalizedLength(0.5));
+      if (fallbackLayerIndex >= 0)
+        sourcePerimeterLayerIndices.Add(fallbackLayerIndex);
+    }
+    L("source perimeter layers: " +
+      string.Join(",", sourcePerimeterLayerIndices));
+
+    // ── 4. Collect inside objects (all visible types, trimmed for curves) ──
+
+    var allInsideObjects = CollectInsideObjects(
+      doc,
+      perimIds,
+      perimeter,
+      plane,
+      boundaryTolerance);
+    L($"insideObjects: all={allInsideObjects.Count}");
+
+    // ── 5. Assemble Part items ─────────────────────────────────────────────────────
+    //  • Original perimeter curves trimmed to the closed boundary — on the chosen layer
+    //  • Bridge segments (gap fillers) — on the chosen layer
+    //  • Inside objects — on their original layers
+
+    L($"trimmedPerimeter: all={rawTrimmedPerimeter.Count} " +
+      $"from {effectivePerimeter.Count} selected curve(s)");
 
     // ── 6. Base point = bounding box center of perimeter ─────────────────
 
     var bbox = perimeter.GetBoundingBox(true);
-    foreach (var (geom, _) in insideObjects)
+    foreach (var (geom, _) in allInsideObjects)
     {
       var b = geom.GetBoundingBox(true);
       if (b.IsValid) bbox = bbox.IsValid ? BoundingBox.Union(bbox, b) : b;
@@ -219,70 +269,194 @@ public sealed class vPart : Command
 
     // ── 7. DynamicDraw preview + placement ────────────────────────────────
 
-    // Precompute preview lists for both join states; DynamicDraw reads the toggle live.
-    var currentColor = doc.Layers[doc.Layers.CurrentLayerIndex]?.Color ?? Color.Cyan;
-
-    var splitPreview = partItems
-      .Select(p => (Geom: p.Geom.Duplicate()!, Color: doc.Layers[p.Attr.LayerIndex]?.Color ?? Color.Cyan))
-      .Where(p => p.Geom != null)
-      .ToList();
-
-    var joinedPreview = new List<(GeometryBase Geom, Color Color)>();
-    joinedPreview.Add((perimeter!.Duplicate()!, currentColor));
+    // Precompute geometry for both join states. Perimeter color is resolved
+    // during drawing so Layer and external current-layer changes update live.
+    var splitPreview = new List<(
+      GeometryBase Geom, ObjectAttributes Attr, bool IsPerimeter)>();
+    foreach (var (curve, attributes) in rawTrimmedPerimeter)
+      splitPreview.Add((curve.DuplicateCurve(), attributes, true));
     foreach (var bridge in bridges)
-      joinedPreview.Add((bridge.Duplicate()!, currentColor));
-    foreach (var (geom, attr) in insideObjects)
-      joinedPreview.Add((geom.Duplicate()!, doc.Layers[attr.LayerIndex]?.Color ?? Color.Cyan));
+      splitPreview.Add((bridge.DuplicateCurve(), new ObjectAttributes(), true));
+    foreach (var (geom, attr) in allInsideObjects)
+      splitPreview.Add((geom.Duplicate()!, attr, false));
 
-    var gp = new GetPoint();
-    gp.EnableTransparentCommands(true);
-    gp.SetCommandPrompt("Pick placement point for Part");
-    gp.AddOptionToggle("Group",         ref groupToggle);
-    gp.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
-    gp.DynamicDraw += (_, e) =>
+    var joinedPreview = new List<(
+      GeometryBase Geom, ObjectAttributes Attr, bool IsPerimeter)>
     {
-      var xform = Transform.Translation(e.CurrentPoint - basePoint);
-      var items = joinPerimToggle.CurrentValue ? joinedPreview : splitPreview;
-      foreach (var (geom, color) in items)
-      {
-        var draw = geom.Duplicate();
-        if (draw == null) continue;
-        draw.Transform(xform);
-        DrawPreview(e.Display, draw, color);
-      }
+      (perimeter.DuplicateCurve(), new ObjectAttributes(), true)
     };
+    foreach (var (geom, attr) in allInsideObjects)
+      joinedPreview.Add((geom.Duplicate()!, attr, false));
 
-    GetResult gpResult;
-    do
+    var placementPoint = Point3d.Unset;
+    while (true)
     {
-      gpResult = gp.Get();
+      var cleanupLayerIndices = ResolveCleanupLayerIndices(
+        doc,
+        layerSession,
+        sourcePerimeterLayerIndices,
+        sourceBoundaryAttributes);
+      var cleanedInsideObjects = allInsideObjects
+        .Where(item => item.Geom is not Curve curve ||
+          !IsRemovableInteriorLine(
+            curve,
+            item.Attr,
+            cleanupLayerIndices,
+            perimeter,
+            boundaryTolerance))
+        .ToList();
+      var cleanedTrimmedPerimeter = rawTrimmedPerimeter
+        .Where(item => !IsRemovableInteriorLine(
+          item.Crv,
+          item.Attr,
+          cleanupLayerIndices,
+          perimeter,
+          boundaryTolerance))
+        .ToList();
+
+      var cleanedSplitPreview = new List<(
+        GeometryBase Geom, ObjectAttributes Attr, bool IsPerimeter)>();
+      foreach (var (curve, attributes) in cleanedTrimmedPerimeter)
+        cleanedSplitPreview.Add((curve.DuplicateCurve(), attributes, true));
+      foreach (var bridge in bridges)
+        cleanedSplitPreview.Add((
+          bridge.DuplicateCurve(), new ObjectAttributes(), true));
+      foreach (var (geom, attr) in cleanedInsideObjects)
+        cleanedSplitPreview.Add((geom.Duplicate()!, attr, false));
+
+      var cleanedJoinedPreview = new List<(
+        GeometryBase Geom, ObjectAttributes Attr, bool IsPerimeter)>
+      {
+        (perimeter.DuplicateCurve(), new ObjectAttributes(), true)
+      };
+      foreach (var (geom, attr) in cleanedInsideObjects)
+        cleanedJoinedPreview.Add((geom.Duplicate()!, attr, false));
+
+      L("cleanup target layers: " + string.Join(",", cleanupLayerIndices) +
+        $" removedInside={allInsideObjects.Count - cleanedInsideObjects.Count}" +
+        $" removedSelected={rawTrimmedPerimeter.Count - cleanedTrimmedPerimeter.Count}");
+
+      var gp = new GetPoint();
+      gp.EnableTransparentCommands(true);
+      gp.SetCommandPrompt("Pick placement point for Part");
+      gp.AddOptionToggle("Group", ref groupToggle);
+      gp.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
+      gp.AddOptionToggle("Cleanup", ref cleanupToggle);
+      var layerOptionIndex = gp.AddOption("Layer", layerSession.OptionLayerName);
+      EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
+      {
+        var xform = Transform.Translation(e.CurrentPoint - basePoint);
+        var items = (joinPerimToggle.CurrentValue, cleanupToggle.CurrentValue) switch
+        {
+          (true, true) => cleanedJoinedPreview,
+          (true, false) => joinedPreview,
+          (false, true) => cleanedSplitPreview,
+          _ => splitPreview
+        };
+        foreach (var (geom, attr, isPerimeter) in items)
+        {
+          var draw = geom.Duplicate();
+          if (draw == null)
+            continue;
+          draw.Transform(xform);
+          var layerIndex = isPerimeter
+            ? ResolvePerimeterLayerIndex(
+              doc, layerSession, attr, sourceBoundaryAttributes)
+            : attr.LayerIndex;
+          var color = doc.Layers[layerIndex]?.Color ?? Color.Cyan;
+          DrawPreview(e.Display, draw, color);
+        }
+      };
+      gp.DynamicDraw += drawPreview;
+      var gpResult = gp.Get();
+      gp.DynamicDraw -= drawPreview;
+      layerSession.ObserveCurrentLayer(doc);
+
+      _group = groupToggle.CurrentValue;
+      _joinPerim = joinPerimToggle.CurrentValue;
+      _cleanup = cleanupToggle.CurrentValue;
       if (gpResult == GetResult.Option)
-      { _group = groupToggle.CurrentValue; _joinPerim = joinPerimToggle.CurrentValue; SaveOptions(); }
-    }
-    while (gpResult == GetResult.Option);
+      {
+        if (gp.Option()?.Index == layerOptionIndex)
+          PromptForLayer(doc, mode, layerSession);
+        SaveOptions();
+        continue;
+      }
 
-    if (gpResult != GetResult.Point)
-    {
-      L($"EXIT: placement cancelled (gpResult={gpResult})");
-      return Result.Cancel;
+      if (gpResult != GetResult.Point)
+      {
+        L($"EXIT: placement cancelled (gpResult={gpResult})");
+        return Result.Cancel;
+      }
+
+      placementPoint = gp.Point();
+      SaveOptions();
+      break;
     }
-    L($"placement point: {gp.Point()}");
+    L($"placement point: {placementPoint}");
 
     // ── 8. Commit ─────────────────────────────────────────────────────────
 
-    var translation = Transform.Translation(gp.Point() - basePoint);
+    var translation = Transform.Translation(placementPoint - basePoint);
     var addedIds    = new List<Guid>();
 
+    ObjectAttributes PerimeterAttributes(ObjectAttributes? source = null)
+    {
+      var attributes = source?.Duplicate() ?? new ObjectAttributes();
+      attributes.LayerIndex = ResolvePerimeterLayerIndex(
+        doc,
+        layerSession,
+        source,
+        sourceBoundaryAttributes);
+      return attributes;
+    }
+
+    var finalCleanupLayerIndices = ResolveCleanupLayerIndices(
+      doc,
+      layerSession,
+      sourcePerimeterLayerIndices,
+      sourceBoundaryAttributes);
+    var cleanedInsideObjectsForCommit = allInsideObjects
+      .Where(item => item.Geom is not Curve curve ||
+        !IsRemovableInteriorLine(
+          curve,
+          item.Attr,
+          finalCleanupLayerIndices,
+          perimeter,
+          boundaryTolerance))
+      .ToList();
+    var cleanedTrimmedPerimeterForCommit = rawTrimmedPerimeter
+      .Where(item => !IsRemovableInteriorLine(
+        item.Crv,
+        item.Attr,
+        finalCleanupLayerIndices,
+        perimeter,
+        boundaryTolerance))
+      .ToList();
+    var activeInsideObjects = _cleanup
+      ? cleanedInsideObjectsForCommit
+      : allInsideObjects;
+    var activeTrimmedPerimeter = _cleanup
+      ? cleanedTrimmedPerimeterForCommit
+      : rawTrimmedPerimeter;
+    var removedInteriorLines = _cleanup
+      ? allInsideObjects.Count - cleanedInsideObjectsForCommit.Count +
+        rawTrimmedPerimeter.Count - cleanedTrimmedPerimeterForCommit.Count
+      : 0;
     var commitItems = new List<(GeometryBase Geom, ObjectAttributes Attr)>();
     if (_joinPerim)
     {
-      // Single joined closed perimeter on current layer, then inside objects
-      commitItems.Add(((GeometryBase)perimeter!, currentLayerAttr.Duplicate()));
-      commitItems.AddRange(insideObjects);
+      // Single joined closed perimeter on the chosen layer, then inside objects.
+      commitItems.Add((perimeter, PerimeterAttributes(sourceBoundaryAttributes)));
+      commitItems.AddRange(activeInsideObjects);
     }
     else
     {
-      commitItems.AddRange(partItems);
+      foreach (var (curve, attributes) in activeTrimmedPerimeter)
+        commitItems.Add((curve, PerimeterAttributes(attributes)));
+      foreach (var bridge in bridges)
+        commitItems.Add((bridge, PerimeterAttributes(sourceBoundaryAttributes)));
+      commitItems.AddRange(activeInsideObjects);
     }
 
     foreach (var (geom, attr) in commitItems)
@@ -307,11 +481,106 @@ public sealed class vPart : Command
       }
     }
 
-    L($"committed: {addedIds.Count} object(s)  grouped={_group && addedIds.Count > 1}");
+    var resolvedLayerDescription = IsSourceLayerOption(_layer)
+      ? SourceLayerOption
+      : layerSession.ResolvedLayerName(doc);
+    L($"committed: {addedIds.Count} object(s)  grouped={_group && addedIds.Count > 1} " +
+      $"cleanup={_cleanup} removedLines={removedInteriorLines} " +
+      $"layer={resolvedLayerDescription}");
     L("=== done ===");
     doc.Views.Redraw();
     return Result.Success;
   }
+
+  private static void PromptForLayer(
+    RhinoDoc doc,
+    RunMode mode,
+    DuplicateOutputLayerSession layerSession)
+  {
+    if (!LayerSelector.TrySelect(
+          doc,
+          layerSession.OptionLayerName,
+          DuplicateCommandSupport.CurrentLayerOption,
+          "vPart perimeter layer",
+          mode,
+          allowNewLayer: false,
+          specialChoices:
+          [
+            new LayerSelector.SpecialChoice(
+              SourceLayerOption,
+              SourceLayerOption)
+          ],
+          out var selectedLayer))
+      return;
+
+    _layer = NormalizePerimeterLayerOption(selectedLayer);
+    layerSession.ApplyOption(doc, _layer);
+    SaveOptions();
+  }
+
+  private static string NormalizePerimeterLayerOption(string? layerName)
+  {
+    var normalized = layerName?.Trim() ?? string.Empty;
+    if (string.Equals(
+          normalized.Trim('*'),
+          SourceLayerOption.Trim('*'),
+          StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+          normalized.Trim('*'),
+          "Original",
+          StringComparison.OrdinalIgnoreCase))
+      return SourceLayerOption;
+
+    return DuplicateCommandSupport.NormalizeLayerOption(normalized);
+  }
+
+  private static bool IsSourceLayerOption(string? layerName) =>
+    string.Equals(
+      NormalizePerimeterLayerOption(layerName),
+      SourceLayerOption,
+      StringComparison.OrdinalIgnoreCase);
+
+  private static int ResolvePerimeterLayerIndex(
+    RhinoDoc doc,
+    DuplicateOutputLayerSession layerSession,
+    ObjectAttributes? sourceAttributes,
+    ObjectAttributes fallbackSourceAttributes)
+  {
+    if (IsSourceLayerOption(_layer))
+    {
+      var sourceLayerIndex = sourceAttributes?.LayerIndex ?? RhinoMath.UnsetIntIndex;
+      if (IsUsableLayer(doc, sourceLayerIndex))
+        return sourceLayerIndex;
+      if (IsUsableLayer(doc, fallbackSourceAttributes.LayerIndex))
+        return fallbackSourceAttributes.LayerIndex;
+    }
+
+    return layerSession.CreateAttributes(doc).LayerIndex;
+  }
+
+  private static HashSet<int> ResolveCleanupLayerIndices(
+    RhinoDoc doc,
+    DuplicateOutputLayerSession layerSession,
+    IReadOnlySet<int> sourcePerimeterLayerIndices,
+    ObjectAttributes fallbackSourceAttributes)
+  {
+    if (IsSourceLayerOption(_layer))
+      return sourcePerimeterLayerIndices.ToHashSet();
+
+    var outputLayerIndex = ResolvePerimeterLayerIndex(
+      doc,
+      layerSession,
+      sourceAttributes: null,
+      fallbackSourceAttributes);
+    return outputLayerIndex >= 0
+      ? [outputLayerIndex]
+      : [];
+  }
+
+  private static bool IsUsableLayer(RhinoDoc doc, int layerIndex) =>
+    layerIndex >= 0 &&
+    layerIndex < doc.Layers.Count &&
+    doc.Layers[layerIndex] is { IsDeleted: false };
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -727,9 +996,8 @@ public sealed class vPart : Command
       if (splitParams.Count == 0)
       {
         // Use a broad IsOnCurve check for boundary-hugging curves, but also
-        // include curves that are entirely inside the perimeter (e.g. accidentally
-        // selected interior curves — they were in the user's selection so they
-        // should appear in the output).
+        // include curves that are entirely inside the perimeter. The later
+        // perimeter-layer cleanup can still omit straight interior pieces.
         var mid = crv.PointAtNormalizedLength(0.5);
         if (IsOnCurve(mid, boundary, boundaryMatchTolerance) || IsInsideOrOn(mid, boundaryList, plane, tol))
         {
@@ -772,7 +1040,11 @@ public sealed class vPart : Command
   ///   the representative point is inside.
   /// </summary>
   private static List<(GeometryBase Geom, ObjectAttributes Attr)> CollectInsideObjects(
-    RhinoDoc doc, HashSet<Guid> excludeIds, Curve perimeter, Plane plane, double tol)
+    RhinoDoc doc,
+    HashSet<Guid> excludeIds,
+    Curve perimeter,
+    Plane plane,
+    double tol)
   {
     var result   = new List<(GeometryBase, ObjectAttributes)>();
     var boundary = new List<Curve> { perimeter };
@@ -800,8 +1072,15 @@ public sealed class vPart : Command
         // If there are no split points, include the whole curve only when the
         // whole sampled curve is inside. This prevents a curve with midpoint
         // inside but ends sticking out from being copied untrimmed.
-        foreach (var insidePiece in TrimCurveInsidePerimeter(crv, perimeter, plane, tol))
+        var insidePieces = TrimCurveInsidePerimeter(
+          crv, perimeter, plane, tol).ToList();
+        if (insidePieces.Count == 0)
+          continue;
+
+        foreach (var insidePiece in insidePieces)
+        {
           result.Add((insidePiece, attr));
+        }
       }
       else
       {
@@ -813,6 +1092,89 @@ public sealed class vPart : Command
     }
 
     return result;
+  }
+
+  private static int ClosestSourceLayerIndex(
+    IReadOnlyList<(Curve Crv, ObjectAttributes Attr)> sources,
+    Point3d boundaryPoint)
+  {
+    var closestLayerIndex = RhinoMath.UnsetIntIndex;
+    var closestDistance = double.PositiveInfinity;
+    foreach (var (curve, attributes) in sources)
+    {
+      if (!curve.ClosestPoint(boundaryPoint, out var parameter))
+        continue;
+
+      var distance = boundaryPoint.DistanceTo(curve.PointAt(parameter));
+      if (distance >= closestDistance)
+        continue;
+
+      closestDistance = distance;
+      closestLayerIndex = attributes.LayerIndex;
+    }
+
+    return closestLayerIndex;
+  }
+
+  private static bool IsNotchCurve(ObjectAttributes attributes) =>
+    string.Equals(
+      attributes.Name,
+      NotchObjectName,
+      StringComparison.OrdinalIgnoreCase) ||
+    string.Equals(
+      attributes.GetUserString(NotchRoleKey),
+      "notch",
+      StringComparison.OrdinalIgnoreCase) ||
+    !string.IsNullOrWhiteSpace(attributes.GetUserString(NotchIdKey));
+
+  private static bool IsRemovableInteriorLine(
+    Curve curve,
+    ObjectAttributes attributes,
+    IReadOnlySet<int> perimeterLayerIndices,
+    Curve perimeter,
+    double tolerance)
+  {
+    if (!perimeterLayerIndices.Contains(attributes.LayerIndex) ||
+        !curve.IsLinear(tolerance) ||
+        IsNotchCurve(attributes))
+      return false;
+
+    var midpoint = curve.PointAtNormalizedLength(0.5);
+    return !IsOnCurve(
+      midpoint,
+      perimeter,
+      tolerance * InteriorLineBoundaryToleranceScale);
+  }
+
+  private static bool CurveContributesToBoundary(
+    Curve curve,
+    Curve perimeter,
+    double tolerance)
+  {
+    var overlapEvents = Intersection.CurveCurve(
+      curve,
+      perimeter,
+      tolerance * InteriorLineBoundaryToleranceScale,
+      tolerance * InteriorLineBoundaryToleranceScale);
+    if (overlapEvents != null && overlapEvents.Any(intersection =>
+          intersection.IsOverlap &&
+          Math.Abs(intersection.OverlapA.Length) > RhinoMath.ZeroTolerance))
+      return true;
+
+    for (var sampleIndex = 0;
+         sampleIndex < PerimeterContributionSampleCount;
+         sampleIndex++)
+    {
+      var normalizedLength =
+        (sampleIndex + 0.5) / PerimeterContributionSampleCount;
+      if (IsOnCurve(
+            curve.PointAtNormalizedLength(normalizedLength),
+            perimeter,
+            tolerance * InteriorLineBoundaryToleranceScale))
+        return true;
+    }
+
+    return false;
   }
 
   private static IEnumerable<Curve> TrimCurveInsidePerimeter(Curve crv, Curve perimeter, Plane plane, double tol)

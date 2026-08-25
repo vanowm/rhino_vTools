@@ -1,4 +1,4 @@
-# vTools  ·  v26.8.24.2054
+# vTools  ·  v26.8.25.007
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
@@ -531,8 +531,8 @@ Option persists to `vTools.config.json` under `vOverlaps`.
 
 1. Select the outer perimeter curves (preselect or postselect; a single closed curve is also valid).
 1. The command joins the selected curves into a closed loop.  If endpoints do not quite meet (gaps ≤ 200× model tolerance), straight-line bridge segments are inserted automatically.
-1. All visible objects inside the closed perimeter are collected automatically (excluding the selected perimeter curves).  Curves that cross the perimeter are split; only the inside segments are kept.  Non-curve objects (text, dots, points, etc.) are included whole when their representative point falls inside.
-1. A full DynamicDraw preview of the Part (perimeter + inside objects) follows the cursor, each object drawn in its original layer color.
+1. All visible objects inside the closed perimeter are collected automatically (excluding the selected perimeter curves). Curves that cross the perimeter are split; only the inside segments are kept. With `Cleanup=Yes`, eligible straight interior lines on the generated perimeter's effective layer are omitted unless they are named or metadata-tagged notch geometry. Non-curve objects (text, dots, points, etc.) are included whole when their representative point falls inside.
+1. A full DynamicDraw preview of the Part (perimeter + inside objects) follows the cursor. The perimeter uses its selected output-layer color; interior objects use their original layer colors.
 1. Pick the placement point to commit.  The Part is added as new objects at that location; originals are not deleted.
 1. Press Esc to cancel without adding anything.
 
@@ -540,6 +540,8 @@ Options (available during both curve selection and placement):
 
 - `Group`: when `Yes`, all output objects are placed into a single Rhino group.
 - `JoinPerimeter`: when `Yes`, perimeter segments are joined into a single curve instead of being kept as individual segments.
+- `Cleanup`: when `Yes`, omits eligible straight interior pieces only when they are on the generated perimeter's effective layer. In `Layer=*Source*` mode, each actual boundary source layer is eligible. Notch geometry and curves on unrelated layers are preserved.
+- `Layer`: chooses the output layer for perimeter segments and gap bridges. `*Current*` follows Rhino's current layer for that command session; `*Source*` preserves each split perimeter segment's source layer, while joined output and bridges use the first actual boundary source layer. In scripted input, `.` selects `*Current*`, and `Source` or `*Source*` selects source layers.
 
 ### vPerpendicularTo flow
 

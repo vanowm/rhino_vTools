@@ -1124,6 +1124,26 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     curveLength = segments[^1].GetLength();
   }
 
+  static bool TryResolvePlacementSegmentStation(
+    NotchSession s, int curveIndex, double logicalLength,
+    out int segmentIndex, out double segmentLength, out double localLength)
+  {
+    segmentIndex = -1;
+    segmentLength = 0.0;
+    localLength = 0.0;
+    if (curveIndex < 0 || curveIndex >= s.PerCurveSegments.Count ||
+        s.PerCurveSegments[curveIndex].Count == 0)
+      return false;
+
+    var segments = s.PerCurveSegments[curveIndex];
+    segmentIndex = ResolvePlacementSourceIndex(s, curveIndex, logicalLength, null);
+    segmentIndex = Math.Clamp(segmentIndex, 0, segments.Count - 1);
+    segmentLength = segments[segmentIndex].GetLength();
+    double prefix = segments.Take(segmentIndex).Sum(segment => segment.GetLength());
+    localLength = Clamp(logicalLength - prefix, 0.0, segmentLength);
+    return true;
+  }
+
   static void RestoreCurveSides(
     NotchSession s,
     IReadOnlyList<bool> sideSequence,
@@ -1210,7 +1230,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     panel.Show();
     s.Panel = panel;
     SyncPanelFromOptions(s);
-    UpdateDistanceLabels(s, null, null, null);
+    UpdateDistanceLabels(s, null, null, null, null, null, null);
 
     EventHandler<CommandEventArgs> commandEnded = (_, e) =>
     {
@@ -1397,7 +1417,15 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     }
     else if (idx == s.NotchLayerOptionIndex)
     {
-      RhinoGet.GetString("Notch layer", false, ref s.NotchLayerName);
+      if (RhinoGet.GetString(
+            "Notch layer (. = current)",
+            false,
+            ref s.NotchLayerName) == Result.Success)
+      {
+        s.NotchLayerName = LayerSelector.NormalizeCurrentLayerValue(
+          s.NotchLayerName,
+          SpecialLayerCurrent);
+      }
     }
     else if (idx == s.NotchEnabledIndex)
     {
@@ -1664,6 +1692,11 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       {
         bool active = curveIndex >= s.CurveEnabled.Length || s.CurveEnabled[curveIndex];
         if (!active || curveIndex >= lengths.Count)
+          continue;
+
+        if (s.MultipleAuto && s.MultipleSeparate &&
+            IsDisconnectedInternalSegmentBoundary(
+              s, curveIndex, lengths[curveIndex], tolerance))
           continue;
 
         if (!s.NotchToggle.CurrentValue)
@@ -1972,6 +2005,29 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       ? s.PerCurveSegments[curveIndex]
       : [s.Curves[curveIndex]];
 
+  static bool PlacementSegmentsTouch(
+    IReadOnlyList<Curve> segments, int boundaryIndex, double tolerance) =>
+    boundaryIndex >= 0 && boundaryIndex + 1 < segments.Count &&
+    segments[boundaryIndex].PointAtEnd.DistanceTo(
+      segments[boundaryIndex + 1].PointAtStart) <= tolerance;
+
+  static bool IsDisconnectedInternalSegmentBoundary(
+    NotchSession s, int curveIndex, double logicalLength, double tolerance)
+  {
+    var segments = PlacementSegments(s, curveIndex);
+    if (segments.Count < 2)
+      return false;
+
+    double cumulativeLength = 0.0;
+    for (int boundaryIndex = 0; boundaryIndex + 1 < segments.Count; boundaryIndex++)
+    {
+      cumulativeLength += segments[boundaryIndex].GetLength();
+      if (Math.Abs(logicalLength - cumulativeLength) <= tolerance)
+        return !PlacementSegmentsTouch(segments, boundaryIndex, tolerance);
+    }
+    return false;
+  }
+
   static List<double> BuildSeparatedMultipleRatios(
     RhinoDoc doc,
     NotchSession s,
@@ -1980,15 +2036,31 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     double referenceAvailable)
   {
     var result = new List<double>();
+    var touchingJoinRatios = new List<double>();
     double cumulativeLength = 0.0;
     double ratioTolerance = Math.Max(
       1.0e-9,
       doc.ModelAbsoluteTolerance / Math.Max(referenceAvailable, doc.ModelAbsoluteTolerance));
-    foreach (var segment in PlacementSegments(s, referenceCurveIndex))
+    var segments = PlacementSegments(s, referenceCurveIndex);
+    for (int segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
     {
+      var segment = segments[segmentIndex];
       double segmentLength = segment.GetLength();
-      double segmentAvailable = segmentLength -
-        EffectiveMultipleStartOffset(s) - EffectiveMultipleEndOffset(s);
+      bool sequenceStart = segmentIndex == 0;
+      bool sequenceEnd = segmentIndex + 1 == segments.Count;
+      double localStartOffset = !s.MultipleAuto || sequenceStart
+        ? EffectiveMultipleStartOffset(s)
+        : 0.0;
+      double localEndOffset = !s.MultipleAuto || sequenceEnd
+        ? EffectiveMultipleEndOffset(s)
+        : 0.0;
+      bool includeStart = s.MultipleAuto
+        ? sequenceStart && s.MultipleStartOffsetEnabled
+        : s.MultipleStartOffsetEnabled;
+      bool includeEnd = s.MultipleAuto
+        ? sequenceEnd && s.MultipleEndOffsetEnabled
+        : s.MultipleEndOffsetEnabled;
+      double segmentAvailable = segmentLength - localStartOffset - localEndOffset;
       if (segmentAvailable > doc.ModelAbsoluteTolerance)
       {
         List<double> localRatios;
@@ -1997,13 +2069,13 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
           localRatios = s.MultipleDistance > doc.ModelAbsoluteTolerance
             ? BuildCurvatureAwareCurveRatios(
                 segment,
-                EffectiveMultipleStartOffset(s),
+                localStartOffset,
                 segmentAvailable,
                 s.MultipleDistance,
                 s.MultipleCurvatureSensitivity * MultipleCurvatureSensitivityUnit,
                 doc.ModelAbsoluteTolerance,
-                s.MultipleStartOffsetEnabled,
-                s.MultipleEndOffsetEnabled)
+                includeStart,
+                includeEnd)
             : [];
         }
         else
@@ -2025,7 +2097,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         foreach (double localRatio in localRatios)
         {
           double logicalLength = cumulativeLength +
-            EffectiveMultipleStartOffset(s) + segmentAvailable * localRatio;
+            localStartOffset + segmentAvailable * localRatio;
           double globalRatio = (logicalLength - startOffset) / referenceAvailable;
           if (globalRatio >= -ratioTolerance && globalRatio <= 1.0 + ratioTolerance)
             result.Add(Math.Clamp(globalRatio, 0.0, 1.0));
@@ -2034,8 +2106,23 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         }
       }
       cumulativeLength += segmentLength;
+      if (s.MultipleAuto && segmentIndex + 1 < segments.Count &&
+          PlacementSegmentsTouch(segments, segmentIndex, doc.ModelAbsoluteTolerance))
+      {
+        double joinRatio = (cumulativeLength - startOffset) / referenceAvailable;
+        if (joinRatio > ratioTolerance && joinRatio < 1.0 - ratioTolerance)
+          touchingJoinRatios.Add(joinRatio);
+      }
     }
-    return result;
+
+    return s.MultipleAuto && touchingJoinRatios.Count > 0
+      ? PreferKinkRatios(
+          result,
+          touchingJoinRatios,
+          s.MultipleDistance,
+          referenceAvailable,
+          doc.ModelAbsoluteTolerance)
+      : result;
   }
 
   static List<double> BuildCombinedSeparatedAutoRatios(
@@ -2715,7 +2802,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     if (refCurve == null)
     {
       s.Panel?.SetViewportCurveHover(-1, 0.0);
-      UpdateDistanceLabels(s, null, null, null);
+      UpdateDistanceLabels(s, null, null, null, null, null, null);
       return;
     }
 
@@ -2728,7 +2815,32 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       double prevLen = LengthFromRecord(s, lastRec, refIdx);
       prevDelta = Math.Abs(lfs - prevLen);
     }
-    UpdateDistanceLabels(s, lfs, prevDelta, otherEnd);
+
+    double? segmentStart = null;
+    double? segmentEnd = null;
+    double? segmentPrevDelta = null;
+    if (PlacementSegmentCount(s, refIdx) > 1 &&
+        TryResolvePlacementSegmentStation(
+          s, refIdx, lfs, out int segmentIndex, out double segmentLength,
+          out double localLength))
+    {
+      segmentStart = localLength;
+      segmentEnd = Math.Max(0.0, segmentLength - localLength);
+      for (int recordIndex = s.NotchRecords.Count - 1; recordIndex >= 0; recordIndex--)
+      {
+        double previousLength = LengthFromRecord(s, s.NotchRecords[recordIndex], refIdx);
+        if (!TryResolvePlacementSegmentStation(
+              s, refIdx, previousLength, out int previousSegmentIndex,
+              out _, out double previousLocalLength) ||
+            previousSegmentIndex != segmentIndex)
+          continue;
+
+        segmentPrevDelta = Math.Abs(localLength - previousLocalLength);
+        break;
+      }
+    }
+    UpdateDistanceLabels(
+      s, lfs, prevDelta, otherEnd, segmentStart, segmentPrevDelta, segmentEnd);
 
     // Compute per-curve positions
     List<double> lengths;
@@ -2800,15 +2912,21 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
         for (int i = 0; i < s.Curves.Count; i++)
         {
           if (i >= hoverPlan.CurveEnabled.Length || !hoverPlan.CurveEnabled[i]) continue;
-          ResolvePlacementCurve(s, i, hoverLengths[i], null,
+          KinkTangentChoice? hoverKinkChoice = s.MultipleAuto
+            ? KinkTangentChoice.Middle
+            : null;
+          ResolvePlacementCurve(s, i, hoverLengths[i], hoverKinkChoice,
             out var hoverCurve, out double hoverLength);
-          string side = PlacementCurveSide(s, i, hoverLengths[i], null);
-          var hgeom = NotchGeometry(hoverCurve, hoverLength, nl, no, side, nt, nw, null, null);
+          string side = PlacementCurveSide(s, i, hoverLengths[i], hoverKinkChoice);
+          var hgeom = NotchGeometry(
+            hoverCurve, hoverLength, nl, no, side, nt, nw,
+            null, hoverKinkChoice);
           if (hgeom == null) continue;
           if (canNotch) foreach (var c in hgeom) PreviewDisplay.DrawCurve(e.Display, c, System.Drawing.Color.Cyan, 1);
           if (canLabel && firstPos)
           {
-            GetCurveTangentAndDirection(hoverCurve, hoverLength, side, null, null,
+            GetCurveTangentAndDirection(
+              hoverCurve, hoverLength, side, null, hoverKinkChoice,
               out var tangent, out var direction);
             if (!tangent.IsValid || !direction.IsValid) continue;
             string firstSide = PlacementCurveSide(s, 0, hoverLengths[0], null);
@@ -4238,7 +4356,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static int ResolveLayerIndex(RhinoDoc doc, string layerName)
   {
-    if (string.IsNullOrWhiteSpace(layerName) || layerName == SpecialLayerCurrent)
+    if (string.IsNullOrWhiteSpace(layerName) ||
+        LayerSelector.IsCurrentLayerValue(layerName, SpecialLayerCurrent))
       return doc.Layers.CurrentLayerIndex;
     int idx = doc.Layers.FindByFullPath(layerName, RhinoMath.UnsetIntIndex);
     if (idx >= 0) return idx;
@@ -4249,7 +4368,8 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
   static string EffectiveLayerName(RhinoDoc doc, string layerChoice, string notchLayerChoice)
   {
-    if (string.IsNullOrWhiteSpace(layerChoice) || layerChoice == SpecialLayerCurrent)
+    if (string.IsNullOrWhiteSpace(layerChoice) ||
+        LayerSelector.IsCurrentLayerValue(layerChoice, SpecialLayerCurrent))
     {
       int ci = doc.Layers.CurrentLayerIndex;
       return ci >= 0 && ci < doc.Layers.Count ? doc.Layers[ci].FullPath : "";
@@ -4355,9 +4475,14 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     s.Panel?.SyncFromSession();
   }
 
-  static void UpdateDistanceLabels(NotchSession s, double? current, double? prevDelta, double? otherEnd)
+  static void UpdateDistanceLabels(
+    NotchSession s,
+    double? current, double? prevDelta, double? otherEnd,
+    double? segmentCurrent, double? segmentPrevDelta, double? segmentOtherEnd)
   {
-    s.Panel?.UpdateDistanceLabels(current, prevDelta, otherEnd);
+    s.Panel?.UpdateDistanceLabels(
+      current, prevDelta, otherEnd,
+      segmentCurrent, segmentPrevDelta, segmentOtherEnd);
   }
 
   // ── Session state ─────────────────────────────────────────────────────────
@@ -4746,6 +4871,7 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
     System.Windows.Controls.CheckBox? _multipleSeparateCheck;
     readonly HashSet<Control> _multipleFocusedInputs = [];
     readonly Label       _fromStartLbl, _fromEndLbl, _fromPrevLbl;
+    readonly Label       _segmentStartLbl, _segmentEndLbl, _segmentPrevLbl;
     readonly Button      _undoBtn, _redoBtn, _selectCurvesButton;
     System.Windows.Controls.CheckBox? _keepSelectionCheck;
     Button[]   _sideButtons = [];
@@ -5098,6 +5224,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       _fromStartLbl = new Label { Text = "-" };
       _fromEndLbl   = new Label { Text = "-" };
       _fromPrevLbl  = new Label { Text = "-" };
+      _segmentStartLbl = new Label { Text = "" };
+      _segmentEndLbl   = new Label { Text = "" };
+      _segmentPrevLbl  = new Label { Text = "" };
 
       // History buttons
       _undoBtn = new Button { Text = "Undo", Width = 54, Height = 24 };
@@ -5317,9 +5446,9 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
 
       // ── Distance info ────────────────────────────────────────────────────
       var distTable = new TableLayout { Spacing = new Eto.Drawing.Size(6, 2) };
-      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From start"),    new TableCell(_fromStartLbl, true) } });
-      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From end"),      new TableCell(_fromEndLbl,   true) } });
-      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From previous"), new TableCell(_fromPrevLbl,  true) } });
+      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From start"),    new TableCell(_fromStartLbl, false), new TableCell(_segmentStartLbl, false), new TableCell(null, true) } });
+      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From end"),      new TableCell(_fromEndLbl,   false), new TableCell(_segmentEndLbl,   false), new TableCell(null, true) } });
+      distTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("From previous"), new TableCell(_fromPrevLbl,  false), new TableCell(_segmentPrevLbl,  false), new TableCell(null, true) } });
       var historyButtons = new StackLayout
       {
         Orientation = Orientation.Vertical,
@@ -7370,12 +7499,20 @@ static void UpdateStaticDefaultsFromSession(NotchSession s)
       SaveOptions(_s);
     }
 
-    public void UpdateDistanceLabels(double? current, double? prevDelta, double? otherEnd)
+    public void UpdateDistanceLabels(
+      double? current, double? prevDelta, double? otherEnd,
+      double? segmentCurrent, double? segmentPrevDelta, double? segmentOtherEnd)
     {
       _fromStartLbl.Text = current.HasValue ? FormatPanelNumber(current.Value) : "-";
       _fromEndLbl.Text = otherEnd.HasValue ? FormatPanelNumber(otherEnd.Value) : "-";
       _fromPrevLbl.Text = prevDelta.HasValue ? FormatPanelNumber(prevDelta.Value) : "-";
+      _segmentStartLbl.Text = FormatSegmentDistance(segmentCurrent);
+      _segmentEndLbl.Text = FormatSegmentDistance(segmentOtherEnd);
+      _segmentPrevLbl.Text = FormatSegmentDistance(segmentPrevDelta);
     }
+
+    static string FormatSegmentDistance(double? value) =>
+      value.HasValue ? $"({FormatPanelNumber(value.Value)})" : "";
 
     public void UpdateUndoEnabled()
     {

@@ -273,11 +273,24 @@ public sealed class vCleanup : Command
       $"helpers={helperIds.Count}");
     var resultAction = autoDeleteEnabled
       ? $"deleted {deletedOverlapCount} overlaps and {deletedShortCount} short findings"
-      : $"saved '{ShortSelectionName}' and '{OverlapSelectionName}'";
-    RhinoApp.WriteLine(
+      : foundOverlapCount + foundShortCount == 0
+        ? "no cleanup findings"
+        : $"saved '{ShortSelectionName}' and '{OverlapSelectionName}'";
+    QueueResultOutput(
       $"vCleanup: simplified {simplifiedCount}; found {foundOverlapCount} overlaps " +
       $"and {foundShortCount} short findings; {resultAction}.");
     return Result.Success;
+  }
+
+  private static void QueueResultOutput(string message)
+  {
+    EventHandler? idleHandler = null;
+    idleHandler = (_, _) =>
+    {
+      RhinoApp.Idle -= idleHandler;
+      RhinoApp.WriteLine(message);
+    };
+    RhinoApp.Idle += idleHandler;
   }
 
   private static Result GetScope(RhinoDoc doc, out HashSet<Guid> scopedIds)

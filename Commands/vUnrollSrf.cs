@@ -1971,8 +1971,7 @@ namespace vTools.Commands
         return defaultPath;
       }
 
-      if (normalized == "." || normalized == "*" ||
-          string.Equals(normalized, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
+      if (LayerSelector.IsCurrentLayerValue(normalized, CurrentLayerOption))
       {
         return CurrentLayerOption;
       }
@@ -1988,8 +1987,7 @@ namespace vTools.Commands
       var layerPath = string.IsNullOrWhiteSpace(configuredLayer)
         ? defaultPath
         : configuredLayer.Trim();
-      if (layerPath == "." || layerPath == "*" ||
-          string.Equals(layerPath, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
+      if (LayerSelector.IsCurrentLayerValue(layerPath, CurrentLayerOption))
       {
         return doc.Layers.CurrentLayerIndex;
       }

@@ -14,11 +14,8 @@ internal static class DuplicateCommandSupport
   internal static string NormalizeLayerOption(string? layerName)
   {
     var value = layerName?.Trim();
-    return string.IsNullOrWhiteSpace(value) || value is "." or "*" ||
-           string.Equals(
-             value,
-             CurrentLayerOption,
-             StringComparison.OrdinalIgnoreCase)
+    return string.IsNullOrWhiteSpace(value) ||
+           LayerSelector.IsCurrentLayerValue(value, CurrentLayerOption)
       ? CurrentLayerOption
       : value;
   }

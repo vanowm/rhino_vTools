@@ -606,8 +606,7 @@ public sealed class vLine : Command
   {
     var value = layerName?.Trim();
     if (string.IsNullOrWhiteSpace(value) ||
-        string.Equals(value, CurrentLayerOption, StringComparison.OrdinalIgnoreCase) ||
-        value == "." || value == "*")
+        LayerSelector.IsCurrentLayerValue(value, CurrentLayerOption))
     {
       return CurrentLayerOption;
     }

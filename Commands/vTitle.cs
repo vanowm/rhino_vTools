@@ -900,8 +900,7 @@ public sealed class vTitle : Command
 
   private static int GetTargetLayerIndex(RhinoDoc doc)
   {
-    if (_layer == "." || _layer == "*" ||
-        string.Equals(_layer, CurrentLayerOption, StringComparison.OrdinalIgnoreCase))
+    if (LayerSelector.IsCurrentLayerValue(_layer, CurrentLayerOption))
       return doc.Layers.CurrentLayerIndex;
     int idx = doc.Layers.FindByFullPath(_layer, -1);
     if (idx >= 0) return idx;
@@ -941,8 +940,7 @@ public sealed class vTitle : Command
   private static string NormalizeLayerOption(string? value)
   {
     var layer = value?.Trim() ?? string.Empty;
-    return layer == "." || layer == "*" ||
-           string.Equals(layer, CurrentLayerOption, StringComparison.OrdinalIgnoreCase)
+    return LayerSelector.IsCurrentLayerValue(layer, CurrentLayerOption)
       ? CurrentLayerOption
       : layer;
   }

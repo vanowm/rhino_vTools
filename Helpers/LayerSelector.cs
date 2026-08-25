@@ -17,8 +17,31 @@ namespace vTools;
 /// </summary>
 internal static class LayerSelector
 {
+  internal readonly record struct SpecialChoice(
+    string Value,
+    string DisplayText);
+
   private static readonly ConditionalWeakTable<DropDown, LayerDropDownState>
     DropDownStates = new();
+
+  internal static bool IsCurrentLayerValue(
+    string? value,
+    string currentLayerValue)
+  {
+    var normalized = value?.Trim() ?? string.Empty;
+    return normalized is "." or "*" ||
+           string.Equals(
+             normalized,
+             currentLayerValue,
+             StringComparison.OrdinalIgnoreCase);
+  }
+
+  internal static string NormalizeCurrentLayerValue(
+    string? value,
+    string currentLayerValue) =>
+    IsCurrentLayerValue(value, currentLayerValue)
+      ? currentLayerValue
+      : value?.Trim() ?? string.Empty;
 
   internal static bool TrySelect(
     RhinoDoc doc,
@@ -27,6 +50,25 @@ internal static class LayerSelector
     string title,
     RunMode runMode,
     bool allowNewLayer,
+    out string result) =>
+    TrySelect(
+      doc,
+      selectedValue,
+      currentLayerValue,
+      title,
+      runMode,
+      allowNewLayer,
+      [],
+      out result);
+
+  internal static bool TrySelect(
+    RhinoDoc doc,
+    string selectedValue,
+    string currentLayerValue,
+    string title,
+    RunMode runMode,
+    bool allowNewLayer,
+    IReadOnlyList<SpecialChoice> specialChoices,
     out string result)
   {
     result = selectedValue;
@@ -38,12 +80,18 @@ internal static class LayerSelector
         currentLayerValue,
         title,
         allowNewLayer,
+        specialChoices,
         out result);
 
     try
     {
       using var dialog = new LayerSelectorDialog(
-        doc, selectedValue, currentLayerValue, title, allowNewLayer);
+        doc,
+        selectedValue,
+        currentLayerValue,
+        title,
+        allowNewLayer,
+        specialChoices);
       if (!dialog.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow))
         return false;
 
@@ -212,6 +260,7 @@ internal static class LayerSelector
     string currentLayerValue,
     string title,
     bool allowNewLayer,
+    IReadOnlyList<SpecialChoice> specialChoices,
     out string result)
   {
     result = selectedValue;
@@ -220,8 +269,11 @@ internal static class LayerSelector
     {
       var getString = new GetString();
       getString.EnableTransparentCommands(true);
+      var specialPrompt = specialChoices.Count == 0
+        ? string.Empty
+        : ", " + string.Join(", ", specialChoices.Select(choice => choice.Value));
       getString.SetCommandPrompt(
-        $"{title} name ({currentLayerValue}, . or * = current layer)");
+        $"{title} name ({currentLayerValue}, . or * = current layer{specialPrompt})");
       getString.SetDefaultString(selectedValue);
       getString.AcceptNothing(true);
       var getResult = getString.GetLiteralString();
@@ -236,6 +288,7 @@ internal static class LayerSelector
             requested,
             currentLayerValue,
             allowNewLayer,
+            specialChoices,
             out result,
             out var error))
       {
@@ -251,6 +304,7 @@ internal static class LayerSelector
     string? requested,
     string currentLayerValue,
     bool allowNewLayer,
+    IReadOnlyList<SpecialChoice> specialChoices,
     out string result,
     out string error)
   {
@@ -263,10 +317,18 @@ internal static class LayerSelector
       return false;
     }
 
-    if (value == "." || value == "*" ||
-        string.Equals(value, currentLayerValue, StringComparison.OrdinalIgnoreCase))
+    if (IsCurrentLayerValue(value, currentLayerValue))
     {
       result = currentLayerValue;
+      return true;
+    }
+
+    foreach (var choice in specialChoices)
+    {
+      if (!MatchesSpecialChoice(value, choice))
+        continue;
+
+      result = choice.Value;
       return true;
     }
 
@@ -306,6 +368,20 @@ internal static class LayerSelector
     return false;
   }
 
+  private static bool MatchesSpecialChoice(
+    string value,
+    SpecialChoice choice)
+  {
+    if (string.Equals(value, choice.Value, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, choice.DisplayText, StringComparison.OrdinalIgnoreCase))
+      return true;
+
+    return string.Equals(
+      value.Trim('*'),
+      choice.Value.Trim('*'),
+      StringComparison.OrdinalIgnoreCase);
+  }
+
   private static bool IsUsableLayer(RhinoDoc doc, int layerIndex)
   {
     if (layerIndex < 0 || layerIndex >= doc.Layers.Count)
@@ -326,7 +402,8 @@ internal static class LayerSelector
       string selectedValue,
       string currentLayerValue,
       string title,
-      bool allowNewLayer)
+      bool allowNewLayer,
+      IReadOnlyList<SpecialChoice> specialChoices)
     {
       Title = title;
       Resizable = true;
@@ -335,6 +412,16 @@ internal static class LayerSelector
       MinimumSize = new Size(300, 260);
 
       _allItems = BuildItems(doc, currentLayerValue);
+      var specialInsertIndex = string.IsNullOrWhiteSpace(currentLayerValue) ? 0 : 1;
+      foreach (var choice in specialChoices.Reverse())
+      {
+        _allItems.Insert(specialInsertIndex, new LayerListItem(
+          choice.Value,
+          choice.DisplayText,
+          choice.Value + " " + choice.DisplayText,
+          Colors.Gray,
+          true));
+      }
       if (allowNewLayer &&
           !string.IsNullOrWhiteSpace(selectedValue) &&
           !_allItems.Any(item => string.Equals(

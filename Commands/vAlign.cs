@@ -20,6 +20,9 @@ public sealed class vAlign : Command
   private const int TargetCurveSampleCount = 32; // Coarse hover samples per target curve; two or greater.
   private const int TargetCurveRefinementIterations = 8; // Local closest-point refinement passes; zero or greater.
   private const double MinimumPickRadiusPixels = 6.0; // Minimum target hover radius in display pixels; greater than zero.
+  private const double CursorSideDeadZoneToleranceScale = 2.0; // World XY side dead zone as a multiple of document tolerance.
+  private const double OrthoCueCurveLengthScale = 0.25; // Fraction of hovered target length used for the World Ortho direction cue.
+  private const double OrthoCueToleranceScale = 20.0; // Minimum Ortho cue length as a multiple of document tolerance.
   private const double PreviewTransparency = 0.65; // Faded-object transparency from zero opaque through one invisible.
   private static readonly Color ReferenceColor = Color.Cyan; // Highlight color for the stationary reference segment.
   private static readonly Color TargetColor = Color.Orange; // Highlight color for the hovered rotating target segment.
@@ -47,28 +50,36 @@ public sealed class vAlign : Command
 
     result = PickEdge(
       doc,
-      "Select reference edge or curve segment",
+      "Select reference edge or curve segment, or press Enter for World Ortho",
       movingIds,
       requireMovingObject: false,
+      allowNothing: true,
       ref distance,
       out var reference);
-    if (result != Result.Success || reference == null)
+    if (result != Result.Success)
       return result;
 
-    using (reference)
+    try
     {
-      Log.Write(
-        "vAlign",
-        $"reference object={reference.ParentId} matchedEnd={reference.MatchedEnd} " +
-        $"anchor=({reference.Anchor.X:G17},{reference.Anchor.Y:G17},{reference.Anchor.Z:G17}) " +
-        $"direction=({reference.Direction.X:G17},{reference.Direction.Y:G17})");
+      if (reference == null)
+      {
+        Log.Write("vAlign", "reference=None mode=WorldOrtho");
+      }
+      else
+      {
+        Log.Write(
+          "vAlign",
+          $"reference object={reference.ParentId} matchedEnd={reference.MatchedEnd} " +
+          $"anchor=({reference.Anchor.X:G17},{reference.Anchor.Y:G17},{reference.Anchor.Z:G17}) " +
+          $"direction=({reference.Direction.X:G17},{reference.Direction.Y:G17})");
+      }
       RestoreMovingSelection(doc, movingIds);
 
       result = PickTargetEdge(
         doc,
         movingIds,
         massCenter,
-        reference,
+        ref reference,
         ref distance,
         out var target,
         out var candidate);
@@ -89,17 +100,24 @@ public sealed class vAlign : Command
           return Result.Failure;
         }
 
-        var action = distance.HasValue
-          ? $"aligned={outputIds.Count} distance={distance.Value:G17}"
-          : $"rotated={outputIds.Count} distance=None";
+        var action = reference == null
+          ? $"rotated={outputIds.Count} mode=WorldOrtho"
+          : distance.HasValue
+            ? $"aligned={outputIds.Count} distance={distance.Value:G17}"
+            : $"rotated={outputIds.Count} distance=None";
         Log.Write(
           "vAlign",
-          $"{action} failed={failed} reference={reference.ParentId} target={target.ParentId} " +
+          $"{action} failed={failed} " +
+          $"reference={(reference == null ? "WorldOrtho" : reference.ParentId)} " +
+          $"target={target.ParentId} " +
           $"angle={RhinoMath.ToDegrees(candidate.Angle):G17}");
 
         if (failed > 0)
           RhinoApp.WriteLine(
             $"vAlign: transformed {outputIds.Count} object(s); {failed} operation(s) failed.");
+        else if (reference == null)
+          RhinoApp.WriteLine(
+            $"vAlign: rotated {outputIds.Count} object(s) to World Ortho.");
         else if (distance.HasValue)
           RhinoApp.WriteLine(
             $"vAlign: aligned {outputIds.Count} object(s) at distance {distance.Value:G}.");
@@ -108,6 +126,10 @@ public sealed class vAlign : Command
             $"vAlign: rotated {outputIds.Count} object(s) around their center of mass.");
         return Result.Success;
       }
+    }
+    finally
+    {
+      reference?.Dispose();
     }
   }
 
@@ -171,13 +193,14 @@ public sealed class vAlign : Command
     string prompt,
     IReadOnlyCollection<Guid> movingIds,
     bool requireMovingObject,
+    bool allowNothing,
     ref double? distance,
     out EdgePick? edgePick)
   {
     edgePick = null;
     while (true)
     {
-      using var getter = CreateEdgeGetter(prompt);
+      using var getter = CreateEdgeGetter(prompt, allowNothing);
       ConfigureDirectDistanceInput(getter);
       var distanceOption = getter.AddOption("Distance", DistanceLabel(distance));
       var getResult = getter.Get();
@@ -190,6 +213,8 @@ public sealed class vAlign : Command
           return Result.Cancel;
         continue;
       }
+      if (allowNothing && getResult == GetResult.Nothing)
+        return Result.Success;
       if (getter.CommandResult() != Result.Success)
         return getter.CommandResult();
       if (getResult != GetResult.Object || getter.ObjectCount == 0)
@@ -217,7 +242,7 @@ public sealed class vAlign : Command
     }
   }
 
-  private static GetObject CreateEdgeGetter(string prompt)
+  private static GetObject CreateEdgeGetter(string prompt, bool allowNothing)
   {
     var getter = new GetObject();
     getter.SetCommandPrompt(prompt);
@@ -229,6 +254,7 @@ public sealed class vAlign : Command
     getter.EnableClearObjectsOnEntry(false);
     getter.EnableUnselectObjectsOnExit(false);
     getter.DeselectAllBeforePostSelect = false;
+    getter.AcceptNothing(allowNothing);
     return getter;
   }
 
@@ -236,13 +262,14 @@ public sealed class vAlign : Command
     RhinoDoc doc,
     IReadOnlyList<Guid> movingIds,
     Point3d massCenter,
-    EdgePick reference,
+    ref EdgePick? reference,
     ref double? distance,
     out EdgePick? target,
     out TransformCandidate? candidate)
   {
     target = null;
     candidate = null;
+    var activeReference = reference;
     using var targetCache = new TargetEdgeCache(doc, movingIds);
     if (targetCache.Count == 0)
     {
@@ -251,7 +278,13 @@ public sealed class vAlign : Command
     }
 
     Log.Write("vAlign", $"target cache curves={targetCache.Count}");
-    using var preview = new AlignPreviewConduit(doc, movingIds, reference);
+    using var preview = new AlignPreviewConduit(doc, movingIds, activeReference);
+    CachedTargetCurve? referenceCache = null;
+    if (activeReference != null &&
+        doc.Objects.FindId(activeReference.ParentId) is { } referenceObject)
+      referenceCache = new CachedTargetCurve(
+        referenceObject,
+        activeReference.Curve.DuplicateCurve());
     preview.Enabled = true;
 
     try
@@ -260,62 +293,127 @@ public sealed class vAlign : Command
       {
         using var getter = new GetPoint();
         getter.EnableTransparentCommands(true);
-        getter.SetCommandPrompt(
-          "Hover and click target edge or curve segment (hold Shift or Ctrl for opposite offset side)");
+        getter.SetCommandPrompt(activeReference == null
+          ? "Hover and click target edge; Shift or Ctrl selects horizontal; click stationary geometry to set reference"
+          : "Hover and click target edge; Shift or Ctrl reverses side; click stationary geometry to replace reference");
         getter.AcceptNumber(true, false);
         getter.AcceptString(true);
-        var distanceOption = getter.AddOption("Distance", DistanceLabel(distance));
+        var distanceOption = activeReference == null
+          ? -1
+          : getter.AddOption("Distance", DistanceLabel(distance));
         EdgePick? hoveredTarget = null;
+        EdgePick? hoveredReference = null;
         TransformCandidate? hoveredCandidate = null;
         string hoverStatus = "no target edge under cursor";
         bool loggedValidHover = false;
         var hoverDistance = distance;
-        bool reverseOffsetSide = IsOffsetSideModifierDown();
+        int cursorSide = 1;
+        bool modifierDown = IsAlignModifierDown();
+        bool orthoHorizontal = activeReference == null && modifierDown;
+        RhinoViewport? lastViewport = null;
+        System.Drawing.Point lastWindowPoint = default;
+        bool hasWindowPoint = false;
 
-        void RefreshHoveredCandidate(bool reverseSide)
+        void RefreshHoveredCandidate(bool modifierPressed)
         {
-          reverseOffsetSide = reverseSide;
-          hoveredCandidate = hoveredTarget == null
+          modifierDown = modifierPressed;
+          orthoHorizontal = activeReference == null && modifierDown;
+          hoveredCandidate = hoveredTarget == null || hoveredReference != null
             ? null
-            : BuildTransformCandidate(
-              doc,
-              movingIds,
-              massCenter,
-              reference,
-              hoveredTarget,
-              hoverDistance,
-              reverseOffsetSide);
+            : activeReference == null
+              ? BuildOrthoTransformCandidate(
+                massCenter,
+                hoveredTarget,
+                cursorSide,
+                orthoHorizontal)
+              : BuildTransformCandidate(
+                doc,
+                movingIds,
+                massCenter,
+                activeReference,
+                hoveredTarget,
+                hoverDistance,
+                cursorSide,
+                modifierDown);
           if (hoveredTarget != null)
           {
             hoverStatus = hoveredCandidate == null
               ? $"target={hoveredTarget.ParentId} has no valid World XY transform"
               : $"target={hoveredTarget.ParentId} candidate ready; " +
-                $"offsetSide={(reverseOffsetSide ? "opposite" : "automatic")}";
+                $"cursorSide={CursorSideLabel(cursorSide)}" +
+                (activeReference == null
+                  ? $" ortho={(orthoHorizontal ? "horizontal" : "vertical")}"
+                  : $" modifier={(modifierDown ? "reversed" : "normal")}");
           }
-          preview.SetHover(hoveredTarget, hoveredCandidate);
+          preview.SetHover(hoveredReference ?? hoveredTarget, hoveredCandidate);
         }
 
         getter.MouseMove += (_, e) =>
         {
+          lastViewport = e.Viewport;
+          lastWindowPoint = e.WindowPoint;
+          hasWindowPoint = true;
+
           EdgePick? nextTarget = null;
-          if (targetCache.TryPick(
-                e.Viewport,
-                e.WindowPoint,
-                out nextTarget,
-                out var pickDiagnostics) &&
-              nextTarget != null)
+          bool hasTarget = targetCache.TryPick(
+            e.Viewport,
+            e.WindowPoint,
+            out nextTarget,
+            out var targetDistancePixels,
+            out var pickDiagnostics);
+          EdgePick? nextReference = null;
+          double referenceDistancePixels = double.PositiveInfinity;
+          if (referenceCache != null)
           {
+            var referenceSample = referenceCache.BestScreenPick(
+              e.Viewport,
+              new Point2d(e.WindowPoint.X, e.WindowPoint.Y));
+            referenceDistancePixels = Math.Sqrt(
+              referenceSample.DistanceSquared ?? double.PositiveInfinity);
+            if (referenceDistancePixels <= PickboxRadiusPixels())
+              TryCreateEdgePick(
+                doc,
+                referenceCache.Parent,
+                referenceCache.Curve,
+                referenceSample.Point,
+                out nextReference);
+          }
+
+          if (nextReference != null &&
+              (!hasTarget || referenceDistancePixels <= targetDistancePixels))
+          {
+            nextTarget?.Dispose();
+            nextTarget = null;
+            hoverStatus =
+              $"reference={nextReference.ParentId} endpoint ready; " +
+              $"nearestPx={referenceDistancePixels:0.###}";
+          }
+          else if (hasTarget && nextTarget != null)
+          {
+            nextReference?.Dispose();
+            nextReference = null;
             hoverStatus = $"target={nextTarget.ParentId}; {pickDiagnostics}";
           }
           else
           {
+            nextReference?.Dispose();
+            nextReference = null;
             hoverStatus = $"no target edge under cursor; {pickDiagnostics}";
           }
 
           var previousTarget = hoveredTarget;
+          var previousReference = hoveredReference;
           hoveredTarget = nextTarget;
-          RefreshHoveredCandidate(IsOffsetSideModifierDown());
+          hoveredReference = nextReference;
+          if (hoveredTarget != null)
+            cursorSide = CursorSideFromWorldXy(
+              e.Point,
+              hoveredTarget,
+              cursorSide,
+              doc.ModelAbsoluteTolerance);
+          RefreshHoveredCandidate(IsAlignModifierDown());
           previousTarget?.Dispose();
+          previousReference?.Dispose();
           if (!loggedValidHover && hoveredTarget != null && hoveredCandidate != null)
           {
             loggedValidHover = true;
@@ -323,31 +421,37 @@ public sealed class vAlign : Command
               "vAlign",
               $"target hover object={hoveredTarget.ParentId} " +
               $"matchedEnd={hoveredTarget.MatchedEnd} " +
-              $"angle={RhinoMath.ToDegrees(hoveredCandidate.Angle):G17}; {hoverStatus}");
+              $"angle={RhinoMath.ToDegrees(hoveredCandidate.Angle):G17} " +
+              $"cursorSide={CursorSideLabel(cursorSide)}; {hoverStatus}");
           }
           doc.Views.Redraw();
         };
 
         EventHandler modifierPoll = (_, _) =>
         {
-          bool nextReverseOffsetSide = IsOffsetSideModifierDown();
-          if (nextReverseOffsetSide == reverseOffsetSide)
+          bool nextModifierDown = IsAlignModifierDown();
+          if (nextModifierDown == modifierDown)
             return;
-          RefreshHoveredCandidate(nextReverseOffsetSide);
+          RefreshHoveredCandidate(nextModifierDown);
           Log.Write(
             "vAlign",
-            $"offset side modifier={(reverseOffsetSide ? "opposite" : "automatic")}");
+            activeReference == null
+              ? $"ortho={(orthoHorizontal ? "horizontal" : "vertical")}"
+              : $"offset side modifier={(modifierDown ? "reversed" : "normal")}");
           doc.Views.Redraw();
         };
         RhinoApp.Idle += modifierPoll;
 
-        bool transferHover = false;
+        bool transferTarget = false;
+        bool transferReference = false;
         try
         {
           var getResult = getter.Get();
           if (HandleDirectDistance(getter, getResult, ref distance))
             continue;
-          if (getResult == GetResult.Option && getter.Option()?.Index == distanceOption)
+          if (distanceOption >= 0 &&
+              getResult == GetResult.Option &&
+              getter.Option()?.Index == distanceOption)
           {
             if (!PromptDistance(ref distance))
               return Result.Cancel;
@@ -358,9 +462,75 @@ public sealed class vAlign : Command
           if (getResult != GetResult.Point)
             return Result.Cancel;
 
-          bool clickReverseOffsetSide = IsOffsetSideModifierDown();
-          if (clickReverseOffsetSide != reverseOffsetSide)
-            RefreshHoveredCandidate(clickReverseOffsetSide);
+          bool clickModifierDown = IsAlignModifierDown();
+          if (clickModifierDown != modifierDown)
+            RefreshHoveredCandidate(clickModifierDown);
+
+          EdgePick? clickedEdge = null;
+          string clickDiagnostics = "screen position unavailable";
+          if (hasWindowPoint && lastViewport != null)
+          {
+            TryPickEdgeAtScreenPoint(
+              doc,
+              lastViewport,
+              lastWindowPoint,
+              out clickedEdge,
+              out clickDiagnostics);
+          }
+
+          if (clickedEdge != null && !Intersects(clickedEdge.ObjectIds, movingIds))
+          {
+            var previousReference = activeReference;
+            activeReference = clickedEdge;
+            reference = activeReference;
+            referenceCache?.Dispose();
+            referenceCache = doc.Objects.FindId(activeReference.ParentId) is { } replacementReferenceObject
+              ? new CachedTargetCurve(
+                replacementReferenceObject,
+                activeReference.Curve.DuplicateCurve())
+              : null;
+            preview.SetReference(activeReference);
+            previousReference?.Dispose();
+            Log.Write(
+              "vAlign",
+              $"reference replaced object={activeReference.ParentId} " +
+              $"matchedEnd={activeReference.MatchedEnd} " +
+              $"anchor=({activeReference.Anchor.X:G17},{activeReference.Anchor.Y:G17},{activeReference.Anchor.Z:G17}); " +
+              clickDiagnostics);
+            continue;
+          }
+
+          if (clickedEdge != null)
+          {
+            if (hoveredTarget == null)
+            {
+              hoveredTarget = clickedEdge;
+              clickedEdge = null;
+              cursorSide = CursorSideFromWorldXy(
+                getter.Point(),
+                hoveredTarget,
+                cursorSide,
+                doc.ModelAbsoluteTolerance);
+              RefreshHoveredCandidate(clickModifierDown);
+            }
+            clickedEdge?.Dispose();
+          }
+
+          if (hoveredReference != null)
+          {
+            var previousReference = activeReference;
+            activeReference = hoveredReference;
+            reference = activeReference;
+            transferReference = true;
+            preview.SetReference(activeReference);
+            previousReference?.Dispose();
+            Log.Write(
+              "vAlign",
+              $"reference re-anchored object={activeReference.ParentId} " +
+              $"matchedEnd={activeReference.MatchedEnd} " +
+              $"anchor=({activeReference.Anchor.X:G17},{activeReference.Anchor.Y:G17},{activeReference.Anchor.Z:G17})");
+            continue;
+          }
 
           if (hoveredTarget == null || hoveredCandidate == null)
           {
@@ -371,12 +541,15 @@ public sealed class vAlign : Command
 
           target = hoveredTarget;
           candidate = hoveredCandidate;
-          transferHover = true;
+          transferTarget = true;
           Log.Write(
             "vAlign",
             $"target click object={target.ParentId} matchedEnd={target.MatchedEnd} " +
             $"angle={RhinoMath.ToDegrees(candidate.Angle):G17} " +
-            $"offsetSide={(reverseOffsetSide ? "opposite" : "automatic")}");
+            $"cursorSide={CursorSideLabel(cursorSide)}" +
+            (activeReference == null
+              ? $" ortho={(orthoHorizontal ? "horizontal" : "vertical")}"
+              : $" modifier={(modifierDown ? "reversed" : "normal")}"));
           RestoreMovingSelection(doc, movingIds);
           return Result.Success;
         }
@@ -384,14 +557,17 @@ public sealed class vAlign : Command
         {
           RhinoApp.Idle -= modifierPoll;
           preview.ClearHover();
-          if (!transferHover)
+          if (!transferTarget)
             hoveredTarget?.Dispose();
+          if (!transferReference)
+            hoveredReference?.Dispose();
           doc.Views.Redraw();
         }
       }
     }
     finally
     {
+      referenceCache?.Dispose();
       preview.Enabled = false;
       doc.Views.Redraw();
     }
@@ -401,6 +577,57 @@ public sealed class vAlign : Command
   {
     getter.AcceptNumber(true, false);
     getter.AcceptString(true);
+  }
+
+  private static bool TryPickEdgeAtScreenPoint(
+    RhinoDoc doc,
+    RhinoViewport viewport,
+    System.Drawing.Point windowPoint,
+    out EdgePick? edgePick,
+    out string diagnostics)
+  {
+    edgePick = null;
+    if (viewport.ParentView == null ||
+        !viewport.GetFrustumLine(windowPoint.X, windowPoint.Y, out var pickLine))
+    {
+      diagnostics = "no viewport pick line";
+      return false;
+    }
+
+    using var pickContext = new PickContext
+    {
+      View = viewport.ParentView,
+      PickLine = pickLine,
+      PickStyle = PickStyle.PointPick,
+      PickMode = PickMode.Wireframe,
+      PickGroupsEnabled = false,
+      SubObjectSelectionEnabled = true
+    };
+    pickContext.SetPickTransform(viewport.GetPickTransform(windowPoint));
+    pickContext.UpdateClippingPlanes();
+
+    var picked = doc.Objects.PickObjects(pickContext);
+    if (picked == null || picked.Length == 0)
+    {
+      diagnostics = "native pick returned no objects";
+      return false;
+    }
+
+    foreach (var objRef in picked)
+    {
+      if (!TryCreateEdgePick(doc, objRef, pickContext, out var candidate) ||
+          candidate == null)
+        continue;
+
+      edgePick = candidate;
+      diagnostics =
+        $"native pick count={picked.Length} object={candidate.ParentId} " +
+        $"component={objRef.GeometryComponentIndex}";
+      return true;
+    }
+
+    diagnostics = $"native pick count={picked.Length} contained no usable curve or edge";
+    return false;
   }
 
   private static bool HandleDirectDistance(
@@ -763,7 +990,8 @@ public sealed class vAlign : Command
     EdgePick reference,
     EdgePick target,
     double? distance,
-    bool reverseOffsetSide = false)
+    int cursorSide,
+    bool reverseOffsetSide)
   {
     if (!TryObjectsBoundingBox(doc, movingIds, out var targetBounds))
       return null;
@@ -840,23 +1068,78 @@ public sealed class vAlign : Command
       }
     }
 
-    var automatic = candidates
-      .OrderBy(item => item.Overlap)
-      .ThenBy(item => item.SameSidePenalty)
-      .ThenBy(item => item.AbsoluteAngle)
-      .ThenBy(item => item.DirectionIndex)
-      .ThenBy(item => item.NormalIndex)
-      .FirstOrDefault();
-    if (!reverseOffsetSide || !distance.HasValue || automatic == null)
-      return automatic;
+    if (candidates.Count == 0)
+      return null;
 
+    int preferredDirectionIndex =
+      referenceDirections.Count > 1 && cursorSide < 0 ? 1 : 0;
+    if (!distance.HasValue)
+      return candidates
+        .OrderBy(item => item.DirectionIndex == preferredDirectionIndex ? 0 : 1)
+        .ThenBy(item => item.AbsoluteAngle)
+        .First();
+
+    int preferredNormalIndex = referenceDirections.Count > 1
+      ? 0
+      : cursorSide < 0 ? 1 : 0;
+    if (reverseOffsetSide)
+      preferredNormalIndex = preferredNormalIndex == 0 ? 1 : 0;
     return candidates.FirstOrDefault(item =>
-        item.DirectionIndex == automatic.DirectionIndex &&
-        item.NormalIndex != automatic.NormalIndex)
-      ?? automatic;
+        item.DirectionIndex == preferredDirectionIndex &&
+        item.NormalIndex == preferredNormalIndex)
+      ?? candidates
+        .OrderBy(item => item.DirectionIndex == preferredDirectionIndex ? 0 : 1)
+        .ThenBy(item => item.NormalIndex == preferredNormalIndex ? 0 : 1)
+        .ThenBy(item => item.Overlap)
+        .First();
   }
 
-  private static bool IsOffsetSideModifierDown()
+  private static TransformCandidate? BuildOrthoTransformCandidate(
+    Point3d massCenter,
+    EdgePick target,
+    int cursorSide,
+    bool horizontal)
+  {
+    var desiredDirection = horizontal ? Vector3d.XAxis : Vector3d.YAxis;
+    if (cursorSide < 0)
+      desiredDirection.Reverse();
+    var angle = SignedWorldXyAngle(target.Direction, desiredDirection);
+    if (!angle.HasValue)
+      return null;
+    return new TransformCandidate(
+      Transform.Rotation(angle.Value, Vector3d.ZAxis, massCenter),
+      0.0,
+      0,
+      Math.Abs(angle.Value),
+      cursorSide < 0 ? 1 : 0,
+      0,
+      angle.Value);
+  }
+
+  private static int CursorSideFromWorldXy(
+    Point3d cursorPoint,
+    EdgePick target,
+    int fallback,
+    double documentTolerance)
+  {
+    if (!TryProjectWorldXy(target.Direction, out var direction))
+      return fallback;
+    var cursorVector = cursorPoint - target.PickPoint;
+    double cross =
+      (direction.X * cursorVector.Y) -
+      (direction.Y * cursorVector.X);
+    double deadZone = Math.Max(
+      RhinoMath.ZeroTolerance,
+      documentTolerance * CursorSideDeadZoneToleranceScale);
+    if (Math.Abs(cross) <= deadZone)
+      return fallback;
+    return cross < 0.0 ? 1 : -1;
+  }
+
+  private static string CursorSideLabel(int cursorSide) =>
+    cursorSide < 0 ? "right" : "left";
+
+  private static bool IsAlignModifierDown()
   {
     var modifiers = System.Windows.Forms.Control.ModifierKeys;
     return (modifiers & (System.Windows.Forms.Keys.Shift | System.Windows.Forms.Keys.Control)) !=
@@ -1224,6 +1507,7 @@ public sealed class vAlign : Command
       RhinoViewport viewport,
       System.Drawing.Point windowPoint,
       out EdgePick? edgePick,
+      out double nearestDistancePixels,
       out string diagnostics)
     {
       edgePick = null;
@@ -1244,8 +1528,9 @@ public sealed class vAlign : Command
         bestDistanceSquared = sample.DistanceSquared.Value;
       }
 
+      nearestDistancePixels = Math.Sqrt(bestDistanceSquared);
       diagnostics =
-        $"cache curves={_curves.Count} nearestPx={Math.Sqrt(bestDistanceSquared):0.###}";
+        $"cache curves={_curves.Count} nearestPx={nearestDistancePixels:0.###}";
       return best != null && bestPoint.IsValid &&
         TryCreateEdgePick(_doc, best.Parent, best.Curve, bestPoint, out edgePick);
     }
@@ -1447,7 +1732,7 @@ public sealed class vAlign : Command
     private readonly RhinoDoc _doc;
     private readonly IReadOnlyList<Guid> _movingIds;
     private readonly HashSet<Guid> _movingSet;
-    private readonly EdgePick _reference;
+    private EdgePick? _reference;
     private readonly DisplayMaterial _previewMaterial = new(FadedPreviewColor)
     {
       Transparency = PreviewTransparency,
@@ -1455,18 +1740,25 @@ public sealed class vAlign : Command
     };
     private readonly List<GeometryBase> _previewGeometry = [];
     private readonly List<PreviewInstance> _previewInstances = [];
+    private readonly HashSet<Guid> _previewedObjectIds = [];
     private EdgePick? _target;
     private TransformCandidate? _candidate;
 
     internal AlignPreviewConduit(
       RhinoDoc doc,
       IReadOnlyList<Guid> movingIds,
-      EdgePick reference)
+      EdgePick? reference)
     {
       _doc = doc;
       _movingIds = movingIds;
       _movingSet = movingIds.ToHashSet();
       _reference = reference;
+    }
+
+    internal void SetReference(EdgePick? reference)
+    {
+      _reference = reference;
+      ClearHover();
     }
 
     internal void SetHover(EdgePick? target, TransformCandidate? candidate)
@@ -1491,18 +1783,21 @@ public sealed class vAlign : Command
             instance.InstanceDefinition,
             candidate.Transform * instance.InstanceXform,
             bounds));
+          _previewedObjectIds.Add(objectId);
           continue;
         }
 
         var geometry = rhinoObject.Geometry?.Duplicate();
         if (geometry == null)
           continue;
-        if (!geometry.Transform(candidate.Transform))
+        if (!CanDrawPreviewGeometry(geometry) ||
+            !geometry.Transform(candidate.Transform))
         {
           geometry.Dispose();
           continue;
         }
         _previewGeometry.Add(geometry);
+        _previewedObjectIds.Add(objectId);
       }
     }
 
@@ -1510,7 +1805,9 @@ public sealed class vAlign : Command
 
     protected override void ObjectCulling(CullObjectEventArgs e)
     {
-      if (_candidate != null && e.RhinoObject != null && _movingSet.Contains(e.RhinoObject.Id))
+      if (_candidate != null && e.RhinoObject != null &&
+          _movingSet.Contains(e.RhinoObject.Id) &&
+          _previewedObjectIds.Contains(e.RhinoObject.Id))
         e.CullObject = true;
     }
 
@@ -1546,19 +1843,39 @@ public sealed class vAlign : Command
 
     protected override void DrawForeground(DrawEventArgs e)
     {
-      PreviewDisplay.DrawCurve(e.Display, _reference.Curve, ReferenceColor, 1);
+      if (_reference != null)
+        PreviewDisplay.DrawCurve(e.Display, _reference.Curve, ReferenceColor, 1);
       if (_target != null)
       {
         PreviewDisplay.DrawCurve(e.Display, _target.Curve, TargetColor, 2);
-        PreviewDisplay.DrawLine(
-          e.Display,
-          _reference.PickPoint,
-          _target.PickPoint,
-          CueColor);
-        e.Display.DrawDottedLine(
-          _reference.PickPoint,
-          _target.PickPoint,
-          CueColor);
+        if (_reference != null)
+        {
+          PreviewDisplay.DrawLine(
+            e.Display,
+            _reference.PickPoint,
+            _target.PickPoint,
+            CueColor);
+          e.Display.DrawDottedLine(
+            _reference.PickPoint,
+            _target.PickPoint,
+            CueColor);
+        }
+        else if (_candidate != null)
+        {
+          var direction = _target.Direction;
+          direction.Transform(_candidate.Transform);
+          if (direction.Unitize())
+          {
+            double halfLength = Math.Max(
+              _target.Curve.GetLength() * OrthoCueCurveLengthScale * 0.5,
+              _doc.ModelAbsoluteTolerance * OrthoCueToleranceScale * 0.5);
+            PreviewDisplay.DrawLine(
+              e.Display,
+              _target.PickPoint - (direction * halfLength),
+              _target.PickPoint + (direction * halfLength),
+              CueColor);
+          }
+        }
       }
     }
 
@@ -1621,12 +1938,17 @@ public sealed class vAlign : Command
       }
     }
 
+    private static bool CanDrawPreviewGeometry(GeometryBase geometry) =>
+      geometry is Curve or Brep or Extrusion or Surface or Mesh or SubD or
+      TextEntity or TextDot or RhinoPoint or Hatch;
+
     private void DisposePreviewGeometry()
     {
       foreach (var geometry in _previewGeometry)
         geometry.Dispose();
       _previewGeometry.Clear();
       _previewInstances.Clear();
+      _previewedObjectIds.Clear();
     }
 
     public void Dispose()

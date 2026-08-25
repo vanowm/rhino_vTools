@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Rhino;
+using Rhino.ApplicationSettings;
 using Rhino.Commands;
 using Rhino.DocObjects;
 using Rhino.Geometry;
@@ -55,11 +56,16 @@ namespace vTools.Commands
     private const string FailureMarkerText = "X"; // Text displayed on surfaces that could not be unrolled.
     private const string LabelHelperDotPrefix     = "__vTools_vUnrollSrf_LabelHelper__"; // Internal following-dot name prefix for label frames.
     private const string EdgeMateHelperDotPrefix  = "__vTools_vUnrollSrf_EdgeHelper__"; // Internal following-dot name prefix for edge mates.
+    private const string UserPointHelperDotPrefix = "__vTools_vUnrollSrf_UserPointHelper__"; // Internal following-dot name prefix for preserving selected point identity across duplicated face output.
+    private const string UserDotHelperDotPrefix   = "__vTools_vUnrollSrf_UserDotHelper__"; // Internal following-dot name prefix for preserving selected text dots through native unroll.
+    private const string NativeFaceHelperDotPrefix = "__vTools_vUnrollSrf_FaceHelper__"; // Internal following-dot name prefix used to map each source face to its flat UV-preserved output.
     private const string CurveHelperDotPrefix     = "__vTools_vUnrollSrf_CurveHelper__"; // Internal following-dot name prefix for curves.
 
     private const string TextFont = "Arial"; // Installed font family used for generated number labels and failure markers.
     private const double TextHeightScale = 1.5; // Label-height multiplier relative to the part-derived base height.
-    private const double TextLiftRatio = 0.001; // Surface-normal lift as a fraction of text height.
+    private const double FlatTextLiftRatio = 0.0; // Unrolled-label normal lift as a fraction of text height; zero keeps text coplanar.
+    private const double SurfaceTextLiftRatio = 0.001; // Original-surface label normal lift as a fraction of text height; zero disables lift.
+    private const double MinimumTextLiftToleranceFactor = 2.0; // Document-tolerance multiplier used as minimum lift when the selected ratio is positive.
     private const double TextUpStepRatio = 2.5; // Label up-direction probe distance as a fraction of text height.
     private const int TextBoundarySamples = 7; // Samples per boundary curve used for label fitting; two or greater.
     private const bool TextMarkSixNine = true; // true underlines all-6/9 labels for orientation; false leaves them plain.
@@ -67,6 +73,13 @@ namespace vTools.Commands
     private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
     private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
     private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
+    private const double SharedPointToleranceFactor = 1.0; // Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.
+    private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native UV-unroll labels with flat edges.
+    private const double NativeSeamMaxRelativeLengthError = 0.01; // Maximum 0..1 relative edge-length error accepted by source-topology fallback seam matching.
+    private const double NativeJoinedSeamToleranceFactor = 10.0; // Document-tolerance multiplier for recognizing an aligned seam as an interior edge after face joining.
+    private const bool NativeForceExplodePolysurfaces = true; // true temporarily separates multi-face UV output for source-topology reconstruction; false honors the visible Explode option directly.
+    private const bool NativeUseNoEcho = true; // true runs the internal Rhino macro with NoEcho; false relies only on RunScript's silent flag.
+    private const int NativeCapturedLogLimit = 12; // Maximum captured native command lines written to the shared diagnostic log per source object; zero disables captured-line logging.
 
     private enum LabelMode
     {
@@ -212,6 +225,7 @@ namespace vTools.Commands
       var edgePairs = _edgeDots
         ? BuildEdgeMates(doc, sources, partNumbers, tol)
         : (List<List<EdgeMateRecord>>?)null;
+      var nativeMateIds = new NativeMateIdAllocator(doc, edgePairs);
       double xLimit = _xExtents;
       double xOrigin = options.StartPoint.X;
       double rowY = options.StartPoint.Y;
@@ -269,6 +283,9 @@ namespace vTools.Commands
             ? edgePairs[i]
             : new List<EdgeMateRecord>();
           var edgeMateHelperDots = new Dictionary<string, EdgeMateRecord>(StringComparer.Ordinal);
+          var userPointHelperDots = new Dictionary<string, Guid>(StringComparer.Ordinal);
+          var userDotHelperDots = new Dictionary<string, (TextDot Dot, Guid SourceId)>(StringComparer.Ordinal);
+          var nativeFaceHelperDots = new Dictionary<string, int>(StringComparer.Ordinal);
           var curveHelperDots = new Dictionary<string, int>(StringComparer.Ordinal);
           var followingDots = new List<TextDot>();
           foreach (var rec in UniqueEdgeMateRecords(edgeMateRecords))
@@ -280,6 +297,26 @@ namespace vTools.Commands
           }
           Dbg($"part={number} edge_mates records={edgeMateRecords.Count} helpers={edgeMateHelperDots.Count}");
 
+          if (src.Brep.Faces.Count > 1)
+          {
+            foreach (var face in src.Brep.Faces)
+            {
+              var helperPoint = FaceInteriorPoint(face, tol);
+              if (!helperPoint.HasValue)
+              {
+                Dbg($"part={number} face_helper source_face={face.FaceIndex} point=None");
+                continue;
+              }
+
+              string helperText = NativeFaceHelperDotPrefix +
+                $"{src.Id:N}:{number}:{face.FaceIndex}";
+              nativeFaceHelperDots[helperText] = face.FaceIndex;
+              followingDots.Add(new TextDot(helperText, helperPoint.Value));
+              Dbg($"part={number} face_helper source_face={face.FaceIndex}" +
+                  $" point={P(helperPoint.Value)}");
+            }
+          }
+
           for (int curveIndex = 0; curveIndex < curves.Count; curveIndex++)
           {
             var markerPoint = curves[curveIndex].PointAtNormalizedLength(0.5);
@@ -289,6 +326,14 @@ namespace vTools.Commands
               $"{src.Id:N}:{number}:{curveIndex}";
             curveHelperDots[markerText] = curveIndex;
             followingDots.Add(new TextDot(markerText, markerPoint));
+          }
+
+          for (int pointIndex = 0; pointIndex < points.Count; pointIndex++)
+          {
+            string helperText =
+              $"{UserPointHelperDotPrefix}{src.Id:N}:{number}:{pointIndex}";
+            userPointHelperDots[helperText] = pointSourceIds[pointIndex];
+            followingDots.Add(new TextDot(helperText, points[pointIndex].Location));
           }
 
           string? labelPointDotText = null;
@@ -309,9 +354,11 @@ namespace vTools.Commands
             followingDots.Add(rightDot);
           }
 
-          foreach (var dot in dots)
+          for (int dotIndex = 0; dotIndex < dots.Count; dotIndex++)
           {
-            followingDots.Add(dot);
+            string helperText = $"{UserDotHelperDotPrefix}{src.Id:N}:{number}:{dotIndex}";
+            userDotHelperDots[helperText] = (dots[dotIndex], dotSourceIds[dotIndex]);
+            followingDots.Add(new TextDot(helperText, dots[dotIndex].Point));
           }
 
           Curve[] unrolledCurves;
@@ -326,14 +373,14 @@ namespace vTools.Commands
               flatBrep.Transform(planarTransform);
               unrolledBreps = new[] { flatBrep };
               unrolledCurves = curves.Select(curve => TransformCurveCopy(curve, planarTransform)).ToArray();
-              unrolledPoints = points.Select(point => TransformPoint(point.Location, planarTransform)).ToArray();
+              unrolledPoints = Array.Empty<Point3d>();
               unrolledDots = followingDots.Select(dot => TransformTextDotCopy(dot, planarTransform)).ToArray();
               Dbg($"part={number} unroll_method=planar_exact");
             }
             else
             {
               if (TryPerformNativeCommandUnroll(
-                    doc, src, _explode, curves, points, followingDots,
+                    doc, src, _explode, curves, Array.Empty<Point>(), followingDots,
                     out unrolledBreps, out unrolledCurves,
                     out unrolledPoints, out unrolledDots,
                     out string nativeDetails))
@@ -350,7 +397,6 @@ namespace vTools.Commands
                 if (unrolledBreps?.Length > 0 && src.Brep.Faces.Count == unrolledBreps[0].Faces.Count)
                 {
                   var mc = new List<Curve>(curves.Count);
-                  var mp = new List<Point3d>(points.Count);
                   var md = new List<TextDot>(followingDots.Count);
                   for (int fi = 0; fi < src.Brep.Faces.Count; fi++)
                   {
@@ -363,14 +409,6 @@ namespace vTools.Commands
                       var flat = uv != null ? ff.Pushup(uv, tol) : null;
                       if (flat != null) mc.Add(flat);
                     }
-                  }
-
-                  foreach (var point in points)
-                  {
-                    if (TryMapPointToUnrolledBrep(
-                      src.Brep, unrolledBreps[0], point.Location, null,
-                      out var mappedPoint, out _))
-                      mp.Add(mappedPoint);
                   }
 
                   foreach (var dot in followingDots)
@@ -403,7 +441,7 @@ namespace vTools.Commands
                           $" point={P(mappedPoint)}");
                   }
                   unrolledCurves = mc.ToArray();
-                  unrolledPoints = mp.ToArray();
+                  unrolledPoints = Array.Empty<Point3d>();
                   unrolledDots   = md.ToArray();
                 }
                 else
@@ -442,9 +480,27 @@ namespace vTools.Commands
           var followingOutputPairs = new List<(Guid srcId, Guid outId)>(); // source-ID → flat output-ID for KeepPropFollowing
           var curveOutputIds    = new List<Guid>();
           var curveFlatMidpoints = new Dictionary<int, Point3d>();
+          var nativeInternalMates = unrolledBreps.Length > 1
+            ? ReconstructNativeFlatFaces(
+                src.Brep,
+                unrolledBreps,
+                unrolledCurves ?? Array.Empty<Curve>(),
+                unrolledPoints ?? Array.Empty<Point3d>(),
+                unrolledDots ?? Array.Empty<TextDot>(),
+                nativeFaceHelperDots,
+                nativeMateIds,
+                number,
+                tol,
+                reconstructFaces: !_explode)
+            : new List<NativeInternalMate>();
           var finalBreps = !_explode && unrolledBreps.Length > 1
             ? (Brep.JoinBreps(unrolledBreps, tol) ?? unrolledBreps)
             : unrolledBreps;
+          var visibleNativeInternalMates = _explode
+            ? nativeInternalMates
+            : nativeInternalMates
+              .Where(mate => !NativeMateWasJoined(finalBreps, mate, tol))
+              .ToList();
           foreach (var brep in finalBreps)
           {
             var surfaceId = doc.Objects.AddBrep(
@@ -472,13 +528,8 @@ namespace vTools.Commands
           Point3d? labelRight = null;
           if (unrolledPoints != null)
           {
-            for (int p = 0; p < unrolledPoints.Length; p++)
-            {
-              var pid = doc.Objects.AddPoint(unrolledPoints[p]);
-              AddValid(outputIds, pid);
-              if (IsValidId(pid) && p < pointSourceIds.Count)
-                followingOutputPairs.Add((pointSourceIds[p], pid));
-            }
+            if (unrolledPoints.Length > 0)
+              Dbg($"part={number} unexpected_native_points removed={unrolledPoints.Length}");
           }
 
           if (unrolledDots != null)
@@ -505,6 +556,36 @@ namespace vTools.Commands
                 continue;
               }
 
+              if (nativeFaceHelperDots.ContainsKey(dotText))
+              {
+                Dbg($"part={number} hidden_face_dot text={dotText}" +
+                    $" point={P(dot.Point)}");
+                continue;
+              }
+
+              if (userPointHelperDots.TryGetValue(dotText, out Guid pointSourceId))
+              {
+                var pointId = doc.Objects.AddPoint(dot.Point);
+                AddValid(outputIds, pointId);
+                if (IsValidId(pointId))
+                  followingOutputPairs.Add((pointSourceId, pointId));
+                Dbg($"part={number} user_point source={pointSourceId}" +
+                    $" point={P(dot.Point)} output={pointId}");
+                continue;
+              }
+
+              if (userDotHelperDots.TryGetValue(dotText, out var userDot))
+              {
+                var copy = userDot.Dot.Duplicate() as TextDot ??
+                  new TextDot(userDot.Dot.Text ?? string.Empty, dot.Point);
+                copy.Point = dot.Point;
+                var dotId = doc.Objects.AddTextDot(copy);
+                AddValid(outputIds, dotId);
+                if (IsValidId(dotId))
+                  followingOutputPairs.Add((userDot.SourceId, dotId));
+                continue;
+              }
+
               if (edgeMateHelperDots.TryGetValue(dotText, out var edgeRecord))
               {
                 var key = (edgeRecord.MateId, edgeRecord.EdgeIndex, edgeRecord.MatePartIndex);
@@ -515,14 +596,8 @@ namespace vTools.Commands
                 continue;
               }
 
-              var dotId = doc.Objects.AddTextDot(dot);
-              AddValid(outputIds, dotId);
-              if (IsValidId(dotId))
-              {
-                int userIdx = followingOutputPairs.Count(p => dotSourceIds.Contains(p.srcId));
-                if (userIdx < dotSourceIds.Count)
-                  followingOutputPairs.Add((dotSourceIds[userIdx], dotId));
-              }
+              Dbg($"part={number} unknown_helper text={dotText}" +
+                  $" point={P(dot.Point)} removed=true");
             }
           }
 
@@ -599,7 +674,9 @@ namespace vTools.Commands
               // the raw frame normal for flat labels. If the unrolled helper frame lands with
               // a -Z normal, annotation text becomes mirrored in Top view. World +Z keeps the
               // text readable while preserving the same unrolled Y/up direction.
-              AddValid(unrolledLabelIds, AddFlatText(doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis, finalLabelHeight, src.Id, _keepPropSurface));
+              AddValid(unrolledLabelIds, AddFlatText(
+                doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis,
+                finalLabelHeight, FlatTextLiftRatio, src.Id, _keepPropSurface));
             }
             else if (addDots)
             {
@@ -648,6 +725,40 @@ namespace vTools.Commands
               if (IsValidId(dotId))
                 outputIds.Add(dotId);
             }
+          }
+
+          if (visibleNativeInternalMates.Count > 0)
+          {
+            int dotLayerIdx = DotOutputLayerIndex(doc);
+            foreach (var mate in visibleNativeInternalMates)
+            {
+              var first = new EdgeMateRecord
+              {
+                MateId = mate.MateId,
+                EdgeIndex = -1,
+                MatePartIndex = -1,
+                MatePartNumber = number,
+                MateEdgeIndex = -1,
+                Reversed = mate.Reversed
+              };
+              var second = new EdgeMateRecord
+              {
+                MateId = mate.MateId,
+                EdgeIndex = -1,
+                MatePartIndex = -2,
+                MatePartNumber = number,
+                MateEdgeIndex = -1,
+                Reversed = !mate.Reversed
+              };
+              AddValid(outputIds, AddEdgeMateDot(doc, first, mate.PointA, number, dotLayerIdx));
+              AddValid(outputIds, AddEdgeMateDot(doc, second, mate.PointB, number, dotLayerIdx));
+            }
+          }
+          if (nativeInternalMates.Count > visibleNativeInternalMates.Count)
+          {
+            Dbg($"part={number} native_seam_dots omitted=" +
+                $"{nativeInternalMates.Count - visibleNativeInternalMates.Count}" +
+                " reason=faces_joined");
           }
 
           if (_rotateFlatParts && frame != null && labelPoint.HasValue)
@@ -1169,13 +1280,53 @@ namespace vTools.Commands
 
         var followingIds = temporaryInputIds.Skip(1).ToList();
         var objectIdsBefore = doc.Objects.Select(obj => obj.Id).ToHashSet();
-        SelectOnly(doc, new[] { commandSourceId });
-        string command = "_-UnrollSrfUV" +
-          $" _Explode=_{(explode ? "Yes" : "No")}" +
-          " _Labels=_No" +
+        SelectOnly(doc, Array.Empty<Guid>());
+        bool nativeExplode = explode ||
+          NativeForceExplodePolysurfaces && source.Brep.Faces.Count > 1;
+        bool nativeLabels = source.Brep.Faces.Count > 1;
+        string command = (NativeUseNoEcho ? "_NoEcho " : string.Empty) +
+          "_-UnrollSrfUV" +
+          $" _Explode=_{(nativeExplode ? "Yes" : "No")}" +
+          $" _Labels=_{(nativeLabels ? "Yes" : "No")}" +
+          $" _SelId {commandSourceId:D}" +
+          " _Enter" +
           string.Concat(followingIds.Select(id => $" _SelId {id:D}")) +
           " _Enter";
-        bool ran = RhinoApp.RunScript(command, false);
+        bool captureStartedHere = !RhinoApp.CommandWindowCaptureEnabled;
+        bool echoPrompts = AppearanceSettings.EchoPromptsToHistoryWindow;
+        bool echoCommands = AppearanceSettings.EchoCommandsToHistoryWindow;
+        string[] capturedOutput = Array.Empty<string>();
+        bool ran;
+        if (captureStartedHere)
+        {
+          RhinoApp.CommandWindowCaptureEnabled = true;
+          RhinoApp.CapturedCommandWindowStrings(true);
+        }
+        try
+        {
+          AppearanceSettings.EchoPromptsToHistoryWindow = false;
+          AppearanceSettings.EchoCommandsToHistoryWindow = false;
+          ran = RhinoApp.RunScript(command, false);
+        }
+        finally
+        {
+          AppearanceSettings.EchoPromptsToHistoryWindow = echoPrompts;
+          AppearanceSettings.EchoCommandsToHistoryWindow = echoCommands;
+          if (captureStartedHere)
+          {
+            capturedOutput = RhinoApp.CapturedCommandWindowStrings(true);
+            RhinoApp.CommandWindowCaptureEnabled = false;
+          }
+        }
+
+        foreach (string line in capturedOutput
+          .SelectMany(line => line.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+          .Select(line => line.Trim())
+          .Where(line => line.Length > 0)
+          .Take(NativeCapturedLogLimit))
+          Dbg($"native_output {line}");
+
+        Dbg($"native_options explode={nativeExplode} labels={nativeLabels}");
 
         var created = doc.Objects
           .Where(obj => obj != null && !objectIdsBefore.Contains(obj.Id))
@@ -1206,9 +1357,10 @@ namespace vTools.Commands
           .ToArray();
 
         details = $"ran={ran} inputs={followingIds.Count}" +
+          $" requested_explode={explode} native_explode={nativeExplode}" +
           $" created={created.Count} breps={flatBreps.Length}" +
           $" curves={flatCurves.Length} points={flatPoints.Length}" +
-          $" dots={flatDots.Length}";
+          $" dots={flatDots.Length} hidden_output={capturedOutput.Length}";
         return ran && flatBreps.Length > 0;
       }
       catch (Exception ex)
@@ -1643,10 +1795,29 @@ namespace vTools.Commands
       return new Plane(origin, x, y);
     }
 
-    private static Guid AddFlatText(RhinoDoc doc, string text, Point3d point, Vector3d yDirection, Vector3d normal, double height, Guid sourceId, bool transfer)
+    private static double TextLift(RhinoDoc doc, double height, double liftRatio)
+    {
+      if (liftRatio <= 0.0)
+        return 0.0;
+
+      return Math.Max(
+        height * liftRatio,
+        doc.ModelAbsoluteTolerance * MinimumTextLiftToleranceFactor);
+    }
+
+    private static Guid AddFlatText(
+      RhinoDoc doc,
+      string text,
+      Point3d point,
+      Vector3d yDirection,
+      Vector3d normal,
+      double height,
+      double liftRatio,
+      Guid sourceId,
+      bool transfer)
     {
       var n = Unit(normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
-      var lift = Math.Max(height * TextLiftRatio, doc.ModelAbsoluteTolerance * 2.0);
+      var lift = TextLift(doc, height, liftRatio);
       var plane = TextPlane(point + n * lift, yDirection, n, doc.ModelAbsoluteTolerance);
       var attrs = LabelAttributes(doc, sourceId, transfer, text);
 
@@ -1704,7 +1875,7 @@ namespace vTools.Commands
     private static Guid AddFailureText(RhinoDoc doc, Point3d point, Vector3d yDirection, Vector3d normal, double height, Guid sourceId)
     {
       var n = Unit(normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
-      var lift = Math.Max(height * TextLiftRatio, doc.ModelAbsoluteTolerance * 2.0);
+      var lift = TextLift(doc, height, SurfaceTextLiftRatio);
       var plane = TextPlane(point + n * lift, yDirection, n, doc.ModelAbsoluteTolerance);
       var attrs = FailureMarkerAttributes(doc, sourceId);
 
@@ -2377,7 +2548,7 @@ namespace vTools.Commands
         if (addText && existing?.Geometry is TextEntity)
         {
           var n = Unit(frame.Normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
-          var lift = Math.Max(height * TextLiftRatio, doc.ModelAbsoluteTolerance * 2.0);
+          var lift = TextLift(doc, height, SurfaceTextLiftRatio);
           var replacement = new TextEntity
           {
             PlainText = display,
@@ -2416,7 +2587,9 @@ namespace vTools.Commands
 
       Guid labelId = Guid.Empty;
       if (addText)
-        labelId = AddFlatText(doc, display, frame.Point, frame.Y, frame.Normal, height, sourceId, transferProperties);
+        labelId = AddFlatText(
+          doc, display, frame.Point, frame.Y, frame.Normal,
+          height, SurfaceTextLiftRatio, sourceId, transferProperties);
       else if (addDots)
         labelId = AddDot(doc, display, frame.Point, sourceId, transferProperties);
       if (!IsValidId(labelId))
@@ -2513,51 +2686,95 @@ namespace vTools.Commands
       var result = new AssignmentResult(surfaces.Count);
       foreach (var item in items)
       {
-        int bestIndex = -1;
-        Tuple<double, double>? bestScore = null;
-        double bestLimit = 0.0;
+        var followingPoint = FollowingPoint(item);
+        var candidates = new List<(
+          int SurfaceIndex,
+          Tuple<double, double> Score,
+          Point3d? ClosestPoint)>();
 
         for (int i = 0; i < surfaces.Count; i++)
         {
-          Tuple<double, double>? score = item.Kind == FollowingKind.Curve
-            ? (item.Geometry is Curve curve ? CurveScore(surfaces[i].Brep, curve) : null)
-            : PointScore(surfaces[i].Brep, FollowingPoint(item));
+          Tuple<double, double>? score;
+          Point3d? closestPoint = null;
+          if (item.Kind == FollowingKind.Curve)
+          {
+            score = item.Geometry is Curve curve
+              ? CurveScore(surfaces[i].Brep, curve)
+              : null;
+          }
+          else if (followingPoint.HasValue &&
+                   TryPointScore(
+                     surfaces[i].Brep,
+                     followingPoint.Value,
+                     out var projectedPoint,
+                     out var pointDistance))
+          {
+            closestPoint = projectedPoint;
+            score = Tuple.Create(pointDistance, pointDistance);
+          }
+          else
+          {
+            score = null;
+          }
 
           if (score == null)
             continue;
-          if (bestScore == null || CompareScore(score, bestScore) < 0)
-          {
-            bestIndex = i;
-            bestScore = score;
-            bestLimit = AssignTolerance(doc, surfaces[i].Geometry, item.Geometry);
-          }
+          var limit = AssignTolerance(
+            doc,
+            surfaces[i].Geometry,
+            item.Geometry);
+          if (score.Item1 <= limit)
+            candidates.Add((i, score, closestPoint));
         }
 
-        if (bestIndex < 0 || bestScore == null || bestScore.Item1 > bestLimit)
+        if (candidates.Count == 0)
         {
           result.Skipped++;
           result.SkippedIds.Add(item.Id);
           continue;
         }
 
-        var assigned = item;
-        if (item.Kind == FollowingKind.Point || item.Kind == FollowingKind.Dot)
+        candidates.Sort((first, second) =>
+          CompareScore(first.Score, second.Score));
+        var best = candidates[0];
+
+        if (item.Kind == FollowingKind.Point &&
+            best.ClosestPoint.HasValue)
         {
-          var p = FollowingPoint(item);
-          if (p.HasValue)
+          var sharedTolerance = Math.Max(
+            RhinoMath.ZeroTolerance,
+            doc.ModelAbsoluteTolerance * SharedPointToleranceFactor);
+          var touchingCandidates = candidates
+            .Where(candidate =>
+              candidate.ClosestPoint.HasValue &&
+              candidate.Score.Item1 <= best.Score.Item1 + sharedTolerance &&
+              candidate.ClosestPoint.Value.DistanceTo(
+                best.ClosestPoint.Value) <= sharedTolerance)
+            .ToList();
+
+          foreach (var candidate in touchingCandidates)
           {
-            try
-            {
-              var cp = surfaces[bestIndex].Brep.ClosestPoint(p.Value);
-              assigned = item.Kind == FollowingKind.Point
-                ? new FollowingItem(item.Id, item.Kind, new Point(cp))
-                : new FollowingItem(item.Id, item.Kind, DuplicateDotAt((TextDot)item.Geometry, cp));
-            }
-            catch { }
+            result.Buckets[candidate.SurfaceIndex].Add(
+              new FollowingItem(
+                item.Id,
+                item.Kind,
+                new Point(candidate.ClosestPoint!.Value)));
           }
+
+          Dbg($"following_point source={item.Id} input={P(followingPoint!.Value)}" +
+              $" assigned_faces={touchingCandidates.Count}" +
+              $" surfaces=[{string.Join(",", touchingCandidates.Select(candidate => candidate.SurfaceIndex))}]");
+          continue;
         }
 
-        result.Buckets[bestIndex].Add(assigned);
+        var assigned = item;
+        if (item.Kind == FollowingKind.Dot && best.ClosestPoint.HasValue)
+          assigned = new FollowingItem(
+            item.Id,
+            item.Kind,
+            DuplicateDotAt((TextDot)item.Geometry, best.ClosestPoint.Value));
+
+        result.Buckets[best.SurfaceIndex].Add(assigned);
       }
       return result;
     }
@@ -2591,16 +2808,29 @@ namespace vTools.Commands
       return null;
     }
 
-    private static Tuple<double, double>? PointScore(Brep brep, Point3d? point)
+    private static bool TryPointScore(
+      Brep brep,
+      Point3d point,
+      out Point3d closestPoint,
+      out double distance)
     {
-      if (brep == null || !point.HasValue)
-        return null;
+      closestPoint = Point3d.Unset;
+      distance = double.PositiveInfinity;
+      if (brep == null || !point.IsValid)
+        return false;
+
       try
       {
-        double d = point.Value.DistanceTo(brep.ClosestPoint(point.Value));
-        return Tuple.Create(d, d);
+        closestPoint = brep.ClosestPoint(point);
+        if (!closestPoint.IsValid)
+          return false;
+        distance = point.DistanceTo(closestPoint);
+        return true;
       }
-      catch { return null; }
+      catch
+      {
+        return false;
+      }
     }
 
     private static Tuple<double, double>? CurveScore(Brep brep, Curve? curve)
@@ -2946,12 +3176,6 @@ namespace vTools.Commands
       return copy;
     }
 
-    private static Point3d TransformPoint(Point3d point, Transform transform)
-    {
-      point.Transform(transform);
-      return point;
-    }
-
     private static TextDot TransformTextDotCopy(TextDot dot, Transform transform)
     {
       var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? string.Empty, dot.Point);
@@ -3137,6 +3361,664 @@ namespace vTools.Commands
       return result;
     }
 
+    private static bool IsNativeUnrollLabel(TextDot dot)
+    {
+      string text = dot.Text ?? string.Empty;
+      return !string.IsNullOrWhiteSpace(text) &&
+             !text.StartsWith(LabelHelperDotPrefix, StringComparison.Ordinal) &&
+             !text.StartsWith(EdgeMateHelperDotPrefix, StringComparison.Ordinal) &&
+             !text.StartsWith(CurveHelperDotPrefix, StringComparison.Ordinal) &&
+             !text.StartsWith(UserPointHelperDotPrefix, StringComparison.Ordinal) &&
+             !text.StartsWith(UserDotHelperDotPrefix, StringComparison.Ordinal) &&
+             !text.StartsWith(NativeFaceHelperDotPrefix, StringComparison.Ordinal);
+    }
+
+    private static Point3d? FaceInteriorPoint(BrepFace face, double tolerance)
+    {
+      var faceBrep = face.DuplicateFace(false);
+      if (faceBrep == null || !faceBrep.IsValid)
+        return null;
+      using var area = AreaMassProperties.Compute(faceBrep);
+      var target = area?.Centroid ?? faceBrep.GetBoundingBox(true).Center;
+      return InteriorLabelPoint(faceBrep, target, tolerance);
+    }
+
+    private static List<NativeInternalMate> ReconstructNativeFlatFaces(
+      Brep sourceBrep,
+      Brep[] flatBreps,
+      Curve[] flatCurves,
+      Point3d[] flatPoints,
+      TextDot[] flatDots,
+      IReadOnlyDictionary<string, int> faceHelperDots,
+      NativeMateIdAllocator mateIds,
+      int partNumber,
+      double tolerance,
+      bool reconstructFaces)
+    {
+      var faceToBrep = MapSourceFacesToFlatBreps(
+        sourceBrep, flatBreps, flatDots, faceHelperDots, partNumber);
+      var seamPairs = NativeLabelSeamPairs(
+        flatBreps, flatDots, mateIds, partNumber, tolerance);
+      foreach (var sourceEdge in sourceBrep.Edges)
+      {
+        var adjacentFaces = sourceEdge.AdjacentFaces().Distinct().ToArray();
+        if (adjacentFaces.Length != 2)
+          continue;
+        var first = TryMappedSourceFaceEdge(
+          sourceBrep,
+          adjacentFaces[0],
+          sourceEdge.EdgeIndex,
+          flatBreps,
+          faceToBrep);
+        var second = TryMappedSourceFaceEdge(
+          sourceBrep,
+          adjacentFaces[1],
+          sourceEdge.EdgeIndex,
+          flatBreps,
+          faceToBrep);
+        if (first == null || second == null || first.BrepIndex == second.BrepIndex)
+        {
+          Dbg($"part={partNumber} native_seam source_edge={sourceEdge.EdgeIndex}" +
+              $" faces={adjacentFaces[0]},{adjacentFaces[1]} mapped=false");
+          continue;
+        }
+
+        bool alreadyMapped = seamPairs.Any(pair =>
+          IsSameFlatEdgePair(pair.First, pair.Second, first, second));
+        if (alreadyMapped)
+          continue;
+
+        double longest = Math.Max(first.Length, second.Length);
+        double lengthError = longest > RhinoMath.ZeroTolerance
+          ? Math.Abs(first.Length - second.Length) / longest
+          : 0.0;
+        seamPairs.Add(new NativeSeamPair(
+          $"E{sourceEdge.EdgeIndex}",
+          mateIds.Next(partNumber),
+          first,
+          second,
+          lengthError));
+      }
+
+      if (seamPairs.Count == 0)
+      {
+        Dbg($"part={partNumber} native_seams count=0" +
+            $" source_faces={sourceBrep.Faces.Count}" +
+            $" mapped_faces={faceToBrep.Count}");
+        return new List<NativeInternalMate>();
+      }
+
+      Dbg($"part={partNumber} native_seams count={seamPairs.Count}" +
+          $" source_faces={sourceBrep.Faces.Count}" +
+          $" mapped_faces={faceToBrep.Count}");
+
+      var transforms = Enumerable.Repeat(Transform.Identity, flatBreps.Length).ToArray();
+      if (reconstructFaces)
+      {
+        var placed = new bool[flatBreps.Length];
+        for (int root = 0; root < flatBreps.Length; root++)
+        {
+          if (placed[root])
+            continue;
+          placed[root] = true;
+          var queue = new Queue<int>();
+          queue.Enqueue(root);
+
+          while (queue.Count > 0)
+          {
+            int fixedBrepIndex = queue.Dequeue();
+            foreach (var pair in seamPairs)
+            {
+              NativeLabelEdge fixedEdge;
+              NativeLabelEdge movingEdge;
+              if (pair.First.BrepIndex == fixedBrepIndex)
+              {
+                fixedEdge = pair.First;
+                movingEdge = pair.Second;
+              }
+              else if (pair.Second.BrepIndex == fixedBrepIndex)
+              {
+                fixedEdge = pair.Second;
+                movingEdge = pair.First;
+              }
+              else
+              {
+                continue;
+              }
+
+              if (placed[movingEdge.BrepIndex])
+                continue;
+              var fixedWorld = TransformNativeLabelEdge(
+                fixedEdge, transforms[fixedBrepIndex]);
+              bool reverseMoving = ResolveCornerReversal(fixedWorld, movingEdge);
+              var targetStart = reverseMoving ? fixedWorld.End : fixedWorld.Start;
+              var targetEnd = reverseMoving ? fixedWorld.Start : fixedWorld.End;
+              if (!TryPlanarEdgeTransform(
+                    movingEdge.Start,
+                    movingEdge.End,
+                    targetStart,
+                    targetEnd,
+                    out var transform))
+                continue;
+
+              transforms[movingEdge.BrepIndex] = transform;
+              placed[movingEdge.BrepIndex] = true;
+              pair.Reversed = reverseMoving;
+              queue.Enqueue(movingEdge.BrepIndex);
+              Dbg($"part={partNumber} native_reconstruct label={pair.Label}" +
+                  $" fixed={fixedBrepIndex}:{fixedEdge.EdgeIndex}" +
+                  $" moved={movingEdge.BrepIndex}:{movingEdge.EdgeIndex}" +
+                  $" reversed={reverseMoving}");
+            }
+          }
+        }
+      }
+      else
+      {
+        foreach (var pair in seamPairs)
+          pair.Reversed = ResolveCornerReversal(pair.First, pair.Second);
+      }
+
+      var curveOwners = flatCurves
+        .Select(curve => ClosestFlatBrep(
+          flatBreps, curve.PointAtNormalizedLength(0.5)))
+        .ToArray();
+      var pointOwners = flatPoints
+        .Select(point => ClosestFlatBrep(flatBreps, point))
+        .ToArray();
+      var dotOwners = flatDots
+        .Select(dot => ClosestFlatBrep(flatBreps, dot.Point))
+        .ToArray();
+
+      if (reconstructFaces)
+      {
+        for (int brepIndex = 0; brepIndex < flatBreps.Length; brepIndex++)
+          flatBreps[brepIndex].Transform(transforms[brepIndex]);
+        for (int curveIndex = 0; curveIndex < flatCurves.Length; curveIndex++)
+        {
+          int owner = curveOwners[curveIndex];
+          if (owner >= 0)
+            flatCurves[curveIndex].Transform(transforms[owner]);
+        }
+        for (int pointIndex = 0; pointIndex < flatPoints.Length; pointIndex++)
+        {
+          int owner = pointOwners[pointIndex];
+          if (owner < 0)
+            continue;
+          var point = flatPoints[pointIndex];
+          point.Transform(transforms[owner]);
+          flatPoints[pointIndex] = point;
+        }
+        for (int dotIndex = 0; dotIndex < flatDots.Length; dotIndex++)
+        {
+          int owner = dotOwners[dotIndex];
+          if (owner >= 0)
+            flatDots[dotIndex].Transform(transforms[owner]);
+        }
+      }
+
+      var result = new List<NativeInternalMate>();
+      foreach (var pair in seamPairs)
+      {
+        var firstEdge = flatBreps[pair.First.BrepIndex].Edges[pair.First.EdgeIndex];
+        var secondEdge = flatBreps[pair.Second.BrepIndex].Edges[pair.Second.EdgeIndex];
+        result.Add(new NativeInternalMate(
+          pair.MateId,
+          PointAtNormalizedEdgeLength(firstEdge, 0.5),
+          PointAtNormalizedEdgeLength(secondEdge, 0.5),
+          pair.Reversed));
+        Dbg($"part={partNumber} native_seam label={pair.Label} id={pair.MateId}" +
+            $" first={pair.First.BrepIndex}:{pair.First.EdgeIndex}" +
+            $" second={pair.Second.BrepIndex}:{pair.Second.EdgeIndex}" +
+            $" length_error={pair.LengthError:G6} reversed={pair.Reversed}");
+      }
+      return result;
+    }
+
+    private static bool NativeMateWasJoined(
+      IEnumerable<Brep> joinedBreps,
+      NativeInternalMate mate,
+      double tolerance)
+    {
+      double maximumDistance = Math.Max(
+        tolerance * NativeJoinedSeamToleranceFactor,
+        RhinoMath.ZeroTolerance);
+      foreach (var edge in joinedBreps
+        .Where(brep => brep != null)
+        .SelectMany(brep => brep.Edges)
+        .Where(edge => edge.Valence == EdgeAdjacency.Interior))
+      {
+        if (!edge.ClosestPoint(mate.PointA, out double firstParameter) ||
+            mate.PointA.DistanceTo(edge.PointAt(firstParameter)) > maximumDistance ||
+            !edge.ClosestPoint(mate.PointB, out double secondParameter) ||
+            mate.PointB.DistanceTo(edge.PointAt(secondParameter)) > maximumDistance)
+          continue;
+        return true;
+      }
+      return false;
+    }
+
+    private static List<NativeSeamPair> NativeLabelSeamPairs(
+      IReadOnlyList<Brep> flatBreps,
+      IEnumerable<TextDot> flatDots,
+      NativeMateIdAllocator mateIds,
+      int partNumber,
+      double tolerance)
+    {
+      var nativeDots = flatDots.Where(IsNativeUnrollLabel).ToList();
+      Dbg($"part={partNumber} native_labels count={nativeDots.Count}" +
+          $" texts=[{string.Join(",", nativeDots.Select(dot => dot.Text ?? string.Empty))}]");
+      var result = new List<NativeSeamPair>();
+      foreach (var labelGroup in nativeDots
+        .GroupBy(dot => dot.Text ?? string.Empty, StringComparer.Ordinal)
+        .OrderBy(group => group.Key, StringComparer.Ordinal))
+      {
+        var candidates = new List<(NativeLabelEdge Edge, double Distance)>();
+        foreach (var dot in labelGroup)
+        {
+          if (TryNativeLabelEdge(
+                flatBreps, dot.Point, tolerance,
+                out var edge, out double distance))
+            candidates.Add((edge, distance));
+        }
+
+        var unused = new HashSet<int>(Enumerable.Range(0, candidates.Count));
+        while (unused.Count >= 2)
+        {
+          (int First, int Second, double Score)? best = null;
+          foreach (int firstIndex in unused)
+          {
+            foreach (int secondIndex in unused)
+            {
+              if (secondIndex <= firstIndex ||
+                  candidates[firstIndex].Edge.BrepIndex ==
+                    candidates[secondIndex].Edge.BrepIndex)
+                continue;
+              double candidateLongest = Math.Max(
+                candidates[firstIndex].Edge.Length,
+                candidates[secondIndex].Edge.Length);
+              if (candidateLongest <= RhinoMath.ZeroTolerance)
+                continue;
+              double candidateLengthError = Math.Abs(
+                candidates[firstIndex].Edge.Length -
+                candidates[secondIndex].Edge.Length) / candidateLongest;
+              double score = candidates[firstIndex].Distance +
+                candidates[secondIndex].Distance +
+                candidateLengthError * candidateLongest;
+              if (!best.HasValue || score < best.Value.Score)
+                best = (firstIndex, secondIndex, score);
+            }
+          }
+
+          if (!best.HasValue)
+            break;
+          unused.Remove(best.Value.First);
+          unused.Remove(best.Value.Second);
+          var first = candidates[best.Value.First].Edge;
+          var second = candidates[best.Value.Second].Edge;
+          double pairLongest = Math.Max(first.Length, second.Length);
+          double pairLengthError = pairLongest > RhinoMath.ZeroTolerance
+            ? Math.Abs(first.Length - second.Length) / pairLongest
+            : 0.0;
+          result.Add(new NativeSeamPair(
+            labelGroup.Key,
+            mateIds.Next(partNumber),
+            first,
+            second,
+            pairLengthError));
+          Dbg($"part={partNumber} native_label_pair label={labelGroup.Key}" +
+              $" first={first.BrepIndex}:{first.EdgeIndex}" +
+              $" second={second.BrepIndex}:{second.EdgeIndex}" +
+              $" score={best.Value.Score:G6}");
+        }
+      }
+      return result;
+    }
+
+    private static bool IsSameFlatEdgePair(
+      NativeLabelEdge firstA,
+      NativeLabelEdge secondA,
+      NativeLabelEdge firstB,
+      NativeLabelEdge secondB)
+    {
+      bool Same(NativeLabelEdge first, NativeLabelEdge second) =>
+        first.BrepIndex == second.BrepIndex &&
+        first.EdgeIndex == second.EdgeIndex;
+      return Same(firstA, firstB) && Same(secondA, secondB) ||
+             Same(firstA, secondB) && Same(secondA, firstB);
+    }
+
+    private static Dictionary<int, int> MapSourceFacesToFlatBreps(
+      Brep sourceBrep,
+      IReadOnlyList<Brep> flatBreps,
+      IEnumerable<TextDot> flatDots,
+      IReadOnlyDictionary<string, int> faceHelperDots,
+      int partNumber)
+    {
+      var result = new Dictionary<int, int>();
+      var usedBreps = new HashSet<int>();
+      foreach (var dot in flatDots)
+      {
+        string text = dot.Text ?? string.Empty;
+        if (!faceHelperDots.TryGetValue(text, out int sourceFaceIndex))
+          continue;
+        int flatBrepIndex = ClosestFlatBrep(flatBreps, dot.Point);
+        if (flatBrepIndex < 0)
+          continue;
+        if (result.TryGetValue(sourceFaceIndex, out int existing) &&
+            existing == flatBrepIndex)
+          continue;
+        if (usedBreps.Contains(flatBrepIndex))
+        {
+          Dbg($"part={partNumber} face_map source_face={sourceFaceIndex}" +
+              $" flat_brep={flatBrepIndex} collision=true");
+          continue;
+        }
+        result[sourceFaceIndex] = flatBrepIndex;
+        usedBreps.Add(flatBrepIndex);
+        Dbg($"part={partNumber} face_map source_face={sourceFaceIndex}" +
+            $" flat_brep={flatBrepIndex} method=helper");
+      }
+
+      foreach (var sourceFace in sourceBrep.Faces)
+      {
+        if (result.ContainsKey(sourceFace.FaceIndex))
+          continue;
+        int bestBrep = -1;
+        double bestScore = double.PositiveInfinity;
+        for (int flatBrepIndex = 0; flatBrepIndex < flatBreps.Count; flatBrepIndex++)
+        {
+          if (usedBreps.Contains(flatBrepIndex))
+            continue;
+          double score = FaceTopologyScore(sourceFace, flatBreps[flatBrepIndex]);
+          if (score >= bestScore)
+            continue;
+          bestScore = score;
+          bestBrep = flatBrepIndex;
+        }
+        if (bestBrep < 0)
+          continue;
+        result[sourceFace.FaceIndex] = bestBrep;
+        usedBreps.Add(bestBrep);
+        Dbg($"part={partNumber} face_map source_face={sourceFace.FaceIndex}" +
+            $" flat_brep={bestBrep} method=topology score={bestScore:G6}");
+      }
+
+      return result;
+    }
+
+    private static double FaceTopologyScore(BrepFace sourceFace, Brep flatBrep)
+    {
+      var sourceLengths = sourceFace.Loops
+        .SelectMany(loop => loop.Trims)
+        .Select(trim => trim.Edge?.GetLength() ?? 0.0)
+        .Where(length => length > RhinoMath.ZeroTolerance)
+        .OrderBy(length => length)
+        .ToArray();
+      var flatLengths = flatBrep.Faces
+        .SelectMany(face => face.Loops)
+        .SelectMany(loop => loop.Trims)
+        .Select(trim => trim.Edge?.GetLength() ?? 0.0)
+        .Where(length => length > RhinoMath.ZeroTolerance)
+        .OrderBy(length => length)
+        .ToArray();
+      if (sourceLengths.Length == 0 || flatLengths.Length == 0)
+        return double.PositiveInfinity;
+
+      double score = Math.Abs(sourceLengths.Length - flatLengths.Length) * 10.0;
+      int count = Math.Min(sourceLengths.Length, flatLengths.Length);
+      for (int index = 0; index < count; index++)
+      {
+        double longest = Math.Max(sourceLengths[index], flatLengths[index]);
+        if (longest > RhinoMath.ZeroTolerance)
+          score += Math.Abs(sourceLengths[index] - flatLengths[index]) / longest;
+      }
+      return score;
+    }
+
+    private static NativeLabelEdge? TryMappedSourceFaceEdge(
+      Brep sourceBrep,
+      int sourceFaceIndex,
+      int sourceEdgeIndex,
+      IReadOnlyList<Brep> flatBreps,
+      IReadOnlyDictionary<int, int> faceToBrep)
+    {
+      if (sourceFaceIndex < 0 || sourceFaceIndex >= sourceBrep.Faces.Count ||
+          !faceToBrep.TryGetValue(sourceFaceIndex, out int flatBrepIndex) ||
+          flatBrepIndex < 0 || flatBrepIndex >= flatBreps.Count)
+        return null;
+
+      var sourceFace = sourceBrep.Faces[sourceFaceIndex];
+      var flatBrep = flatBreps[flatBrepIndex];
+      if (flatBrep.Faces.Count == 0)
+        return null;
+      if (sourceEdgeIndex < 0 || sourceEdgeIndex >= sourceBrep.Edges.Count)
+        return null;
+      double sourceLength = sourceBrep.Edges[sourceEdgeIndex].GetLength();
+      var flatFace = flatBrep.Faces[0];
+      int loopCount = Math.Min(sourceFace.Loops.Count, flatFace.Loops.Count);
+      for (int loopIndex = 0; loopIndex < loopCount; loopIndex++)
+      {
+        var sourceLoop = sourceFace.Loops[loopIndex];
+        var flatLoop = flatFace.Loops[loopIndex];
+        int trimCount = Math.Min(sourceLoop.Trims.Count, flatLoop.Trims.Count);
+        for (int trimIndex = 0; trimIndex < trimCount; trimIndex++)
+        {
+          if (sourceLoop.Trims[trimIndex].Edge?.EdgeIndex != sourceEdgeIndex)
+            continue;
+          var flatEdge = flatLoop.Trims[trimIndex].Edge;
+          if (flatEdge != null && RelativeLengthError(
+                sourceLength, flatEdge.GetLength()) <=
+              NativeSeamMaxRelativeLengthError)
+            return NativeFlatEdge(flatBrepIndex, flatBrep, flatEdge);
+        }
+      }
+
+      var fallback = flatFace.Loops
+        .SelectMany(loop => loop.Trims)
+        .Select(trim => trim.Edge)
+        .Where(edge => edge != null)
+        .Cast<BrepEdge>()
+        .Distinct()
+        .OrderBy(edge => Math.Abs(edge.GetLength() - sourceLength))
+        .FirstOrDefault();
+      return fallback == null ||
+             RelativeLengthError(sourceLength, fallback.GetLength()) >
+               NativeSeamMaxRelativeLengthError
+        ? null
+        : NativeFlatEdge(flatBrepIndex, flatBrep, fallback);
+    }
+
+    private static double RelativeLengthError(double first, double second)
+    {
+      double longest = Math.Max(Math.Abs(first), Math.Abs(second));
+      return longest > RhinoMath.ZeroTolerance
+        ? Math.Abs(first - second) / longest
+        : 0.0;
+    }
+
+    private static NativeLabelEdge NativeFlatEdge(
+      int flatBrepIndex,
+      Brep flatBrep,
+      BrepEdge flatEdge)
+    {
+      using var area = AreaMassProperties.Compute(flatBrep);
+      var center = area?.Centroid ?? flatBrep.GetBoundingBox(true).Center;
+      return new NativeLabelEdge(
+        flatBrepIndex,
+        flatEdge.EdgeIndex,
+        flatEdge.PointAtStart,
+        flatEdge.PointAtEnd,
+        center,
+        flatEdge.GetLength());
+    }
+
+    private static NativeLabelEdge TransformNativeLabelEdge(
+      NativeLabelEdge edge,
+      Transform transform)
+    {
+      var start = edge.Start;
+      var end = edge.End;
+      var center = edge.Center;
+      start.Transform(transform);
+      end.Transform(transform);
+      center.Transform(transform);
+      return new NativeLabelEdge(
+        edge.BrepIndex,
+        edge.EdgeIndex,
+        start,
+        end,
+        center,
+        edge.Length);
+    }
+
+    private static int ClosestFlatBrep(
+      IReadOnlyList<Brep> flatBreps,
+      Point3d point)
+    {
+      int bestIndex = -1;
+      double bestDistance = double.PositiveInfinity;
+      for (int brepIndex = 0; brepIndex < flatBreps.Count; brepIndex++)
+      {
+        Point3d closest;
+        try
+        {
+          closest = flatBreps[brepIndex].ClosestPoint(point);
+        }
+        catch
+        {
+          continue;
+        }
+        double distance = point.DistanceToSquared(closest);
+        if (distance >= bestDistance)
+          continue;
+        bestDistance = distance;
+        bestIndex = brepIndex;
+      }
+      return bestIndex;
+    }
+
+    private static bool TryNativeLabelEdge(
+      IReadOnlyList<Brep> flatBreps,
+      Point3d labelPoint,
+      double tolerance,
+      out NativeLabelEdge edgeResult,
+      out double distanceResult)
+    {
+      edgeResult = null!;
+      distanceResult = double.PositiveInfinity;
+      NativeLabelEdge? best = null;
+      for (int brepIndex = 0; brepIndex < flatBreps.Count; brepIndex++)
+      {
+        var brep = flatBreps[brepIndex];
+        foreach (var edge in brep.Edges)
+        {
+          if (!edge.ClosestPoint(labelPoint, out double parameter))
+            continue;
+          double distance = labelPoint.DistanceTo(edge.PointAt(parameter));
+          if (distance >= distanceResult)
+            continue;
+          distanceResult = distance;
+          best = NativeFlatEdge(brepIndex, brep, edge);
+        }
+      }
+
+      if (best == null)
+        return false;
+      double scale = flatBreps[best.BrepIndex].GetBoundingBox(true).Diagonal.Length;
+      double limit = Math.Max(
+        tolerance * NativeLabelEdgeToleranceFactor,
+        scale * EdgeMateDiagFactor);
+      if (distanceResult > limit)
+        return false;
+      edgeResult = best;
+      return true;
+    }
+
+    private static bool ResolveCornerReversal(
+      NativeLabelEdge fixedEdge,
+      NativeLabelEdge movingEdge)
+    {
+      double sameScore = CornerAlignmentScore(
+        fixedEdge,
+        movingEdge,
+        reverseMoving: false);
+      double reversedScore = CornerAlignmentScore(
+        fixedEdge,
+        movingEdge,
+        reverseMoving: true);
+      return reversedScore < sameScore;
+    }
+
+    private static double CornerAlignmentScore(
+      NativeLabelEdge fixedEdge,
+      NativeLabelEdge movingEdge,
+      bool reverseMoving)
+    {
+      var targetStart = reverseMoving ? fixedEdge.End : fixedEdge.Start;
+      var targetEnd = reverseMoving ? fixedEdge.Start : fixedEdge.End;
+      if (!TryPlanarEdgeTransform(
+            movingEdge.Start,
+            movingEdge.End,
+            targetStart,
+            targetEnd,
+            out var transform))
+        return double.PositiveInfinity;
+
+      var movedStart = movingEdge.Start;
+      var movedEnd = movingEdge.End;
+      var movedCenter = movingEdge.Center;
+      movedStart.Transform(transform);
+      movedEnd.Transform(transform);
+      movedCenter.Transform(transform);
+
+      double endpointError =
+        movedStart.DistanceTo(targetStart) + movedEnd.DistanceTo(targetEnd);
+      double fixedSide = PlanarSide(
+        fixedEdge.Start, fixedEdge.End, fixedEdge.Center);
+      double movingSide = PlanarSide(
+        fixedEdge.Start, fixedEdge.End, movedCenter);
+      double sidePenalty = fixedSide * movingSide < 0.0
+        ? 0.0
+        : Math.Max(fixedEdge.Length, movingEdge.Length);
+      return endpointError + sidePenalty;
+    }
+
+    private static bool TryPlanarEdgeTransform(
+      Point3d movingStart,
+      Point3d movingEnd,
+      Point3d targetStart,
+      Point3d targetEnd,
+      out Transform transform)
+    {
+      transform = Transform.Identity;
+      var movingDirection = movingEnd - movingStart;
+      var targetDirection = targetEnd - targetStart;
+      movingDirection.Z = 0.0;
+      targetDirection.Z = 0.0;
+      if (!movingDirection.Unitize() || !targetDirection.Unitize())
+        return false;
+
+      double angle = Math.Atan2(
+        movingDirection.X * targetDirection.Y -
+          movingDirection.Y * targetDirection.X,
+        movingDirection.X * targetDirection.X +
+          movingDirection.Y * targetDirection.Y);
+      var rotation = Transform.Rotation(angle, Vector3d.ZAxis, movingStart);
+      var rotatedStart = movingStart;
+      rotatedStart.Transform(rotation);
+      transform = Transform.Translation(targetStart - rotatedStart) * rotation;
+      return transform.IsValid;
+    }
+
+    private static double PlanarSide(
+      Point3d edgeStart,
+      Point3d edgeEnd,
+      Point3d point)
+    {
+      return (edgeEnd.X - edgeStart.X) * (point.Y - edgeStart.Y) -
+             (edgeEnd.Y - edgeStart.Y) * (point.X - edgeStart.X);
+    }
     private static Point3d PointAtNormalizedEdgeLength(Curve edge, double fraction)
     {
       fraction = Math.Max(0.0, Math.Min(1.0, fraction));
@@ -3370,6 +4252,131 @@ namespace vTools.Commands
       public bool    Reversed;
     }
 
+    private sealed class NativeInternalMate
+    {
+      public string MateId { get; }
+      public Point3d PointA { get; }
+      public Point3d PointB { get; }
+      public bool Reversed { get; }
+
+      public NativeInternalMate(
+        string mateId,
+        Point3d pointA,
+        Point3d pointB,
+        bool reversed)
+      {
+        MateId = mateId;
+        PointA = pointA;
+        PointB = pointB;
+        Reversed = reversed;
+      }
+    }
+
+    private sealed class NativeSeamPair
+    {
+      public string Label { get; }
+      public string MateId { get; }
+      public NativeLabelEdge First { get; }
+      public NativeLabelEdge Second { get; }
+      public double LengthError { get; }
+      public bool Reversed { get; set; }
+
+      public NativeSeamPair(
+        string label,
+        string mateId,
+        NativeLabelEdge first,
+        NativeLabelEdge second,
+        double lengthError)
+      {
+        Label = label;
+        MateId = mateId;
+        First = first;
+        Second = second;
+        LengthError = lengthError;
+      }
+    }
+
+    private sealed class NativeLabelEdge
+    {
+      public int BrepIndex { get; }
+      public int EdgeIndex { get; }
+      public Point3d Start { get; }
+      public Point3d End { get; }
+      public Point3d Center { get; }
+      public double Length { get; }
+
+      public NativeLabelEdge(
+        int brepIndex,
+        int edgeIndex,
+        Point3d start,
+        Point3d end,
+        Point3d center,
+        double length)
+      {
+        BrepIndex = brepIndex;
+        EdgeIndex = edgeIndex;
+        Start = start;
+        End = end;
+        Center = center;
+        Length = length;
+      }
+    }
+
+    private sealed class NativeMateIdAllocator
+    {
+      private readonly Dictionary<int, Queue<string>> _reusableByPart;
+      private readonly HashSet<string> _used;
+      private int _nextSequence;
+
+      public NativeMateIdAllocator(
+        RhinoDoc doc,
+        IReadOnlyList<List<EdgeMateRecord>>? edgePairs)
+      {
+        var existing = ExistingEdgeMates(doc);
+        _used = new HashSet<string>(
+          edgePairs?.SelectMany(records => records).Select(record => record.MateId) ??
+            Enumerable.Empty<string>(),
+          StringComparer.OrdinalIgnoreCase);
+        _nextSequence = existing
+          .Select(mate => MateSequence(mate.MateId))
+          .Concat(_used.Select(MateSequence))
+          .DefaultIfEmpty(0)
+          .Max() + 1;
+        _reusableByPart = existing
+          .Where(mate =>
+            mate.PartNumber == mate.MatePartNumber &&
+            !_used.Contains(mate.MateId))
+          .GroupBy(mate => mate.PartNumber)
+          .ToDictionary(
+            group => group.Key,
+            group => new Queue<string>(
+              group
+                .GroupBy(mate => mate.MateId, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(idGroup => MateSequence(idGroup.Key))
+                .Select(idGroup => idGroup.Key)));
+      }
+
+      public string Next(int partNumber)
+      {
+        if (_reusableByPart.TryGetValue(partNumber, out var reusable))
+        {
+          while (reusable.Count > 0)
+          {
+            string mateId = reusable.Dequeue();
+            if (_used.Add(mateId))
+              return mateId;
+          }
+        }
+
+        string created;
+        do
+        {
+          created = $"{EdgeMatePrefix}{_nextSequence++:D2}";
+        }
+        while (!_used.Add(created));
+        return created;
+      }
+    }
     private class EdgePairResult
     {
       public double  MaxDist;

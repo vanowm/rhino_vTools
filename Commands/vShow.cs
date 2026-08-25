@@ -15,6 +15,12 @@ namespace vTools.Commands;
 [CommandStyle(Style.Transparent)]
 public sealed class vShow : Command
 {
+  private const int MaximumRecentSetOptions = 20; // Maximum user hide-set options shown at the prompt; positive integer.
+  private const string GeneratedOptionPrefix = "Set"; // Prefix for generated command-option names when a set name is not option-safe.
+  private const string Tag = "vShow";
+  private const string SetPrompt = // Prompt shown when a hide-set name was not supplied directly.
+    "Name of object set to show. Press Enter to show all named sets.";
+
   private sealed class ActiveHideSet
   {
     public ActiveHideSet(string name, long order)
@@ -27,10 +33,6 @@ public sealed class vShow : Command
     public long Order { get; set; }
     public List<Guid> ObjectIds { get; } = new();
   }
-
-  private const string Tag = "vShow";
-  private const string SetPrompt = // Prompt shown when a hide-set name was not supplied directly.
-    "Name of object set to show. Press Enter to show all named sets.";
 
   public override string EnglishName => Tag;
 
@@ -65,7 +67,7 @@ public sealed class vShow : Command
     var recentSets = activeSets
       .OrderByDescending(set => set.Order)
       .ThenBy(set => set.Name, StringComparer.OrdinalIgnoreCase)
-      .Take(20)
+      .Take(MaximumRecentSetOptions)
       .ToList();
     Log.Write(Tag,
       $"  object-hidden candidates={objectHiddenCount}" +
@@ -154,6 +156,9 @@ public sealed class vShow : Command
         continue;
 
       nativeNamedCount++;
+      if (HideSetState.IsInternalNativeName(nativeName))
+        continue;
+
       var trackedName = HideSetState.GetTrackedName(obj);
       if (!string.Equals(nativeName, trackedName, StringComparison.OrdinalIgnoreCase))
         continue;
@@ -221,7 +226,7 @@ public sealed class vShow : Command
     var characters = setName.Where(IsAsciiLetterOrDigit).ToArray();
     var candidate = new string(characters);
     if (string.IsNullOrEmpty(candidate) || !IsAsciiLetter(candidate[0]))
-      candidate = $"Set{position}";
+      candidate = $"{GeneratedOptionPrefix}{position}";
 
     var uniqueName = candidate;
     var suffix = 2;

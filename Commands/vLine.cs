@@ -13,6 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native line command ported from LinePlus.py.
 /// </summary>
+[CommandStyle(Style.NotUndoable)]
 public sealed class vLine : Command
 {
   private const string OptionsSectionName = "vLine";
@@ -4673,14 +4674,31 @@ public sealed class vLine : Command
         return;
       }
 
-      while (PendingFinalizations.TryDequeue(out var pending))
+      var pendingCount = PendingFinalizations.Count;
+      for (var pendingIndex = 0;
+           pendingIndex < pendingCount && PendingFinalizations.TryDequeue(out var pending);
+           pendingIndex++)
       {
-        if (RollbackCombinedRecord(pending, out var prepared))
+        var doc = RhinoDoc.FromRuntimeSerialNumber(pending.DocSerial);
+        if (doc != null &&
+            (doc.UndoRecordingIsActive || doc.UndoActive || doc.RedoActive))
+        {
+          PendingFinalizations.Enqueue(pending);
+          continue;
+        }
+
+        if (RemoveTemporaryOutputs(pending, out var prepared))
         {
           CreateIndividualRecords(prepared, out var continuation);
           if (continuation != null)
             PendingRecordCreations.Enqueue(continuation);
         }
+      }
+
+      if (PendingFinalizations.Count > 0 && !_idleHandlerAttached)
+      {
+        _idleHandlerAttached = true;
+        RhinoApp.Idle += OnFinalizeIdle;
       }
 
       if (PendingRecordCreations.Count > 0 && !_recordCreationHandlerAttached)
@@ -4694,7 +4712,7 @@ public sealed class vLine : Command
       }
     }
 
-    private static bool RollbackCombinedRecord(
+    private static bool RemoveTemporaryOutputs(
       PendingLineFinalization pending,
       out PendingLineFinalization prepared)
     {
@@ -4706,30 +4724,29 @@ public sealed class vLine : Command
       var redrawWasEnabled = doc.Views.RedrawEnabled;
       doc.Views.RedrawEnabled = false;
       var presentCount = pending.Outputs.Count(output => IsPresent(doc, output.OriginalId));
-      var rolledBack = presentCount == 0;
-      var undoResult = false;
+      var removed = presentCount == 0;
       try
       {
         if (presentCount == pending.Outputs.Count)
         {
-          undoResult = RunSilentHistoryCommand(pending.DocSerial, "_Undo");
-          rolledBack = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
+          foreach (var output in pending.Outputs)
+            _ = doc.Objects.Delete(output.OriginalId, true);
+          removed = pending.Outputs.All(output => !IsPresent(doc, output.OriginalId));
         }
       }
       catch
       {
-        rolledBack = false;
+        removed = false;
       }
 
       Log.Write(
         "vLine",
-        "undo finalization rollback present={0}/{1} undo_result={2} rolled_back={3}",
+        "undo finalization remove temporary outputs present={0}/{1} removed={2}",
         presentCount,
         pending.Outputs.Count,
-        undoResult,
-        rolledBack);
+        removed);
 
-      if (!rolledBack)
+      if (!removed)
       {
         doc.Views.RedrawEnabled = redrawWasEnabled;
         RhinoApp.WriteLine("vLine: could not separate the completed objects into individual undo records.");
@@ -4793,32 +4810,17 @@ public sealed class vLine : Command
       if (doc == null)
         return;
 
-      var restored = false;
-      if (pending.NextOutputIndex == 0)
+      foreach (var output in pending.Outputs.Skip(pending.NextOutputIndex))
       {
-        var redoResult = RunSilentHistoryCommand(pending.DocSerial, "_Redo");
-        restored = redoResult && pending.Outputs.All(output => IsPresent(doc, output.OriginalId));
-        Log.Write(
-          "vLine",
-          "undo record creation fallback redo_result={0} restored={1}",
-          redoResult,
-          restored);
+        _ = doc.Objects.AddCurve(
+          output.Curve.DuplicateCurve(),
+          output.Attributes.Duplicate());
       }
 
-      if (!restored)
-      {
-        foreach (var output in pending.Outputs.Skip(pending.NextOutputIndex))
-        {
-          _ = doc.Objects.AddCurve(
-            output.Curve.DuplicateCurve(),
-            output.Attributes.Duplicate());
-        }
-
-        Log.Write(
-          "vLine",
-          "undo record creation fallback restored snapshots={0}",
-          pending.Outputs.Count - pending.NextOutputIndex);
-      }
+      Log.Write(
+        "vLine",
+        "undo record creation fallback restored snapshots={0}",
+        pending.Outputs.Count - pending.NextOutputIndex);
 
       RhinoApp.WriteLine("vLine: separate undo records were unavailable; restored the completed geometry.");
       RestoreRedraw(doc, pending);
@@ -4935,18 +4937,6 @@ public sealed class vLine : Command
       return obj != null && !obj.IsDeleted;
     }
 
-    private static bool RunSilentHistoryCommand(uint docSerial, string command)
-    {
-      var restoreEcho = Rhino.ApplicationSettings.AppearanceSettings
-        .EchoCommandsToHistoryWindow;
-      var script = restoreEcho
-        ? $"_NoEcho {command} _Echo"
-        : $"_NoEcho {command}";
-      return RhinoApp.RunScript(
-        docSerial,
-        script,
-        false);
-    }
   }
 
   private sealed record PendingLineFinalization(

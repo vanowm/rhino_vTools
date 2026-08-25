@@ -28,6 +28,9 @@ public sealed class vFitBox : Command
   private const int MaxNormalSamples = 5000; // Maximum sampled surface normals used by the 3D fit search.
   private const double MinYawRefineStepDeg = 0.01; // Final 3D yaw refinement step in degrees; greater than zero.
   private const double Min2dFinalStepDeg = 0.001; // Final planar refinement step in degrees; greater than zero.
+  private const double PlanarityModelToleranceMultiplier = 5.0; // Multiplier applied to document tolerance for coplanarity tests; greater than zero.
+  private const double PlanarityBoundsScale = 1.0e-6; // Relative diagonal tolerance used to absorb numeric planarity noise; greater than zero.
+  private const double FlatOutputShortSideScale = 1.0e-4; // Maximum height relative to the shorter footprint side for flat polyline output; greater than zero.
 
   // Option defaults
   private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
@@ -212,19 +215,34 @@ public sealed class vFitBox : Command
   private static string FormatFitSizes(RhinoDoc doc, FitCandidate fit)
   {
     var outWidth = Math.Max(fit.Width, fit.Depth);
-    var outHeight = Math.Min(fit.Width, fit.Depth);
+    var outDepth = Math.Min(fit.Width, fit.Depth);
     var primaryIsFractional = IsFractionalDisplayMode(doc);
     var wP = FormatLengthByMode(doc, outWidth, primaryIsFractional);
-    var hP = FormatLengthByMode(doc, outHeight, primaryIsFractional);
+    var dP = FormatLengthByMode(doc, outDepth, primaryIsFractional);
     var wA = FormatLengthByMode(doc, outWidth, !primaryIsFractional);
-    var hA = FormatLengthByMode(doc, outHeight, !primaryIsFractional);
-    return $"{wP} x {hP} ({wA} x {hA})";
+    var dA = FormatLengthByMode(doc, outDepth, !primaryIsFractional);
+
+    if (IsFlatOutput(doc, fit))
+      return $"{wP} x {dP} ({wA} x {dA})";
+
+    var hP = FormatLengthByMode(doc, fit.Height, primaryIsFractional);
+    var hA = FormatLengthByMode(doc, fit.Height, !primaryIsFractional);
+    return $"3D: {wP} x {dP} x {hP} ({wA} x {dA} x {hA})";
+  }
+
+  private static bool IsFlatOutput(RhinoDoc doc, FitCandidate fit)
+  {
+    return string.Equals(fit.Mode, "2d", StringComparison.OrdinalIgnoreCase) ||
+           fit.Height <= doc.ModelAbsoluteTolerance ||
+           IsEffectivelyFlatForSizeDisplay(doc, fit);
   }
 
   private static bool IsEffectivelyFlatForSizeDisplay(RhinoDoc doc, FitCandidate fit)
   {
     var shortSide = Math.Min(fit.Width, fit.Depth);
-    var tolerance = Math.Max(doc.ModelAbsoluteTolerance * 5.0, shortSide * 1.0e-4);
+    var tolerance = Math.Max(
+      doc.ModelAbsoluteTolerance * PlanarityModelToleranceMultiplier,
+      shortSide * FlatOutputShortSideScale);
     return fit.Height <= tolerance;
   }
 
@@ -463,19 +481,27 @@ public sealed class vFitBox : Command
   {
     plane = Plane.Unset;
 
-    var points = new List<Point3d>();
+    var structuralPoints = new List<Point3d>();
+    var annotationPoints = new List<Point3d>();
     foreach (var geometry in geometries)
     {
+      var points = geometry is AnnotationBase ? annotationPoints : structuralPoints;
       if (!TryAddPlanarSamplePoints(geometry, points))
         return false;
     }
 
-    var unique = UniquePoints(points, tolerance);
+    var unique = UniquePoints(structuralPoints, tolerance);
     if (!TryBuildPlaneFromPoints(unique, tolerance, out plane))
-      return false;
+    {
+      unique = UniquePoints(structuralPoints.Concat(annotationPoints), tolerance);
+      if (!TryBuildPlaneFromPoints(unique, tolerance, out plane))
+        return false;
+    }
 
     var bbox = new BoundingBox(unique);
-    var planeTolerance = Math.Max(tolerance, bbox.IsValid ? bbox.Diagonal.Length * 1.0e-6 : tolerance);
+    var planeTolerance = Math.Max(
+      tolerance,
+      bbox.IsValid ? bbox.Diagonal.Length * PlanarityBoundsScale : tolerance);
     foreach (var point in unique)
     {
       if (Math.Abs(plane.DistanceTo(point)) > planeTolerance)
@@ -495,6 +521,13 @@ public sealed class vFitBox : Command
       case Point point:
         AddSamplePoint(points, point.Location);
         return true;
+
+      case TextDot textDot:
+        AddSamplePoint(points, textDot.Point);
+        return true;
+
+      case AnnotationBase annotation:
+        return AddAnnotationPlaneSamplePoints(annotation, points);
 
       case Curve curve:
         return AddCurveSamplePoints(curve, points);
@@ -520,6 +553,20 @@ public sealed class vFitBox : Command
       default:
         return false;
     }
+  }
+
+  private static bool AddAnnotationPlaneSamplePoints(
+    AnnotationBase annotation,
+    List<Point3d> points)
+  {
+    if (annotation == null || !annotation.IsValid || !annotation.Plane.IsValid)
+      return false;
+
+    var plane = annotation.Plane;
+    AddSamplePoint(points, plane.Origin);
+    AddSamplePoint(points, plane.Origin + plane.XAxis);
+    AddSamplePoint(points, plane.Origin + plane.YAxis);
+    return true;
   }
 
   private static bool AddCurveSamplePoints(Curve curve, List<Point3d> points)
@@ -680,7 +727,9 @@ public sealed class vFitBox : Command
     var objective2d = normalizedFitMode == "area" ? ScoreMode.Area : ScoreMode.Strip;
 
     var (requestedStepDeg, stableStepDeg) = StabilizedStepDeg(angleStepDeg);
-    var planarTolerance = Math.Max(doc.ModelAbsoluteTolerance * 5.0, 1.0e-9);
+    var planarTolerance = Math.Max(
+      doc.ModelAbsoluteTolerance * PlanarityModelToleranceMultiplier,
+      RhinoMath.ZeroTolerance);
 
     if (TryFindSelectionPlane(geometries, planarTolerance, out var selectionPlane))
     {
@@ -831,6 +880,9 @@ public sealed class vFitBox : Command
     }
 
     if (first) return;
+    if (string.Equals(c.Mode, "2d", StringComparison.OrdinalIgnoreCase))
+      minZ = maxZ = 0.0;
+
     c.MinX = minX; c.MaxX = maxX;
     c.MinY = minY; c.MaxY = maxY;
     c.MinZ = minZ; c.MaxZ = maxZ;
@@ -865,7 +917,7 @@ public sealed class vFitBox : Command
   /// </summary>
   private static Guid AddFitGeometry(RhinoDoc doc, FitCandidate fit)
   {
-    if (fit.Height <= doc.ModelAbsoluteTolerance || IsEffectivelyFlatForSizeDisplay(doc, fit))
+    if (IsFlatOutput(doc, fit))
     {
       var p0 = fit.Plane.PointAt(fit.MinX, fit.MinY, fit.MinZ);
       var p1 = fit.Plane.PointAt(fit.MaxX, fit.MinY, fit.MinZ);

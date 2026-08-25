@@ -1,44 +1,56 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
+using System.Linq;
 using Rhino;
 using Rhino.Commands;
+using Rhino.Display;
 using Rhino.DocObjects;
 using Rhino.Geometry;
+using Rhino.Geometry.Intersect;
 using Rhino.Input;
 using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
 /// <summary>
-/// Finds all curve objects that overlap by following the same path and selects them.
-/// For each group of identical duplicates the oldest curve (lowest runtime serial) is
-/// left unselected (treated as the original to keep); all others are selected.
-/// Curves that are fully covered by a longer curve are also selected.
+/// Finds covered curves and faces that share surface area with other faces.
 /// </summary>
 public sealed class vOverlaps : Command
 {
-  private const string SectionName = "vOverlaps";
-  private const string TolKey      = "tolerance";
-  private const string SegKey      = "segments";
-
   // Option defaults
   private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
   private const bool DefaultSegments = false; // true compares polycurve segments individually; false compares whole curves.
 
+  // Customizable selection and output behavior
+  private const ObjectType SupportedGeometry = ObjectType.Curve | ObjectType.Surface | ObjectType.Brep; // Rhino object and subobject types accepted by the command.
+  private static readonly Color OverlapAreaColor = Color.Cyan; // Fill color used to identify shared face area.
+  private const double OverlapAreaTransparency = 0.15; // Shared-area fill transparency from 0.0 opaque to 1.0 invisible.
+  private const int OverlapValidationSamples = 8; // Equal-length interior samples used to verify that a highlighted interval follows both source edges; integer two or greater.
+  private const double FaceCoincidenceToleranceFactor = 5.0; // Multiplier applied to command tolerance only when deciding whether two face planes are close enough to compare; greater than or equal to one.
+  private const double MinimumOverlapToleranceFactor = 10.0; // Minimum highlighted overlap length as a multiple of tolerance; rejects point-contact slivers reported as overlaps.
+  private const double MinimumOverlapEdgeFraction = 1e-6; // Minimum highlighted overlap length as a fraction of the shorter source edge; positive fraction below one.
+  private const int DoubleEscapeIntervalMilliseconds = 600; // Maximum elapsed milliseconds between two Esc presses that clear a persistent overlap highlight; positive integer.
+
+  private const string SectionName = "vOverlaps";
+  private const string TolKey = "tolerance";
+  private const string SegKey = "segments";
+
   private static double _tolerance = DefaultTolerance;
-  private static bool   _segments  = DefaultSegments;
+  private static bool _segments = DefaultSegments;
+  private static OverlapAreaConduit? _activeAreaHighlight;
+  private static uint _activeAreaDocumentSerial;
+  private static long _lastEscapeTick;
 
   public override string EnglishName => "vOverlaps";
-
-  // ── Option persistence ────────────────────────────────────────────────────
 
   private static void LoadOptions() =>
     ToolsOptionStore.Read<int>(SectionName, section =>
     {
-      if (ToolsOptionStore.TryGetDouble(section, TolKey, out var t) && t > 0.0)
-        _tolerance = t;
-      if (ToolsOptionStore.TryGetBool(section, SegKey, out var s))
-        _segments = s;
+      if (ToolsOptionStore.TryGetDouble(section, TolKey, out var tolerance) && tolerance > 0.0)
+        _tolerance = tolerance;
+      if (ToolsOptionStore.TryGetBool(section, SegKey, out var segments))
+        _segments = segments;
       return 0;
     });
 
@@ -49,446 +61,926 @@ public sealed class vOverlaps : Command
       section[SegKey] = _segments;
     });
 
-  // ── Command ───────────────────────────────────────────────────────────────
+  internal static (double Tolerance, bool Segments) GetDetectionSettings()
+  {
+    LoadOptions();
+    return (_tolerance, _segments);
+  }
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    DisableAreaHighlight(doc);
     LoadOptions();
 
-    // ── Selection loop ─────────────────────────────────────────────────────
-    // Tracks the working set across AddMore / Remove iterations.
-    var selectedIds = new HashSet<Guid>();
+    var selectedCurveIds = new HashSet<Guid>();
+    var selectedFaces = new HashSet<FaceOverlapFinder.FaceReference>();
+    SeedPreselection(doc, selectedCurveIds, selectedFaces);
 
-    // Seed from preselection.
-    foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
-      if (obj?.ObjectType == ObjectType.Curve) selectedIds.Add(obj.Id);
-
-    bool firstPrompt = true;
-
+    var firstPrompt = true;
     while (true)
     {
-      var go = new GetObject();
-      go.EnableTransparentCommands(true);
-      go.GeometryFilter    = ObjectType.Curve;
-      go.SubObjectSelect   = false;
-      go.GroupSelect       = true;
-      go.AcceptNothing(true);
-      go.AcceptNumber(true, true);
-      go.EnablePreSelect(false, true);
-      go.DeselectAllBeforePostSelect = false;
+      SyncWorkingSelection(doc, selectedCurveIds, selectedFaces);
+      using var getter = CreateGeometryGetter();
+      var toleranceOption = new OptionDouble(_tolerance, 1e-9, 1e6);
+      var segmentsOption = new OptionToggle(_segments, "No", "Yes");
+      var toleranceOptionIndex = getter.AddOptionDouble("Tolerance", ref toleranceOption);
+      getter.AddOptionToggle("Segments", ref segmentsOption);
+      var addOptionIndex = getter.AddOption("AddMore");
+      var removeOptionIndex = getter.AddOption("Remove");
+      var allOptionIndex = getter.AddOption("AllVisible");
 
-      var tolOpt    = new OptionDouble(_tolerance, 1e-9, 1e6);
-      var segOpt    = new OptionToggle(_segments, "No", "Yes");
-      var idxTol    = go.AddOptionDouble("Tolerance", ref tolOpt);
-      var idxSeg    = go.AddOptionToggle("Segments",  ref segOpt);
-      var idxAdd    = go.AddOption("AddMore");
-      var idxRemove = go.AddOption("Remove");
-      var idxAll    = go.AddOption("AllVisible");
-
-      if (selectedIds.Count == 0)
-        go.SetCommandPrompt("Select curves (Enter = all visible)");
+      var selectedCount = selectedCurveIds.Count + selectedFaces.Count;
+      if (selectedCount == 0)
+        getter.SetCommandPrompt("Select curves or faces (Enter = all visible)");
       else if (firstPrompt)
-        go.SetCommandPrompt($"{selectedIds.Count} curves — Enter to find overlaps, or add/remove");
+        getter.SetCommandPrompt($"{SelectionLabel(selectedCurveIds.Count, selectedFaces.Count)} - Enter to find overlaps, or add/remove");
       else
-        go.SetCommandPrompt($"{selectedIds.Count} curves — Enter to find overlaps");
-
+        getter.SetCommandPrompt($"{SelectionLabel(selectedCurveIds.Count, selectedFaces.Count)} - Enter to find overlaps");
       firstPrompt = false;
 
-      // Pre-select objects in the working set so the user can see them.
-      foreach (var id in selectedIds)
-        doc.Objects.Select(id, true);
+      var minimumSelectionCount = selectedCount == 0 ? 1 : 0;
+      Log.Write(
+        "vOverlaps",
+        $"selection_prompt selected={selectedCount} minimum={minimumSelectionCount}");
+      var getResult = getter.GetMultiple(minimumSelectionCount, 0);
+      Log.Write(
+        "vOverlaps",
+        $"selection_result result={getResult} objects={getter.ObjectCount}");
+      _tolerance = toleranceOption.CurrentValue;
+      _segments = segmentsOption.CurrentValue;
 
-      var res = go.GetMultiple(0, 0);
-
-      _tolerance = tolOpt.CurrentValue;
-      _segments  = segOpt.CurrentValue;
-
-      if (res == GetResult.Cancel)
+      if (getResult == GetResult.Cancel)
         return Result.Cancel;
 
-      if (res == GetResult.Number)
+      if (getResult == GetResult.Number)
       {
-        if (go.Number() > 0.0) _tolerance = go.Number();
+        if (getter.Number() > 0.0)
+          _tolerance = getter.Number();
         SaveOptions();
         continue;
       }
 
-      if (res == GetResult.Option)
+      if (getResult == GetResult.Option)
       {
-        int idx = go.Option()?.Index ?? -1;
+        var optionIndex = getter.Option()?.Index ?? -1;
         SaveOptions();
 
-        if (idx == idxTol)
+        if (optionIndex == toleranceOptionIndex)
           continue;
 
-        if (idx == idxAdd)
+        if (optionIndex == addOptionIndex)
         {
-          // Let user pick more curves.
-          var goAdd = new GetObject();
-          goAdd.EnableTransparentCommands(true);
-          goAdd.SetCommandPrompt("Add curves to selection");
-          goAdd.GeometryFilter    = ObjectType.Curve;
-          goAdd.SubObjectSelect   = false;
-          goAdd.GroupSelect       = true;
-          goAdd.AcceptNothing(true);
-          goAdd.EnablePreSelect(false, true);
-          goAdd.DeselectAllBeforePostSelect = false;
-          var addRes = goAdd.GetMultiple(1, 0);
-          if (addRes == GetResult.Object)
-            for (int i = 0; i < goAdd.ObjectCount; i++)
-              selectedIds.Add(goAdd.Object(i).ObjectId);
+          PickWorkingSet(doc, add: true, selectedCurveIds, selectedFaces);
           continue;
         }
 
-        if (idx == idxRemove)
+        if (optionIndex == removeOptionIndex)
         {
-          var goRm = new GetObject();
-          goRm.EnableTransparentCommands(true);
-          goRm.SetCommandPrompt("Remove curves from selection");
-          goRm.GeometryFilter    = ObjectType.Curve;
-          goRm.SubObjectSelect   = false;
-          goRm.GroupSelect       = true;
-          goRm.AcceptNothing(true);
-          goRm.EnablePreSelect(false, true);
-          goRm.DeselectAllBeforePostSelect = false;
-          var rmRes = goRm.GetMultiple(1, 0);
-          if (rmRes == GetResult.Object)
-            for (int i = 0; i < goRm.ObjectCount; i++)
-              selectedIds.Remove(goRm.Object(i).ObjectId);
+          PickWorkingSet(doc, add: false, selectedCurveIds, selectedFaces);
           continue;
         }
 
-        if (idx == idxAll)
+        if (optionIndex == allOptionIndex)
         {
-          selectedIds.Clear();
-          continue;  // empty set → next loop uses all visible
+          ClearWorkingSelection(doc, selectedCurveIds, selectedFaces);
+          selectedCurveIds.Clear();
+          selectedFaces.Clear();
+          continue;
         }
 
         continue;
       }
 
-      if (res == GetResult.Object)
+      if (getResult == GetResult.Object)
       {
-        // User picked objects — add them to working set.
-        for (int i = 0; i < go.ObjectCount; i++)
-          selectedIds.Add(go.Object(i).ObjectId);
-        continue;
+        AddReferences(getter.Objects(), selectedCurveIds, selectedFaces);
+        break;
       }
 
-      // GetResult.Nothing = Enter → run with current set (or all visible).
       break;
     }
 
     SaveOptions();
+    BuildInputs(
+      doc,
+      selectedCurveIds,
+      selectedFaces,
+      out var inputCurves,
+      out var inputFaces);
 
-    // ── Build input object list ────────────────────────────────────────────
-    List<RhinoObject> inputObjs;
-    if (selectedIds.Count == 0)
+    if (inputCurves.Count < 2 && inputFaces.Count < 2)
     {
-      var settings = new ObjectEnumeratorSettings
-      {
-        IncludeLights   = false,
-        IncludeGrips    = false,
-        IncludePhantoms = false,
-        NormalObjects   = true,
-        LockedObjects   = false,
-        HiddenObjects   = false,
-      };
-      inputObjs = new List<RhinoObject>();
-      foreach (var obj in doc.Objects.GetObjectList(settings))
-        if (obj?.ObjectType == ObjectType.Curve && obj.IsValid)
-          inputObjs.Add(obj);
-    }
-    else
-    {
-      inputObjs = new List<RhinoObject>();
-      foreach (var id in selectedIds)
-      {
-        var obj = doc.Objects.FindId(id);
-        if (obj?.ObjectType == ObjectType.Curve) inputObjs.Add(obj);
-      }
-    }
-
-    if (inputObjs.Count < 2)
-    {
-      RhinoApp.WriteLine("vOverlaps: need at least 2 visible curves.");
+      RhinoApp.WriteLine("vOverlaps: need at least 2 curves or 2 faces.");
       return Result.Nothing;
     }
 
-    // ── Build curve cache ──────────────────────────────────────────────────
-    // In Segments mode each polycurve is exploded; items map to parent objects.
-    // In whole-curve mode items map 1:1 to RhinoObjects via RuntimeSerialNumber.
-    var curveCache  = new Dictionary<uint, Curve>();
-    var lengthCache = new Dictionary<uint, double>();
-    var objById     = new Dictionary<uint, RhinoObject>();  // whole-curve mode
-    var parentMap   = new Dictionary<uint, RhinoObject>();  // segment mode
+    var curveOverlaps = inputCurves.Count >= 2
+      ? OverlapFinder.Find(inputCurves, _tolerance, _segments)
+      : new OverlapFinder.Result([], inputCurves.Count, 0, 0);
+    var faceCoincidenceTolerance = Math.Max(
+      _tolerance * FaceCoincidenceToleranceFactor,
+      RhinoMath.ZeroTolerance);
+    var faceAreaTolerance = Math.Max(_tolerance, RhinoMath.ZeroTolerance);
+    var faceOverlaps = inputFaces.Count >= 2
+      ? FaceOverlapFinder.Find(
+        inputFaces,
+        faceCoincidenceTolerance,
+        faceAreaTolerance)
+      : new FaceOverlapFinder.Result([], [], inputFaces.Count, 0, 0);
 
-    if (_segments)
-    {
-      uint key = 1;
-      foreach (var obj in inputObjs)
-      {
-        if (obj.Geometry is not Curve crv) continue;
-        foreach (var seg in ExplodeSegments(crv))
-        {
-          var dup = seg.DuplicateCurve();
-          if (dup == null) continue;
-          double len = dup.GetLength();
-          if (len < 1e-12) continue;
-          curveCache[key]  = dup;
-          lengthCache[key] = len;
-          parentMap[key]   = obj;
-          key++;
-        }
-      }
-    }
-    else
-    {
-      foreach (var obj in inputObjs)
-      {
-        if (obj.Geometry is not Curve crv) continue;
-        var dup = crv.DuplicateCurve();
-        if (dup == null) continue;
-        uint sn = obj.RuntimeSerialNumber;
-        curveCache[sn]  = dup;
-        lengthCache[sn] = dup.GetLength();
-        objById[sn]     = obj;
-      }
-    }
+    var overlappingAreas = FaceOverlapFinder.CreateOverlapAreas(
+      inputFaces,
+      faceOverlaps.OverlappingPairs,
+      faceCoincidenceTolerance,
+      faceAreaTolerance);
 
-    if (curveCache.Count < 2)
-    {
-      RhinoApp.WriteLine("vOverlaps: no valid curves to process.");
-      return Result.Nothing;
-    }
+    var highlightedAreaCount = ApplyResults(
+      doc,
+      inputFaces,
+      curveOverlaps.CoveredObjectIds,
+      overlappingAreas);
 
-    double tol = _tolerance;
-    var ids    = new List<uint>(curveCache.Keys);
-    int n      = ids.Count;
+    var modeLabel = _segments ? ", segments mode" : string.Empty;
+    var findings = new List<string>();
+    if (curveOverlaps.CoveredObjectIds.Count > 0)
+      findings.Add($"selected {curveOverlaps.CoveredObjectIds.Count} covered curve(s)");
+    if (faceOverlaps.OverlappingFaces.Count > 0)
+      findings.Add(
+        $"highlighted {highlightedAreaCount} overlapping face area(s)");
 
-    // covered_by[sn] = set of serial numbers whose curve covers sn.
-    var coveredBy    = new Dictionary<uint, HashSet<uint>>();
-    var dupPairs     = new List<(uint, uint)>();
-    int pairChecks   = 0;
-    int coverHits    = 0;
-
-    foreach (var sn in ids)
-      coveredBy[sn] = new HashSet<uint>();
-
-    for (int i = 0; i < n - 1; i++)
-    {
-      uint snA   = ids[i];
-      var  crvA  = curveCache[snA];
-      double lenA = lengthCache[snA];
-
-      for (int j = i + 1; j < n; j++)
-      {
-        uint snB   = ids[j];
-        var  crvB  = curveCache[snB];
-        double lenB = lengthCache[snB];
-
-        pairChecks++;
-
-        if (CurvesAreSamePathSameSize(crvA, crvB, lenA, lenB, tol))
-        {
-          coveredBy[snA].Add(snB);
-          coveredBy[snB].Add(snA);
-          dupPairs.Add((snA, snB));
-          coverHits += 2;
-          continue;
-        }
-
-        if (lenA <= lenB)
-        {
-          if (CurveIsFullyCoveredBy(crvA, lenA, crvB, tol))
-          { coveredBy[snA].Add(snB); coverHits++; }
-        }
-        else
-        {
-          if (CurveIsFullyCoveredBy(crvB, lenB, crvA, tol))
-          { coveredBy[snB].Add(snA); coverHits++; }
-        }
-      }
-    }
-
-    // Union-Find: group exact duplicates.
-    var groups   = DuplicateGroups(ids, dupPairs);
-    // For suppress: in segment mode use parent serial; in whole mode use item serial.
-    var suppressParents = new HashSet<uint>();
-    foreach (var group in groups)
-    {
-      if (group.Count < 2) continue;
-      // Keep oldest parent (or item in whole mode) unselected.
-      uint oldest = group[0];
-      uint oldestParent = _segments
-          ? (parentMap.TryGetValue(oldest, out var po0) ? po0.RuntimeSerialNumber : oldest)
-          : oldest;
-      foreach (var sn in group)
-      {
-        uint parentSn = _segments
-            ? (parentMap.TryGetValue(sn, out var po) ? po.RuntimeSerialNumber : sn)
-            : sn;
-        if (parentSn < oldestParent) { oldest = sn; oldestParent = parentSn; }
-      }
-      suppressParents.Add(oldestParent);
-    }
-
-    // Collect objects to select.
-    var toSelect = new HashSet<Guid>();
-    foreach (var sn in ids)
-    {
-      if (coveredBy[sn].Count == 0) continue;
-      if (_segments)
-      {
-        if (!parentMap.TryGetValue(sn, out var parentObj)) continue;
-        uint parentSn = parentObj.RuntimeSerialNumber;
-        if (!suppressParents.Contains(parentSn))
-          toSelect.Add(parentObj.Id);
-      }
-      else
-      {
-        if (!objById.TryGetValue(sn, out var obj)) continue;
-        if (!suppressParents.Contains(sn))
-          toSelect.Add(obj.Id);
-      }
-    }
-
-    doc.Objects.UnselectAll();
-    foreach (var id in toSelect)
-      doc.Objects.Select(id);
-
-    doc.Views.Redraw();
-
-    string modeLabel = _segments ? $", segments mode" : "";
-    if (toSelect.Count > 0)
-      RhinoApp.WriteLine($"vOverlaps: selected {toSelect.Count} covered curve(s) " +
-        $"({curveCache.Count} items{modeLabel}, {pairChecks} pair checks, {coverHits} cover hits).");
-    else
-      RhinoApp.WriteLine($"vOverlaps: no covered curves found ({curveCache.Count} items{modeLabel}).");
+    var resultLabel = findings.Count > 0
+      ? string.Join("; ", findings)
+      : "no overlaps found";
+    RhinoApp.WriteLine(
+      $"vOverlaps: {resultLabel} " +
+      $"({curveOverlaps.ItemCount} curve items{modeLabel}, {curveOverlaps.PairChecks} curve pair checks; " +
+      $"{faceOverlaps.FaceCount} faces, {faceOverlaps.PairChecks} face pair checks).");
+    Log.Write(
+      "vOverlaps",
+      $"curves={curveOverlaps.ItemCount} curve_pairs={curveOverlaps.PairChecks} curve_hits={curveOverlaps.CoverHits} " +
+      $"faces={faceOverlaps.FaceCount} face_pairs={faceOverlaps.PairChecks} face_hits={faceOverlaps.OverlapHits} " +
+      $"face_coincidence_tolerance={faceCoincidenceTolerance:G6} " +
+      $"face_area_tolerance={faceAreaTolerance:G6} overlapping_areas={highlightedAreaCount}");
 
     return Result.Success;
   }
 
-  // ── Segment explode ───────────────────────────────────────────────────────
-
-  /// <summary>
-  /// Returns the constituent segments of a curve.
-  /// PolyCurves are exploded; polylines become individual line segments.
-  /// Simple curves (arc, line, NURBS) are returned as-is.
-  /// </summary>
-  private static IEnumerable<Curve> ExplodeSegments(Curve curve)
+  private static GetObject CreateGeometryGetter()
   {
-    if (curve is PolyCurve pc)
+    var getter = new GetObject();
+    getter.EnableTransparentCommands(true);
+    getter.GeometryFilter = SupportedGeometry;
+    getter.SubObjectSelect = true;
+    getter.GroupSelect = false;
+    getter.AcceptNothing(true);
+    getter.AcceptNumber(true, true);
+    getter.AlreadySelectedObjectSelect = true;
+    getter.EnablePreSelect(false, true);
+    getter.EnableClearObjectsOnEntry(false);
+    getter.EnableUnselectObjectsOnExit(false);
+    getter.DeselectAllBeforePostSelect = false;
+    return getter;
+  }
+
+  private static void SeedPreselection(
+    RhinoDoc doc,
+    ISet<Guid> curveIds,
+    ISet<FaceOverlapFinder.FaceReference> faces)
+  {
+    var settings = VisibleObjectSettings();
+    foreach (var obj in doc.Objects.GetObjectList(settings))
     {
-      var segs = pc.Explode();
-      if (segs != null && segs.Length > 0)
+      if (obj.Geometry is Curve && obj.IsSelected(checkSubObjects: false) != 0)
       {
-        foreach (var s in segs)
-          foreach (var sub in ExplodeSegments(s))  // recurse for nested PolyCurves
-            yield return sub;
-        yield break;
+        curveIds.Add(obj.Id);
+        continue;
+      }
+
+      if (obj.Geometry is not Brep brep)
+        continue;
+
+      var selectedComponents = obj.GetSelectedSubObjects() ?? Array.Empty<ComponentIndex>();
+      var addedSubobjects = false;
+      foreach (var component in selectedComponents)
+      {
+        if (component.ComponentIndexType != ComponentIndexType.BrepFace ||
+            component.Index < 0 || component.Index >= brep.Faces.Count)
+          continue;
+        faces.Add(new FaceOverlapFinder.FaceReference(obj.Id, component.Index));
+        addedSubobjects = true;
+      }
+
+      if (!addedSubobjects && obj.IsSelected(checkSubObjects: false) != 0)
+        AddAllFaces(obj.Id, brep, faces);
+    }
+  }
+
+  private static void PickWorkingSet(
+    RhinoDoc doc,
+    bool add,
+    ISet<Guid> curveIds,
+    ISet<FaceOverlapFinder.FaceReference> faces)
+  {
+    using var getter = CreateGeometryGetter();
+    getter.SetCommandPrompt(add
+      ? "Add curves or faces to selection"
+      : "Remove curves or faces from selection");
+    var getResult = getter.GetMultiple(1, 0);
+    if (getResult != GetResult.Object)
+      return;
+
+    if (add)
+    {
+      AddReferences(getter.Objects(), curveIds, faces);
+      return;
+    }
+
+    RemoveReferences(doc, getter.Objects(), curveIds, faces);
+  }
+
+  private static void AddReferences(
+    IEnumerable<ObjRef> references,
+    ISet<Guid> curveIds,
+    ISet<FaceOverlapFinder.FaceReference> faces)
+  {
+    foreach (var objRef in references)
+    {
+      var obj = objRef.Object();
+      if (obj?.Geometry is Curve)
+      {
+        curveIds.Add(obj.Id);
+        continue;
+      }
+
+      if (obj?.Geometry is not Brep brep)
+        continue;
+
+      var component = objRef.GeometryComponentIndex;
+      if (component.ComponentIndexType == ComponentIndexType.BrepFace &&
+          component.Index >= 0 && component.Index < brep.Faces.Count)
+      {
+        faces.Add(new FaceOverlapFinder.FaceReference(obj.Id, component.Index));
+      }
+      else
+      {
+        AddAllFaces(obj.Id, brep, faces);
+      }
+    }
+  }
+
+  private static void RemoveReferences(
+    RhinoDoc doc,
+    IEnumerable<ObjRef> references,
+    ISet<Guid> curveIds,
+    ISet<FaceOverlapFinder.FaceReference> faces)
+  {
+    foreach (var objRef in references)
+    {
+      var obj = objRef.Object();
+      if (obj?.Geometry is Curve)
+      {
+        curveIds.Remove(obj.Id);
+        obj.Select(false);
+        continue;
+      }
+
+      if (obj?.Geometry is not Brep brep)
+        continue;
+
+      var component = objRef.GeometryComponentIndex;
+      if (component.ComponentIndexType == ComponentIndexType.BrepFace &&
+          component.Index >= 0 && component.Index < brep.Faces.Count)
+      {
+        faces.Remove(new FaceOverlapFinder.FaceReference(obj.Id, component.Index));
+        obj.SelectSubObject(component, false, true, false);
+        continue;
+      }
+
+      for (var faceIndex = 0; faceIndex < brep.Faces.Count; faceIndex++)
+      {
+        faces.Remove(new FaceOverlapFinder.FaceReference(obj.Id, faceIndex));
+        obj.SelectSubObject(FaceComponent(faceIndex), false, true, false);
+      }
+    }
+  }
+
+  private static void AddAllFaces(
+    Guid objectId,
+    Brep brep,
+    ISet<FaceOverlapFinder.FaceReference> faces)
+  {
+    for (var faceIndex = 0; faceIndex < brep.Faces.Count; faceIndex++)
+      faces.Add(new FaceOverlapFinder.FaceReference(objectId, faceIndex));
+  }
+
+  private static void SyncWorkingSelection(
+    RhinoDoc doc,
+    IEnumerable<Guid> curveIds,
+    IEnumerable<FaceOverlapFinder.FaceReference> faces)
+  {
+    foreach (var curveId in curveIds)
+      doc.Objects.FindId(curveId)?.Select(true);
+
+    foreach (var face in faces)
+      doc.Objects.FindId(face.ObjectId)?.SelectSubObject(
+        FaceComponent(face.FaceIndex),
+        true,
+        true,
+        false);
+    doc.Views.Redraw();
+  }
+
+  private static void ClearWorkingSelection(
+    RhinoDoc doc,
+    IEnumerable<Guid> curveIds,
+    IEnumerable<FaceOverlapFinder.FaceReference> faces)
+  {
+    foreach (var curveId in curveIds)
+      doc.Objects.FindId(curveId)?.Select(false);
+    foreach (var face in faces)
+      doc.Objects.FindId(face.ObjectId)?.SelectSubObject(
+        FaceComponent(face.FaceIndex),
+        false,
+        true,
+        false);
+    doc.Views.Redraw();
+  }
+
+  private static void BuildInputs(
+    RhinoDoc doc,
+    IReadOnlyCollection<Guid> selectedCurveIds,
+    IReadOnlyCollection<FaceOverlapFinder.FaceReference> selectedFaces,
+    out List<RhinoObject> curves,
+    out List<FaceOverlapFinder.FaceItem> faces)
+  {
+    curves = [];
+    faces = [];
+
+    if (selectedCurveIds.Count == 0 && selectedFaces.Count == 0)
+    {
+      foreach (var obj in doc.Objects.GetObjectList(VisibleObjectSettings()))
+      {
+        if (obj?.Geometry is Curve && obj.IsValid)
+          curves.Add(obj);
+        else if (obj?.Geometry is Brep brep && obj.IsValid)
+          AddFaceInputs(obj.Id, brep, null, faces);
+      }
+      return;
+    }
+
+    foreach (var curveId in selectedCurveIds)
+    {
+      var obj = doc.Objects.FindId(curveId);
+      if (obj?.Geometry is Curve && obj.IsValid)
+        curves.Add(obj);
+    }
+
+    foreach (var group in selectedFaces.GroupBy(face => face.ObjectId))
+    {
+      var obj = doc.Objects.FindId(group.Key);
+      if (obj?.Geometry is Brep brep && obj.IsValid)
+        AddFaceInputs(obj.Id, brep, group.Select(face => face.FaceIndex), faces);
+    }
+  }
+
+  private static ObjectEnumeratorSettings VisibleObjectSettings() => new()
+  {
+    IncludeLights = false,
+    IncludeGrips = false,
+    IncludePhantoms = false,
+    NormalObjects = true,
+    LockedObjects = false,
+    HiddenObjects = false
+  };
+
+  private static void AddFaceInputs(
+    Guid objectId,
+    Brep brep,
+    IEnumerable<int>? faceIndices,
+    ICollection<FaceOverlapFinder.FaceItem> faces)
+  {
+    var indices = faceIndices ?? Enumerable.Range(0, brep.Faces.Count);
+    foreach (var faceIndex in indices.Distinct())
+    {
+      if (faceIndex < 0 || faceIndex >= brep.Faces.Count)
+        continue;
+      faces.Add(new FaceOverlapFinder.FaceItem(
+        new FaceOverlapFinder.FaceReference(objectId, faceIndex),
+        brep.Faces[faceIndex]));
+    }
+  }
+
+  private static int ApplyResults(
+    RhinoDoc doc,
+    IReadOnlyCollection<FaceOverlapFinder.FaceItem> inputFaces,
+    IReadOnlyCollection<Guid> coveredCurveIds,
+    IReadOnlyCollection<Brep> overlappingAreas)
+  {
+    doc.Objects.UnselectAll();
+    foreach (var obj in inputFaces
+               .Select(face => doc.Objects.FindId(face.Reference.ObjectId))
+               .Where(obj => obj != null)
+               .Distinct())
+      obj!.UnhighlightAllSubObjects();
+
+    foreach (var curveId in coveredCurveIds)
+      doc.Objects.Select(curveId);
+
+    if (overlappingAreas.Count > 0)
+    {
+      _activeAreaDocumentSerial = doc.RuntimeSerialNumber;
+      _activeAreaHighlight = new OverlapAreaConduit(
+        overlappingAreas,
+        _activeAreaDocumentSerial)
+      {
+        Enabled = true
+      };
+      AttachAreaHighlightEvents();
+    }
+
+    doc.Views.Redraw();
+    return overlappingAreas.Count;
+  }
+
+  private static List<Curve> FindOverlappingEdgeSegments(
+    IReadOnlyCollection<FaceOverlapFinder.FaceItem> inputFaces,
+    IReadOnlyCollection<FaceOverlapFinder.FacePair> overlappingPairs,
+    double tolerance)
+  {
+    var facesByReference = inputFaces.ToDictionary(face => face.Reference);
+    var segments = new List<Curve>();
+    foreach (var pair in overlappingPairs)
+    {
+      if (!facesByReference.TryGetValue(pair.First, out var first) ||
+          !facesByReference.TryGetValue(pair.Second, out var second))
+        continue;
+
+      foreach (var firstEdgeIndex in first.Face.AdjacentEdges())
+      {
+        var firstEdge = first.Face.Brep.Edges[firstEdgeIndex];
+        using var firstCurve = firstEdge.DuplicateCurve();
+        if (firstCurve == null || !firstCurve.IsValid)
+          continue;
+
+        var firstBounds = firstCurve.GetBoundingBox(accurate: true);
+        foreach (var secondEdgeIndex in second.Face.AdjacentEdges())
+        {
+          var secondEdge = second.Face.Brep.Edges[secondEdgeIndex];
+          using var secondCurve = secondEdge.DuplicateCurve();
+          if (secondCurve == null || !secondCurve.IsValid)
+            continue;
+
+          if (!BoundingBoxesMeet(
+                firstBounds,
+                secondCurve.GetBoundingBox(accurate: true),
+                tolerance))
+            continue;
+
+          if (firstCurve.IsLinear(tolerance) && secondCurve.IsLinear(tolerance))
+          {
+            if (TryCreateLinearOverlapSegment(
+                  firstCurve,
+                  secondCurve,
+                  tolerance,
+                  out var linearSegment,
+                  out var linearDiagnostic))
+            {
+              segments.Add(linearSegment);
+              Log.Write(
+                "vOverlaps",
+                $"linear edge overlap accepted faces={pair.First.ObjectId}:{pair.First.FaceIndex}/" +
+                $"{pair.Second.ObjectId}:{pair.Second.FaceIndex} edges={firstEdgeIndex}/{secondEdgeIndex} " +
+                linearDiagnostic);
+            }
+            else
+            {
+              Log.Write(
+                "vOverlaps",
+                $"linear edge overlap rejected faces={pair.First.ObjectId}:{pair.First.FaceIndex}/" +
+                $"{pair.Second.ObjectId}:{pair.Second.FaceIndex} edges={firstEdgeIndex}/{secondEdgeIndex} " +
+                linearDiagnostic);
+            }
+            continue;
+          }
+
+          var endpointSegments = CreateEndpointOverlapSegments(
+            firstCurve,
+            secondCurve,
+            tolerance);
+          if (endpointSegments.Count > 0)
+          {
+            segments.AddRange(endpointSegments);
+            Log.Write(
+              "vOverlaps",
+              $"endpoint edge overlap accepted faces={pair.First.ObjectId}:{pair.First.FaceIndex}/" +
+              $"{pair.Second.ObjectId}:{pair.Second.FaceIndex} edges={firstEdgeIndex}/{secondEdgeIndex} " +
+              $"segments={endpointSegments.Count}");
+            continue;
+          }
+
+          var intersections = Intersection.CurveCurve(
+            firstCurve,
+            secondCurve,
+            tolerance,
+            tolerance);
+          if (intersections == null)
+            continue;
+
+          foreach (var intersection in intersections)
+          {
+            if (!intersection.IsOverlap)
+              continue;
+
+            if (TryCreateOverlapSegment(
+                  firstCurve,
+                  secondCurve,
+                  intersection.PointA,
+                  intersection.PointA2,
+                  tolerance,
+                  out var segment,
+                  out var diagnostic))
+            {
+              segments.Add(segment);
+              Log.Write(
+                "vOverlaps",
+                $"edge overlap accepted faces={pair.First.ObjectId}:{pair.First.FaceIndex}/" +
+                $"{pair.Second.ObjectId}:{pair.Second.FaceIndex} edges={firstEdgeIndex}/{secondEdgeIndex} " +
+                $"event_domain={intersection.OverlapA} {diagnostic}");
+            }
+            else
+            {
+              Log.Write(
+                "vOverlaps",
+                $"edge overlap rejected faces={pair.First.ObjectId}:{pair.First.FaceIndex}/" +
+                $"{pair.Second.ObjectId}:{pair.Second.FaceIndex} edges={firstEdgeIndex}/{secondEdgeIndex} " +
+                $"event_domain={intersection.OverlapA} {diagnostic}");
+            }
+          }
+        }
       }
     }
 
-    if (curve.TryGetPolyline(out var poly) && poly != null && poly.Count > 1)
-    {
-      for (int i = 0; i < poly.Count - 1; i++)
-        yield return new LineCurve(poly[i], poly[i + 1]);
-      yield break;
-    }
-
-    yield return curve;
+    return segments;
   }
 
-  // ── Geometry helpers ──────────────────────────────────────────────────────
-
-  private static int AdaptiveSampleCount(double length, double tol, bool dense)
+  private static bool TryCreateOverlapSegment(
+    Curve firstEdge,
+    Curve secondEdge,
+    Point3d overlapStart,
+    Point3d overlapEnd,
+    double tolerance,
+    out Curve segment,
+    out string diagnostic)
   {
-    if (tol <= 0.0) return dense ? 90 : 60;
-    double mult = dense ? 4.0 : 6.0;
-    int    min  = dense ? 70  : 40;
-    int    max  = dense ? 280 : 220;
-    return Math.Max(min, Math.Min(max, (int)Math.Round(length / Math.Max(tol * mult, 1e-9))));
-  }
-
-  private static bool AllSamplesFollowPath(Curve a, Curve b, int samples, double tol)
-  {
-    for (int i = 0; i <= samples; i++)
+    segment = null!;
+    diagnostic = string.Empty;
+    if (!overlapStart.IsValid || !overlapEnd.IsValid ||
+        !firstEdge.ClosestPoint(overlapStart, out var startParameter) ||
+        !firstEdge.ClosestPoint(overlapEnd, out var endParameter))
     {
-      double s  = (double)i / samples;
-      Point3d p = a.PointAtNormalizedLength(s);
-      if (!p.IsValid) continue;
-      if (!b.ClosestPoint(p, out double t)) return false;
-      if (p.DistanceTo(b.PointAt(t)) > tol)   return false;
+      diagnostic = "reason=invalid_endpoints";
+      return false;
     }
+
+    var interval = new Interval(
+      Math.Min(startParameter, endParameter),
+      Math.Max(startParameter, endParameter));
+    if (!interval.IsValid || interval.Length <= RhinoMath.ZeroTolerance)
+    {
+      diagnostic = $"reason=empty_interval mapped_domain={interval}";
+      return false;
+    }
+
+    var candidate = firstEdge.Trim(interval);
+    if (candidate == null || !candidate.IsValid)
+    {
+      candidate?.Dispose();
+      diagnostic = $"reason=trim_failed mapped_domain={interval}";
+      return false;
+    }
+
+    var length = candidate.GetLength();
+    var validationTolerance = Math.Max(tolerance, RhinoMath.ZeroTolerance);
+    var firstDeviation = double.PositiveInfinity;
+    var secondDeviation = double.PositiveInfinity;
+    var minimumLength = MinimumOverlapLength(firstEdge, secondEdge, tolerance);
+    var followsFirst = length > minimumLength &&
+      CurveFollowsEdge(candidate, firstEdge, validationTolerance, out firstDeviation);
+    var followsSecond = followsFirst &&
+      CurveFollowsEdge(candidate, secondEdge, validationTolerance, out secondDeviation);
+    if (!followsFirst || !followsSecond)
+    {
+      candidate.Dispose();
+      diagnostic =
+        $"reason=off_edge mapped_domain={interval} length={length:G6} " +
+        $"minimum_length={minimumLength:G6} " +
+        $"deviation={firstDeviation:G6}/{secondDeviation:G6}";
+      return false;
+    }
+
+    segment = candidate;
+    diagnostic =
+      $"mapped_domain={interval} length={length:G6} " +
+      $"deviation={firstDeviation:G6}/{secondDeviation:G6} " +
+      $"from={PointText(candidate.PointAtStart)} to={PointText(candidate.PointAtEnd)}";
     return true;
   }
 
-  private static bool CurveIsFullyCoveredBy(Curve a, double lenA, Curve b, double tol)
+  private static List<Curve> CreateEndpointOverlapSegments(
+    Curve firstEdge,
+    Curve secondEdge,
+    double tolerance)
   {
-    int samples = AdaptiveSampleCount(lenA, tol, dense: false);
-    return AllSamplesFollowPath(a, b, samples, tol);
-  }
-
-  private static bool CurvesAreSamePathSameSize(
-    Curve a, Curve b, double lenA, double lenB, double tol)
-  {
-    if (Math.Abs(lenA - lenB) > Math.Max(tol * 2.0, 1e-6)) return false;
-    int samples = AdaptiveSampleCount(Math.Max(lenA, lenB), tol, dense: true);
-    return AllSamplesFollowPath(a, b, samples, tol)
-        && AllSamplesFollowPath(b, a, samples, tol);
-  }
-
-  // ── Union-Find ────────────────────────────────────────────────────────────
-
-  private static uint FindRoot(Dictionary<uint, uint> parents, uint x)
-  {
-    while (parents[x] != x)
+    var parameters = new List<double>
     {
-      parents[x] = parents[parents[x]];   // path compression
-      x = parents[x];
-    }
-    return x;
-  }
-
-  private static void Union(Dictionary<uint, uint> parents, Dictionary<uint, int> rank, uint a, uint b)
-  {
-    uint ra = FindRoot(parents, a), rb = FindRoot(parents, b);
-    if (ra == rb) return;
-    if (rank[ra] < rank[rb]) { parents[ra] = rb; }
-    else if (rank[ra] > rank[rb]) { parents[rb] = ra; }
-    else { parents[rb] = ra; rank[ra]++; }
-  }
-
-  private static List<List<uint>> DuplicateGroups(List<uint> ids, List<(uint, uint)> pairs)
-  {
-    var parents = new Dictionary<uint, uint>();
-    var rank    = new Dictionary<uint, int>();
-    foreach (var id in ids) { parents[id] = id; rank[id] = 0; }
-    foreach (var (a, b) in pairs) Union(parents, rank, a, b);
-
-    var groups = new Dictionary<uint, List<uint>>();
-    foreach (var id in ids)
+      firstEdge.Domain.Min,
+      firstEdge.Domain.Max
+    };
+    var validationTolerance = Math.Max(tolerance, RhinoMath.ZeroTolerance);
+    foreach (var endpoint in new[]
+             {
+               secondEdge.PointAtStart,
+               secondEdge.PointAtEnd
+             })
     {
-      uint root = FindRoot(parents, id);
-      if (!groups.TryGetValue(root, out var g)) { g = new List<uint>(); groups[root] = g; }
-      g.Add(id);
+      if (!firstEdge.ClosestPoint(endpoint, out var parameter))
+        continue;
+      if (endpoint.DistanceTo(firstEdge.PointAt(parameter)) <= validationTolerance)
+        parameters.Add(parameter);
     }
-    return new List<List<uint>>(groups.Values);
+
+    parameters.Sort();
+    var parameterTolerance = Math.Max(
+      Math.Abs(firstEdge.Domain.Length) * 1e-12,
+      RhinoMath.ZeroTolerance);
+    var distinct = new List<double>();
+    foreach (var parameter in parameters)
+    {
+      if (distinct.Count == 0 ||
+          Math.Abs(parameter - distinct[^1]) > parameterTolerance)
+        distinct.Add(parameter);
+    }
+
+    var minimumLength = MinimumOverlapLength(firstEdge, secondEdge, tolerance);
+    var segments = new List<Curve>();
+    for (var index = 0; index < distinct.Count - 1; index++)
+    {
+      var interval = new Interval(distinct[index], distinct[index + 1]);
+      using var candidate = firstEdge.Trim(interval);
+      if (candidate == null || !candidate.IsValid ||
+          candidate.GetLength() <= minimumLength ||
+          !CurveFollowsEdge(
+            candidate,
+            secondEdge,
+            validationTolerance,
+            out _))
+        continue;
+
+      var duplicate = candidate.DuplicateCurve();
+      if (duplicate != null && duplicate.IsValid)
+        segments.Add(duplicate);
+      else
+        duplicate?.Dispose();
+    }
+
+    return segments;
   }
 
-  private static HashSet<uint> SuppressOneOriginalPerGroup(
-    List<List<uint>> groups, Dictionary<uint, RhinoObject> objById)
+  private static bool TryCreateLinearOverlapSegment(
+    Curve firstEdge,
+    Curve secondEdge,
+    double tolerance,
+    out Curve segment,
+    out string diagnostic)
   {
-    var suppress = new HashSet<uint>();
-    foreach (var group in groups)
+    segment = null!;
+    diagnostic = string.Empty;
+    var firstLine = new Line(firstEdge.PointAtStart, firstEdge.PointAtEnd);
+    var secondLine = new Line(secondEdge.PointAtStart, secondEdge.PointAtEnd);
+    var firstLength = firstLine.Length;
+    var secondLength = secondLine.Length;
+    var minimumLength = MinimumOverlapLength(firstEdge, secondEdge, tolerance);
+    if (firstLength <= minimumLength || secondLength <= minimumLength)
     {
-      if (group.Count < 2) continue;
-      uint oldest = group[0];
-      for (int i = 1; i < group.Count; i++)
-        if (group[i] < oldest) oldest = group[i];
-      suppress.Add(oldest);
+      diagnostic =
+        $"reason=edge_too_short first_length={firstLength:G6} " +
+        $"second_length={secondLength:G6} minimum_length={minimumLength:G6}";
+      return false;
     }
-    return suppress;
+
+    var validationTolerance = Math.Max(tolerance, RhinoMath.ZeroTolerance);
+    var maximumLineDeviation = Math.Max(
+      Math.Max(
+        firstLine.DistanceTo(secondLine.From, limitToFiniteSegment: false),
+        firstLine.DistanceTo(secondLine.To, limitToFiniteSegment: false)),
+      Math.Max(
+        secondLine.DistanceTo(firstLine.From, limitToFiniteSegment: false),
+        secondLine.DistanceTo(firstLine.To, limitToFiniteSegment: false)));
+    if (maximumLineDeviation > validationTolerance)
+    {
+      diagnostic =
+        $"reason=not_collinear deviation={maximumLineDeviation:G6} " +
+        $"tolerance={validationTolerance:G6} " +
+        $"first={PointText(firstLine.From)}->{PointText(firstLine.To)} " +
+        $"second={PointText(secondLine.From)}->{PointText(secondLine.To)}";
+      return false;
+    }
+
+    var firstDirection = firstLine.Direction;
+    if (!firstDirection.Unitize())
+    {
+      diagnostic = "reason=invalid_direction";
+      return false;
+    }
+
+    var secondStart = (secondLine.From - firstLine.From) * firstDirection;
+    var secondEnd = (secondLine.To - firstLine.From) * firstDirection;
+    var overlapStart = Math.Max(0.0, Math.Min(secondStart, secondEnd));
+    var overlapEnd = Math.Min(firstLength, Math.Max(secondStart, secondEnd));
+    var overlapLength = overlapEnd - overlapStart;
+    if (overlapLength <= minimumLength)
+    {
+      diagnostic =
+        $"reason=no_length_overlap length={overlapLength:G6} " +
+        $"minimum_length={minimumLength:G6} " +
+        $"first={PointText(firstLine.From)}->{PointText(firstLine.To)} " +
+        $"second={PointText(secondLine.From)}->{PointText(secondLine.To)}";
+      return false;
+    }
+
+    segment = new LineCurve(
+      firstLine.From + firstDirection * overlapStart,
+      firstLine.From + firstDirection * overlapEnd);
+    diagnostic =
+      $"length={overlapLength:G6} minimum_length={minimumLength:G6} " +
+      $"deviation={maximumLineDeviation:G6} " +
+      $"from={PointText(segment.PointAtStart)} to={PointText(segment.PointAtEnd)}";
+    return true;
   }
+
+  private static double MinimumOverlapLength(
+    Curve firstEdge,
+    Curve secondEdge,
+    double tolerance) =>
+    Math.Max(
+      tolerance * MinimumOverlapToleranceFactor,
+      Math.Min(firstEdge.GetLength(), secondEdge.GetLength()) *
+      MinimumOverlapEdgeFraction);
+
+  private static bool CurveFollowsEdge(
+    Curve candidate,
+    Curve edge,
+    double tolerance,
+    out double maximumDeviation)
+  {
+    maximumDeviation = 0.0;
+    for (var sampleIndex = 0;
+         sampleIndex <= OverlapValidationSamples;
+         sampleIndex++)
+    {
+      var point = candidate.PointAtNormalizedLength(
+        (double)sampleIndex / OverlapValidationSamples);
+      if (!point.IsValid || !edge.ClosestPoint(point, out var edgeParameter))
+      {
+        maximumDeviation = double.PositiveInfinity;
+        return false;
+      }
+
+      maximumDeviation = Math.Max(
+        maximumDeviation,
+        point.DistanceTo(edge.PointAt(edgeParameter)));
+      if (maximumDeviation > tolerance)
+        return false;
+    }
+
+    return true;
+  }
+
+  private static string PointText(Point3d point) =>
+    $"({point.X:G6},{point.Y:G6},{point.Z:G6})";
+
+  private static bool BoundingBoxesMeet(
+    BoundingBox first,
+    BoundingBox second,
+    double tolerance) =>
+    first.Min.X <= second.Max.X + tolerance &&
+    first.Max.X + tolerance >= second.Min.X &&
+    first.Min.Y <= second.Max.Y + tolerance &&
+    first.Max.Y + tolerance >= second.Min.Y &&
+    first.Min.Z <= second.Max.Z + tolerance &&
+    first.Max.Z + tolerance >= second.Min.Z;
+
+  private static void AttachAreaHighlightEvents()
+  {
+    RhinoApp.EscapeKeyPressed -= OnEscapeKeyPressed;
+    RhinoApp.EscapeKeyPressed += OnEscapeKeyPressed;
+    RhinoDoc.CloseDocument -= OnDocumentClosed;
+    RhinoDoc.CloseDocument += OnDocumentClosed;
+    _lastEscapeTick = 0;
+  }
+
+  private static void DetachAreaHighlightEvents()
+  {
+    RhinoApp.EscapeKeyPressed -= OnEscapeKeyPressed;
+    RhinoDoc.CloseDocument -= OnDocumentClosed;
+    _lastEscapeTick = 0;
+  }
+
+  private static void OnEscapeKeyPressed(object? sender, EventArgs e)
+  {
+    if (_activeAreaHighlight == null)
+      return;
+
+    var now = System.Environment.TickCount64;
+    if (_lastEscapeTick != 0 &&
+        now - _lastEscapeTick <= DoubleEscapeIntervalMilliseconds)
+    {
+      DisableAreaHighlight(
+        RhinoDoc.FromRuntimeSerialNumber(_activeAreaDocumentSerial));
+      return;
+    }
+
+    _lastEscapeTick = now;
+  }
+
+  private static void OnDocumentClosed(
+    object? sender,
+    DocumentEventArgs e)
+  {
+    if (e.DocumentSerialNumber == _activeAreaDocumentSerial)
+      DisableAreaHighlight(null);
+  }
+
+  private static void DisableAreaHighlight(RhinoDoc? doc)
+  {
+    DetachAreaHighlightEvents();
+    if (_activeAreaHighlight == null)
+      return;
+
+    _activeAreaHighlight.Enabled = false;
+    _activeAreaHighlight.Dispose();
+    _activeAreaHighlight = null;
+    _activeAreaDocumentSerial = 0;
+    doc?.Views.Redraw();
+  }
+
+  private sealed class OverlapAreaConduit(
+    IReadOnlyCollection<Brep> areas,
+    uint documentSerial) : DisplayConduit, IDisposable
+  {
+    private readonly DisplayMaterial _material = new(OverlapAreaColor)
+    {
+      Diffuse = Color.Black,
+      BackDiffuse = Color.Black,
+      Emission = OverlapAreaColor,
+      BackEmission = OverlapAreaColor,
+      Transparency = OverlapAreaTransparency,
+      BackTransparency = OverlapAreaTransparency,
+      IsTwoSided = true
+    };
+    private bool _disposed;
+
+    public void Dispose()
+    {
+      if (_disposed)
+        return;
+
+      _disposed = true;
+      foreach (var area in areas)
+        area.Dispose();
+      _material.Dispose();
+    }
+
+    protected override void DrawForeground(DrawEventArgs e)
+    {
+      if (e.RhinoDoc.RuntimeSerialNumber != documentSerial)
+        return;
+
+      e.Display.PushDepthTesting(false);
+      e.Display.PushDepthWriting(false);
+      try
+      {
+        foreach (var area in areas)
+        {
+          e.Display.DrawBrepShaded(area, _material);
+          foreach (var edge in area.Edges)
+          {
+            if (edge.Valence == EdgeAdjacency.Naked)
+              PreviewDisplay.DrawOverlapCurve(e.Display, edge);
+          }
+        }
+      }
+      finally
+      {
+        e.Display.PopDepthWriting();
+        e.Display.PopDepthTesting();
+      }
+    }
+  }
+
+  private static ComponentIndex FaceComponent(int faceIndex) =>
+    new(ComponentIndexType.BrepFace, faceIndex);
+
+  private static string SelectionLabel(int curveCount, int faceCount) =>
+    $"{curveCount} curve(s), {faceCount} face(s)";
 }

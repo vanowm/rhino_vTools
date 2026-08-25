@@ -12,6 +12,14 @@
     "sound": "Default",
     "audioFile": ""
   },
+  "vCleanup": {
+    "threshold": 0.02,
+    "highlightShort": false,
+    "preselect": "Short",
+    "autoDelete": "No",
+    "simplifyCrv": true,
+    "overlaps": true
+  },
   "vCurveToSpline": {
     "joinMode": "Smooth"
   },
@@ -68,7 +76,8 @@
     "flattenGroups": true
   },
   "vJoin": {
-    "copy": true
+    "copy": true,
+    "layer": "Source"
   },
   "vMatch": {
     "distance": 2.0,
@@ -77,7 +86,25 @@
   },
   "vMirror": {
     "copy": true,
-    "flipText": true
+    "flipText": true,
+    "changeText": false,
+    "distance": 30.0,
+    "textReplacements": [
+      {
+        "a": "OUTSIDE",
+        "b": "INSIDE",
+        "mode": "literal",
+        "preserveCase": true,
+        "wholeWord": true
+      },
+      {
+        "a": "IN",
+        "b": "OUT",
+        "mode": "literal",
+        "preserveCase": true,
+        "wholeWord": true
+      }
+    ]
   },
   "vMiddleCurve": {
     "lines": true,

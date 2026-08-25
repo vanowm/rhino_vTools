@@ -24,6 +24,9 @@ public sealed class vGroup : Command
   private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
   private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
 
+  // Customizable boundary behavior
+  private const double ConnectivitySortTolerance = 1.0; // Maximum endpoint gap in model units used only to order source curves before boundary solving; positive value.
+
   private static readonly HashSet<int> _ourGroupIndices = new();
   private static double _boundaryTolerance = DefaultStoredBoundaryTolerance;
   private static bool _flattenGroups = DefaultFlattenGroups;
@@ -37,9 +40,9 @@ public sealed class vGroup : Command
     if (selection == null)
       return Result.Cancel;
 
-    if (selection.Curves.Count == 0)
+    if (!selection.HasBoundaryGeometry)
     {
-      RhinoApp.WriteLine("vGroup: select at least one curve boundary.");
+      RhinoApp.WriteLine("vGroup: select at least one curve, surface, polysurface, or face boundary.");
       return Result.Nothing;
     }
 
@@ -89,9 +92,9 @@ public sealed class vGroup : Command
   {
     var go = new GetObject();
     go.EnableTransparentCommands(true);
-    go.SetCommandPrompt("Select objects to group by closed curve boundary");
+    go.SetCommandPrompt("Select objects to group by curve or face boundary");
     go.GroupSelect = true;
-    go.SubObjectSelect = false;
+    go.SubObjectSelect = true;
     go.GetMultiple(1, 0);
 
     if (go.CommandResult() != Result.Success)
@@ -99,23 +102,40 @@ public sealed class vGroup : Command
 
     var result = new SelectionData();
     var curvePairs = new List<(Curve Crv, Guid Id)>();
+    var faceSources = new HashSet<FaceBoundarySource>();
     foreach (var objRef in go.Objects())
     {
       var id = objRef.ObjectId;
       if (id == Guid.Empty)
         continue;
 
-      result.AllIds.Add(id);
+      if (!result.AllIds.Contains(id))
+        result.AllIds.Add(id);
       var obj = doc.Objects.FindId(id);
-      if (obj?.Geometry is not Curve curve)
+      if (obj?.Geometry is Curve curve)
+      {
+        curvePairs.Add((curve, id));
+        continue;
+      }
+
+      if (obj?.Geometry is not Brep brep)
         continue;
 
-      curvePairs.Add((curve, id));
+      var component = objRef.GeometryComponentIndex;
+      if (component.ComponentIndexType == ComponentIndexType.BrepFace &&
+          component.Index >= 0 && component.Index < brep.Faces.Count)
+      {
+        faceSources.Add(new FaceBoundarySource(id, component.Index));
+        continue;
+      }
+
+      for (var faceIndex = 0; faceIndex < brep.Faces.Count; faceIndex++)
+        faceSources.Add(new FaceBoundarySource(id, faceIndex));
     }
 
     // Sort by endpoint connectivity so JoinCurves always builds chains in the same order.
     curvePairs.Sort((a, b) => b.Crv.GetLength().CompareTo(a.Crv.GetLength())); // longest first as seed
-    var snapTol = 1.0;
+    var snapTol = ConnectivitySortTolerance;
     var sorted = new List<(Curve Crv, Guid Id)>(curvePairs.Count);
     var used = new bool[curvePairs.Count];
     while (sorted.Count < curvePairs.Count)
@@ -151,9 +171,10 @@ public sealed class vGroup : Command
     }
     foreach (var (crv, id) in sorted)
     {
-      result.Curves.Add(crv);
-      result.CurveIds.Add(id);
+      result.ExplicitCurves.Add(crv);
+      result.ExplicitCurveIds.Add(id);
     }
+    result.FaceSources.AddRange(faceSources);
 
     return result;
   }
@@ -230,10 +251,14 @@ public sealed class vGroup : Command
   {
     var tol = doc.ModelAbsoluteTolerance;
     var solve = new BoundarySolve(boundaryTolerance);
+    PrepareBoundaryCurves(doc, selection, tol, boundaryTolerance, log);
 
     if (log)
     {
-      Log.Write(LogName, $"--- run start --- tol={tol:G4} boundaryTol={boundaryTolerance:G4} curves={selection.Curves.Count} totalObjects={selection.AllIds.Count}");
+      Log.Write(LogName,
+        $"--- run start --- tol={tol:G4} boundaryTol={boundaryTolerance:G4} " +
+        $"explicitCurves={selection.ExplicitCurves.Count} faces={selection.FaceSources.Count} " +
+        $"boundaryCurves={selection.Curves.Count} totalObjects={selection.AllIds.Count}");
       LogInputCurves(selection, tol);
     }
 
@@ -252,6 +277,120 @@ public sealed class vGroup : Command
       Log.Write(LogName, $"  boundaries found: {solve.Boundaries.Count}");
 
     return solve;
+  }
+
+  private static void PrepareBoundaryCurves(
+    RhinoDoc doc,
+    SelectionData selection,
+    double documentTolerance,
+    double boundaryTolerance,
+    bool log)
+  {
+    selection.Curves.Clear();
+    selection.CurveSourceIds.Clear();
+    for (var index = 0; index < selection.ExplicitCurves.Count; index++)
+    {
+      selection.Curves.Add(selection.ExplicitCurves[index]);
+      selection.CurveSourceIds.Add(
+        new HashSet<Guid> { selection.ExplicitCurveIds[index] });
+    }
+
+    if (selection.FaceSources.Count == 0)
+      return;
+
+    var inputFaces = new List<Brep>();
+    var inputSourceIds = new List<Guid>();
+    foreach (var source in selection.FaceSources)
+    {
+      var brep = doc.Objects.FindId(source.ObjectId)?.Geometry as Brep;
+      if (brep == null || source.FaceIndex < 0 ||
+          source.FaceIndex >= brep.Faces.Count)
+        continue;
+
+      var duplicate = brep.Faces[source.FaceIndex].DuplicateFace(
+        duplicateMeshes: false);
+      if (duplicate == null || !duplicate.IsValid)
+      {
+        duplicate?.Dispose();
+        continue;
+      }
+
+      inputFaces.Add(duplicate);
+      inputSourceIds.Add(source.ObjectId);
+    }
+
+    if (inputFaces.Count == 0)
+      return;
+
+    var joinTolerance = Math.Max(documentTolerance, boundaryTolerance);
+    Brep[]? joinedFaces = null;
+    List<int[]>? indexMap = null;
+    try
+    {
+      joinedFaces = Brep.JoinBreps(
+        inputFaces,
+        joinTolerance,
+        doc.ModelAngleToleranceRadians,
+        out indexMap);
+
+      if (joinedFaces == null || joinedFaces.Length == 0 ||
+          indexMap == null || indexMap.Count != joinedFaces.Length)
+      {
+        foreach (var joined in joinedFaces ?? Array.Empty<Brep>())
+          joined.Dispose();
+        joinedFaces = inputFaces
+          .Select(face => face.DuplicateBrep())
+          .Where(face => face != null)
+          .Cast<Brep>()
+          .ToArray();
+        indexMap = Enumerable.Range(0, joinedFaces.Length)
+          .Select(index => new[] { index })
+          .ToList();
+      }
+
+      var generatedCurveCount = 0;
+      for (var joinedIndex = 0; joinedIndex < joinedFaces.Length; joinedIndex++)
+      {
+        var sourceIds = indexMap[joinedIndex]
+          .Where(index => index >= 0 && index < inputSourceIds.Count)
+          .Select(index => inputSourceIds[index])
+          .ToHashSet();
+        if (sourceIds.Count == 0)
+          continue;
+
+        var nakedEdges = joinedFaces[joinedIndex].DuplicateNakedEdgeCurves(
+          nakedOuter: true,
+          nakedInner: true);
+        foreach (var edge in nakedEdges ?? Array.Empty<Curve>())
+        {
+          if (edge == null || !edge.IsValid)
+          {
+            edge?.Dispose();
+            continue;
+          }
+
+          selection.Curves.Add(edge);
+          selection.CurveSourceIds.Add(new HashSet<Guid>(sourceIds));
+          generatedCurveCount++;
+        }
+      }
+
+      if (log)
+      {
+        Log.Write(
+          LogName,
+          $"  face boundaries: inputs={inputFaces.Count} " +
+          $"joinedPatches={joinedFaces.Length} nakedCurves={generatedCurveCount} " +
+          $"joinTolerance={joinTolerance:G4}");
+      }
+    }
+    finally
+    {
+      foreach (var joined in joinedFaces ?? Array.Empty<Brep>())
+        joined.Dispose();
+      foreach (var input in inputFaces)
+        input.Dispose();
+    }
   }
 
   private static void LogInputCurves(SelectionData selection, double tol)
@@ -582,7 +721,10 @@ public sealed class vGroup : Command
         var midpoint = solve.CoreSegments[i].PointAt(solve.CoreSegments[i].Domain.Mid);
         var containment = boundary.Curve.Contains(midpoint, boundary.Plane, tol);
         if (containment == PointContainment.Coincident)
-          members.Add(selection.CurveIds[solve.CoreOriginIndices[i]]);
+        {
+          foreach (var sourceId in selection.CurveSourceIds[solve.CoreOriginIndices[i]])
+            members.Add(sourceId);
+        }
       }
 
       for (var k = 0; k < allObjects.Length; k++)
@@ -920,9 +1062,16 @@ public sealed class vGroup : Command
   private sealed class SelectionData
   {
     public List<Guid> AllIds { get; } = new();
+    public List<Curve> ExplicitCurves { get; } = new();
+    public List<Guid> ExplicitCurveIds { get; } = new();
+    public List<FaceBoundarySource> FaceSources { get; } = new();
     public List<Curve> Curves { get; } = new();
-    public List<Guid> CurveIds { get; } = new();
+    public List<HashSet<Guid>> CurveSourceIds { get; } = new();
+    public bool HasBoundaryGeometry =>
+      ExplicitCurves.Count > 0 || FaceSources.Count > 0;
   }
+
+  private readonly record struct FaceBoundarySource(Guid ObjectId, int FaceIndex);
 
   private sealed class BoundarySolve
   {

@@ -21,11 +21,12 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vFacing : Command
 {
-  private const string SectionName = "vFacing";
-  private const string SizeKey     = "size";
-
   // Option defaults
   private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
+  private const int InteriorCurveContainmentSamples = 17; // Samples used to preserve fully contained curves before perimeter clipping; three or greater.
+
+  private const string SectionName = "vFacing";
+  private const string SizeKey     = "size";
 
   private static double _size = DefaultSize;
 
@@ -989,9 +990,12 @@ public sealed class vFacing : Command
       return false;
     }
 
-    var side1Final = s1Trimmed!;
-    var side2Final = s2Trimmed!;
-    var offTrimmed = finalOffset!.DuplicateCurve();
+    var side1Final = PreserveSourceSpan(
+      s1Joined, s1Trimmed!, tol, "side1");
+    var side2Final = PreserveSourceSpan(
+      s2Joined, s2Trimmed!, tol, "side2");
+    var offTrimmed = PreserveSourceSpan(
+      offsetCurve!, finalOffset!, tol, "offset");
     if (offTrimmed.PointAtStart.DistanceTo(side2Final.PointAtEnd) >
         offTrimmed.PointAtEnd.DistanceTo(side2Final.PointAtEnd))
       offTrimmed.Reverse();
@@ -1022,7 +1026,6 @@ public sealed class vFacing : Command
     Log.Write("vFacing", $"  side2   {Pt(side2Final.PointAtStart)}→{Pt(side2Final.PointAtEnd)}");
     Log.Write("vFacing", $"  offset  {Pt(offTrimmed.PointAtStart)}→{Pt(offTrimmed.PointAtEnd)}");
     Log.Write("vFacing", $"  side1rv {Pt(s1Rev.PointAtStart)}→{Pt(s1Rev.PointAtEnd)}");
-
     // Build output pieces; bridge any sub-mm gap at the base-side junctions with a closing line.
     outPieces = new List<(Curve, int)>();
     outPieces.Add((baseJoined, baseLayer));
@@ -1042,16 +1045,62 @@ public sealed class vFacing : Command
       Log.Write("vFacing", $"  added closing bridge at side1 junction (gap={s1Gap:F4})");
     }
 
-    // Joined boundary for CollectInsideObjects only.
-    // Failure here is non-fatal — inside-object collection will be skipped.
+    // Build a normalized planar boundary for CollectInsideObjects. The visible
+    // output pieces may legitimately overlap near a side, while containment
+    // requires a simple region so crossing notch segments classify correctly.
     var bndPieces = outPieces.Select(p => p.Crv).ToArray();
-    var bnd = Curve.JoinCurves(bndPieces, snapTol);
-    if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
+    boundaryCurve = CreateContainmentBoundary(bndPieces, cplane, tol);
+    if (boundaryCurve == null)
     {
-      boundaryCurve = bnd[0];
+      var bnd = Curve.JoinCurves(bndPieces, snapTol);
+      if (bnd != null && bnd.Length == 1 && bnd[0].IsClosed)
+        boundaryCurve = bnd[0];
     }
     // boundaryCurve may remain null; caller handles that gracefully.
     return true;
+  }
+
+  private static Curve? CreateContainmentBoundary(
+    Curve[] pieces, Plane plane, double tol)
+  {
+    using var regions = Curve.CreateBooleanRegions(
+      pieces, plane, combineRegions: true, tol);
+    if (regions == null)
+    {
+      Log.Write("vFacing", "  containment boolean regions unavailable");
+      return null;
+    }
+
+    Curve? bestBoundary = null;
+    var bestArea = double.NegativeInfinity;
+    for (var regionIndex = 0; regionIndex < regions.RegionCount; regionIndex++)
+    {
+      var regionCurves = regions.RegionCurves(regionIndex);
+      if (regionCurves == null || regionCurves.Length == 0)
+        continue;
+
+      var candidates = regionCurves[0].IsClosed
+        ? new[] { regionCurves[0] }
+        : Curve.JoinCurves(regionCurves, tol * 10.0);
+      foreach (var candidate in candidates)
+      {
+        if (candidate?.IsClosed != true)
+          continue;
+
+        using var properties = AreaMassProperties.Compute(candidate);
+        var area = properties?.Area ?? 0.0;
+        if (area <= bestArea)
+          continue;
+
+        bestArea = area;
+        bestBoundary = candidate.DuplicateCurve();
+      }
+    }
+
+    Log.Write("vFacing",
+      $"  containment boolean regions={regions.RegionCount} " +
+      $"selectedArea={Math.Max(0.0, bestArea):F6}");
+    return bestBoundary;
   }
 
   private static bool TryTrimCrossedJunctions(
@@ -1182,6 +1231,7 @@ public sealed class vFacing : Command
       Point3d Offset1Point,
       Point3d Side2Point,
       Point3d Offset2Point,
+      double SideClearanceGain,
       double SignedDistance)>();
 
     foreach (var signedDistance in new[] { size, -size })
@@ -1200,6 +1250,7 @@ public sealed class vFacing : Command
             baseCurve, side1, side2, offset!,
             out var candidateSide1Point, out var candidateOffset1Point,
             out var candidateSide2Point, out var candidateOffset2Point,
+            out var sideClearanceGain,
             out var pickFailure))
       {
         Log.Write("vFacing",
@@ -1212,28 +1263,31 @@ public sealed class vFacing : Command
         offset!,
         candidateSide1Point, candidateOffset1Point,
         candidateSide2Point, candidateOffset2Point,
+        sideClearanceGain,
         signedDistance));
 
       Log.Write("vFacing",
         $"  offset distance={signedDistance:F3} rawCount={rawCount} " +
-        $"len={offset!.GetLength():F3} accepted");
+        $"len={offset!.GetLength():F3} clearanceGain={sideClearanceGain:F6} accepted");
     }
 
-    if (validOffsets.Count != 1)
+    if (validOffsets.Count == 0)
     {
-      failure = validOffsets.Count == 0
-        ? "neither signed offset is between the sides"
-        : "both signed offsets are between the sides";
+      failure = "neither signed offset is between the sides";
       return false;
     }
 
-    var selected = validOffsets[0];
+    var selected = validOffsets
+      .OrderByDescending(candidate => candidate.SideClearanceGain)
+      .First();
     offsetResult = selected.Offset;
     side1Point = selected.Side1Point;
     offset1Point = selected.Offset1Point;
     side2Point = selected.Side2Point;
     offset2Point = selected.Offset2Point;
-    Log.Write("vFacing", $"  selected offset distance={selected.SignedDistance:F3}");
+    Log.Write("vFacing",
+      $"  selected offset distance={selected.SignedDistance:F3} " +
+      $"clearanceGain={selected.SideClearanceGain:F6} candidates={validOffsets.Count}");
     return true;
   }
 
@@ -1335,9 +1389,11 @@ public sealed class vFacing : Command
     Curve baseCurve, Curve side1, Curve side2, Curve offset,
     out Point3d side1Point, out Point3d offset1Point,
     out Point3d side2Point, out Point3d offset2Point,
+    out double sideClearanceGain,
     out string failure)
   {
     side1Point = offset1Point = side2Point = offset2Point = Point3d.Unset;
+    sideClearanceGain = 0.0;
     failure = string.Empty;
 
     if (!side1.ClosestPoints(offset, out side1Point, out offset1Point) ||
@@ -1406,6 +1462,9 @@ public sealed class vFacing : Command
       return false;
     }
 
+    sideClearanceGain =
+      (side1JunctionDistance - side1OffsetDistance) +
+      (side2JunctionDistance - side2OffsetDistance);
     side1Point = side1.PointAt((side1.Domain.T0 + side1AtContact) / 2.0);
     side2Point = side2.PointAt((side2.Domain.T0 + side2AtContact) / 2.0);
     offset1Point = offset.PointAt((offsetAtSide1 + offsetAtMiddle) / 2.0);
@@ -1443,6 +1502,39 @@ public sealed class vFacing : Command
     side = OrientFromPoint(filletResult[sideIndex], sideJunction, snapTol);
     offset = filletResult[1 - sideIndex];
     return side != null;
+  }
+
+  private static Curve PreserveSourceSpan(
+    Curve source, Curve filletResult, double tol, string label)
+  {
+    if (!source.ClosestPoint(filletResult.PointAtStart, out var sourceAtStart) ||
+        !source.ClosestPoint(filletResult.PointAtEnd, out var sourceAtEnd))
+      return filletResult;
+
+    var sourceStartPoint = source.PointAt(sourceAtStart);
+    var sourceEndPoint = source.PointAt(sourceAtEnd);
+    if (sourceStartPoint.DistanceTo(filletResult.PointAtStart) > tol ||
+        sourceEndPoint.DistanceTo(filletResult.PointAtEnd) > tol)
+      return filletResult;
+
+    var firstParameter = Math.Min(sourceAtStart, sourceAtEnd);
+    var secondParameter = Math.Max(sourceAtStart, sourceAtEnd);
+    var preserved = TrimRetainedSpan(source, firstParameter, secondParameter, tol);
+    if (preserved == null)
+      return filletResult;
+
+    if (preserved.PointAtEnd.DistanceTo(filletResult.PointAtStart) <
+        preserved.PointAtStart.DistanceTo(filletResult.PointAtStart))
+      preserved.Reverse();
+
+    if (preserved.PointAtStart.DistanceTo(filletResult.PointAtStart) > tol ||
+        preserved.PointAtEnd.DistanceTo(filletResult.PointAtEnd) > tol)
+      return filletResult;
+
+    Log.Write("vFacing",
+      $"  preserved original {label} span instead of fillet-generated geometry " +
+      $"len={preserved.GetLength():F6}");
+    return preserved;
   }
 
   private static double DistanceToCurve(Curve curve, Point3d point)
@@ -1498,19 +1590,31 @@ public sealed class vFacing : Command
 
         if (splitParams.Count == 0)
         {
-          if (IsInsideOrOn(crv.PointAtNormalizedLength(0.5), boundary, plane, tol))
+          if (IsCurveFullyInsideOrOn(crv, boundary, plane, tol))
+          {
             result.Add((crv.DuplicateCurve(), attr));
+            Log.Write("vFacing",
+              $"    preserved whole interior curve id={obj.Id} " +
+              $"type={crv.GetType().Name} len={crv.GetLength():F6}");
+          }
         }
         else
         {
           var segs = crv.Split(splitParams);
           if (segs == null) continue;
+          var keptSegments = 0;
           foreach (var seg in segs)
           {
             if (seg.GetLength() < tol) continue;
             if (IsInsideOrOn(seg.PointAtNormalizedLength(0.5), boundary, plane, tol))
+            {
               result.Add((seg, attr));
+              keptSegments++;
+            }
           }
+          Log.Write("vFacing",
+            $"    clipped interior curve id={obj.Id} type={crv.GetType().Name} " +
+            $"split={segs.Length} kept={keptSegments}");
         }
       }
       else
@@ -1522,6 +1626,26 @@ public sealed class vFacing : Command
     }
 
     return result;
+  }
+
+  private static bool IsCurveFullyInsideOrOn(
+    Curve curve, List<Curve> boundary, Plane plane, double tol)
+  {
+    int divisor = curve.IsClosed
+      ? InteriorCurveContainmentSamples
+      : InteriorCurveContainmentSamples - 1;
+    int lastSample = InteriorCurveContainmentSamples - 1;
+    for (var i = 0; i <= lastSample; i++)
+    {
+      double normalizedParameter = (double)i / divisor;
+      if (!IsInsideOrOn(
+            curve.PointAtNormalizedLength(normalizedParameter),
+            boundary,
+            plane,
+            tol))
+        return false;
+    }
+    return true;
   }
 
   private static bool IsInsideOrOn(Point3d pt, List<Curve> closed, Plane plane, double tol)

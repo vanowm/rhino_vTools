@@ -12,6 +12,11 @@ namespace vTools.Commands;
 
 internal static class HideSetState
 {
+  private const string NativeIsolateSetName = "$$Isolate$$"; // Rhino's internal hide attachment used by the native Isolate command.
+  private const string Tag = "HideSetState";
+  private const string TrackingKey = "vTools.HideSet";
+  private const string TrackingOrderKey = "vTools.HideSetOrder";
+
   internal sealed class SelectionSnapshot
   {
     internal List<SelectionEntry> Entries { get; } = new();
@@ -47,10 +52,6 @@ internal static class HideSetState
     public uint DocumentSerialNumber { get; }
     public Dictionary<Guid, string> PreviousNativeNames { get; } = new();
   }
-
-  private const string Tag = "HideSetState";
-  private const string TrackingKey = "vTools.HideSet";
-  private const string TrackingOrderKey = "vTools.HideSetOrder";
 
   private static readonly MethodInfo? ObjectPointerMethod =
     typeof(RhinoObject).GetMethod(
@@ -110,6 +111,15 @@ internal static class HideSetState
 
   public static string GetTrackedName(RhinoObject obj) =>
     (obj.Attributes.GetUserString(TrackingKey) ?? string.Empty).Trim();
+
+  public static bool IsInternalNativeName(string? hideSetName)
+  {
+    var value = hideSetName?.Trim() ?? string.Empty;
+    return string.Equals(
+      value,
+      NativeIsolateSetName,
+      StringComparison.OrdinalIgnoreCase);
+  }
 
   public static long GetTrackedOrder(RhinoObject obj) =>
     long.TryParse(
@@ -356,6 +366,7 @@ internal static class HideSetState
     var order = DateTime.UtcNow.Ticks;
     var namedCount = 0;
     var unnamedCount = 0;
+    var internalCount = 0;
     foreach (var entry in context.PreviousNativeNames)
     {
       var obj = doc.Objects.FindId(entry.Key);
@@ -370,6 +381,13 @@ internal static class HideSetState
           StringComparison.OrdinalIgnoreCase);
       if (newlyNamed)
       {
+        if (IsInternalNativeName(nativeName))
+        {
+          SetTrackedName(doc, obj.Id, string.Empty);
+          internalCount++;
+          continue;
+        }
+
         if (SetTrackedName(doc, obj.Id, nativeName, order))
           namedCount++;
         continue;
@@ -388,7 +406,7 @@ internal static class HideSetState
     Log.Write(Tag,
       $"  polling default Hide end result={e.CommandResult}" +
       $" affected={context.PreviousNativeNames.Count}" +
-      $" named={namedCount} unnamed={unnamedCount}");
+      $" named={namedCount} internal={internalCount} unnamed={unnamedCount}");
   }
 
   private static void OnEndOpenDocument(object? sender, DocumentOpenEventArgs e)

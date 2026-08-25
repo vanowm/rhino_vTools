@@ -16,20 +16,31 @@ namespace vTools.Commands;
 
 public sealed class vTitle : Command
 {
-  private const string SectionName = "vTitle";
-  private const string KeyText    = "text";
-  private const string KeySize    = "size";
-  private const string KeyPadding = "padding";
-  private const string KeyBox     = "box";
-  private const string KeyLayer   = "layer";
-  private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves title output to Rhino's current layer.
-
   // Option defaults
   private const string DefaultText = ""; // Plain title text; empty prompts for text.
   private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
   private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
   private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
   private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
+  private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves title output to Rhino's current layer.
+  private static readonly Color PreviewTextColor = Color.FromArgb(220, 255, 255, 80); // ARGB color for live title text previews.
+  private static readonly Color PreviewFallbackBackgroundColor = Color.FromArgb(200, 60, 60, 60); // ARGB background for dot-based preview fallback.
+  private static readonly Color PreviewBoxColor = Color.FromArgb(180, 180, 220, 60); // ARGB color for live title-frame previews.
+  private static readonly Color HoverHighlightColor = Color.FromArgb(220, 255, 220, 40); // ARGB color for hovered existing-title frames.
+  private static readonly Color PreviewFallbackTextColor = Color.Yellow; // ARGB foreground for text and dot preview fallbacks.
+  private const int PreviewLineThicknessOffset = 1; // Relative display thickness offset used for frame and hover lines; integer zero or greater.
+  internal const string TitleFlagKey = "vTitle"; // User-string key identifying title annotations; non-empty text.
+  internal const string TitleFlagValue = "1"; // User-string value identifying title annotations; non-empty text.
+  internal const string PaddingUserStringKey = "vTitlePadding"; // User-string key storing padding percentage; non-empty text.
+  private const string FrameFlagKey = "vTitleFrame"; // User-string key identifying the generated title frame; non-empty text.
+  private const string FrameFlagValue = "1"; // User-string value identifying the generated title frame; non-empty text.
+
+  private const string SectionName = "vTitle";
+  private const string KeyText    = "text";
+  private const string KeySize    = "size";
+  private const string KeyPadding = "padding";
+  private const string KeyBox     = "box";
+  private const string KeyLayer   = "layer";
 
   private static string _text = DefaultText;
   private static double _size = DefaultSize;
@@ -42,13 +53,20 @@ public sealed class vTitle : Command
   private static Guid _activeBoxId   = Guid.Empty;
   private static int  _activeGrpIdx  = -1;
   private static bool _internalReplace = false;
+  private static int _suspendAutoBoxSyncDepth = 0;
 
   // ── External-edit event subscription ───────────────────────────────
-  private static readonly System.Collections.Generic.HashSet<Guid> _pendingBoxUpdates = new();
+  private static readonly System.Collections.Generic.HashSet<PendingBoxUpdate>
+    _pendingBoxUpdates = new();
+
+  private readonly record struct PendingBoxUpdate(
+    uint DocumentSerialNumber,
+    Guid ObjectId);
 
   static vTitle()
   {
     RhinoDoc.ReplaceRhinoObject += OnRhinoObjectReplaced;
+    RhinoDoc.AddRhinoObject += OnRhinoObjectAdded;
   }
 
   public override string EnglishName => "vTitle";
@@ -208,66 +226,56 @@ public sealed class vTitle : Command
   private static void DrawPreview(GetPointDrawEventArgs e,
     string text, double size, double padding, bool box)
   {
-    if (string.IsNullOrEmpty(text)) return;
+    if (string.IsNullOrEmpty(text))
+      return;
 
     var pt = e.CurrentPoint;
     var cpNative = e.Viewport.GetConstructionPlane();
-    var xAxis     = cpNative.Plane.XAxis;
-    var yAxis     = cpNative.Plane.YAxis;
+    var xAxis = cpNative.Plane.XAxis;
+    var yAxis = cpNative.Plane.YAxis;
     var textPlane = new Plane(pt, xAxis, yAxis);
 
-    var te = new TextEntity
+    using var te = new TextEntity
     {
-      Plane          = textPlane,
-      PlainText      = text,
-      TextHeight     = size,
-      Justification  = TextJustification.MiddleCenter,
+      Plane = textPlane,
+      PlainText = text,
+      TextHeight = size,
+      Justification = TextJustification.MiddleCenter,
       DimensionScale = 1.0,
     };
+
     try { te.DrawForward = false; } catch { }
-    try { e.Display.DrawAnnotation(te, Color.FromArgb(220, 255, 255, 80)); }
-    catch
-    {
-      try { e.Display.Draw3dText(new Text3d(text, textPlane, size), Color.Yellow); }
-      catch { e.Display.DrawDot(pt, text, Color.FromArgb(200, 60, 60, 60), Color.Yellow); }
-    }
 
-    if (!box) return;
-
-    // Try actual text bounds from the transient entity; fall back to approximation
-    double ihw, ihh;
     try
     {
-      var bb = te.GetBoundingBox(true);
-      if (bb.IsValid)
-      {
-        double maxU = 0, maxV = 0;
-        foreach (var corner in bb.GetCorners())
-        {
-          var r = corner - pt;
-          maxU = Math.Max(maxU, Math.Abs(r * xAxis));
-          maxV = Math.Max(maxV, Math.Abs(r * yAxis));
-        }
-        if (maxU > 0 && maxV > 0) { ihw = maxU; ihh = maxV; }
-        else { var (tw, th) = ApproxBounds(text, size); ihw = tw / 2.0; ihh = th / 2.0; }
-      }
-      else { var (tw, th) = ApproxBounds(text, size); ihw = tw / 2.0; ihh = th / 2.0; }
+      e.Display.DrawAnnotation(
+        te, PreviewTextColor);
     }
-    catch { var (tw, th) = ApproxBounds(text, size); ihw = tw / 2.0; ihh = th / 2.0; }
+    catch
+    {
+      try
+      {
+        e.Display.Draw3dText(
+          new Text3d(text, textPlane, size), PreviewFallbackTextColor);
+      }
+      catch
+      {
+        e.Display.DrawDot(
+          pt, text,
+          PreviewFallbackBackgroundColor,
+          PreviewFallbackTextColor);
+      }
+    }
 
-    double pad = size * padding / 100.0;
-    double ohw = ihw + pad;
-    double ohh = ihh + pad;
-    var c0 = pt + xAxis * (-ohw) + yAxis * (-ohh);
-    var c1 = pt + xAxis * ( ohw) + yAxis * (-ohh);
-    var c2 = pt + xAxis * ( ohw) + yAxis * ( ohh);
-    var c3 = pt + xAxis * (-ohw) + yAxis * ( ohh);
+    if (!box)
+      return;
 
-    var boxColor = Color.FromArgb(180, 180, 220, 60);
-    PreviewDisplay.DrawLine(e.Display, c0, c1, boxColor);
-    PreviewDisplay.DrawLine(e.Display, c1, c2, boxColor);
-    PreviewDisplay.DrawLine(e.Display, c2, c3, boxColor);
-    PreviewDisplay.DrawLine(e.Display, c3, c0, boxColor);
+    using var frame = CreateFrameForText(te, padding);
+    PreviewDisplay.DrawCurve(
+      e.Display,
+      frame,
+      PreviewBoxColor,
+      PreviewLineThicknessOffset);
   }
 
   private static void PlaceTitle(RhinoDoc doc, Point3d center,
@@ -290,8 +298,10 @@ public sealed class vTitle : Command
 
     int layerIdx = GetTargetLayerIndex(doc);
     var attr = new ObjectAttributes();
-    attr.SetUserString("vTitle",        "1");
-    attr.SetUserString("vTitlePadding", padding.ToString(CultureInfo.InvariantCulture));
+    attr.SetUserString(TitleFlagKey, TitleFlagValue);
+    attr.SetUserString(
+      PaddingUserStringKey,
+      padding.ToString(CultureInfo.InvariantCulture));
     attr.LayerIndex = layerIdx;
     _activeTextId  = doc.Objects.AddText(te, attr);
     _activeBoxId   = Guid.Empty;
@@ -300,10 +310,18 @@ public sealed class vTitle : Command
 
     if (box)
     {
-      var (ihw, ihh) = GetActualHalfExtents(doc, _activeTextId, text, size);
-      double pad = size * padding / 100.0;
-      var boxAttr = new ObjectAttributes { LayerIndex = layerIdx };
-      _activeBoxId = doc.Objects.AddCurve(RectCurve(center, xAxis, yAxis, ihw + pad, ihh + pad), boxAttr);
+      var titleObj = doc.Objects.FindId(_activeTextId);
+      if (titleObj?.Geometry is TextEntity placedText)
+      {
+        using var frame = CreateFrameForTitlePreview(
+          titleObj, placedText);
+        if (frame != null)
+        {
+          var boxAttr = new ObjectAttributes { LayerIndex = layerIdx };
+          boxAttr.SetUserString(FrameFlagKey, FrameFlagValue);
+          _activeBoxId = doc.Objects.AddCurve(frame, boxAttr);
+        }
+      }
     }
 
     // Group text + box together
@@ -332,7 +350,7 @@ public sealed class vTitle : Command
     {
       if (obj.IsLocked || obj.IsHidden) continue;
       if (obj.Geometry is not TextEntity te) continue;
-      if (obj.Attributes.GetUserString("vTitle") != "1") continue;
+      if (obj.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue) continue;
       if (!GetTitleHalfExtents(doc, obj, te, out double hw, out double hh)) continue;
 
       var rel = pt - te.Plane.Origin;
@@ -386,8 +404,8 @@ public sealed class vTitle : Command
     }
 
     // Fallback: approximate from stored padding
-    double padding = 10.0;
-    if (double.TryParse(textRhObj.Attributes.GetUserString("vTitlePadding"),
+    double padding = DefaultPadding;
+    if (double.TryParse(textRhObj.Attributes.GetUserString(PaddingUserStringKey),
           NumberStyles.Any, CultureInfo.InvariantCulture, out double sp))
       padding = sp;
     var (tw, th) = ApproxBounds(te.PlainText ?? "", te.TextHeight);
@@ -419,7 +437,7 @@ public sealed class vTitle : Command
     {
       if (obj.IsLocked || obj.IsHidden) continue;
       if (obj.Geometry is not TextEntity te) continue;
-      if (obj.Attributes.GetUserString("vTitle") != "1") continue;
+      if (obj.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue) continue;
       if (!GetTitleHalfExtents(doc, obj, te, out double hw, out double hh)) continue;
 
       var rel = pt - te.Plane.Origin;
@@ -429,81 +447,174 @@ public sealed class vTitle : Command
       var o  = te.Plane.Origin;
       var xa = te.Plane.XAxis;
       var ya = te.Plane.YAxis;
-      var hc = Color.FromArgb(220, 255, 220, 40);
-      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), hc, 1);
-      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), hc, 1);
-      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), hc, 1);
-      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), hc, 1);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), HoverHighlightColor, PreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), HoverHighlightColor, PreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), HoverHighlightColor, PreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), HoverHighlightColor, PreviewLineThicknessOffset);
     }
   }
 
   // ── External-edit handler ───────────────────────────────────────────────
 
+  /// <summary>
+  /// Temporarily suppresses vTitle's automatic frame-sync handler.
+  /// Commands such as vMirror can then update the title and explicitly ask
+  /// vTitle to rebuild its frame inside the command's own undo record.
+  /// </summary>
+  internal static IDisposable SuspendAutomaticBoxSync()
+  {
+    _suspendAutoBoxSyncDepth++;
+    return new AutoBoxSyncScope();
+  }
+
+  /// <summary>
+  /// Rebuilds one vTitle frame immediately using the current TextEntity and
+  /// current vTitlePadding user string.
+  /// </summary>
+  internal static void SyncBoxForTitleNow(RhinoDoc doc, Guid textId)
+  {
+    if (doc == null || textId == Guid.Empty)
+      return;
+    if (doc.UndoActive || doc.RedoActive)
+      return;
+
+    _pendingBoxUpdates.Remove(
+      new PendingBoxUpdate(doc.RuntimeSerialNumber, textId));
+    UpdateBoxForTitle(doc, textId);
+  }
+
+  private sealed class AutoBoxSyncScope : IDisposable
+  {
+    private bool _disposed;
+
+    public void Dispose()
+    {
+      if (_disposed)
+        return;
+
+      _disposed = true;
+      if (_suspendAutoBoxSyncDepth > 0)
+        _suspendAutoBoxSyncDepth--;
+    }
+  }
+
   private static void OnRhinoObjectReplaced(object? sender,
     RhinoReplaceObjectEventArgs e)
   {
-    if (_internalReplace) return;
-    if (e.OldRhinoObject?.Attributes.GetUserString("vTitle") != "1") return;
-    _pendingBoxUpdates.Add(e.OldRhinoObject.Id);
-    RhinoApp.Idle -= OnIdleUpdateBoxes;
-    RhinoApp.Idle += OnIdleUpdateBoxes;
+    if (_internalReplace || _suspendAutoBoxSyncDepth > 0)
+      return;
+
+    var oldObj = e.OldRhinoObject;
+    var newObj = e.NewRhinoObject;
+    if (oldObj?.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue)
+      return;
+    if (oldObj.Geometry is not TextEntity oldText ||
+        newObj?.Geometry is not TextEntity newText)
+      return;
+
+    var doc = newObj.Document ?? oldObj.Document;
+    if (doc == null || doc.UndoActive || doc.RedoActive)
+      return;
+
+    // Transform-only replacements move the grouped frame with the text.
+    // Rebuild only when the text bounds can actually change.
+    bool textChanged = !string.Equals(
+      oldText.PlainText, newText.PlainText, StringComparison.Ordinal);
+    bool heightChanged =
+      Math.Abs(oldText.TextHeight - newText.TextHeight) >
+      RhinoMath.ZeroTolerance;
+    if (!textChanged && !heightChanged)
+      return;
+
+    _pendingBoxUpdates.Add(
+      new PendingBoxUpdate(doc.RuntimeSerialNumber, e.ObjectId));
   }
 
-  private static void OnIdleUpdateBoxes(object? sender, EventArgs e)
+  private static void OnRhinoObjectAdded(object? sender,
+    RhinoObjectEventArgs e)
   {
-    RhinoApp.Idle -= OnIdleUpdateBoxes;
-    var doc = RhinoDoc.ActiveDoc;
-    if (doc == null || _pendingBoxUpdates.Count == 0) { _pendingBoxUpdates.Clear(); return; }
-    uint undoRecord = doc.BeginUndoRecord("vTitle: sync box");
-    try
-    {
-      foreach (var id in _pendingBoxUpdates)
-        UpdateBoxForTitle(doc, id);
-    }
-    finally
-    {
-      if (undoRecord != 0) doc.EndUndoRecord(undoRecord);
-    }
-    _pendingBoxUpdates.Clear();
+    if (_internalReplace || _suspendAutoBoxSyncDepth > 0)
+      return;
+
+    var obj = e.TheObject;
+    var doc = obj?.Document;
+    if (doc == null ||
+        !_pendingBoxUpdates.Remove(
+          new PendingBoxUpdate(doc.RuntimeSerialNumber, e.ObjectId)))
+      return;
+    if (obj?.Geometry is not TextEntity ||
+        obj.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue ||
+        doc.UndoActive ||
+        doc.RedoActive)
+      return;
+
+    // The replacement TextEntity is now committed to the object table.
+    // Rebuild its frame in the same Rhino operation; no separate undo record.
+    UpdateBoxForTitle(doc, e.ObjectId);
     doc.Views.Redraw();
   }
 
   private static void UpdateBoxForTitle(RhinoDoc doc, Guid textId)
   {
-    if (textId == Guid.Empty) return;
+    if (textId == Guid.Empty)
+      return;
+
     var textObj = doc.Objects.FindId(textId);
-    if (textObj?.Geometry is not TextEntity te) return;
-    if (textObj.Attributes.GetUserString("vTitle") != "1") return;
+    if (textObj?.Geometry is not TextEntity text ||
+        textObj.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue)
+      return;
 
-    double padding = 10.0;
-    if (double.TryParse(textObj.Attributes.GetUserString("vTitlePadding"),
-          NumberStyles.Any, CultureInfo.InvariantCulture, out double sp))
-      padding = sp;
+    var groups = textObj.Attributes.GetGroupList();
+    int groupIndex = groups?.Length > 0 ? groups[0] : -1;
+    if (groupIndex < 0)
+      return;
 
-    var grpList = textObj.Attributes.GetGroupList();
-    int grpIdx = grpList?.Length > 0 ? grpList[0] : -1;
-    if (grpIdx < 0) return;
+    using var frame = CreateFrameForTitlePreview(textObj, text);
+    if (frame == null)
+      return;
 
-    var (ihw, ihh) = GetActualHalfExtents(doc, textId, te.PlainText ?? "", te.TextHeight);
-    double pad = te.TextHeight * padding / 100.0;
-
-    // Snapshot IDs before replacing to avoid modifying the collection during enumeration
-    var boxIds = doc.Objects
+    var groupedFrames = doc.Objects
       .Where(o => o.Geometry is PolylineCurve)
-      .Where(o => { var gl = o.Attributes.GetGroupList(); return gl != null && Array.IndexOf(gl, grpIdx) >= 0; })
-      .Select(o => o.Id)
+      .Where(o =>
+      {
+        var gl = o.Attributes.GetGroupList();
+        return gl != null &&
+               Array.IndexOf(gl, groupIndex) >= 0;
+      })
       .ToList();
 
-    foreach (var boxId in boxIds)
+    var taggedFrames = groupedFrames
+      .Where(o => o.Attributes.GetUserString(FrameFlagKey) == FrameFlagValue)
+      .ToList();
+    var frameObjects = taggedFrames.Count > 0
+      ? taggedFrames
+      : groupedFrames.Count == 1
+        ? groupedFrames
+        : [];
+
+    foreach (var frameObject in frameObjects)
     {
-      var newBox = RectCurve(te.Plane.Origin, te.Plane.XAxis, te.Plane.YAxis, ihw + pad, ihh + pad);
       _internalReplace = true;
-      doc.Objects.Replace(boxId, newBox);
-      _internalReplace = false;
+      try
+      {
+        if (!doc.Objects.Replace(frameObject.Id, frame))
+          continue;
+
+        var replacedFrame = doc.Objects.FindId(frameObject.Id);
+        if (replacedFrame != null &&
+            replacedFrame.Attributes.GetUserString(FrameFlagKey) != FrameFlagValue)
+        {
+          var attributes = replacedFrame.Attributes.Duplicate();
+          attributes.SetUserString(FrameFlagKey, FrameFlagValue);
+          doc.Objects.ModifyAttributes(replacedFrame, attributes, true);
+        }
+      }
+      finally
+      {
+        _internalReplace = false;
+      }
     }
   }
-
-  private static Guid FindInnerBoxId(RhinoDoc doc, int grpIdx) => Guid.Empty;
 
   // ── Live update of last placed group ─────────────────────────────────
 
@@ -514,40 +625,61 @@ public sealed class vTitle : Command
     if (textObj?.Geometry is not TextEntity oldTe) { _activeTextId = Guid.Empty; return; }
 
     // Update text content and size
-    var newTe = (TextEntity)oldTe.Duplicate();
+    using var newTe = (TextEntity)oldTe.Duplicate();
     newTe.PlainText  = _text;
     newTe.TextHeight = _size;
     _internalReplace = true;
-    doc.Objects.Replace(_activeTextId, newTe);
-    _internalReplace = false;
+    try
+    {
+      doc.Objects.Replace(_activeTextId, newTe);
+    }
+    finally
+    {
+      _internalReplace = false;
+    }
     // Keep padding in sync on the text object's attributes
     var tobj0 = doc.Objects.FindId(_activeTextId);
     if (tobj0 != null)
     {
       var ta0 = tobj0.Attributes.Duplicate();
-      ta0.SetUserString("vTitlePadding", _padding.ToString(CultureInfo.InvariantCulture));
+      ta0.SetUserString(
+        PaddingUserStringKey,
+        _padding.ToString(CultureInfo.InvariantCulture));
       doc.Objects.ModifyAttributes(tobj0, ta0, true);
     }
 
-    var center = oldTe.Plane.Origin;
-    var xAxis  = oldTe.Plane.XAxis;
-    var yAxis  = oldTe.Plane.YAxis;
-
-    // Get actual bounds from the just-replaced entity
-    var (ihw, ihh) = GetActualHalfExtents(doc, _activeTextId, _text, _size);
-    double pad = _size * _padding / 100.0;
-
     if (_box)
     {
-      var newCurve = RectCurve(center, xAxis, yAxis, ihw + pad, ihh + pad);
+      var updatedTitleObj = doc.Objects.FindId(_activeTextId);
+      if (updatedTitleObj?.Geometry is not TextEntity updatedText)
+        return;
+
+      using var newCurve = CreateFrameForTitlePreview(
+        updatedTitleObj, updatedText);
+      if (newCurve == null)
+        return;
+
       if (_activeBoxId != Guid.Empty)
       {
         doc.Objects.Replace(_activeBoxId, newCurve);
+        var existingFrame = doc.Objects.FindId(_activeBoxId);
+        if (existingFrame != null &&
+            existingFrame.Attributes.GetUserString(FrameFlagKey) != FrameFlagValue)
+        {
+          var frameAttributes = existingFrame.Attributes.Duplicate();
+          frameAttributes.SetUserString(FrameFlagKey, FrameFlagValue);
+          doc.Objects.ModifyAttributes(existingFrame, frameAttributes, true);
+        }
       }
       else
       {
         // Box was off — create it and add to the existing group
-        _activeBoxId = doc.Objects.AddCurve(newCurve);
+        var frameAttributes = new ObjectAttributes
+        {
+          LayerIndex = updatedTitleObj.Attributes.LayerIndex
+        };
+        frameAttributes.SetUserString(FrameFlagKey, FrameFlagValue);
+        _activeBoxId = doc.Objects.AddCurve(newCurve, frameAttributes);
         if (_activeBoxId != Guid.Empty)
         {
           if (_activeGrpIdx < 0)
@@ -581,55 +713,189 @@ public sealed class vTitle : Command
 
   // ── Helpers ───────────────────────────────────────────────────────────
 
-  private static PolylineCurve BoxCurve(Point3d center,
-    Vector3d xAxis, Vector3d yAxis, string text, double size, double padding)
+  /// <summary>
+  /// Builds a vTitle frame for the final TextEntity using the title's CURRENT
+  /// vTitlePadding user string. vMirror preview and real vTitle sync both call
+  /// this exact path.
+  /// </summary>
+  internal static PolylineCurve? CreateFrameForTitlePreview(
+    RhinoObject titleObject,
+    TextEntity text)
   {
-    var (tw, th) = ApproxBounds(text, size);
-    double pad = size * padding / 100.0;
-    return RectCurve(center, xAxis, yAxis, tw / 2.0 + pad, th / 2.0 + pad);
+    if (titleObject == null || text == null)
+      return null;
+    if (titleObject.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue)
+      return null;
+
+    double padding = GetPaddingPercent(titleObject);
+    return CreateFrameForText(text, padding);
   }
 
-  private static PolylineCurve RectCurve(Point3d center,
-    Vector3d xAxis, Vector3d yAxis, double hw, double hh)
+  internal static bool IsTitleFrame(RhinoObject candidate) =>
+    candidate?.Geometry is PolylineCurve &&
+    candidate.Attributes.GetUserString(FrameFlagKey) == FrameFlagValue;
+
+  /// <summary>
+  /// Builds a preview frame for replacement text from a FRESH TextEntity.
+  /// Mutating PlainText on a duplicated TextEntity can leave stale annotation
+  /// layout data until Rhino inserts it into the document; a fresh entity
+  /// avoids that mismatch and matches vTitle's normal creation path.
+  /// </summary>
+  internal static PolylineCurve? CreateFrameForTitlePreview(
+    RhinoObject titleObject,
+    TextEntity sourceText,
+    string previewText)
+  {
+    if (titleObject == null || sourceText == null)
+      return null;
+    if (titleObject.Attributes.GetUserString(TitleFlagKey) != TitleFlagValue)
+      return null;
+
+    using var freshText = new TextEntity
+    {
+      Plane = sourceText.Plane,
+      PlainText = previewText ?? string.Empty,
+      TextHeight = sourceText.TextHeight,
+      Justification = sourceText.Justification,
+      DimensionScale = sourceText.DimensionScale,
+    };
+
+    try { freshText.DrawForward = sourceText.DrawForward; }
+    catch { }
+
+    double padding = GetPaddingPercent(titleObject);
+    return CreateFrameForText(freshText, padding);
+  }
+
+  private static double GetPaddingPercent(RhinoObject titleObject)
+  {
+    double padding = DefaultPadding;
+    if (double.TryParse(
+          titleObject.Attributes.GetUserString(PaddingUserStringKey),
+          NumberStyles.Any,
+          CultureInfo.InvariantCulture,
+          out double storedPadding))
+    {
+      padding = storedPadding;
+    }
+
+    return padding;
+  }
+
+  /// <summary>
+  /// Creates the rectangle around the ACTUAL glyph outlines. TextEntity's
+  /// annotation bounding box has produced angle-dependent results in this
+  /// workflow, so use Explode() curves as the geometry source of truth.
+  /// </summary>
+  private static PolylineCurve CreateFrameForText(
+    TextEntity text,
+    double paddingPercent)
+  {
+    double hw;
+    double hh;
+
+    if (!TryGetExplodedTextHalfExtents(text, out hw, out hh))
+    {
+      var (tw, th) = ApproxBounds(
+        text.PlainText ?? string.Empty, text.TextHeight);
+      hw = tw / 2.0;
+      hh = th / 2.0;
+    }
+
+    double pad = text.TextHeight * paddingPercent / 100.0;
+    return RectCurve(
+      text.Plane.Origin,
+      text.Plane.XAxis,
+      text.Plane.YAxis,
+      Math.Max(hw + pad, RhinoMath.ZeroTolerance),
+      Math.Max(hh + pad, RhinoMath.ZeroTolerance));
+  }
+
+  private static bool TryGetExplodedTextHalfExtents(
+    TextEntity text,
+    out double hw,
+    out double hh)
+  {
+    hw = 0.0;
+    hh = 0.0;
+
+    Curve[]? curves = null;
+    try
+    {
+      curves = text.Explode();
+      if (curves == null || curves.Length == 0)
+        return false;
+
+      // Explicitly transform the exploded glyph geometry from the title plane
+      // into WorldXY. Unlike GetBoundingBox(Plane), this guarantees that the
+      // measured coordinates are local to text.Plane.Origin and independent of
+      // the title's model-space position/rotation.
+      var toLocal = Transform.PlaneToPlane(
+        text.Plane, Plane.WorldXY);
+
+      double minX = double.PositiveInfinity;
+      double minY = double.PositiveInfinity;
+      double maxX = double.NegativeInfinity;
+      double maxY = double.NegativeInfinity;
+      bool found = false;
+
+      foreach (var sourceCurve in curves)
+      {
+        if (sourceCurve == null)
+          continue;
+
+        using var localCurve = sourceCurve.DuplicateCurve();
+        if (localCurve == null || !localCurve.Transform(toLocal))
+          continue;
+
+        var bb = localCurve.GetBoundingBox(true);
+        if (!bb.IsValid)
+          continue;
+
+        minX = Math.Min(minX, bb.Min.X);
+        minY = Math.Min(minY, bb.Min.Y);
+        maxX = Math.Max(maxX, bb.Max.X);
+        maxY = Math.Max(maxY, bb.Max.Y);
+        found = true;
+      }
+
+      if (!found)
+        return false;
+
+      // vTitle is MiddleCenter-justified, so its frame remains centered on the
+      // annotation origin. Use the actual local glyph reach on each axis.
+      hw = Math.Max(Math.Abs(minX), Math.Abs(maxX));
+      hh = Math.Max(Math.Abs(minY), Math.Abs(maxY));
+
+      return hw > RhinoMath.ZeroTolerance &&
+             hh > RhinoMath.ZeroTolerance;
+    }
+    catch
+    {
+      return false;
+    }
+    finally
+    {
+      if (curves != null)
+      {
+        foreach (var curve in curves)
+          curve?.Dispose();
+      }
+    }
+  }
+
+  private static PolylineCurve RectCurve(
+    Point3d center,
+    Vector3d xAxis,
+    Vector3d yAxis,
+    double hw,
+    double hh)
   {
     var c0 = center + xAxis * (-hw) + yAxis * (-hh);
     var c1 = center + xAxis * ( hw) + yAxis * (-hh);
     var c2 = center + xAxis * ( hw) + yAxis * ( hh);
     var c3 = center + xAxis * (-hw) + yAxis * ( hh);
     return new PolylineCurve(new[] { c0, c1, c2, c3, c0 });
-  }
-
-  /// <summary>Gets half-extents of a placed text entity; falls back to ApproxBounds.</summary>
-  private static (double hw, double hh) GetActualHalfExtents(
-    RhinoDoc doc, Guid textId, string text, double size)
-  {
-    try
-    {
-      var robj = doc.Objects.FindId(textId);
-      if (robj != null)
-      {
-        var bb = robj.Geometry.GetBoundingBox(true);
-        if (bb.IsValid)
-        {
-          var te = robj.Geometry as TextEntity;
-          if (te != null)
-          {
-            double maxU = 0, maxV = 0;
-            var origin = te.Plane.Origin;
-            foreach (var corner in bb.GetCorners())
-            {
-              var r = corner - origin;
-              maxU = Math.Max(maxU, Math.Abs(r * te.Plane.XAxis));
-              maxV = Math.Max(maxV, Math.Abs(r * te.Plane.YAxis));
-            }
-            if (maxU > 0 && maxV > 0) return (maxU, maxV);
-          }
-        }
-      }
-    }
-    catch { }
-    var (tw, th) = ApproxBounds(text, size);
-    return (tw / 2.0, th / 2.0);
   }
 
   private static int GetTargetLayerIndex(RhinoDoc doc)

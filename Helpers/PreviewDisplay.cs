@@ -26,6 +26,13 @@ internal static class PreviewDisplay
     OutlineColor: Color.Black,
     OutlineEmphasis: 3);
 
+  // Overlapping geometry uses a cyan center stroke over a wider black outline.
+  private static readonly CurveHighlightStyle OverlapStyle = new( // Colors and relative pixel widths for overlapping geometry.
+    StrokeColor: Color.Cyan,
+    StrokeEmphasis: 1,
+    OutlineColor: Color.Black,
+    OutlineEmphasis: 3);
+
   // Generic outlined curves use these defaults unless the caller supplies different thickness values.
   private static readonly Color OutlinedCurveOutlineColor = Color.Black; // Default outline color for emphasized source curves.
   private const int OutlinedCurveStrokeEmphasis = 1; // Colored-stroke pixels added to Rhino's curve thickness.
@@ -161,4 +168,7 @@ internal static class PreviewDisplay
 
   public static void DrawRemovedPoint(DisplayPipeline display, Point3d point) =>
     DrawHighlightPoint(display, point, RemovedStyle);
+
+  public static void DrawOverlapCurve(DisplayPipeline display, Curve curve) =>
+    DrawHighlightCurve(display, curve, OverlapStyle);
 }

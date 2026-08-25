@@ -40,17 +40,18 @@ namespace vTools.Commands
     private const bool DefaultRandStart = true; // true randomizes the first layout position; false uses deterministic placement.
     private const bool DefaultRandNext = true; // true randomizes subsequent layout positions; false uses deterministic placement.
 
+    private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
+    private const double CursorReleaseRadiusPixels = 12.0; // Cursor travel in display pixels required before re-enabling edge snap after a match; zero or greater.
+    private static readonly Color SourceEdgeHighlightColor = Color.Orange; // Hovered source-edge highlight color.
+    private static readonly Color SourceDotHighlightColor = Color.Gold; // Chosen source-dot highlight color.
+    private static readonly Color MateDotHighlightColor = Color.Magenta; // Matching destination-dot highlight color.
+    private static readonly Color MatePartHighlightColor = Color.Cyan; // Matching destination-part highlight color.
+
     private static double _distance   = DefaultDistance;
     private static bool   _randStart  = DefaultRandStart;
     private static bool   _randNext   = DefaultRandNext;
 
     private static readonly Random _rng = new Random();
-
-    private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
-    private static readonly Color SourceEdgeHighlightColor = Color.Orange; // Hovered source-edge highlight color.
-    private static readonly Color SourceDotHighlightColor = Color.Gold; // Chosen source-dot highlight color.
-    private static readonly Color MateDotHighlightColor = Color.Magenta; // Matching destination-dot highlight color.
-    private static readonly Color MatePartHighlightColor = Color.Cyan; // Matching destination-part highlight color.
 
     public override string EnglishName => "vMatch";
 
@@ -105,16 +106,21 @@ namespace vTools.Commands
       private readonly RhinoDoc _doc;
       private readonly IReadOnlyList<Dot> _dots;
       private readonly IReadOnlyList<MateEdge> _edges;
+      private readonly System.Drawing.Point? _releasePoint;
       private MateEdge? _activeEdge;
+      private bool _waitingForCursorRelease;
 
       public MateEdgePicker(
         RhinoDoc doc,
         IReadOnlyList<Dot> dots,
-        IReadOnlyList<MateEdge> edges)
+        IReadOnlyList<MateEdge> edges,
+        System.Drawing.Point? releasePoint)
       {
         _doc = doc;
         _dots = dots;
         _edges = edges;
+        _releasePoint = releasePoint;
+        _waitingForCursorRelease = releasePoint.HasValue;
         PermitObjectSnap(false);
         EnableObjectSnapCursors(false);
         PermitOrthoSnap(false);
@@ -123,6 +129,8 @@ namespace vTools.Commands
 
       public Dot? SourceDot { get; private set; }
       public Dot? MateDot { get; private set; }
+      public System.Drawing.Point LastWindowPoint { get; private set; }
+      public bool HasWindowPoint { get; private set; }
 
       public void ReleaseSnap()
       {
@@ -135,6 +143,23 @@ namespace vTools.Commands
 
       protected override void OnMouseMove(GetPointMouseEventArgs e)
       {
+        LastWindowPoint = e.WindowPoint;
+        HasWindowPoint = true;
+
+        if (_waitingForCursorRelease && _releasePoint.HasValue)
+        {
+          double dx = e.WindowPoint.X - _releasePoint.Value.X;
+          double dy = e.WindowPoint.Y - _releasePoint.Value.Y;
+          if ((dx * dx) + (dy * dy) <= CursorReleaseRadiusPixels * CursorReleaseRadiusPixels)
+          {
+            ReleaseSnap();
+            base.OnMouseMove(e);
+            return;
+          }
+
+          _waitingForCursorRelease = false;
+        }
+
         var nextEdge = FindHoveredEdge(
           _edges, e.Viewport, e.WindowPoint.X, e.WindowPoint.Y, out var edgePoint);
 
@@ -192,9 +217,10 @@ namespace vTools.Commands
       using var shortcutSession = new LocalUndoRedoShortcutSession(
         "vMatch",
         redo => new MatchHistoryRequest(redo));
+      System.Drawing.Point? cursorReleasePoint = null;
       while (true)
       {
-          var gp = new MateEdgePicker(doc, dots, mateEdges);
+          using var gp = new MateEdgePicker(doc, dots, mateEdges, cursorReleasePoint);
           gp.EnableTransparentCommands(true);
           gp.SetCommandPrompt("Click a highlighted edge to match its part");
           int idxDist = gp.AddOption("Distance", $"{_distance:G}");
@@ -208,6 +234,9 @@ namespace vTools.Commands
           var res = gp.Get();
           var src = gp.SourceDot;
           var mate = gp.MateDot;
+          cursorReleasePoint = res == GetResult.Point && gp.HasWindowPoint
+            ? gp.LastWindowPoint
+            : null;
           gp.ReleaseSnap();
           if (res != GetResult.Point)
             doc.Views.Redraw();

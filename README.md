@@ -1,25 +1,27 @@
-# vTools  ·  v26.8.20.1355
+# vTools  ·  v26.8.24.2054
 
 vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NET 10) that provides native RhinoCommon commands for notches, orient, trim/extend, gumball, curve, line, text, tangent/perpendicular alignment workflows and more.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (52):
+- Native commands (54):
   - [vAlign](#valign-flow) *(26.8.20.807)* — rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
   - [vChamfer](#vchamfer-flow) *(26.5.7.723)* — adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length
   - [vCommandFailSound](#vcommandfailsound-flow) *(26.7.23.045)* — configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel
+  - [vCleanup](#vcleanup-flow) *(26.8.20.1740)* — simplifies scoped curves, finds covered overlaps, and identifies or deletes protected short segments and control-point candidates
   - [vCurveToSpline](#vcurvetospline-flow) *(26.4.24.934)* — converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement
   - [vDiamonds](#vdiamonds-flow) *(26.5.14.928)* — draws an argyle diamond pattern with optional bounding rectangle and size/count labels; supports BySize centering mode
+  - [vDir](#vdir-flow) *(26.8.24.1747)* — flips the normal direction of individually selected surface or polysurface faces
   - [vDupBorder](#vdupborder-flow) *(26.8.13.829)* — duplicates whole-object or selected-face borders onto a chosen layer while carrying source groups, with optional source removal and grouping for ungrouped inputs
   - [vDupEdge](#vdupedge-flow) *(26.8.13.829)* — duplicates selected Brep, mesh, extrusion, or SubD edges onto a chosen layer while carrying source groups and optionally grouping ungrouped inputs
   - [vFacing](#vfacing-flow) *(26.5.29.1333)* — builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview
   - [vFilterExec](#vfilterexec-flow) *(26.7.30.1223)* — runs a command with a temporary selection filter and restores the previous filter afterward
   - [vFitBox](#vfitbox-flow) *(26.4.24.934)* — finds the minimum bounding box for selected objects by optimizing rotation angle
   - [vFPS](#vfps-flow) *(26.7.30.1041)* — toggles a per-viewport FPS overlay measured from short active-view rendering samples
-  - [vGroup](#vgroup-flow) *(26.5.27.1300)* — groups selected objects by closed-curve boundaries; each boundary is grouped with the objects inside it
+  - [vGroup](#vgroup-flow) *(26.5.27.1300)* — groups selected objects by closed curve, surface, polysurface, or face boundaries; each boundary is grouped with the objects inside it
   - [vIsolate](#visolate-flow) *(26.7.22.1515)* — keeps selected objects visible while hiding every other visible normal object, optionally in a named Rhino hide set
   - [vJoin](#vjoin-flow) *(26.7.30.2016)* — joins selected objects, optionally joining copies while preserving the originals
   - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, automatic angle constraint, and length constraints
@@ -31,7 +33,7 @@ vTools is a dual-target Rhino 8 and Rhino 9 plug-in project (C# / .NET 7 and .NE
   - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in Offset continuously and can trim or extend new offsets to curves touching the source endpoints
   - [vOrient2pt](#vorient2pt-flow) *(26.4.24.934)* — orients objects from a source two-point frame to a target two-point frame
   - [vOrient3pt](#vorient3pt-flow) *(26.4.24.934)* — orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient)
-  - [vOverlaps](#voverlaps-flow) *(26.7.3.2104)* — finds all visible curves that follow the same path or are fully covered by another and selects them (duplicates/subsets); one original per duplicate group is kept unselected
+  - [vOverlaps](#voverlaps-flow) *(26.7.3.2104)* — selects covered curves and highlights coincident edge intervals belonging to overlapping surface or polysurface faces
   - [vPart](#vpart-flow) *(26.5.18.1742)* — captures a closed perimeter from selected curves (gaps are bridged automatically), collects all visible objects inside the perimeter (curves trimmed at the boundary; other types included whole), and lets the user place the resulting Part with a full preview
   - [vPerpendicularTo](#vperpendicularto-flow) *(26.5.5.757)* — rotates curve A about its nearest endpoint so it is perpendicular to curve B in the active CPlane
   - [vPointNormalToSurface](#vpointnormaltosurface-flow) *(26.4.27.2109)* — places points projected onto the closest surface normal evaluation point
@@ -105,7 +107,7 @@ Release output is written to:
 
 All command options persist by default unless stated otherwise.
 
-Native commands (52): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (54): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -113,13 +115,13 @@ Native commands (52): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow)
 ### vAlign flow
 
 1. Preselect objects or run `vAlign` and select the objects to rotate. Group members are treated as one movable object.
-1. Click the stationary reference curve or surface/polysurface edge near the end that should receive the target. Kinks of 30 degrees or more are independently selectable segments.
-1. Hover a target curve or edge within the movable selection. The target is highlighted, a thin line connects the two picked points, and the complete transformed result previews faded; click to apply it.
+1. Click the stationary reference curve or surface/polysurface edge near the end that should receive the target, or press Enter to use World Ortho. Kinks of 30 degrees or more are independently selectable segments.
+1. Hover a target curve or edge within the movable selection. The target is highlighted and the complete transformed result previews faded. With a reference, a thin line connects the picked points and moving the cursor across the target controls the rotation/offset side; hold Shift or Ctrl to reverse that side. Click any stationary curve or edge during this stage to replace the reference, including clicking the current reference near its other end. Without a reference, the target aligns vertically by default and horizontally while Shift or Ctrl is held, with cursor side choosing the direction. Click the target to apply the preview.
 1. Alignment uses World XY rotation around World Z, independent of the active view. Open curves match the clicked ends so the objects are not inadvertently reversed.
 
 Options:
 
-- `Distance`: a non-negative separation from the reference edge; the command chooses the side that minimizes overlap and places the moved objects opposite the reference object. Enter `None` to rotate in place around the selected objects' center of mass without translating them.
+- `Distance`: a non-negative separation from a selected reference edge. Cursor side controls the destination side. Enter `None` to rotate in place around the selected objects' center of mass without translating them. Distance is ignored in reference-free World Ortho mode.
 
 ### vBiminiParts flow
 
@@ -180,6 +182,15 @@ Notes:
 1. While enabled, the selected sound plays whenever a Rhino command ends with any result other than `Success` or `Cancel`.
 1. Press Enter to finish configuring the command. The watcher detaches automatically when the plug-in shuts down.
 
+### vCleanup flow
+
+1. Preselect curves or add/remove individual curves at the command prompt. Press Enter with no curve selection to process every curve object in the document.
+1. Adjust the persistent `Threshold`, `HighlightShort`, `Preselect`, `AutoDelete`, `SimplifyCrv`, and `Overlaps` options. Press Enter after selection to approve and run cleanup.
+1. Enabled processing runs in order: SimplifyCrv-compatible curve simplification, shared vOverlaps detection, then short segment and adjacent control-point analysis. Open-curve endpoints remain protected.
+1. `Preselect` and `AutoDelete` independently target `Short`, `Overlaps`, `All`, or `No` findings. Preselection applies to requested findings that remain after deletion.
+1. With `AutoDelete=No`, results are saved as the document named selections `vCleanup Short geometry` and `vCleanup Overlaps`. Any enabled auto-delete mode runs SimplifyCrv once more afterward when simplification is enabled.
+1. With `HighlightShort=Yes`, surviving short findings are highlighted in magenta and overlaps in cyan until the next `vCleanup` run.
+
 ### vCurveToSpline flow
 
 1. Select source curves (preselect or postselect is supported). If all selected curves form one connected end-to-end chain they are automatically joined and treated as a single input.
@@ -210,6 +221,12 @@ Closed source curves and closed joined chains are created as closed splines.
 
 1. Current bounding box dimensions print to command history on every preview update.
 1. Pick the placement point to commit. All objects are grouped. Output layers: `PLOT` (diamond lines), `CUT1` (boundary rect), `Reference` (labels).
+
+### vDir flow
+
+1. Preselected individual faces flip immediately when `vDir` starts. Otherwise, hover a surface or polysurface face to identify it with Rhino's native prehighlight, then click to flip it immediately.
+1. The clicked face is not left selected. Continue clicking faces and press Enter or Esc when finished.
+1. Each face changes only its normal orientation; geometry, trims, attributes, groups, and object placement remain unchanged.
 
 ### vDupBorder flow
 
@@ -272,6 +289,9 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
 
 1. Confirm selection to generate the fit result.
 
+    - Flat fits create a closed polyline and report two footprint dimensions.
+    - Non-flat fits create a polysurface and report `3D: width x depth x height`.
+
 ### vFPS flow
 
 1. Run `vFPS` to toggle the viewport FPS overlay (`ON`/`OFF`).
@@ -281,8 +301,9 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
 
 ### vGroup flow
 
-1. Select objects to group — include both the boundary curves and any objects to be placed inside groups.
-1. The command finds all closed polygon boundaries formed by the selected curves:
+1. Select objects to group — include boundary curves, surfaces, polysurfaces, or individual faces together with any objects to be placed inside groups.
+1. Touching selected faces are joined into one boundary patch. Their shared edges are omitted and only the patch's naked perimeter contributes to boundary detection.
+1. The command finds all closed polygon boundaries formed by the selected curves and generated face perimeters:
 
     - All curves are split at their mutual intersection points.
     - Segments with dead-end endpoints (degree-1 nodes) are iteratively removed until only closed-cycle core segments remain.
@@ -303,7 +324,9 @@ Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `
 
 1. Preselect at least two joinable objects, or run `vJoin` and select curves, surfaces, polysurfaces, extrusions, meshes, or SubDs.
 1. Set `Copy=No` to join the selected originals, or `Copy=Yes` to join in-place copies while preserving the originals. The setting persists immediately.
+1. Set `Layer=Source` to inherit the first compatible input object's layer, or `Layer=Current` to place joined output on Rhino's current layer. The setting persists immediately.
 1. Press Enter to confirm a preselection. `vJoin` can run transparently inside another command.
+1. On success, the command reports the input and output geometry counts and types, plus whether originals or copies were joined.
 
 ### vLine flow
 
@@ -402,7 +425,8 @@ Options persist to `vTools.config.json` under `vMatch`.
 
 1. Preselect objects or run `vMirror` and select them, then choose the start and end of the mirror axis in the active CPlane. Originals are deselected for placement; mirrored previews use Rhino's selected-object color, and Move mode ghosts the originals in grey.
 1. Plane options match native Mirror: `3Point`, `XAxis`, `YAxis`, `ZAxis`, and `Object` for a planar surface or face.
-1. `Copy` preserves the source objects. `FlipText` applies an additional readable-side flip to mirrored text. Both options remain available throughout object and plane selection and persist between runs.
+1. `Left`, `Right`, `Top`, and `Bottom` mirror directly to that side of the selection in the active CPlane, leaving the persistent `Distance` gap between the original and mirrored bounds.
+1. `Copy` preserves the source objects. `FlipText` applies an additional readable-side flip to mirrored text. `SwapText` applies the configured bidirectional replacements to mirrored vTitle text. These settings persist between runs.
 
 ### vNotches flow
 
@@ -492,13 +516,14 @@ Options persist to `vTools.config.json` under the `vNotches` section.
 ### vOverlaps flow
 
 1. Run `vOverlaps`.
-1. Optionally preselect curves; if none, press Enter at the prompt to scan all visible curves in the document.
+1. Optionally preselect curves, surfaces, polysurfaces, or individual face subobjects; if none, press Enter at the prompt to scan all visible curves and Brep faces in the document.
 1. Use the `Tolerance` option to adjust the proximity threshold (default 0.001).
-1. Press Enter to run: covered and duplicate curves are unselected first, then the overlapping ones are selected.
+1. Press Enter to run: covered and duplicate curves are selected, while only coincident edge intervals belonging to overlapping face pairs receive the shared cyan-and-black overlap highlight.
 
 Behavior:
 - **Same-path duplicates**: both curves follow the same path and have the same length. The oldest (lowest runtime serial number) is kept unselected as the original; all others are selected.
 - **Covered curves**: a shorter curve lies entirely on top of a longer one. The shorter (covered) curve is selected.
+- **Overlapping faces**: planar trimmed regions are compared by shared area; coincident curved faces use bidirectional interior checks. Faces that only touch at an edge are ignored, and only edge intervals shared by detected face pairs are highlighted.
 
 Option persists to `vTools.config.json` under `vOverlaps`.
 
@@ -694,7 +719,7 @@ Behavior:
 
 Notes:
 - Editing an existing title replaces it in place.
-- If the text annotation is later changed externally (e.g. via `Properties`), the bounding box resizes automatically on the next idle frame.
+- If the text annotation is later changed externally (e.g. via `Properties`), the bounding box resizes automatically with the replacement.
 - All settings persist to `vTools.config.json` under `vTitle`.
 
 ### vToggleAxes flow

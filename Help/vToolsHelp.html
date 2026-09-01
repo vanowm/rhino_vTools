@@ -1,0 +1,2413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vTools Command Help</title>
+<script>
+(function () {
+  const parameters = new URLSearchParams(location.search);
+  const root = document.documentElement;
+  const theme = parameters.get('theme');
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+  const palette = {
+    background: '--page-background',
+    surface: '--surface-background',
+    field: '--field-background',
+    text: '--text-color',
+    muted: '--muted-color',
+    border: '--border-color',
+    link: '--link-color'
+  };
+  Object.keys(palette).forEach(function (key) {
+    const value = parameters.get(key);
+    if (/^[0-9a-f]{6}$/i.test(value || '')) {
+      root.style.setProperty(palette[key], '#' + value);
+    }
+  });
+}());
+</script>
+<style>
+:root {
+  color-scheme: light;
+  --page-background: #ffffff;
+  --surface-background: #f5f5f5;
+  --field-background: #ffffff;
+  --dialog-background: #e0e3e9;
+  --table-header-background: #dcdcdc;
+  --text-color: #333333;
+  --muted-color: #666666;
+  --border-color: #c0c0c0;
+  --cell-border-color: #d3d3d3;
+  --link-color: #2b72bc;
+  --hover-link-color: #8b0000;
+  --visited-link-color: #800080;
+  --bullet-color: #8b0000;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "Segoe UI", "Helvetica Neue", Verdana, sans-serif;
+  font-size: 1em;
+  margin: 10px;
+  line-height: 1.3em;
+  color: var(--text-color);
+  background: var(--page-background);
+}
+main { width: 100%; margin: 0; padding: 0; }
+.help-topic { display: none; }
+.help-topic.active { display: block; }
+h1 {
+  font-size: 1.75em;
+  font-weight: 700;
+  border-bottom: solid 1px var(--border-color);
+  margin: 0;
+  line-height: 1.5;
+  padding-bottom: 0;
+  margin-top: 0;
+}
+h2 {
+  font-weight: 700;
+  margin-bottom: 5px;
+  margin-top: 1.25em;
+  line-height: 1em;
+  margin-left: 0;
+}
+h3 {
+  margin-top: 1.5em;
+  font-weight: 700;
+  margin-bottom: 5px;
+  line-height: 1em;
+  margin-left: 0;
+}
+h4 {
+  border-bottom: solid 1px var(--border-color);
+  font-weight: 700;
+  margin-top: 10px;
+  margin-bottom: 3px;
+  margin-left: 0;
+  padding-top: 4px;
+  font-size: 100%;
+}
+h5 {
+  font-weight: 700;
+  font-size: 100%;
+  margin-bottom: 0;
+  margin-left: 0;
+  margin-top: 5px;
+}
+p { margin-bottom: 5px; margin-top: 0; margin-left: 0; }
+ul {
+  margin-top: 5px;
+  margin-left: 15px;
+  padding-left: 0;
+  line-height: 1.3em;
+  padding-bottom: 1px;
+  margin-bottom: 10px;
+}
+ol {
+  margin-bottom: 0;
+  margin-top: 0;
+  margin-left: 1em;
+  padding-left: 0;
+  line-height: 1.3em;
+}
+li { font-size: 100%; padding-left: 0; margin-top: 0; padding-top: 0; }
+ul li::marker { color: var(--bullet-color); }
+.tutorialblock {
+  border-radius: 5px;
+  background-color: var(--surface-background);
+  padding-top: 0;
+  padding-left: 0.5em;
+  padding-right: 10px;
+  position: relative;
+  margin-bottom: 5px;
+  margin-top: 5px;
+  padding-bottom: 5px;
+  border: none 0 var(--cell-border-color);
+}
+p.Dialog_Box_Title {
+  background-color: var(--dialog-background);
+  font-size: 110%;
+  font-weight: 700;
+  margin-top: 1em;
+  padding-bottom: 5px;
+  padding-top: 3px;
+  padding-left: 5px;
+  padding-right: 5px;
+  margin-right: 0;
+  margin-left: -5px;
+}
+.command-option { margin-left: 20px; }
+.command-option p { margin-bottom: 5px; }
+table {
+  border-collapse: collapse;
+  text-align: left;
+  border: solid 1px var(--border-color);
+  border-radius: 5px;
+  margin-right: 5px;
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+td {
+  border: 1px solid var(--cell-border-color);
+  padding-bottom: 1px;
+  padding-right: 5px;
+  text-align: left;
+  vertical-align: top;
+  padding-left: 5px;
+}
+th {
+  font-weight: 700;
+  vertical-align: top;
+  text-align: left;
+  border-bottom: solid 1px #808080;
+  padding: 2px 5px;
+}
+code { font-family: inherit; font-weight: 600; }
+pre { overflow: auto; padding: 10px; border: 1px solid var(--border-color); background: var(--field-background); }
+pre code { padding: 0; border: 0; background: transparent; font-family: Consolas, monospace; }
+blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--link-color); }
+a:link { text-decoration: none; color: var(--link-color); }
+a:visited { color: var(--visited-link-color); text-decoration: none; }
+a:hover { text-decoration: none; color: var(--hover-link-color); }
+a:active { text-decoration: none; }
+.empty { color: var(--muted-color); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page-background: #222222;
+    --surface-background: #333333;
+    --field-background: #333333;
+    --dialog-background: #444444;
+    --table-header-background: #626262;
+    --text-color: #f5f5f5;
+    --muted-color: #c0c0c0;
+    --border-color: #707070;
+    --cell-border-color: #707070;
+    --link-color: #4aa5ff;
+    --hover-link-color: #ff3e3e;
+    --visited-link-color: #ff80ff;
+    --bullet-color: #ff3e3e;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page-background: #ffffff;
+  --surface-background: #f5f5f5;
+  --field-background: #ffffff;
+  --dialog-background: #e0e3e9;
+  --table-header-background: #dcdcdc;
+  --text-color: #333333;
+  --muted-color: #666666;
+  --border-color: #c0c0c0;
+  --cell-border-color: #d3d3d3;
+  --link-color: #2b72bc;
+  --hover-link-color: #8b0000;
+  --visited-link-color: #800080;
+  --bullet-color: #8b0000;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page-background: #222222;
+  --surface-background: #333333;
+  --field-background: #333333;
+  --dialog-background: #444444;
+  --table-header-background: #626262;
+  --text-color: #f5f5f5;
+  --muted-color: #c0c0c0;
+  --border-color: #707070;
+  --cell-border-color: #707070;
+  --link-color: #4aa5ff;
+  --hover-link-color: #ff3e3e;
+  --visited-link-color: #ff80ff;
+  --bullet-color: #ff3e3e;
+}
+</style>
+</head>
+<body>
+<main>
+<!-- GENERATED_TOPICS_START -->
+<article class="help-topic" data-topic="vhelp">
+<h1>vTools commands</h1>
+<li class="command-option" type="number">
+<h5><a href="#valign">vAlign</a></h5>
+<p>Rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vbiminiparts">vBiminiParts</a></h5>
+<p>Builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vcenter">vCenter</a></h5>
+<p>Places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vchamfer">vChamfer</a></h5>
+<p>Adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vcommandfailsound">vCommandFailSound</a></h5>
+<p>Configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vcleanup">vCleanup</a></h5>
+<p>Simplifies scoped curves, finds covered overlaps, and identifies or deletes protected short segments and control-point candidates.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vcurvetospline">vCurveToSpline</a></h5>
+<p>Converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vdiamonds">vDiamonds</a></h5>
+<p>Draws an argyle diamond pattern with optional bounding rectangle and size/count labels; supports BySize centering mode.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vdir">vDir</a></h5>
+<p>Flips one face, every face in a polysurface, or faces pointing opposite to a clicked reference face.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vdupborder">vDupBorder</a></h5>
+<p>Duplicates whole-object or selected-face borders onto a chosen layer while carrying source groups, with optional source removal and grouping for ungrouped inputs.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vdupedge">vDupEdge</a></h5>
+<p>Duplicates selected Brep, mesh, extrusion, or SubD edges onto a chosen layer while carrying source groups and optionally grouping ungrouped inputs.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vfacing">vFacing</a></h5>
+<p>Builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vfilterexec">vFilterExec</a></h5>
+<p>Runs a command with a temporary selection filter and restores the previous filter afterward.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vfitbox">vFitBox</a></h5>
+<p>Finds the minimum bounding box for selected objects by optimizing rotation angle.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vfps">vFPS</a></h5>
+<p>Toggles a per-viewport FPS overlay measured from short active-view rendering samples.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vgroup">vGroup</a></h5>
+<p>Groups selected objects by closed curve, surface, polysurface, or face boundaries; each boundary is grouped with the objects inside it.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vgroupsmanager">vGroupsManager</a></h5>
+<p>Manages document groups in a modeless sortable tree with actual text values, selection-distinct highlighting, optional automatic selection, membership editing, renaming, ungrouping, and empty-group cleanup.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#visolate">vIsolate</a></h5>
+<p>Keeps selected objects visible while hiding every other visible normal object, optionally in a named Rhino hide set.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vjoin">vJoin</a></h5>
+<p>Joins selected objects, optionally joining copies while preserving the originals.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vline">vLine</a></h5>
+<p>Draws lines with chain modes, native construction modes at either endpoint, automatic angle constraint, and length constraints.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vlinelength">vLineLength</a></h5>
+<p>Resizes an open curve to a target total, additive, or subtractive length.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vmatch">vMatch</a></h5>
+<p>Click near an edge-mate dot produced by <a href="#vunrollsrf">vUnrollSrf</a> or <a href="#vunrollsrfuv">vUnrollSrfUV</a> to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vmiddlecurve">vMiddleCurve</a></h5>
+<p>Creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vmirror">vMirror</a></h5>
+<p>Mirrors selected objects across two-point, three-point, CPlane-axis, or planar-object planes, with persistent copying and text-flipping options.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vnotches">vNotches</a></h5>
+<p>Places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#voffset">vOffset</a></h5>
+<p>Runs built-in <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/offset.htm"><code>Offset</code></a> continuously and can trim or extend new offsets to curves touching the source endpoints.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vorient2pt">vOrient2pt</a></h5>
+<p>Orients objects from a source two-point frame to a target two-point frame.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vorient3pt">vOrient3pt</a></h5>
+<p>Orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient).</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#voverlaps">vOverlaps</a></h5>
+<p>Selects covered or partially overlapping curves and highlights coincident edge intervals belonging to overlapping surface or polysurface faces.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vpart">vPart</a></h5>
+<p>Captures a closed perimeter from selected curves (gaps are bridged automatically), collects all visible objects inside the perimeter (curves trimmed at the boundary; other types included whole), and lets the user place the resulting Part with a full preview.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vperpendicularto">vPerpendicularTo</a></h5>
+<p>Rotates curve A about its nearest endpoint so it is perpendicular to curve B in the active CPlane.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vpointnormaltosurface">vPointNormalToSurface</a></h5>
+<p>Places points projected onto the closest surface normal evaluation point.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vprojecttosurface">vProjectToSurface</a></h5>
+<p>Projects selected curves and points onto one or more target surfaces or polysurfaces with live preview; overhanging curve portions are clipped away.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vpointtrace">vPointTrace</a></h5>
+<p>Maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vrectangle">vRectangle</a></h5>
+<p>Creates an axis-aligned rectangle polyline from width/height inputs driven by numeric value or selected curve lengths.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vregroup">vReGroup</a></h5>
+<p>Dissolves all existing groups (including nested sub-groups) on the selected objects and collects them into one new group.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vscallop">vScallop</a></h5>
+<p>Creates an arc scallop between two points or along a selected line.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vsetpt">vSetPt</a></h5>
+<p>Previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm">SetPt</a> command.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vsmooth">vSmooth</a></h5>
+<p>Adjusts a selected curve so it transitions smoothly (G1) into one or two connected neighbours by eliminating kinks at shared endpoints; per-end StrengthStart/StrengthEnd, Copy, and Join options.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vshow">vShow</a></h5>
+<p>Shows one named hidden-object set, or all named sets, without cancelling the command already in progress.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vsplit">vSplit</a></h5>
+<p>Interactively splits selected curves at picked real point markers with distinct add/remove colors and shapes plus point snapping.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vsplitatcorners">vSplitAtCorners</a></h5>
+<p>Splits curves at detected corners with interactive per-corner toggle preview.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtangent">vTangent</a></h5>
+<p>Moves a curve rigidly so one or both endpoints align tangentially to selected driver curves.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtextaligned">vTextAligned</a></h5>
+<p>Places or repositions annotation text aligned and offset along a selected curve.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtextflip">vTextFlip</a></h5>
+<p>Flips or rotates annotation text while preserving dimension and leader lines.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtitle">vTitle</a></h5>
+<p>Places or edits a titled annotation text box with optional bounding rectangle; hover to highlight, click existing to edit.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtoggleaxes">vToggleAxes</a></h5>
+<p>Toggles visible viewport axes (grid/construction axes plus display-mode Z axis).</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtogglecontrolpoints">vToggleControlPoints</a></h5>
+<p>Toggles selected objects between edit points on the curve and off-curve control points.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtoggleperpgumball">vTogglePerpGumball</a></h5>
+<p>Toggles a monitor that auto-orients the gumball perpendicular to selected grips.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtrim">vTrim</a></h5>
+<p>Trims and extends curves with auto-cutter detection and join of extensions.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vtrimoff">vTrimOff</a></h5>
+<p>Trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vunrollsrf">vUnrollSrf</a></h5>
+<p>Develops selected surfaces through Rhino&#39;s native <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm">UnrollSrf</a> with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vunrollsrfuv">vUnrollSrfUV</a></h5>
+<p>Unrolls selected surfaces through Rhino&#39;s UV-preserving <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv">UnrollSrfUV</a> with the same labels, matching, placement, and reusable output workflow.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vuzip">vUzip</a></h5>
+<p>Full U-zip workflow in one command: selects three U-shape arm curves, computes the inward-offset center curve with fillet, and optionally produces glass, vis, and parts output with label and tail settings.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vuzipcenter">vUzipCenter</a></h5>
+<p>Offsets a U-shape&#39;s three curves inward, fillets the inside corners, and produces a single joined open curve.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vuzipparts">vUzipParts</a></h5>
+<p>Creates U-zip parts from a center curve into labeled reference, plot, and cut output groups.</p>
+</li>
+</article>
+<article class="help-topic" data-topic="valign">
+<h1>vAlign</h1>
+<p class="command-description">The vAlign command rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect objects or run <code>vAlign</code> and select the objects to rotate. Group members are treated as one movable object.</li>
+<li>Click the stationary reference curve or surface/polysurface edge near the end that should receive the target, or press Enter to use World Ortho. Kinks of 30 degrees or more are independently selectable segments.</li>
+<li>Hover a target curve or edge within the movable selection. The target is highlighted and the complete transformed result previews faded. With a reference, a thin line connects the picked points and moving the cursor across the target controls the rotation/offset side; hold Shift or Ctrl to reverse that side. Click any stationary curve or edge during this stage to replace the reference, including clicking the current reference near its other end. Without a reference, the target aligns vertically by default and horizontally while Shift or Ctrl is held, with cursor side choosing the direction. Click the target to apply the preview.</li>
+<li>Alignment uses World XY rotation around World Z, independent of the active view. Open curves match the clicked ends so the objects are not inadvertently reversed.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Distance</h5>
+<p>a non-negative separation from a selected reference edge. Cursor side controls the destination side. Enter <code>None</code> to rotate in place around the selected objects&#39; center of mass without translating them. Distance is ignored in reference-free World Ortho mode.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vbiminiparts">
+<h1>vBiminiParts</h1>
+<p class="command-description">The vBiminiParts command builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select bimini boundary curves (preselect supported).</li>
+<li>The command joins the selected curves into a single closed boundary, then determines the seam curve (outward offset) and finished curve (either detected from an existing curve on the PLOT layer or computed as an inward offset), and breaks both at corners into top/bottom/left/right segments.</li>
+<li><strong>Stage 2 — Main pocket</strong>: click the center of up to 2 seam or finished top/bottom segments to identify the main pocket side(s). Press Enter to skip.</li>
+<li><strong>Stage 3 — Secondary pocket</strong>: click the center of remaining top/bottom segments for secondary pockets if fewer than 2 main pockets were picked. Press Enter to skip.</li>
+<li>Before generating a secondary pocket, its length calculated from the main curve is compared with the previous secondary-pocket length stored in the Rhino document. When they differ, the command shows both lengths and asks whether to reuse the previous length. A successfully created secondary pocket updates the stored document value.</li>
+<li>Output is built automatically:</li>
+</ol>
+<ul>
+<li><strong>Facing parts</strong> (port and starboard sides) with interior objects collected.</li>
+<li><strong>Main pocket outline</strong> — closed filleted rectangle trimmed to the boundary.</li>
+<li><strong>Secondary pocket outline(s)</strong> — closed filleted shapes with seam clearance.</li>
+<li><strong>Center reference line</strong> through all pocket center points.</li>
+</ul>
+<ol start="7">
+<li>Output layers: <code>PLOT</code> (finished curve segments), <code>CUT1</code> (seam and pocket outlines), <code>Reference</code> (center points and center line).</li>
+<li>Standalone generated curves inherit the selected boundary curves&#39; groups. Facing and pocket parts remain in their own generated groups.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>PipeSize</h5>
+<p>selects a pipe size group which sets <code>MainPktDepth</code>, <code>SecPktDepth</code>, and optional <code>ExtraRect</code> dimensions. All groups are configurable in <code>vTools.config.json</code> under <code>vBiminiParts</code>.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vcenter">
+<h1>vCenter</h1>
+<p class="command-description">The vCenter command places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect geometry or select it after running <code>vCenter</code>; add or remove individual objects before pressing Enter, with group selection matching <a href="#vfitbox">vFitBox</a>.</li>
+<li>A point preview updates as the selection changes.</li>
+<li>Set <code>Method</code> from the option list or type <code>BoundingBox</code>, <code>Mass</code>, or <code>Objects</code> directly. The selected method is saved immediately.</li>
+<li>Press Enter to place a normal Rhino point on the current layer while preserving the source selection.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Methods</p>
+<div class="command-option">
+<h5>BoundingBox</h5>
+<p>center of the combined world-coordinate bounding box.</p>
+</div>
+<div class="command-option">
+<h5>Mass</h5>
+<p>volume-weighted center for solids, otherwise area-weighted center, curve-length-weighted center, or the available point/fallback center.</p>
+</div>
+<div class="command-option">
+<h5>Objects</h5>
+<p>equal-weight average of each selected object&#39;s natural volume, area, length, point, or bounding-box center.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vchamfer">
+<h1>vChamfer</h1>
+<p class="command-description">The vChamfer command adds a chamfer line perpendicular to the middle curve at an equidistant gap; places the chamfer where the gap between two diverging curves equals the specified length.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Pick <strong>curve 1</strong> — near the corner of the two diverging curves. For one closed curve, pick it near the corner to chamfer; the closest G1 kink is used and the second-curve prompt is skipped.</li>
+<li>For open curves, pick <strong>curve 2</strong> near the same corner.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Length</h5>
+<p>the desired chamfer line length — the perpendicular (equidistant) gap between both curves at the chamfer point. The chamfer is placed where the equidistant gap equals this value, with the line perpendicular to the middle curve.</p>
+</div>
+<div class="command-option">
+<h5>Trim</h5>
+<p><code>Yes</code> trims both curves to the chamfer endpoints; <code>No</code> only adds the line.</p>
+</div>
+<div class="command-option">
+<h5>Join *(Trim=Yes only)*</h5>
+<p><code>Yes</code> joins trimmed curves and the chamfer line into a single polycurve.</p>
+</div>
+<ol>
+<li>Optional — pick a <strong>reference point</strong> to reposition the chamfer: click anywhere near the curves. The chamfer moves to the arc position where the chamfer line&#39;s midpoint is exactly <code>Length</code> units away from the click (toward the corner). Press <code>ClearPoint</code> to revert to the gap-based placement.</li>
+<li>Press Enter to apply.</li>
+</ol>
+<h3>Notes</h3>
+<ul>
+<li>Open-curve corner detection uses the closest endpoint pair. Closed-curve detection uses the G1 corner closest to the cursor and rebuilds the same object around the chamfer. Extension stubs (toward a virtual corner) are shown in the preview when <code>Trim=Yes</code> and the cut falls inside the extension zone.</li>
+<li>All options persist to <code>vTools.config.json</code> under <code>vChamfer</code>.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vcommandfailsound">
+<h1>vCommandFailSound</h1>
+<p class="command-description">The vCommandFailSound command configures and toggles an audible notification when a Rhino command ends with any result other than Success or Cancel.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Press Enter when configuration is complete.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Enabled</h5>
+<p>turns failure monitoring on or off and saves the state immediately.</p>
+</div>
+<div class="command-option">
+<h5>Sound</h5>
+<p>selects the system default, Asterisk, Exclamation, Hand, Question, or a custom audio file.</p>
+</div>
+<div class="command-option">
+<h5>AudioFile</h5>
+<p>opens a file picker and selects <code>Custom</code> automatically.</p>
+</div>
+<div class="command-option">
+<h5>Preview</h5>
+<p>plays the current choice without changing the watcher state.</p>
+</div>
+<p>While enabled, the selected sound plays whenever a Rhino command ends with any result other than <code>Success</code> or <code>Cancel</code>. Sound choices persist immediately in the shared <code>vTools.config.json</code>, and the watcher detaches automatically when the plug-in shuts down.</p>
+<p>Failure monitoring is enabled by default when the plug-in loads.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vcleanup">
+<h1>vCleanup</h1>
+<p class="command-description">The vCleanup command simplifies scoped curves, finds covered overlaps, and identifies or deletes protected short segments and control-point candidates.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect curves or add/remove individual curves at the command prompt. Press Enter with no curve selection to process every curve object in the document.</li>
+<li>Press Enter after selection to approve and run cleanup.</li>
+<li>Enabled processing runs in order: <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/simplifycrv.htm">SimplifyCrv</a>-compatible curve simplification, shared <a href="#voverlaps">vOverlaps</a> detection, then short segment and adjacent control-point analysis. Open-curve endpoints remain protected.</li>
+<li>Review the surviving highlighted, selected, or named-selection findings.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Threshold</h5>
+<p>maximum short-geometry length in model units; the default is <code>0.02</code>.</p>
+</div>
+<div class="command-option">
+<h5>HighlightShort</h5>
+<p>highlights surviving short findings in magenta and overlaps in cyan until the next <code>vCleanup</code> run.</p>
+</div>
+<div class="command-option">
+<h5>Preselect</h5>
+<p>selects surviving <code>Short</code>, <code>Overlaps</code>, <code>All</code>, or <code>No</code> findings after deletion.</p>
+</div>
+<div class="command-option">
+<h5>AutoDelete</h5>
+<p>deletes <code>Short</code>, <code>Overlaps</code>, <code>All</code>, or <code>No</code> findings. Any deleting mode runs <code>SimplifyCrv</code> once more afterward when simplification is enabled.</p>
+</div>
+<div class="command-option">
+<h5>SimplifyCrv</h5>
+<p>runs Rhino-compatible curve simplification before analysis and, when deleting findings, once more afterward.</p>
+</div>
+<div class="command-option">
+<h5>Overlaps</h5>
+<p>runs shared <a href="#voverlaps">vOverlaps</a> detection before the short-geometry scan.</p>
+</div>
+<div class="command-option">
+<h5>OverlapSegments</h5>
+<p>when <code>Yes</code> (the default), splits the chosen source of a partial overlap and selects or deletes only its exact overlapping piece; <code>No</code> targets the chosen whole source curve. This setting is shared with <code>vOverlaps</code>.</p>
+</div>
+<p>With <code>AutoDelete=No</code>, results are saved as the document named selections <code>vCleanup Short geometry</code> and <code>vCleanup Overlaps</code>. All settings persist.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vcurvetospline">
+<h1>vCurveToSpline</h1>
+<p class="command-description">The vCurveToSpline command converts selected curves to interpolated splines with join modes, smooth/kink control, and optional in-place replacement.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select source curves (preselect or postselect is supported). If all selected curves form one connected end-to-end chain they are automatically joined and treated as a single input.</li>
+<li>Confirm to create interpolated curve output and select results.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Join</h5>
+<p><code>None</code> creates one spline per selected curve; <code>Connected</code> creates one spline per connected curve island; <code>All</code> creates one spline through all selected curves.</p>
+</div>
+<div class="command-option">
+<h5>Smooth</h5>
+<p><code>Yes</code> blends all control points of a joined group into one smooth spline; <code>No</code> converts each segment to its own spline and joins them into a kink-preserving polycurve. It has no effect when <code>Join=None</code>.</p>
+</div>
+<div class="command-option">
+<h5>SmoothClose</h5>
+<p><code>Yes</code> makes closed outputs smooth; <code>No</code> closes with an explicit seam point and leaves a kink.</p>
+</div>
+<div class="command-option">
+<h5>ReplaceOriginal</h5>
+<p><code>Yes</code> deletes inputs after creating spline output; <code>No</code> keeps them.</p>
+</div>
+<p>Closed source curves and closed joined chains are created as closed splines.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vdiamonds">
+<h1>vDiamonds</h1>
+<p class="command-description">The vDiamonds command draws an argyle diamond pattern with optional bounding rectangle and size/count labels; supports BySize centering mode.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Width / Height</h5>
+<p>single-diamond cell width and height. Accept decimal, fraction (<code>3+1/8</code>), or type <code>heightxwidth</code> directly at the placement prompt (e.g. <code>2x3</code>).</p>
+</div>
+<div class="command-option">
+<h5>CountWidth / CountHeight</h5>
+<p>number of diamond cells across/tall; decimals allowed (<code>3.5</code> = 3 full + half cell).</p>
+</div>
+<div class="command-option">
+<h5>BySize</h5>
+<p>enter a target bounding box size as <code>widthxheight</code>. Diamonds are counted by <code>floor(box/cell)</code> and centered with equal margins. Does not change <code>CountWidth</code>/<code>CountHeight</code>. Enter <code>0</code> to revert to count mode.</p>
+</div>
+<div class="command-option">
+<h5>Boundary=Yes/No</h5>
+<p>show/hide the CUT1 bounding rectangle.</p>
+</div>
+<div class="command-option">
+<h5>Size=Yes/No</h5>
+<p>show/hide the size label (e.g. <code>2 x 2</code>), fitted to bbox width.</p>
+</div>
+<div class="command-option">
+<h5>Count=Yes/No</h5>
+<p>show/hide the count label (e.g. <code>(3 x 3)</code>), fitted to bbox width independently.</p>
+</div>
+<ol>
+<li>Current bounding box dimensions print to command history on every preview update.</li>
+<li>Pick the placement point to commit. All objects are grouped. Output layers: <code>PLOT</code> (diamond lines), <code>CUT1</code> (boundary rect), <code>Reference</code> (labels).</li>
+</ol>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vdir">
+<h1>vDir</h1>
+<p class="command-description">The vDir command flips one face, every face in a polysurface, or faces pointing opposite to a clicked reference face.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselected individual Brep, extrusion, or mesh faces flip immediately when <code>vDir</code> starts. Otherwise, hover a surface, polysurface, extrusion, mesh, or SubD face to preview the active operation, then click to apply it immediately. The hovered reference face is orange; additional faces affected by <code>FlipAll</code> or <code>SameDirection</code> are cyan.</li>
+<li>From <code>SingleFace</code>, Shift temporarily applies <code>FlipAll</code> and Ctrl applies <code>SameDirection</code>. From either multi-face mode, Shift temporarily applies <code>SingleFace</code>, while Ctrl applies the other multi-face mode. Ctrl takes precedence when both modifiers are held; the hover preview and cursor prompt update immediately when a modifier changes.</li>
+<li>Ctrl+Z and Ctrl+Y undo or redo one click while keeping <code>vDir</code> active. After the command ends, Rhino retains the same per-click undo records.</li>
+<li>The clicked geometry is not left selected. Continue clicking faces and press Enter or Esc when finished. Each click creates one object replacement and one undo record.</li>
+<li>Direction changes preserve shape, trims, attributes, groups, and object placement. An extrusion becomes its equivalent Brep when an individual face direction is changed because Rhino does not store independent extrusion-face orientation.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>SingleFace</h5>
+<p>flips only the clicked Brep, extrusion, or mesh face. Rhino does not support independently reversing one SubD face.</p>
+</div>
+<div class="command-option">
+<h5>FlipAll</h5>
+<p>reverses every face in a surface, polysurface, extrusion, or mesh, and reverses the complete SubD through Rhino&#39;s native whole-SubD orientation operation.</p>
+</div>
+<div class="command-option">
+<h5>SameDirection</h5>
+<p>keeps the clicked face as the reference and propagates coherent orientation across shared Brep or mesh edges, reversing only connected faces that disagree. SubD face orientation is inherently unified already.</p>
+</div>
+<p>The active mode persists and supports direct command-line macros such as <code>_-vDir _FlipAll</code>.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vdupborder">
+<h1>vDupBorder</h1>
+<p class="command-description">The vDupBorder command duplicates whole-object or selected-face borders onto a chosen layer while carrying source groups, with optional source removal and grouping for ungrouped inputs.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect or select open surfaces, polysurfaces, meshes, SubDs, hatches, or individual Brep/mesh/SubD faces. Group selection is disabled so sources are chosen individually.</li>
+<li>The command duplicates each whole-object border; selected Brep faces produce individual face borders, while selected mesh or SubD face sets produce their combined outer boundary.</li>
+<li>Existing source groups are always applied to every resulting curve.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>GroupIfNone</h5>
+<p>when <code>Yes</code>, an ungrouped source and all curves created from it are placed into a new group.</p>
+</div>
+<div class="command-option">
+<h5>RemoveSource</h5>
+<p>deletes each source only after its border curves were created successfully.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>uses the shared searchable picker. <code>*Current*</code> follows the current document layer; a named choice persists by full path. <code>-vDupBorder</code> accepts the layer directly.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vdupedge">
+<h1>vDupEdge</h1>
+<p class="command-description">The vDupEdge command duplicates selected Brep, mesh, extrusion, or SubD edges onto a chosen layer while carrying source groups and optionally grouping ungrouped inputs.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect or select Brep, extrusion, mesh, or SubD edge subobjects. Normal Rhino multi-edge and double-click chain selection remains available.</li>
+<li>Each duplicated curve inherits every group assigned to its source object.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>GroupIfNone</h5>
+<p>when <code>Yes</code>, an ungrouped source and all edges duplicated from it are placed into a new group.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>uses the shared searchable picker. <code>*Current*</code> follows the current document layer; a named choice persists by full path. <code>-vDupEdge</code> accepts the layer directly.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vfacing">
+<h1>vFacing</h1>
+<p class="command-description">The vFacing command builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select the facing curves (base + two sides). Multiple curves per role are supported. An optional chamfer piece may also be included.</li>
+</ol>
+<p>Role assignment rules:</p>
+<ul>
+<li>Curves are grouped by layer; each layer group is treated as one role (base, side 1, side 2).</li>
+<li>If all curves share the same layer: exactly 3 curves — roles are auto-detected by topology; more than 3 — the command prompts you to click the two side curves.</li>
+<li>A single closed curve — the command splits it at corners (≥30&#176;), highlights the pieces, and prompts you to click the base edge.</li>
+<li>Four layer groups — the group that shares an endpoint with only one other group is identified as the chamfer piece and merged into the adjacent side.</li>
+</ul>
+<ol start="2">
+<li>The command builds the four-piece boundary: base, offset front (at <code>Size</code> distance inward), and two trimmed side segments. All visible objects inside the closed boundary are collected automatically.</li>
+<li>A DynamicDraw preview follows the cursor. Pick the placement point to commit.</li>
+<li>All output objects are placed as new geometry at the picked location and added to a single Rhino group. Originals are not deleted.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Size</h5>
+<p>offset distance from the base curve to the inner facing edge. Persists to <code>vTools.config.json</code> under <code>vFacing</code>.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vfilterexec">
+<h1>vFilterExec</h1>
+<p class="command-description">The vFilterExec command runs a command with a temporary selection filter and restores the previous filter afterward.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Enter the command to execute.</li>
+<li>Choose one filter or enter a comma-separated combination.</li>
+<li>The command runs with that filter, then the previous selection filter is restored.</li>
+<li><code>vFilterExec</code> is transparent and remains Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/repeat.htm">Repeat</a> command after the delegated command ends.</li>
+</ol>
+<p>Filters: <code>All</code>, <code>Points</code>, <code>PointClouds</code>, <code>Curves</code>, <code>Surfaces</code>, <code>Polysurfaces</code>, <code>Meshes</code>, <code>SubDs</code>, <code>Extrusions</code>, <code>Annotations</code>, <code>Hatches</code>, <code>Blocks</code>, <code>Lights</code>, <code>Grips</code>, <code>Edges</code>, <code>Faces</code>, and <code>Vertices</code>. Singular forms and aliases such as <code>Text</code>, <code>Dimensions</code>, <code>ControlPoints</code>, and <code>Instances</code> are accepted. Combine filters with <code>,</code>, <code>+</code>, <code>|</code>, or <code>;</code>.</p>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vfitbox">
+<h1>vFitBox</h1>
+<p class="command-description">The vFitBox command finds the minimum bounding box for selected objects by optimizing rotation angle.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select objects to fit.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>AngleStep</h5>
+<p>sampling step in degrees and accepts direct numeric input during object picking.</p>
+</div>
+<div class="command-option">
+<h5>Rotate</h5>
+<p>applies final rotation to both fit box and selected objects, keeps the longest in-plane side horizontal, and prefers the equivalent orientation that avoids unnecessary 180-degree flips.</p>
+</div>
+<div class="command-option">
+<h5>Fit</h5>
+<p>optimize by <code>Height</code> or <code>Area</code>.</p>
+</div>
+<ol>
+<li>Confirm selection to generate the fit result.</li>
+</ol>
+<ul>
+<li>Flat fits create a closed polyline and report two footprint dimensions.</li>
+<li>Non-flat fits create a polysurface and report <code>3D: width x depth x height</code>.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vfps">
+<h1>vFPS</h1>
+<p class="command-description">The vFPS command toggles a per-viewport FPS overlay measured from short active-view rendering samples.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>The command toggles the viewport FPS overlay (<code>ON</code>/<code>OFF</code>).</li>
+<li>Each viewport keeps its own rolling frame-rate measurement, displayed as a rounded integer in a fixed three-digit field.</li>
+<li>While a mouse button is held, the active viewport is sampled continuously so very slow pan, orbit, or zoom movement still reports rendering throughput. No redraws are forced while the mouse is idle; naturally frequent redraw sequences can still update the measurement.</li>
+<li>The enabled state is saved immediately in <code>vTools.config.json</code> and restored when the plugin loads.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vgroup">
+<h1>vGroup</h1>
+<p class="command-description">The vGroup command groups selected objects by closed curve, surface, polysurface, or face boundaries; each boundary is grouped with the objects inside it.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select objects to group — include boundary curves, surfaces, polysurfaces, or individual faces together with any objects to be placed inside groups.</li>
+<li>Touching selected faces are joined into one boundary patch. Their shared edges are omitted and only the patch&#39;s naked perimeter contributes to boundary detection.</li>
+<li>The command finds all closed polygon boundaries formed by the selected curves and generated face perimeters:</li>
+</ol>
+<ul>
+<li>All curves are split at their mutual intersection points.</li>
+<li>Segments with dead-end endpoints (degree-1 nodes) are iteratively removed until only closed-cycle core segments remain.</li>
+<li>Surviving segments are joined into closed planar boundaries.</li>
+</ul>
+<ol start="4">
+<li>For each closed boundary, all selected objects whose representative point falls inside it are collected. Original curves that defined the boundary (e.g. crossing lines whose midpoint lies outside the inner polygon) are included via source-curve tracking.</li>
+<li>Each boundary and its interior objects are added to a Rhino group (minimum 2 members required).</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vgroupsmanager">
+<h1>vGroupsManager</h1>
+<p class="command-description">The vGroupsManager command manages document groups in a modeless sortable tree with actual text values, selection-distinct highlighting, optional automatic selection, membership editing, renaming, ungrouping, and empty-group cleanup.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>A modeless tree opens with every document group and its current object count. The Rhino document remains interactive while the window is open. Expand a group to list each member using vObjectPropertiesPlus terminology; text objects show their actual text value instead of <code>Annotation</code>. Changing the Rhino document selection selects a complete group row when all of its members are selected; partial group selections use the matching object rows and expand their groups. Tree selection remains strongly visible with a slightly less saturated version of the active color while focus is in Rhino.</li>
+<li>Click either column header to sort groups by name or object count. Select one group and click <code>Rename</code>, or double-click its row.</li>
+<li>Select any mix of group and individual-object rows with standard Ctrl/Shift selection. Their object union receives a cyan outlined temporary highlight that remains distinct from Rhino&#39;s yellow selected-object display.</li>
+<li>Click <code>Select</code> to replace the document selection with the highlighted union. The unlabeled checkbox at the front of the button performs that selection whenever tree selection changes, is accessible even when no tree row is highlighted, is disabled by default, and persists immediately. Disabling it clears objects selected automatically while preserving unrelated manual selection. Closing the manager clears only its temporary highlights and leaves the document selection unchanged.</li>
+<li><code>Add</code> adds the currently selected Rhino objects to the groups represented by highlighted tree rows, expands the destination, and scrolls the first new member into view. <code>Remove</code> removes highlighted member rows directly; for highlighted group rows it removes the currently selected Rhino objects from those groups. When removed rows disappear, the nearest surviving row becomes selected. Each action creates one Rhino undo record.</li>
+<li><code>Ungroup</code> dissolves the selected group rows, <code>Ungroup Singles</code> dissolves every one-object group, and <code>Purge Empty</code> deletes every empty group. Each action creates one Rhino undo record and refreshes the tree while preserving its sort and expanded groups.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="visolate">
+<h1>vIsolate</h1>
+<p class="command-description">The vIsolate command keeps selected objects visible while hiding every other visible normal object, optionally in a named Rhino hide set.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect objects to keep visible, or run <code>vIsolate</code> and select them. Prompted selection includes whole groups and excludes subobjects; a direct set name such as <code>vIsolate &quot;A&quot;</code> can be supplied before selecting objects.</li>
+<li>Enter an optional Rhino hide-set name, or press Enter for no named set.</li>
+<li>Every other visible, unlocked normal object is hidden natively and the isolated objects remain selected. Named isolation records active set membership; blank input clears any prior membership and uses Rhino&#39;s ordinary unnamed hide behavior, matching Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm">Isolate</a>.</li>
+<li><code>vIsolate</code> is transparent and can run without cancelling the command already in progress. When nested inside another command, it restores the selection that existed before isolation.</li>
+<li>The packaged <code>vTools</code> toolbar and tab contain a blue/grey <code>vIsolate / vShow</code> flyout linked to the <code>vIsolate</code> toolbar. That toolbar contains the general <code>vIsolate / vShow</code> button, named <code>vIsolate A</code> through <code>vIsolate E</code> buttons, and the combined built-in <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm">Isolate</a> / <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/show.htm">Show</a> button. Named buttons isolate into the matching set on left-click and use transparent <a href="#vshow">vShow</a> to restore that set on right-click; the built-in button uses <code>!_Isolate</code> and <code>!_Show</code>.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vjoin">
+<h1>vJoin</h1>
+<p class="command-description">The vJoin command joins selected objects, optionally joining copies while preserving the originals.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect at least two joinable objects, or run <code>vJoin</code> and select curves, surfaces, polysurfaces, extrusions, meshes, or SubDs.</li>
+<li>Press Enter to confirm a preselection. <code>vJoin</code> can run transparently inside another command.</li>
+<li>On success, the command reports the input and output geometry counts and types, plus whether originals or copies were joined.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Copy</h5>
+<p><code>No</code> joins the selected originals; <code>Yes</code> joins in-place copies and preserves the originals.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p><code>Source</code> inherits the first compatible input object&#39;s layer; <code>Current</code> places joined output on Rhino&#39;s current layer.</p>
+</div>
+<p>Both settings persist immediately.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vline">
+<h1>vLine</h1>
+<p class="command-description">The vLine command draws lines with chain modes, native construction modes at either endpoint, automatic angle constraint, and length constraints.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Pick the start point.</li>
+</ol>
+<p class="Dialog_Box_Title">Start point options</p>
+<div class="command-option">
+<h5>Mode</h5>
+<p>chain behavior for subsequent segments.</p>
+</div>
+<div class="command-option">
+<h5>Single</h5>
+<p>create one segment and finish.</p>
+</div>
+<div class="command-option">
+<h5>Multiple</h5>
+<p>after each segment, pick a fresh start point.</p>
+</div>
+<div class="command-option">
+<h5>Chained</h5>
+<p>each next segment starts at the previous end point.</p>
+</div>
+<div class="command-option">
+<h5>Polyline</h5>
+<p>build/update one polyline as you add vertices.</p>
+</div>
+<div class="command-option">
+<h5>BothSides</h5>
+<p>creates a symmetric line centered on the picked start point.</p>
+</div>
+<div class="command-option">
+<h5>Normal</h5>
+<p>starts on a selected curve or surface and follows its normal.</p>
+</div>
+<div class="command-option">
+<h5>Angled</h5>
+<p>defines a reference direction and rotates it by the entered CPlane angle.</p>
+</div>
+<div class="command-option">
+<h5>Vertical</h5>
+<p>starts a line constrained to the active CPlane Z-axis.</p>
+</div>
+<div class="command-option">
+<h5>FourPoint</h5>
+<p>defines the direction with two points, then picks the line start.</p>
+</div>
+<div class="command-option">
+<h5>Bisector</h5>
+<p>starts at an angle vertex and follows the bisector of two picked sides.</p>
+</div>
+<div class="command-option">
+<h5>Extension</h5>
+<p>starts at the selected end of a curve and follows its tangent.</p>
+</div>
+<div class="command-option">
+<h5>Parallel</h5>
+<p>defines the direction with two points, then picks the line start.</p>
+</div>
+<div class="command-option">
+<h5>Perpendicular and Tangent</h5>
+<p>pick the first curve, keep it feedback-highlighted without selecting it, and defer the exact start point until the end constraint is known.</p>
+</div>
+<div class="command-option">
+<h5>BiTangent</h5>
+<p>hover-clicks two curves and previews the candidate tangent line while hovering the second curve.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>opens the shared searchable layer selector with <code>*Current*</code> as the first item. Choosing <code>*Current*</code> follows the document&#39;s current layer dynamically; choosing another layer stores its full path. <code>-vLine</code> accepts the layer name or full path directly instead. The choice persists. If Rhino&#39;s current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.</p>
+</div>
+<ul>
+<li>Reference geometry is display-highlighted without changing Rhino object or subobject selection; existing preselection is preserved.</li>
+</ul>
+<ol start="2">
+<li>Pick the end point.</li>
+</ol>
+<p class="Dialog_Box_Title">End point options</p>
+<div class="command-option">
+<h5>Normal, Angled, Vertical, FourPoint, Bisector, Perpendicular, Tangent, Extension, and Parallel</h5>
+<p>remain available where compatible with the start definition; incompatible constructions and controls are hidden. <code>Vertical</code> constrains the endpoint along the active CPlane Z-axis. A direction-defining mode is offered once per line. Endpoint constraints such as <code>Perpendicular</code>, <code>Tangent</code>, and <code>ProjectTo</code> preserve an existing start direction such as <code>Extension</code> and solve only where both constraints are geometrically compatible.</p>
+</div>
+<ul>
+<li><code>Extension</code> continues outward when the selected curve already ends at the current chained start; otherwise it uses the selected curve end as the target anchor.</li>
+<li>When a constraint pair has multiple valid positions, the branch nearest the first curve click remains stable; the endpoint click chooses among solutions on that branch.</li>
+<li>Curve-constrained previews show a short white tangent bar and center point at each solved endpoint.</li>
+</ul>
+<div class="command-option">
+<h5>Perpendicular</h5>
+<p>solve against the hovered curve and use the valid perpendicular point nearest the cursor.</p>
+</div>
+<div class="command-option">
+<h5>Tangent</h5>
+<p>solve against the hovered curve and use the valid tangent point nearest the cursor.</p>
+</div>
+<div class="command-option">
+<h5>PerpNear</h5>
+<p>solve perpendicular against the nearest curve or surface/polysurface edge.</p>
+</div>
+<div class="command-option">
+<h5>TanNear</h5>
+<p>solve against the nearest curve or surface/polysurface edge and use the valid tangent point nearest the cursor.</p>
+</div>
+<div class="command-option">
+<h5>Auto</h5>
+<p>choose perpendicular/tangent solution using <code>Priority</code>.</p>
+</div>
+<div class="command-option">
+<h5>FromPoint</h5>
+<p>for a perpendicular-from-curve start, picks and locks an exact starting point on the source curve; run it again to change that point.</p>
+</div>
+<div class="command-option">
+<h5>FromFirstPoint</h5>
+<p>for a perpendicular- or tangent-from-curve start, locks the start to the initially clicked point instead of allowing the solver to move it along the first curve.</p>
+</div>
+<div class="command-option">
+<h5>ProjectTo</h5>
+<p>picks a curve, surface, polysurface, or mesh and constrains the endpoint to its nearest projected point.</p>
+</div>
+<div class="command-option">
+<h5>Priority</h5>
+<p>auto-mode choice policy.</p>
+</div>
+<div class="command-option">
+<h5>Closest</h5>
+<p>whichever solution is closer to cursor.</p>
+</div>
+<div class="command-option">
+<h5>PerpFirst</h5>
+<p>prefer perpendicular when available.</p>
+</div>
+<div class="command-option">
+<h5>TanFirst</h5>
+<p>prefer tangent when available.</p>
+</div>
+<div class="command-option">
+<h5>KeepCurrent</h5>
+<p>keep previous auto choice when possible.</p>
+</div>
+<div class="command-option">
+<h5>PersistConstraint</h5>
+<p>keeps current constraint mode (<code>Perp</code>/<code>Tangent</code>/etc.) for following segments.</p>
+</div>
+<div class="command-option">
+<h5>Length</h5>
+<p>forces segment length from start point. Not persistent across sessions.</p>
+</div>
+<div class="command-option">
+<h5>Angle</h5>
+<p>angle value; setting this automatically activates the angle constraint for the current invocation. Not persistent across sessions.</p>
+</div>
+<div class="command-option">
+<h5>AngleRef</h5>
+<p><code>Absolute</code> uses CPlane X-axis; <code>Relative</code> uses previous segment direction.</p>
+</div>
+<div class="command-option">
+<h5>Mode, BothSides, and Layer</h5>
+<p>also available while placing the end point.</p>
+</div>
+<ul>
+<li>Direct numerical input sets the segment length without leaving the active construction mode.</li>
+<li>A hidden target layer is reported at the cursor and command line; the line is still created on that layer.</li>
+</ul>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vlinelength">
+<h1>vLineLength</h1>
+<p class="command-description">The vLineLength command resizes an open curve to a target total, additive, or subtractive length.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Click an open curve near the end you want to drive.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Length</h5>
+<p>target value used by current mode.</p>
+</div>
+<div class="command-option">
+<h5>ExtendMode</h5>
+<p>extension style when target requires growth.</p>
+</div>
+<div class="command-option">
+<h5>Smooth</h5>
+<p>smooth extension.</p>
+</div>
+<div class="command-option">
+<h5>Line</h5>
+<p>straight-line extension.</p>
+</div>
+<div class="command-option">
+<h5>Mode</h5>
+<p>how <code>Length</code> is interpreted.</p>
+</div>
+<div class="command-option">
+<h5>Total</h5>
+<p>resulting full curve length.</p>
+</div>
+<div class="command-option">
+<h5>Add</h5>
+<p>add value to current length.</p>
+</div>
+<div class="command-option">
+<h5>Subtract</h5>
+<p>subtract value from current length.</p>
+</div>
+<p>Hidden keywords while editing:</p>
+<ul>
+<li><code>total</code>, <code>add</code>, <code>subtract</code>: set mode directly.</li>
+<li><code>add/subtract</code>: toggle between add and subtract.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vmatch">
+<h1>vMatch</h1>
+<p class="command-description">The vMatch command click near an edge-mate dot produced by <a href="#vunrollsrf">vUnrollSrf</a> or <a href="#vunrollsrfuv">vUnrollSrfUV</a> to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Click near an <strong>edge-mate dot</strong> (placed by <a href="#vunrollsrf">vUnrollSrf</a> or <a href="#vunrollsrfuv">vUnrollSrfUV</a>) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance, with the parts placed on opposite sides of the matched edges to avoid overlap. Auto assembly retains each transformed part&#39;s live dot positions and orientation while traversing the remaining matches.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Distance</h5>
+<p>gap between matched edges.</p>
+</div>
+<div class="command-option">
+<h5>Auto</h5>
+<p><code>Yes</code> assembles all selected parts via BFS (Breadth-First Search) starting from a single clicked dot; <code>No</code> does one match per click.</p>
+</div>
+<div class="command-option">
+<h5>RandStart *(Auto only)*</h5>
+<p>randomise the BFS start part.</p>
+</div>
+<div class="command-option">
+<h5>RandNext *(Auto only)*</h5>
+<p>randomise the order of BFS neighbours.</p>
+</div>
+<p>Options persist to <code>vTools.config.json</code> under <code>vMatch</code>.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vmiddlecurve">
+<h1>vMiddleCurve</h1>
+<p class="command-description">The vMiddleCurve command creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select exactly 2 curves (preselect supported — press Enter to confirm).</li>
+<li>The command aligns curve directions and seams automatically, then creates an interpolated curve equidistant between the two inputs.</li>
+<li>Sample density is chosen adaptively and refined until the middle curve error is within tolerance.</li>
+<li>If both input curves belong to the same Rhino group, the new middle curve (and any connector lines) is added to that group.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vmirror">
+<h1>vMirror</h1>
+<p class="command-description">The vMirror command mirrors selected objects across two-point, three-point, CPlane-axis, or planar-object planes, with persistent copying and text-flipping options.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect objects or run <code>vMirror</code>, select the objects to mirror, and press Enter. Rhino groups are expanded so every grouped member participates.</li>
+<li>Pick the start of the mirror axis in the active CPlane, or choose a plane/directional option that defines the mirror immediately.</li>
+<li>For a picked axis, pick its end while the mirrored result previews. The final preview remains visible until Rhino finishes the mirror and text post-processing, then the mirrored objects are selected.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>3Point</h5>
+<p>define a three-dimensional mirror plane with three points; a live rectangle displays the picked plane.</p>
+</div>
+<div class="command-option">
+<h5>XAxis / YAxis / ZAxis</h5>
+<p>use the corresponding active-CPlane axis or plane through the CPlane origin.</p>
+</div>
+<div class="command-option">
+<h5>Object</h5>
+<p>use a selected planar surface or polysurface face as the mirror plane.</p>
+</div>
+<div class="command-option">
+<h5>Horizontal / Vertical</h5>
+<p>immediately mirror in place across the corresponding active-CPlane axis through the selected objects&#39; bounding-box center.</p>
+</div>
+<div class="command-option">
+<h5>Left / Right / Top / Bottom</h5>
+<p>mirror directly to that side of the selection in the active CPlane.</p>
+</div>
+<div class="command-option">
+<h5>Distance</h5>
+<p>gap between the original and directional mirrored bounding boxes for <code>Left</code>, <code>Right</code>, <code>Top</code>, and <code>Bottom</code>.</p>
+</div>
+<div class="command-option">
+<h5>Copy</h5>
+<p><code>Yes</code> preserves the source objects; <code>No</code> mirrors the originals.</p>
+</div>
+<div class="command-option">
+<h5>FlipText</h5>
+<p>keeps mirrored annotations readable while preserving geometry and placement. Ordinary text and leaders follow their mirrored in-plane frame. Dimensions using Rhino&#39;s <code>Horizontal</code> text-angle mode retain their native mirrored position and angle while being corrected to read right-side-up; aligned dimension text follows its mirrored annotation frame.</p>
+</div>
+<div class="command-option">
+<h5>SwapText</h5>
+<p>applies the configured bidirectional replacements to mirrored vTitle text.</p>
+</div>
+<div class="command-option">
+<h5>EditTextReplacements</h5>
+<p>opens the persistent replacement-rule editor used by <code>SwapText</code>.</p>
+</div>
+<p><code>Copy</code>, <code>FlipText</code>, <code>SwapText</code>, <code>Distance</code>, and replacement rules persist between runs.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vnotches">
+<h1>vNotches</h1>
+<p class="command-description">The vNotches command places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions.</li>
+<li>A floating <strong>Notches</strong> panel opens. Click positions along the curve(s) to place notches.</li>
+<li>Use the disclosure chevron in each group header to collapse or restore the Notch, Multiple, and Label settings.</li>
+<li>Numeric controls and readouts display at most three decimal places without unnecessary trailing zeroes.</li>
+</ol>
+<p class="Dialog_Box_Title">Notch group options</p>
+<ul>
+<li>The <code>Notch</code> header checkbox controls notch geometry output. Notch and Label can both be enabled, but the command keeps at least one enabled.</li>
+</ul>
+<div class="command-option">
+<h5>Type</h5>
+<p>five checkbox-sized vector buttons select <code>I</code>, <code>V</code>, open <code>\/</code>, flat-capped <code>U</code>, or upside-down <code>T</code>, in that order. The icons and active highlight update from the current Width and Length values.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>target layer for notch geometry, using the same packed-ARGB swatches as vObjectPropertiesPlus.</p>
+</div>
+<div class="command-option">
+<h5>Length, Width, and Offset</h5>
+<p>compact numeric steppers; width controls <code>V</code>, <code>\/</code>, and <code>U</code> arm separation and the <code>T</code> crossbar.</p>
+</div>
+<ul>
+<li>Created notch curves are named <code>NOTCH</code> and carry <code>notches.db.*</code> user-string attributes describing their source curve, placement, dimensions, side, label settings, and layers. The disconnected <code>\/</code> legs and branched <code>T</code> stem/crossbar are grouped component curves tracked as one notch.</li>
+</ul>
+<p class="Dialog_Box_Title">Label group options</p>
+<ul>
+<li>The <code>Label</code> header checkbox controls label output. The remaining label settings stay editable whether output is enabled or not.</li>
+<li>Value text box: the label string placed at the notch.</li>
+</ul>
+<div class="command-option">
+<h5>AutoAdv</h5>
+<p>when enabled, increments a trailing numeric suffix after each placement.</p>
+</div>
+<div class="command-option">
+<h5>FlipSide</h5>
+<p>mirrors the label to the opposite side of the curve.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>target layer for label text, using the same packed-ARGB swatches as vObjectPropertiesPlus.</p>
+</div>
+<div class="command-option">
+<h5>Size</h5>
+<p>manual label text height. <code>Auto</code> computes height proportionally from notch geometry; the adjacent percentage stepper scales the auto-computed height. When <code>Auto</code> is checked the manual size field is disabled; when unchecked the percentage stepper is disabled.</p>
+</div>
+<div class="command-option">
+<h5>Offset X / Offset Y</h5>
+<p>numeric steppers for label position relative to the notch point (along-curve and across-curve).</p>
+</div>
+<p class="Dialog_Box_Title">Multiple group options</p>
+<div class="command-option">
+<h5>Start offset / End offset</h5>
+<p>numeric steppers for the distances from each curve&#39;s respective ends to the first and last notch.</p>
+</div>
+<div class="command-option">
+<h5>Auto</h5>
+<p>uses curvature-aware spacing. Every enabled curve contributes to one shared curvature envelope, so turns occurring at different positions on different curves all add density at their corresponding stations. Curve kinks are preferred station candidates, use the middle kink orientation, and replace nearby regular stations. The adjacent unlabeled integer control sets sensitivity in fine whole-number steps: zero produces uniform maximum-distance spacing, while larger values make tangent changes reduce spacing more strongly. <code>Distance</code> becomes the maximum gap, and one sampled turn transition cannot create clustered duplicate stations. Unchecking Auto restores the Number or Distance mode that was selected before Auto and immediately recalculates the inactive companion value.</p>
+</div>
+<div class="command-option">
+<h5>Number</h5>
+<p>numeric stepper for the total number of notches; minimum is 1. When <code>Number=1</code> a single notch is placed at the start offset position only.</p>
+</div>
+<div class="command-option">
+<h5>Distance</h5>
+<p>editable numeric stepper with a <code>1.0</code> button increment. Changing <code>Number</code> evenly distributes the fixed start/end span. In regular Distance mode it is the minimum repeated spacing; in Auto mode it is the maximum allowed spacing. Absolute stations use the shortest enabled curve as their distance base while curvature contributions remain combined from every enabled curve.</p>
+</div>
+<div class="command-option">
+<h5>Add</h5>
+<p>creates the previewed notch batch. Notches already added to the current curve selection reserve their locations, so proposed stations closer than the active local spacing are omitted per curve while missing companion-curve stations remain available. Its inset <code>Separate</code> checkbox applies Number, Distance, or Auto spacing independently to every physical segment in a linked sequence, then maps the expanded station count across companion curves. For example, <code>Number=3</code> on a linked pair creates three notches per segment and six on an accompanying single curve. When labels are enabled, only the first new station receives the label and auto-advance runs once.</p>
+</div>
+<p class="Dialog_Box_Title">Other panel controls options</p>
+<div class="command-option">
+<h5>Percent</h5>
+<p>display and place by relative curve position. When disabled, the control is highlighted if selected sequence lengths differ by more than 1/16 inch.</p>
+</div>
+<div class="command-option">
+<h5>Group</h5>
+<p>group each enabled notch and label output.</p>
+</div>
+<div class="command-option">
+<h5>Select</h5>
+<p>return to individual-curve selection without selecting groups or ending the command. Its inset checkbox defaults unchecked: unchecked selection replaces the current curve set; checked selection keeps the current curves so others can be added or removed. The setting is saved immediately. Existing placed notches remain in the document. Replacement curves inherit Side by sequence, retained curves preserve their source-specific Side and oriented start, and explicitly clicking another end intentionally defines a new start.</p>
+</div>
+<ul>
+<li>Per-curve row — use the grip at the left to drag and reorder curves. The stable, optically centered curve number appears before its enable checkbox and highlights when the row or corresponding viewport curve is hovered. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. The enlarged up/down Side and dynamic single-arrow Reverse controls retain compact click areas and show borderless hover and pressed feedback. Use the borderless link button between rows to join or separate placement sequences. The centered length badges use equal compact padding and <code>999.999</code> only as their minimum-width sample for individual and combined linked lengths; cumulative values include a clipping allowance, and larger values remain fully displayable in the scrollable row. The longest and shortest sequences also show transparent-background green <code>(+difference)</code> and red <code>(-difference)</code> superscripts after the applicable length.</li>
+<li>Distance info: <strong>From start</strong>, <strong>From end</strong>, <strong>From previous</strong> show arc-length values rounded to three decimal places.</li>
+<li><strong>Undo</strong> / <strong>Redo</strong> buttons: step backward or forward through placements.</li>
+</ul>
+<ol start="5">
+<li>Created notch components are named <code>Notch</code>; created text objects are named <code>NotchLabel</code> and carry the same source, placement, geometry, layer, tangent, and label metadata as their matching notch, plus label and paired-notch identifiers.</li>
+<li>Notch, label, multiple-placement, layer, Percent, and Group settings are saved in the Rhino document and override global settings when that document is reopened. Window and selection preferences remain global.</li>
+<li>Press Enter to finish and keep all placed notches. Press Esc to cancel and remove them.</li>
+</ol>
+<p>The floating panel adds scrollbars when resized below its content size.</p>
+<p>Options persist to <code>vTools.config.json</code> under the <code>vNotches</code> section.</p>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="voffset">
+<h1>vOffset</h1>
+<p class="command-description">The vOffset command runs built-in <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/offset.htm"><code>Offset</code></a> continuously and can trim or extend new offsets to curves touching the source endpoints.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select one source curve, or preselect it before starting the command.</li>
+<li>Pick the offset side while previewing the final result.</li>
+<li>The selected curve and settings are passed to Rhino&#39;s built-in <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/offset.htm">Offset</a> command when the side is accepted.</li>
+<li>After each completed offset, selection is cleared and <code>vOffset</code> starts again automatically.</li>
+<li>Press Escape to exit the loop.</li>
+<li>Press Enter to repeat <code>vOffset</code> for a new loop.</li>
+</ol>
+<p class="Dialog_Box_Title">available during source and side selection options</p>
+<div class="command-option">
+<h5>Distance</h5>
+<p>fixed offset distance when <code>ThroughPoint=No</code>.</p>
+</div>
+<div class="command-option">
+<h5>Loose</h5>
+<p>passes Rhino&#39;s loose offset mode through to the final offset.</p>
+</div>
+<div class="command-option">
+<h5>Corner</h5>
+<p>selects <code>None</code>, <code>Sharp</code>, <code>Round</code>, <code>Smooth</code>, or <code>Chamfer</code> corner handling.</p>
+</div>
+<div class="command-option">
+<h5>ThroughPoint</h5>
+<p>uses the picked side point to determine offset distance instead of <code>Distance</code>.</p>
+</div>
+<div class="command-option">
+<h5>Trim</h5>
+<p>previews and commits the trimmed Rhino offset when enabled.</p>
+</div>
+<div class="command-option">
+<h5>Tolerance</h5>
+<p>calculation tolerance in model units.</p>
+</div>
+<div class="command-option">
+<h5>BothSides</h5>
+<p>previews and creates offsets on both sides of the source.</p>
+</div>
+<div class="command-option">
+<h5>InCPlane</h5>
+<p>offsets in the active CPlane when enabled; otherwise uses the curve plane.</p>
+</div>
+<div class="command-option">
+<h5>Cap</h5>
+<p>selects <code>None</code>, <code>Flat</code>, or <code>Round</code> end caps.</p>
+</div>
+<div class="command-option">
+<h5>OutputLayer</h5>
+<p><code>Current</code> uses Rhino&#39;s current layer; <code>Input</code> uses the source curve layer.</p>
+</div>
+<div class="command-option">
+<h5>Group</h5>
+<p><code>Auto</code> adds output to the source groups or creates a source/output group when ungrouped; <code>Yes</code> creates a separate group containing only that source and its outputs; <code>No</code> leaves grouping unchanged.</p>
+</div>
+<div class="command-option">
+<h5>AutoTrim</h5>
+<p>checks each open source endpoint independently. When the endpoint touches another curve, the new offset is trimmed if it crosses that curve, left unchanged if already touching, or extended when it falls short.</p>
+</div>
+<p>The options retain native order so existing hotkeys remain stable. <code>Group</code>, <code>AutoTrim</code>, and the other command settings persist; group changes share the offset undo record.</p>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vorient2pt">
+<h1>vOrient2pt</h1>
+<p class="command-description">The vOrient2pt command orients objects from a source two-point frame to a target two-point frame.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select objects to orient.</li>
+<li>Pick source first point.</li>
+<li>Pick target first point.</li>
+<li>Pick source second point.</li>
+<li>Pick target second point.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Copy</h5>
+<p>creates an oriented copy when enabled; otherwise transforms the selected originals.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vorient3pt">
+<h1>vOrient3pt</h1>
+<p class="command-description">The vOrient3pt command orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient).</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select objects to orient.</li>
+<li>Pick source first point.</li>
+<li>Pick target first point.</li>
+<li>Pick source second point, or press Enter for 1-point orient (translation only).</li>
+<li>Pick target second point, or press Enter to use source second point.</li>
+<li>Pick source third point, or press Enter for 2-point orient.</li>
+<li>Pick target third point, or press Enter to use source third point.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Copy</h5>
+<p>creates an oriented copy when enabled; otherwise transforms the selected originals.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="voverlaps">
+<h1>vOverlaps</h1>
+<p class="command-description">The vOverlaps command selects covered or partially overlapping curves and highlights coincident edge intervals belonging to overlapping surface or polysurface faces.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Optionally preselect curves, surfaces, polysurfaces, or individual face subobjects; if none, press Enter at the prompt to scan all visible curves and Brep faces in the document.</li>
+<li>Press Enter to run: covered, duplicate, and partially overlapping curves are selected, while only coincident edge intervals belonging to overlapping face pairs receive the shared cyan-and-black overlap highlight.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Tolerance</h5>
+<p>proximity threshold used for overlap detection; the default is <code>0.001</code> model units.</p>
+</div>
+<div class="command-option">
+<h5>OverlapSegments</h5>
+<p>splits partial findings and selects only their exact overlapping pieces when enabled; the default is <code>Yes</code>. Disable it to select the chosen whole source curve instead.</p>
+</div>
+<p>Behavior:</p>
+<ul>
+<li><strong>Same-path duplicates</strong>: both curves follow the same path and have the same length. The oldest (lowest runtime serial number) is kept unselected as the original; all others are selected.</li>
+<li><strong>Covered curves</strong>: a shorter curve lies entirely on top of a longer one. The shorter (covered) curve is selected.</li>
+<li><strong>Partial curve overlaps</strong>: curves share a length-bearing interval but neither fully covers the other. The source with fewer endpoints connected to other visible document curves is chosen, even when only the overlapping pair was selected for analysis; equal endpoint connectivity chooses the newer Rhino object. With <code>OverlapSegments=Yes</code>, that source is partitioned at the exact overlap boundaries and only the overlapping piece is selected or deleted; its original ID remains on the longest non-overlapping remainder, and all pieces retain the source attributes and groups.</li>
+<li><strong>Compound curves</strong>: polycurve and polyline components are compared automatically; there is no separate detection mode to configure.</li>
+<li><strong>Overlapping faces</strong>: planar trimmed regions are compared by shared area; coincident curved faces use bidirectional interior checks. Faces that only touch at an edge are ignored, and only edge intervals shared by detected face pairs are highlighted.</li>
+</ul>
+<p>Option persists to <code>vTools.config.json</code> under <code>vOverlaps</code>.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vpart">
+<h1>vPart</h1>
+<p class="command-description">The vPart command captures a closed perimeter from selected curves (gaps are bridged automatically), collects all visible objects inside the perimeter (curves trimmed at the boundary; other types included whole), and lets the user place the resulting Part with a full preview.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select the outer perimeter curves (preselect or postselect; a single closed curve is also valid).</li>
+<li>The command joins the selected curves into a closed loop.  If endpoints do not quite meet (gaps ≤ 200&#215; model tolerance), straight-line bridge segments are inserted automatically.</li>
+<li>All visible objects inside the closed perimeter are collected automatically (excluding the selected perimeter curves). Curves that cross the perimeter are split; only the inside segments are kept. With <code>Cleanup=Yes</code>, eligible straight interior lines on the generated perimeter&#39;s effective layer are omitted unless they are named or metadata-tagged notch geometry. Non-curve objects (text, dots, points, etc.) are included whole when their representative point falls inside.</li>
+<li>A full DynamicDraw preview of the Part (perimeter + inside objects) follows the cursor. The perimeter uses its selected output-layer color; interior objects use their original layer colors.</li>
+<li>Pick the placement point to commit.  The Part is added as new objects at that location; originals are not deleted.</li>
+<li>Press Esc to cancel without adding anything.</li>
+</ol>
+<p class="Dialog_Box_Title">available during both curve selection and placement options</p>
+<div class="command-option">
+<h5>Group</h5>
+<p>when <code>Yes</code>, all output objects are placed into a single Rhino group.</p>
+</div>
+<div class="command-option">
+<h5>JoinPerimeter</h5>
+<p>when <code>Yes</code>, perimeter segments are joined into a single curve instead of being kept as individual segments.</p>
+</div>
+<div class="command-option">
+<h5>Cleanup</h5>
+<p>when <code>Yes</code>, omits eligible straight interior pieces only when they are on the generated perimeter&#39;s effective layer. In <code>Layer=*Source*</code> mode, Cleanup runs only when the perimeter uses one source layer; with multiple source layers it is skipped and reported during placement. Notch geometry and curves on unrelated layers are preserved.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>chooses the output layer for perimeter segments and gap bridges. <code>*Current*</code> follows Rhino&#39;s current layer for that command session; <code>*Source*</code> preserves each split perimeter segment&#39;s source layer, while joined output and bridges use the first actual boundary source layer. In scripted input, <code>.</code> selects <code>*Current*</code>, and <code>Source</code> or <code>*Source*</code> selects source layers.</p>
+</div>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vperpendicularto">
+<h1>vPerpendicularTo</h1>
+<p class="command-description">The vPerpendicularTo command rotates curve A about its nearest endpoint so it is perpendicular to curve B in the active CPlane.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Pick <strong>curve A</strong> — the curve to rotate.</li>
+<li>Pick <strong>curve B</strong> — the reference curve (not moved).</li>
+</ol>
+<p>Behavior:</p>
+<ul>
+<li>The nearest endpoint pair between A and B is found automatically.</li>
+<li>Curve A is rotated about its near endpoint in the active CPlane by the angle needed to make it perpendicular to B&#39;s tangent at B&#39;s near endpoint.</li>
+<li>Of the two possible perpendicular directions, the one requiring the smaller rotation is chosen.</li>
+</ul>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vpointnormaltosurface">
+<h1>vPointNormalToSurface</h1>
+<p class="command-description">The vPointNormalToSurface command places points projected onto the closest surface normal evaluation point.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select a target surface or polysurface face.</li>
+<li>Pick points in space.</li>
+<li>A point is placed on the closest evaluated surface location (normal evaluation point), with live preview from picked point to on-surface point.</li>
+<li>Press Enter to finish.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vprojecttosurface">
+<h1>vProjectToSurface</h1>
+<p class="command-description">The vProjectToSurface command projects selected curves and points onto one or more target surfaces or polysurfaces with live preview; overhanging curve portions are clipped away.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select one or more target surfaces or polysurfaces.</li>
+<li>Select curves and point objects to project; the projected result previews while the selection changes.</li>
+<li>Projected point objects and curve pieces are created on the target and selected; curve pieces use the current layer and source objects are left unchanged.</li>
+</ol>
+<p>Behavior:</p>
+<ul>
+<li>Curves are pulled to every selected brep face by closest-point projection.</li>
+<li>Portions of a curve that do not touch the trimmed target face are skipped, so curves longer than the surface produce only the projected touching spans.</li>
+</ul>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vpointtrace">
+<h1>vPointTrace</h1>
+<p class="command-description">The vPointTrace command maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Click the source curve near the end you want to treat as the start.</li>
+<li>Click the destination curve near the end you want to treat as the start.</li>
+<li>Source and destination curves are highlighted but left unselected.</li>
+<li>Pick points constrained to the source curve; a corresponding point is added on the destination at the same arc-length fraction.</li>
+<li>A green dot previews the destination point while moving along the source.</li>
+<li>Press Enter to finish.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vrectangle">
+<h1>vRectangle</h1>
+<p class="command-description">The vRectangle command creates an axis-aligned rectangle polyline from width/height inputs driven by numeric value or selected curve lengths.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>If curves are preselected, their total length is used as the width automatically.</li>
+<li>Otherwise, set width: select curves to use their total length, type a number, or press Enter to keep the current value.</li>
+<li>Set height the same way.</li>
+<li>Pick the bottom-left corner. Press Enter to reuse the previous bottom-right position.</li>
+<li>Live preview shows the rectangle while moving the cursor.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Width</h5>
+<p>changes the current rectangle width while picking the corner.</p>
+</div>
+<div class="command-option">
+<h5>Height</h5>
+<p>changes the current rectangle height while picking the corner.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vregroup">
+<h1>vReGroup</h1>
+<p class="command-description">The vReGroup command dissolves all existing groups (including nested sub-groups) on the selected objects and collects them into one new group.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Preselect or select objects in any combination of groups and sub-groups.</li>
+<li>If the selection spans exactly one group and every member of that group is selected, the existing group is reused and any ungrouped objects are simply added to it.</li>
+<li>Otherwise, all existing group memberships (including nested sub-groups) are stripped from the selected objects, any groups left empty are deleted, and all selected objects are placed into one new group.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vscallop">
+<h1>vScallop</h1>
+<p class="command-description">The vScallop command creates an arc scallop between two points or along a selected line.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select a line, or press Enter to pick two points.</li>
+<li>Pick side point to define bulge direction.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Size</h5>
+<p>scallop bulge distance.</p>
+</div>
+<div class="command-option">
+<h5>Free</h5>
+<p>when <code>Yes</code>, bulge is measured from midpoint to picked side point; when <code>No</code>, uses fixed <code>Size</code>.</p>
+</div>
+<div class="command-option">
+<h5>DeleteOriginal</h5>
+<p>when selecting an existing line input, remove that original line after creating the scallop arc.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vsetpt">
+<h1>vSetPt</h1>
+<p class="command-description">The vSetPt command previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm">SetPt</a> command.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Each curve keeps the end nearest the cursor when that curve is selected, even if its other end is nearer the eventual common target; deselecting and reselecting the curve captures a new end. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.</li>
+<li>With preview enabled, thin cyan temporary curves show each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moving to a common target that follows the cursor at the selected points&#39; view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.</li>
+<li>Grips are enabled and the identified points are selected automatically. After a successful <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm">SetPt</a>, including when the points are already at the chosen coordinate, the exact endpoints, edit points, or control points used remain visible and selected so Rhino displays the gumball; cancelling restores each curve&#39;s original grip visibility.</li>
+<li>Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm">SetPt</a> command launches with <code>XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No</code>; click the target location to commit.</li>
+<li>Press Enter to repeat <code>vSetPt</code>.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Preview</h5>
+<p><code>On</code> shows the live result during curve selection; <code>Off</code> hides it. The setting persists.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vsmooth">
+<h1>vSmooth</h1>
+<p class="command-description">The vSmooth command adjusts a selected curve so it transitions smoothly (G1) into one or two connected neighbours by eliminating kinks at shared endpoints; per-end StrengthStart/StrengthEnd, Copy, and Join options.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select the target curve. Preselected connected curves seed the target and neighbour preview immediately; each remains individually toggleable.</li>
+<li>Connected candidate curves are pickable. Click one to select it as the neighbour for that end — the start-end neighbour highlights <strong>orange</strong>, the end-end neighbour highlights <strong>green</strong>.</li>
+<li>Click a selected neighbour again to deselect it. Click the target curve to clear all neighbour selections and start over.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>StrengthStart / StrengthEnd</h5>
+<p>independent handle-length scale per end. 0 = near-degenerate handle (very tight turn at the endpoint), 1 = rotate the existing handle to the G1 direction (default), &gt;1 = lengthen the handle for a more extended blend.</p>
+</div>
+<div class="command-option">
+<h5>Copy</h5>
+<p>when <code>Yes</code>, a new curve is created and the original is kept; when <code>No</code> (default) the original is replaced in-place.</p>
+</div>
+<div class="command-option">
+<h5>Join</h5>
+<p>when <code>Yes</code>, the smoothed curve and its connected neighbours are joined into a single polycurve; the separate originals are deleted.</p>
+</div>
+<div class="command-option">
+<h5>SmoothAll</h5>
+<p>when <code>No</code> (default), only the target curve changes. When <code>Yes</code>, the tangent correction is shared between the target and each selected neighbour so the transition is spread across both curves.</p>
+</div>
+<ul>
+<li>Direct input accepts <code>start</code>, <code>start,end</code>, or <code>,end</code> to change only <code>StrengthStart</code>, both strengths, or only <code>StrengthEnd</code> respectively.</li>
+</ul>
+<ol>
+<li>Press Enter to commit. If the input curve belongs to a group the output curve inherits that group.</li>
+</ol>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vshow">
+<h1>vShow</h1>
+<p class="command-description">The vShow command shows one named hidden-object set, or all named sets, without cancelling the command already in progress.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Run <code>vShow</code> while another command is active or from the normal command prompt.</li>
+<li>Choose one of up to twenty most-recent active set options, enter any set name directly, or press Enter to show every named hidden set while leaving ordinary unnamed hidden objects untouched. Named sets created by Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/hide.htm">Hide</a> command are polled into the same persistent list.</li>
+<li>Matching active set members are shown directly, their completed set membership is cleared, and the interrupted command remains active with its prior selection restored.</li>
+<li>The <a href="#visolate">vIsolate</a> toolbar passes A-E directly as set-name input when a named isolate button is right-clicked.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vsplit">
+<h1>vSplit</h1>
+<p class="command-description">The vSplit command interactively splits selected curves at picked real point markers with distinct add/remove colors and shapes plus point snapping.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select curves to split.</li>
+<li>Click near selected curves to add real warm-yellow circular point-object split markers; point picking is constrained to the chosen curves.</li>
+<li>Existing split markers are snap points; hover one to preview it as a cool-blue X, then click to remove it. Both marker states use a black halo and the configured pink outline so they remain visible over similarly colored curves.</li>
+<li>Press Enter to apply splitting and replace the original curves with split pieces.</li>
+<li>When splitting would break history, affected objects are shaded orange with a dark outline while a native-style <code>Rhino N History Warning</code> with <code>OK/Cancel</code> appears before any source curves are replaced. <code>Cancel</code> leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino&#39;s shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino&#39;s built-in history warning handling.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Points</h5>
+<p>choose <code>Default</code>, <code>CP</code>, <code>EditPoints</code>, or <code>Hidden</code> while choosing split points. <code>Default</code> leaves the original point visibility untouched on start and restores each selected curve&#39;s original hidden/CP/edit-point state when switched back.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vsplitatcorners">
+<h1>vSplitAtCorners</h1>
+<p class="command-description">The vSplitAtCorners command splits curves at detected corners with interactive per-corner toggle preview.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select curves to split.</li>
+<li>Auto-detected corners appear as orange dots; click any to toggle it off (gray = excluded).</li>
+<li>Click anywhere along a selected curve to add a manual split point (cyan X); click an existing cyan X to remove it.</li>
+<li>Press Enter to apply splitting.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Angle</h5>
+<p>minimum detected corner angle in degrees.</p>
+</div>
+<div class="command-option">
+<h5>MinLength</h5>
+<p>minimum resulting segment length to keep.</p>
+</div>
+<div class="command-option">
+<h5>ClearManual</h5>
+<p>remove all manually added split points.</p>
+</div>
+<div class="command-option">
+<h5>ClearAll</h5>
+<p>restore all removed auto-corners and remove all manual points.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtangent">
+<h1>vTangent</h1>
+<p class="command-description">The vTangent command moves a curve rigidly so one or both endpoints align tangentially to selected driver curves.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Pick <strong>S1</strong> — click near the end of the subject curve you want aligned to D1.</li>
+<li>Pick <strong>D1</strong> — the required driver curve; the tangent at the click point is used.</li>
+<li>Pick <strong>S2</strong> — click the other end of the same subject curve (for a second alignment).</li>
+<li>Pick <strong>D2</strong> — an optional second driver curve; press Enter to skip.</li>
+</ol>
+<p>Behavior:</p>
+<ul>
+<li>With D1 only: the subject curve is translated and rotated rigidly so the S1-end tangent matches the D1 tangent at the pick point.</li>
+<li>With D1 and D2: an additional twist about the D1 tangent axis is applied to minimize the angular error between the S2-end tangent and D2 (or its reverse, whichever needs less rotation).</li>
+<li>The subject curve shape is not changed — only its position and orientation.</li>
+</ul>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtextaligned">
+<h1>vTextAligned</h1>
+<p class="command-description">The vTextAligned command places or repositions annotation text aligned and offset along a selected curve.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Click a curve to lock orientation base, or click existing text to edit/reposition it.</li>
+<li>Pick placement point near locked curve.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Text</h5>
+<p>sets content for newly created text and active text edits.</p>
+</div>
+<div class="command-option">
+<h5>Height</h5>
+<p>text height.</p>
+</div>
+<div class="command-option">
+<h5>Offset</h5>
+<p>signed side offset from the curve to the true text bounds, including rotated and styled annotation bounds.</p>
+</div>
+<div class="command-option">
+<h5>Rotate</h5>
+<p>rotates text orientation by 90 degrees each use.</p>
+</div>
+<div class="command-option">
+<h5>BothSides</h5>
+<p>previews and creates a mirrored text pair with both visible text bounds centered at the same curve position and offset equally from the curve.</p>
+</div>
+<ul>
+<li>Newly created text inherits every group membership from the locked curve; local redo preserves those groups.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtextflip">
+<h1>vTextFlip</h1>
+<p class="command-description">The vTextFlip command flips or rotates annotation text while preserving dimension and leader lines.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select ordinary text, dimensions, leaders, or other annotation objects.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Flip</h5>
+<p>mirrors selected text through its object-local frame. Dimension lines and leader arrows remain fixed, including custom text positions and leader-side alignment.</p>
+</div>
+<div class="command-option">
+<h5>Rotate</h5>
+<p>rotates selected text by 90 degrees without moving dimension or leader lines.</p>
+</div>
+<div class="command-option">
+<h5>Clear</h5>
+<p>clears the editable annotation selection.</p>
+</div>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtitle">
+<h1>vTitle</h1>
+<p class="command-description">The vTitle command places or edits a titled annotation text box with optional bounding rectangle; hover to highlight, click existing to edit.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Move the cursor — existing vTitle objects highlight when the cursor enters their bounding box.</li>
+<li><strong>Click existing title</strong> → enter edit mode (loads its text, size, and settings; the object group is highlighted).</li>
+<li><strong>Click empty space</strong> → place a new title at the cursor position.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Text</h5>
+<p>title string.</p>
+</div>
+<div class="command-option">
+<h5>Size</h5>
+<p>final model-space text height; document annotation scaling does not change it.</p>
+</div>
+<div class="command-option">
+<h5>Padding</h5>
+<p>percentage of text height added as padding on each side of the bounding box.</p>
+</div>
+<div class="command-option">
+<h5>Box</h5>
+<p><code>Yes/No</code> — draw a padded bounding rectangle around the text.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>opens the shared searchable layer selector. Use <code>*Current*</code> to follow the current layer; <code>-vTitle</code> accepts a layer name or full path directly. Default is <code>Reference</code>.</p>
+</div>
+<ol>
+<li>Press Enter to confirm, Esc to cancel.</li>
+</ol>
+<h3>Notes</h3>
+<ul>
+<li>Editing an existing title replaces it in place.</li>
+<li>If the text annotation is later changed externally (e.g. via <code>Properties</code>), the bounding box resizes automatically with the replacement.</li>
+<li>All settings persist to <code>vTools.config.json</code> under <code>vTitle</code>.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtoggleaxes">
+<h1>vToggleAxes</h1>
+<p class="command-description">The vToggleAxes command toggles visible viewport axes (grid/construction axes plus display-mode Z axis).</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>The command toggles visible viewport axes: construction-plane grid axes and the display-mode Z axis are shown or hidden together.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtogglecontrolpoints">
+<h1>vToggleControlPoints</h1>
+<p class="command-description">The vToggleControlPoints command toggles selected objects between edit points on the curve and off-curve control points.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select objects or selected points.</li>
+<li>The command is transparent, so it can be run while another Rhino command is active.</li>
+<li>If off-curve control points are visible, the command switches the selection to edit points on the curve.</li>
+<li>If edit points are visible or selected, the command switches the selection to off-curve control points where supported.</li>
+<li>If no points are visible on the selected curves, the command shows edit points first.</li>
+<li>Run with nothing selected to turn points off.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtoggleperpgumball">
+<h1>vTogglePerpGumball</h1>
+<p class="command-description">The vTogglePerpGumball command toggles a monitor that auto-orients the gumball perpendicular to selected grips.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>The command toggles monitor state (<code>ON</code>/<code>OFF</code>).</li>
+<li>The monitor restores its last state when the plug-in loads.</li>
+<li>While <code>ON</code>, select one or more grips in a supported viewport.</li>
+<li>The command auto-orients gumball so it stays perpendicular and view-stable without changing the viewport CPlane. Multiple curve endpoints use their shared perpendicular direction and keep the gumball at the selection center.</li>
+<li><code>Perspective</code> viewports keep default gumball, including when switched to <code>Parallel</code> projection.</li>
+<li>When turning <code>OFF</code>, gumball orientation is reset to Rhino default.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtrim">
+<h1>vTrim</h1>
+<p class="command-description">The vTrim command trims and extends curves with auto-cutter detection and join of extensions.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Choose a workflow: select cutting curves for <a href="#vtrim-regular-mode">Regular mode</a>, or press Enter for <a href="#vtrim-autoclosest-mode">AutoClosest mode</a>.</li>
+</ol>
+<h3 id="vtrim-regular-mode">Regular mode</h3>
+<ol>
+<li>Select one or more cutting curves and press Enter.</li>
+<li><code>vTrim</code> passes those cutters to Rhino&#39;s native <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/trim.htm">Trim</a> command, which handles target selection, preview, and trimming normally.</li>
+</ol>
+<h3 id="vtrim-autoclosest-mode">AutoClosest mode</h3>
+<ol>
+<li>Press Enter without selecting cutting curves.</li>
+<li>Hover a target curve. <code>vTrim</code> finds the relevant touching or intersecting cutter nearest the hovered curve segment and previews the exact portion that will be removed.</li>
+<li>Click to apply the displayed trim. Hold Shift before clicking to preview and apply an extension from the hovered end instead.</li>
+<li>Continue hovering and clicking targets, or press Enter when finished.</li>
+</ol>
+<h3 id="vtrim-autoclosest-options">AutoClosest options</h3>
+<ul>
+<li><code>Extend</code>: <code>Line</code> or <code>Smooth</code> extension style.</li>
+<li><code>Join</code>: <code>Yes</code> or <code>No</code> for joining kept trim pieces.</li>
+</ul>
+<h3 id="vtrim-preview-colors">Preview colors</h3>
+<ul>
+<li>Trim removal preview: red.</li>
+<li>Extend addition preview: green.</li>
+</ul>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vtrimoff">
+<h1>vTrimOff</h1>
+<p class="command-description">The vTrimOff command trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select at least 2 curves (open or closed, crossing or adjacent).</li>
+<li>The command finds all enclosed regions formed by the selected curves and computes their combined outer boundary.</li>
+<li>The original selected curves are replaced by the trimmed boundary curves; protruding ends that extend outside the enclosed region are discarded.</li>
+<li>Uses the active CPlane for planar region detection.</li>
+</ol>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vunrollsrf">
+<h1>vUnrollSrf</h1>
+<p class="command-description">The vUnrollSrf command develops selected surfaces through Rhino&#39;s native <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm">UnrollSrf</a> with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select surfaces, polysurfaces, or extrusions to unroll.</li>
+<li>Select curves, points, or dots that should follow their nearest surface, or press Enter for none.</li>
+<li>Choose the output start point. When replacing already processed parts, press Enter to preserve each part&#39;s prior position and orientation.</li>
+<li>Flat parts receive matching labels and shared-edge <code>M###</code> dots for use with <a href="#vmatch">vMatch</a>. The default top-level output layers are <code>Unrolled_surface</code>, <code>Unrolled_label</code>, and <code>Unrolled_dot</code>, ordered immediately below <code>Surface</code>; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly; other parts and their following geometry use Rhino&#39;s developable-surface <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm">UnrollSrf</a>, with RhinoCommon retained only as a failure fallback.</li>
+<li>Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Labels</h5>
+<p>creates <code>Text</code>, numbered <code>Dots</code>, or <code>None</code> for part identification.</p>
+</div>
+<div class="command-option">
+<h5>RotateFlatParts</h5>
+<p>aligns flat parts with the source orientation when enabled; otherwise keeps Rhino&#39;s unroller orientation.</p>
+</div>
+<div class="command-option">
+<h5>EdgeDots</h5>
+<p>creates matching shared-edge <code>M###</code> dots for <a href="#vmatch">vMatch</a>.</p>
+</div>
+<div class="command-option">
+<h5>Explode</h5>
+<p>outputs separate flat faces instead of keeping each unrolled Brep joined.</p>
+</div>
+<div class="command-option">
+<h5>SplitFaces</h5>
+<p>unrolls polysurface faces separately while retaining their source-face associations.</p>
+</div>
+<div class="command-option">
+<h5>KeepPropSurface</h5>
+<p>preserves source surface object properties; otherwise uses the selected surface output layer.</p>
+</div>
+<div class="command-option">
+<h5>KeepPropFollowing</h5>
+<p>preserves properties of following curves, points, and dots; otherwise uses the corresponding output layers.</p>
+</div>
+<div class="command-option">
+<h5>Spacing</h5>
+<p>gap between automatically laid-out flat parts in model units.</p>
+</div>
+<div class="command-option">
+<h5>XExtents</h5>
+<p>maximum layout row width in model units; <code>0</code> disables row wrapping.</p>
+</div>
+<div class="command-option">
+<h5>SurfaceLayer</h5>
+<p>layer for committed flat surfaces, selected with the shared searchable layer picker.</p>
+</div>
+<div class="command-option">
+<h5>LabelLayer</h5>
+<p>layer for committed labels, selected with the shared searchable layer picker.</p>
+</div>
+<div class="command-option">
+<h5>DotLayer</h5>
+<p>layer for committed matching dots, selected with the shared searchable layer picker.</p>
+</div>
+<p>Options are shared with <a href="#vunrollsrfuv">vUnrollSrfUV</a> and persist to <code>vTools.config.json</code> under the <code>vUnrollSrf</code> section. Layer choices are saved immediately when changed.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vunrollsrfuv">
+<h1>vUnrollSrfUV</h1>
+<p class="command-description">The vUnrollSrfUV command unrolls selected surfaces through Rhino&#39;s UV-preserving <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv">UnrollSrfUV</a> with the same labels, matching, placement, and reusable output workflow.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select surfaces, polysurfaces, or extrusions to unroll.</li>
+<li>Select curves, points, or dots that should follow their nearest surface, or press Enter for none.</li>
+<li>Choose the output start point. When replacing already processed parts, press Enter to preserve each part&#39;s prior position and orientation.</li>
+<li>Flat parts receive the same labels, shared-edge <code>M###</code> dots, layers, following geometry, and source properties as <a href="#vunrollsrf">vUnrollSrf</a>. Planar single-face parts are mapped exactly; other parts delegate to Rhino&#39;s UV-preserving <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv">UnrollSrfUV</a>, with RhinoCommon retained only as a failure fallback.</li>
+<li>Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Labels</h5>
+<p>creates <code>Text</code>, numbered <code>Dots</code>, or <code>None</code> for part identification.</p>
+</div>
+<div class="command-option">
+<h5>RotateFlatParts</h5>
+<p>aligns flat parts with the source orientation when enabled; otherwise keeps Rhino&#39;s unroller orientation.</p>
+</div>
+<div class="command-option">
+<h5>EdgeDots</h5>
+<p>creates matching shared-edge <code>M###</code> dots for <a href="#vmatch">vMatch</a>.</p>
+</div>
+<div class="command-option">
+<h5>Explode</h5>
+<p>outputs separate flat faces instead of keeping each unrolled Brep joined.</p>
+</div>
+<div class="command-option">
+<h5>SplitFaces</h5>
+<p>unrolls polysurface faces separately while retaining their source-face associations.</p>
+</div>
+<div class="command-option">
+<h5>KeepPropSurface</h5>
+<p>preserves source surface object properties; otherwise uses the selected surface output layer.</p>
+</div>
+<div class="command-option">
+<h5>KeepPropFollowing</h5>
+<p>preserves properties of following curves, points, and dots; otherwise uses the corresponding output layers.</p>
+</div>
+<div class="command-option">
+<h5>Spacing</h5>
+<p>gap between automatically laid-out flat parts in model units.</p>
+</div>
+<div class="command-option">
+<h5>XExtents</h5>
+<p>maximum layout row width in model units; <code>0</code> disables row wrapping.</p>
+</div>
+<div class="command-option">
+<h5>SurfaceLayer</h5>
+<p>layer for committed flat surfaces, selected with the shared searchable layer picker.</p>
+</div>
+<div class="command-option">
+<h5>LabelLayer</h5>
+<p>layer for committed labels, selected with the shared searchable layer picker.</p>
+</div>
+<div class="command-option">
+<h5>DotLayer</h5>
+<p>layer for committed matching dots, selected with the shared searchable layer picker.</p>
+</div>
+<p>Options are shared with <a href="#vunrollsrf">vUnrollSrf</a> and persist to <code>vTools.config.json</code> under the <code>vUnrollSrf</code> section. Layer choices are saved immediately when changed.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vuzip">
+<h1>vUzip</h1>
+<p class="command-description">The vUzip command full U-zip workflow in one command: selects three U-shape arm curves, computes the inward-offset center curve with fillet, and optionally produces glass, vis, and parts output with label and tail settings.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Optionally preselect up to three U-shape arm curves before running.</li>
+<li>Select the three U-shape curves (left arm, right arm, bottom).</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Left / Right / Bottom</h5>
+<p>inward offset distances for each arm.  Accepts decimal, fraction (<code>2 3/8</code>, <code>2-3/8</code>), or <code>z</code>/<code>zipper</code> keyword; offset distances may be <code>0</code>.</p>
+</div>
+<div class="command-option">
+<h5>Radius</h5>
+<p>fillet radius at the two inside corners.</p>
+</div>
+<div class="command-option">
+<h5>Glass</h5>
+<p><code>Yes/No</code> — compute and show glass offset curves.</p>
+</div>
+<div class="command-option">
+<h5>Vis</h5>
+<p><code>Yes/No</code> — compute and show vis offset curves.</p>
+</div>
+<div class="command-option">
+<h5>Parts</h5>
+<p><code>Yes/No</code> — enable the parts-output pipeline.</p>
+</div>
+<div class="command-option">
+<h5>Label *(when Parts=Yes)*</h5>
+<p>text label for generated part groups.</p>
+</div>
+<div class="command-option">
+<h5>Tail *(when Parts=Yes)*</h5>
+<p>tail length for end curves.</p>
+</div>
+<div class="command-option">
+<h5>Options</h5>
+<p>opens the full options dialog with shared hierarchical layer dropdowns and color swatches, plus additional offset values.</p>
+</div>
+<ol>
+<li>A cyan preview of the computed center curve is shown live.</li>
+<li>When <code>Parts=No</code>: press Enter to accept, or click a boundary curve to trim/extend the ends.</li>
+<li>When <code>Parts=Yes</code>: select boundary curves to trim/extend end caps; press Enter to accept.</li>
+<li>The center curve (and optionally glass, vis, and parts output) is committed to the document.</li>
+</ol>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vuzipcenter">
+<h1>vUzipCenter</h1>
+<p class="command-description">The vUzipCenter command offsets a U-shape&#39;s three curves inward, fillets the inside corners, and produces a single joined open curve.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select three curves that form a U shape (left arm, right arm, bottom). You may preselect up to three curves before running the command; a fourth preselected curve is used as the initial boundary.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Left</h5>
+<p>offset distance for the left arm.</p>
+</div>
+<div class="command-option">
+<h5>Right</h5>
+<p>offset distance for the right arm.</p>
+</div>
+<div class="command-option">
+<h5>Bottom</h5>
+<p>offset distance for the bottom curve.</p>
+</div>
+<div class="command-option">
+<h5>Radius</h5>
+<p>fillet radius at the two inside corners.</p>
+</div>
+<p>Distances accept fractional inch input (<code>2 3/8</code>, <code>2-3/8</code>, <code>3/8</code>, plain decimal) and the shorthand <code>z</code>/<code>zipper</code> (returns the left-arm default). Offset distances may be <code>0</code>; radius must be greater than <code>0</code>.</p>
+<ol>
+<li>A cyan preview curve is displayed showing the computed result.</li>
+<li>While previewing, adjust the same options to recompute live.</li>
+<li>Click any existing curve to set or replace the boundary: the result is trimmed or extended to meet it.</li>
+<li>Press Enter to accept and add the result curve to the document.</li>
+</ol>
+<p>The <code>Options</code> command-line option opens the shared hierarchical layer dropdowns with color swatches for center, glass, and vis output layers. Settings persist under the <code>vUzipCenter</code> section.</p>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vuzipparts">
+<h1>vUzipParts</h1>
+<p class="command-description">The vUzipParts command creates U-zip parts from a center curve into labeled reference, plot, and cut output groups.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select the center curve.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Label</h5>
+<p>text used when naming generated output. It remains available while placing and rebuilds all parts when changed.</p>
+</div>
+<div class="command-option">
+<h5>Tail</h5>
+<p>tail distance used when building end curves. It remains available while placing and rebuilds all parts when changed.</p>
+</div>
+<ol>
+<li>Pick placement point for generated groups, or cancel placement to remove generated objects.</li>
+</ol>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<!-- GENERATED_TOPICS_END -->
+</main>
+<script>
+(function () {
+  const topics = Array.from(document.querySelectorAll('.help-topic'));
+  function showTopic() {
+    const requested = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+    const anchor = requested ? document.getElementById(requested) : null;
+    const topic = topics.find(item => item.dataset.topic === requested) ||
+      (anchor ? anchor.closest('.help-topic') : null) || topics[0];
+    topics.forEach(item => item.classList.toggle('active', item === topic));
+    if (topic) {
+      const heading = topic.querySelector('h1');
+      document.title = (heading ? heading.textContent + ' | ' : '') + 'vTools Command Help';
+    }
+    if (anchor && topic.contains(anchor)) {
+      requestAnimationFrame(() => anchor.scrollIntoView());
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+  window.addEventListener('hashchange', showTopic);
+  showTopic();
+}());
+</script>
+</body>
+</html>

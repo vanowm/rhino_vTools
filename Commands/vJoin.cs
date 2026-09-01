@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// Joins selected objects with Rhino's native Join command, optionally using copies.
 /// </summary>
 [CommandStyle(Style.Transparent | Style.ScriptRunner)]
-public sealed class vJoin : Command
+public sealed class vJoin : vToolsCommand
 {
   // Option defaults
   private const bool DefaultCopy = true; // true joins duplicates and keeps inputs; false joins the original objects.

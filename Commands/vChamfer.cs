@@ -30,7 +30,7 @@ namespace vTools.Commands;
 ///   Length and Trim options are available at every prompt.
 ///   Press Enter to apply.
 /// </summary>
-public sealed class vChamfer : Command
+public sealed class vChamfer : vToolsCommand
 {
   private const string SectionName = "vChamfer";
   private const string LengthKey   = "length";

@@ -22,7 +22,7 @@ namespace vTools.Commands;
 /// With D1+D2:   a twist is also applied to minimise the rotation needed to also
 ///               match the S2-end tangent to D2 (or its reverse).
 /// </summary>
-public sealed class vTangent : Command
+public sealed class vTangent : vToolsCommand
 {
   public override string EnglishName => "vTangent";
 

@@ -20,7 +20,7 @@ namespace vTools.Commands;
 /// output layer. The user picks a placement point with a full DynamicDraw preview.
 /// Originals are not modified; the Part is added as new objects.
 /// </summary>
-public sealed class vPart : Command
+public sealed class vPart : vToolsCommand
 {
   public override string EnglishName => "vPart";
 
@@ -40,6 +40,7 @@ public sealed class vPart : Command
   private const string NotchObjectName = "Notch"; // Rhino object name used to exempt notch curves from interior line cleanup.
   private const string NotchRoleKey = "notch.object_role"; // Notch metadata key whose value is "notch" for generated notch geometry.
   private const string NotchIdKey = "notch.notch_id"; // Notch metadata key containing a nonempty notch component identifier.
+  private const string MultiLayerSourceCleanupMessage = "vPart: Cleanup skipped because Layer=Source perimeter uses multiple layers ({0})."; // string.Format template; {0} is a comma-separated list of source layer paths.
   private const int PerimeterContributionSampleCount = 17; // Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.
   private const double InteriorLineBoundaryToleranceScale = 2.0; // Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.
 
@@ -289,8 +290,21 @@ public sealed class vPart : Command
       joinedPreview.Add((geom.Duplicate()!, attr, false));
 
     var placementPoint = Point3d.Unset;
+    var cleanupSkipMessageShown = false;
     while (true)
     {
+      var skipMultiLayerSourceCleanup =
+        cleanupToggle.CurrentValue &&
+        IsSourceLayerOption(_layer) &&
+        sourcePerimeterLayerIndices.Count > 1;
+      if (skipMultiLayerSourceCleanup && !cleanupSkipMessageShown)
+      {
+        RhinoApp.WriteLine(
+          MultiLayerSourceCleanupMessage,
+          DescribeLayers(doc, sourcePerimeterLayerIndices));
+      }
+      cleanupSkipMessageShown = skipMultiLayerSourceCleanup;
+
       var cleanupLayerIndices = ResolveCleanupLayerIndices(
         doc,
         layerSession,
@@ -565,7 +579,9 @@ public sealed class vPart : Command
     ObjectAttributes fallbackSourceAttributes)
   {
     if (IsSourceLayerOption(_layer))
-      return sourcePerimeterLayerIndices.ToHashSet();
+      return sourcePerimeterLayerIndices.Count == 1
+        ? sourcePerimeterLayerIndices.ToHashSet()
+        : [];
 
     var outputLayerIndex = ResolvePerimeterLayerIndex(
       doc,
@@ -576,6 +592,17 @@ public sealed class vPart : Command
       ? [outputLayerIndex]
       : [];
   }
+
+  private static string DescribeLayers(
+    RhinoDoc doc,
+    IEnumerable<int> layerIndices) =>
+    string.Join(
+      ", ",
+      layerIndices
+        .OrderBy(layerIndex => layerIndex)
+        .Select(layerIndex => IsUsableLayer(doc, layerIndex)
+          ? doc.Layers[layerIndex].FullPath
+          : layerIndex.ToString()));
 
   private static bool IsUsableLayer(RhinoDoc doc, int layerIndex) =>
     layerIndex >= 0 &&

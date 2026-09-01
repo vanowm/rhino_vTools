@@ -15,7 +15,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Groups selected objects by closed-curve boundaries.
 /// </summary>
-public sealed class vGroup : Command
+public sealed class vGroup : vToolsCommand
 {
   private const string LogName = "vGroup";
   private const string OptionsSectionName = "vGroup";

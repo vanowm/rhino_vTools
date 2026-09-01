@@ -20,7 +20,7 @@ namespace vTools.Commands
   /// Auto sub-mode assembles a whole selection via BFS (with optional
   /// RandStart / RandNext randomisation).
   /// </summary>
-  public sealed class vMatch : Command
+  public sealed class vMatch : vToolsCommand
   {
     // ── Constants shared with vUnrollSrf / MultiUnroll2.py ────────────────
     internal const string EdgeMateName        = "MultiUnroll_EdgeMate"; // Object name assigned to generated matching edge dots.

@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native text-on-curve alignment command ported from TextAligned.py.
 /// </summary>
-public sealed class vTextAligned : Command
+public sealed class vTextAligned : vToolsCommand
 {
   private const string OptionsSectionName = "vTextAligned";
   private const string TextKey = "text";

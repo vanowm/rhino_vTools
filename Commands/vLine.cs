@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// Native line command ported from LinePlus.py.
 /// </summary>
 [CommandStyle(Style.NotUndoable)]
-public sealed class vLine : Command
+public sealed class vLine : vToolsCommand
 {
   private const string OptionsSectionName = "vLine";
   private const string ChainModeKey = "chainMode";

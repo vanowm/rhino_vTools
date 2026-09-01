@@ -15,7 +15,7 @@ namespace vTools.Commands;
 /// Creates an axis-aligned rectangle polyline from width/height inputs and a corner point.
 /// Width and height can be driven by total selected curve length.
 /// </summary>
-public sealed class vRectangle : Command
+public sealed class vRectangle : vToolsCommand
 {
   private const string OptionsSectionName = "vRectangle";
   private const string WidthKey = "width";

@@ -12,7 +12,7 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vOffset : Command
+public sealed class vOffset : vToolsCommand
 {
   private const string OptionsSectionName = "vOffset";
   private const string AutoTrimKey = "autoTrim";

@@ -28,7 +28,7 @@ namespace vTools.Commands;
 ///   Stage 4 — create FacingP / FacingS from side seam segments offset 3" inward.
 ///   Stage 5 — create Main pocket: zipper offset, side offsets, perpendicular lines.
 /// </summary>
-public sealed class vBiminiParts : Command
+public sealed class vBiminiParts : vToolsCommand
 {
   // Defaults
   private const string SectionName = "vBiminiParts";

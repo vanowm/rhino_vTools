@@ -19,7 +19,7 @@ namespace vTools.Commands;
 /// Builds multi-part zipper-style geometry from a selected center curve and
 /// preselected helper curves, driven by the shared <c>vTools.config.json</c> file.
 /// </summary>
-public class vUzipParts : Command
+public class vUzipParts : vToolsCommand
 {
   /// <summary>
   /// Rhino command name.

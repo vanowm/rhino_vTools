@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// optionally assigning the hidden objects to a named Rhino hide group.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vIsolate : Command
+public sealed class vIsolate : vToolsCommand
 {
   private const string Tag = "vIsolate";
   private const string HideSetPrompt = // Prompt shown when an isolate-set name was not supplied directly.

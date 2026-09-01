@@ -17,7 +17,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Places notches (I, V, open-V, U, and T shapes) on one or more curves with an interactive live panel.
 /// </summary>
-public sealed class vNotches : Rhino.Commands.Command
+public sealed class vNotches : vToolsCommand
 {
   // ── Constants ────────────────────────────────────────────────────────────
 

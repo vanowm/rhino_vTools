@@ -11,7 +11,7 @@ namespace vTools.Commands;
 /// Toggles visible viewport axes: grid/construction axes plus display-mode Z axis.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vToggleAxes : Command
+public sealed class vToggleAxes : vToolsCommand
 {
   private static readonly string[] GridAxesPropertyNames =
   [

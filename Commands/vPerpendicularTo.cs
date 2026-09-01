@@ -21,7 +21,7 @@ namespace vTools.Commands;
 ///   A is rotated about its near endpoint in the active CPlane until it is
 ///   perpendicular to B's tangent at B's near endpoint.
 /// </summary>
-public sealed class vPerpendicularTo : Command
+public sealed class vPerpendicularTo : vToolsCommand
 {
   public override string EnglishName => "vPerpendicularTo";
 

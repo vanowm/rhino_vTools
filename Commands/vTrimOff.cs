@@ -11,7 +11,7 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vTrimOff : Command
+public sealed class vTrimOff : vToolsCommand
 {
   public override string EnglishName => "vTrimOff";
 

@@ -16,7 +16,7 @@ namespace vTools.Commands;
 /// Native curve-to-spline conversion command ported from Curve2Spline.py.
 /// Supports curves and points; points are treated as single anchor endpoints.
 /// </summary>
-public sealed class vCurveToSpline : Command
+public sealed class vCurveToSpline : vToolsCommand
 {
   private const string OptionsSectionName = "vCurveToSpline";
   private const string JoinModeKey = "joinMode";

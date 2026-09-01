@@ -11,7 +11,7 @@ namespace vTools.Commands;
 /// Dissolves all existing groups (including nested sub-groups) on the selected
 /// objects and collects them into one new group.
 /// </summary>
-public sealed class vReGroup : Command
+public sealed class vReGroup : vToolsCommand
 {
   public override string EnglishName => "vReGroup";
 

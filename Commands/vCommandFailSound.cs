@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// Configures and toggles an audible notification when a Rhino command fails.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vCommandFailSound : Command
+public sealed class vCommandFailSound : vToolsCommand
 {
   // Defaults
   internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.

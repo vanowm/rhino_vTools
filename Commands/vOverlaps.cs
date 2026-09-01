@@ -16,11 +16,11 @@ namespace vTools.Commands;
 /// <summary>
 /// Finds covered curves and faces that share surface area with other faces.
 /// </summary>
-public sealed class vOverlaps : Command
+public sealed class vOverlaps : vToolsCommand
 {
   // Option defaults
   private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
-  private const bool DefaultSegments = false; // true compares polycurve segments individually; false compares whole curves.
+  private const bool DefaultOverlapSegments = true; // true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.
 
   // Customizable selection and output behavior
   private const ObjectType SupportedGeometry = ObjectType.Curve | ObjectType.Surface | ObjectType.Brep; // Rhino object and subobject types accepted by the command.
@@ -34,10 +34,12 @@ public sealed class vOverlaps : Command
 
   private const string SectionName = "vOverlaps";
   private const string TolKey = "tolerance";
-  private const string SegKey = "segments";
+  private const string LegacyCompareSegmentsKey = "compareSegments";
+  private const string LegacySegmentsKey = "segments";
+  private const string OverlapSegmentsKey = "overlapSegments";
 
   private static double _tolerance = DefaultTolerance;
-  private static bool _segments = DefaultSegments;
+  private static bool _overlapSegments = DefaultOverlapSegments;
   private static OverlapAreaConduit? _activeAreaHighlight;
   private static uint _activeAreaDocumentSerial;
   private static long _lastEscapeTick;
@@ -47,10 +49,12 @@ public sealed class vOverlaps : Command
   private static void LoadOptions() =>
     ToolsOptionStore.Read<int>(SectionName, section =>
     {
+      _tolerance = DefaultTolerance;
+      _overlapSegments = DefaultOverlapSegments;
       if (ToolsOptionStore.TryGetDouble(section, TolKey, out var tolerance) && tolerance > 0.0)
         _tolerance = tolerance;
-      if (ToolsOptionStore.TryGetBool(section, SegKey, out var segments))
-        _segments = segments;
+      if (ToolsOptionStore.TryGetBool(section, OverlapSegmentsKey, out var overlapSegments))
+        _overlapSegments = overlapSegments;
       return 0;
     });
 
@@ -58,13 +62,22 @@ public sealed class vOverlaps : Command
     ToolsOptionStore.Update(SectionName, section =>
     {
       section[TolKey] = _tolerance;
-      section[SegKey] = _segments;
+      section.Remove(LegacySegmentsKey);
+      section.Remove(LegacyCompareSegmentsKey);
+      section[OverlapSegmentsKey] = _overlapSegments;
     });
 
-  internal static (double Tolerance, bool Segments) GetDetectionSettings()
+  internal static (double Tolerance, bool OverlapSegments) GetDetectionSettings()
   {
     LoadOptions();
-    return (_tolerance, _segments);
+    return (_tolerance, _overlapSegments);
+  }
+
+  internal static void SetOverlapSegments(bool overlapSegments)
+  {
+    LoadOptions();
+    _overlapSegments = overlapSegments;
+    SaveOptions();
   }
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
@@ -82,9 +95,9 @@ public sealed class vOverlaps : Command
       SyncWorkingSelection(doc, selectedCurveIds, selectedFaces);
       using var getter = CreateGeometryGetter();
       var toleranceOption = new OptionDouble(_tolerance, 1e-9, 1e6);
-      var segmentsOption = new OptionToggle(_segments, "No", "Yes");
+      var overlapSegmentsOption = new OptionToggle(_overlapSegments, "No", "Yes");
       var toleranceOptionIndex = getter.AddOptionDouble("Tolerance", ref toleranceOption);
-      getter.AddOptionToggle("Segments", ref segmentsOption);
+      getter.AddOptionToggle("OverlapSegments", ref overlapSegmentsOption);
       var addOptionIndex = getter.AddOption("AddMore");
       var removeOptionIndex = getter.AddOption("Remove");
       var allOptionIndex = getter.AddOption("AllVisible");
@@ -107,7 +120,7 @@ public sealed class vOverlaps : Command
         "vOverlaps",
         $"selection_result result={getResult} objects={getter.ObjectCount}");
       _tolerance = toleranceOption.CurrentValue;
-      _segments = segmentsOption.CurrentValue;
+      _overlapSegments = overlapSegmentsOption.CurrentValue;
 
       if (getResult == GetResult.Cancel)
         return Result.Cancel;
@@ -174,9 +187,55 @@ public sealed class vOverlaps : Command
       return Result.Nothing;
     }
 
+    var connectivityCurves = doc.Objects
+      .GetObjectList(ConnectivityCurveSettings())
+      .Where(obj => obj?.Geometry is Curve && obj.IsValid)
+      .ToList();
     var curveOverlaps = inputCurves.Count >= 2
-      ? OverlapFinder.Find(inputCurves, _tolerance, _segments)
-      : new OverlapFinder.Result([], inputCurves.Count, 0, 0);
+      ? OverlapFinder.Find(
+        inputCurves,
+        _tolerance,
+        connectivityCurves)
+      : new OverlapFinder.Result([], [], [], inputCurves.Count, 0, 0, 0);
+
+    var remainingPartialIds = new HashSet<Guid>(
+      curveOverlaps.PartiallyOverlappingObjectIds);
+    var materializedSegments = new OverlapSegmentProcessor.Result([], [], [], 0);
+    if (_overlapSegments && curveOverlaps.PartialOverlapSpans.Count > 0)
+    {
+      var affectedSourceIds = curveOverlaps.PartialOverlapSpans
+        .Select(span => span.ObjectId)
+        .Where(id => !curveOverlaps.CoveredObjectIds.Contains(id))
+        .Distinct()
+        .ToList();
+      var historyRecords = new HashSet<Guid>();
+      foreach (var sourceId in affectedSourceIds)
+        historyRecords.UnionWith(
+          HistoryBreakWarning.CaptureAffectedRecords(doc, sourceId));
+      if (!HistoryBreakWarning.Confirm(doc, EnglishName, historyRecords))
+        return Result.Cancel;
+
+      var undoRecord = doc.BeginUndoRecord("vOverlaps Overlap Segments");
+      try
+      {
+        materializedSegments = OverlapSegmentProcessor.Materialize(
+          doc,
+          curveOverlaps.PartialOverlapSpans,
+          curveOverlaps.CoveredObjectIds,
+          _tolerance);
+      }
+      finally
+      {
+        if (undoRecord != 0)
+          doc.EndUndoRecord(undoRecord);
+      }
+      remainingPartialIds.ExceptWith(
+        materializedSegments.ProcessedSourceObjectIds);
+      if (remainingPartialIds.Count > 0)
+        Log.Write(
+          "vOverlaps",
+          $"overlap segment isolation skipped sources={remainingPartialIds.Count}");
+    }
     var faceCoincidenceTolerance = Math.Max(
       _tolerance * FaceCoincidenceToleranceFactor,
       RhinoMath.ZeroTolerance);
@@ -194,16 +253,31 @@ public sealed class vOverlaps : Command
       faceCoincidenceTolerance,
       faceAreaTolerance);
 
+    var resultCurveIds = new HashSet<Guid>(curveOverlaps.CoveredObjectIds);
+    resultCurveIds.UnionWith(materializedSegments.OverlapObjectIds);
+    if (!_overlapSegments)
+      resultCurveIds.UnionWith(remainingPartialIds);
     var highlightedAreaCount = ApplyResults(
       doc,
       inputFaces,
-      curveOverlaps.CoveredObjectIds,
+      resultCurveIds,
       overlappingAreas);
 
-    var modeLabel = _segments ? ", segments mode" : string.Empty;
     var findings = new List<string>();
     if (curveOverlaps.CoveredObjectIds.Count > 0)
       findings.Add($"selected {curveOverlaps.CoveredObjectIds.Count} covered curve(s)");
+    if (curveOverlaps.PartiallyOverlappingObjectIds.Count > 0)
+    {
+      if (_overlapSegments && materializedSegments.OverlapObjectIds.Count > 0)
+        findings.Add(
+          $"selected {materializedSegments.OverlapObjectIds.Count} partial-overlap segment(s)");
+      if (!_overlapSegments && remainingPartialIds.Count > 0)
+        findings.Add(
+          $"selected {remainingPartialIds.Count} partially overlapping curve(s)");
+      else if (_overlapSegments && remainingPartialIds.Count > 0)
+        findings.Add(
+          $"skipped {remainingPartialIds.Count} partial curve(s) whose overlap could not be isolated");
+    }
     if (faceOverlaps.OverlappingFaces.Count > 0)
       findings.Add(
         $"highlighted {highlightedAreaCount} overlapping face area(s)");
@@ -213,11 +287,13 @@ public sealed class vOverlaps : Command
       : "no overlaps found";
     RhinoApp.WriteLine(
       $"vOverlaps: {resultLabel} " +
-      $"({curveOverlaps.ItemCount} curve items{modeLabel}, {curveOverlaps.PairChecks} curve pair checks; " +
+      $"({curveOverlaps.ItemCount} curve items, {curveOverlaps.PairChecks} curve pair checks; " +
       $"{faceOverlaps.FaceCount} faces, {faceOverlaps.PairChecks} face pair checks).");
     Log.Write(
       "vOverlaps",
       $"curves={curveOverlaps.ItemCount} curve_pairs={curveOverlaps.PairChecks} curve_hits={curveOverlaps.CoverHits} " +
+      $"curve_partial_hits={curveOverlaps.PartialOverlapHits} " +
+      $"overlap_segments={_overlapSegments} split_sources={materializedSegments.SplitSourceCount} " +
       $"faces={faceOverlaps.FaceCount} face_pairs={faceOverlaps.PairChecks} face_hits={faceOverlaps.OverlapHits} " +
       $"face_coincidence_tolerance={faceCoincidenceTolerance:G6} " +
       $"face_area_tolerance={faceAreaTolerance:G6} overlapping_areas={highlightedAreaCount}");
@@ -453,6 +529,16 @@ public sealed class vOverlaps : Command
     HiddenObjects = false
   };
 
+  private static ObjectEnumeratorSettings ConnectivityCurveSettings() => new()
+  {
+    IncludeLights = false,
+    IncludeGrips = false,
+    IncludePhantoms = false,
+    NormalObjects = true,
+    LockedObjects = true,
+    HiddenObjects = false
+  };
+
   private static void AddFaceInputs(
     Guid objectId,
     Brep brep,
@@ -473,7 +559,7 @@ public sealed class vOverlaps : Command
   private static int ApplyResults(
     RhinoDoc doc,
     IReadOnlyCollection<FaceOverlapFinder.FaceItem> inputFaces,
-    IReadOnlyCollection<Guid> coveredCurveIds,
+    IReadOnlyCollection<Guid> selectedCurveIds,
     IReadOnlyCollection<Brep> overlappingAreas)
   {
     doc.Objects.UnselectAll();
@@ -483,7 +569,7 @@ public sealed class vOverlaps : Command
                .Distinct())
       obj!.UnhighlightAllSubObjects();
 
-    foreach (var curveId in coveredCurveIds)
+    foreach (var curveId in selectedCurveIds)
       doc.Objects.Select(curveId);
 
     if (overlappingAreas.Count > 0)

@@ -4,7 +4,7 @@ using System.Runtime.Versioning;
 using Rhino.PlugIns;
 
 [assembly: AssemblyTitle("vTools")]
-[assembly: AssemblyDescription("Native Rhino workflow tools for curves, surfaces, objects, annotation, and fabrication.")]
+[assembly: AssemblyDescription("Precision workflow tools for Rhino: curve and surface editing, fabrication, unrolling and matching, alignment, annotation, selection, and object management.")]
 [assembly: AssemblyCompany("V@no")]
 [assembly: AssemblyProduct("vTools")]
 [assembly: ComVisible(false)]

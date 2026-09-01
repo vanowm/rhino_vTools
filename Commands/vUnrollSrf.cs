@@ -23,10 +23,28 @@ using Rhino.Input.Custom;
 namespace vTools.Commands
 {
   [CommandStyle(Style.ScriptRunner)]
-  public class vUnrollSrf : Command
+  public sealed class vUnrollSrf : UnrollSrfCommandBase
   {
+    private const string NativeCommandName = "_-UnrollSrf"; // Scriptable Rhino command used for developable-surface unrolling.
+
     public override string EnglishName => "vUnrollSrf";
 
+    protected override string NativeUnrollCommand => NativeCommandName;
+  }
+
+  [CommandStyle(Style.ScriptRunner)]
+  public sealed class vUnrollSrfUV : UnrollSrfCommandBase
+  {
+    private const string NativeCommandName = "_-UnrollSrfUV"; // Scriptable Rhino command used for UV-preserving surface unrolling.
+
+    public override string EnglishName => "vUnrollSrfUV";
+
+    protected override string NativeUnrollCommand => NativeCommandName;
+  }
+
+  public abstract class UnrollSrfCommandBase : vToolsCommand
+  {
+    // Defaults and customizable constants
     private const string SettingsSection = "vUnrollSrf";
     private const string CurrentLayerOption = "*Current*"; // Layer-selector sentinel that resolves output to Rhino's current layer.
     private const string OutputLayerAnchor = "Surface"; // Top-level layer used as the ordering anchor for default output layers.
@@ -58,7 +76,7 @@ namespace vTools.Commands
     private const string EdgeMateHelperDotPrefix  = "__vTools_vUnrollSrf_EdgeHelper__"; // Internal following-dot name prefix for edge mates.
     private const string UserPointHelperDotPrefix = "__vTools_vUnrollSrf_UserPointHelper__"; // Internal following-dot name prefix for preserving selected point identity across duplicated face output.
     private const string UserDotHelperDotPrefix   = "__vTools_vUnrollSrf_UserDotHelper__"; // Internal following-dot name prefix for preserving selected text dots through native unroll.
-    private const string NativeFaceHelperDotPrefix = "__vTools_vUnrollSrf_FaceHelper__"; // Internal following-dot name prefix used to map each source face to its flat UV-preserved output.
+    private const string NativeFaceHelperDotPrefix = "__vTools_vUnrollSrf_FaceHelper__"; // Internal following-dot name prefix used to map each source face to its native flat output.
     private const string CurveHelperDotPrefix     = "__vTools_vUnrollSrf_CurveHelper__"; // Internal following-dot name prefix for curves.
 
     private const string TextFont = "Arial"; // Installed font family used for generated number labels and failure markers.
@@ -74,35 +92,12 @@ namespace vTools.Commands
     private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
     private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
     private const double SharedPointToleranceFactor = 1.0; // Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.
-    private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native UV-unroll labels with flat edges.
+    private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native unroll labels with flat edges.
     private const double NativeSeamMaxRelativeLengthError = 0.01; // Maximum 0..1 relative edge-length error accepted by source-topology fallback seam matching.
     private const double NativeJoinedSeamToleranceFactor = 10.0; // Document-tolerance multiplier for recognizing an aligned seam as an interior edge after face joining.
-    private const bool NativeForceExplodePolysurfaces = true; // true temporarily separates multi-face UV output for source-topology reconstruction; false honors the visible Explode option directly.
+    private const bool NativeForceExplodePolysurfaces = true; // true temporarily separates multi-face native output for source-topology reconstruction; false honors the visible Explode option directly.
     private const bool NativeUseNoEcho = true; // true runs the internal Rhino macro with NoEcho; false relies only on RunScript's silent flag.
     private const int NativeCapturedLogLimit = 12; // Maximum captured native command lines written to the shared diagnostic log per source object; zero disables captured-line logging.
-
-    private enum LabelMode
-    {
-      Text = 0,
-      Dots = 1,
-      None = 2
-    }
-
-    private static readonly string[] LabelModeNames = { "Text", "Dots", "None" }; // Command option names in LabelMode enum order.
-
-    // Session-sticky settings. If you want persistence across Rhino restarts, move these into your plug-in settings.
-    private static LabelMode _labelMode = DefaultLabelMode;
-    private static bool _rotateFlatParts = DefaultRotateFlatParts;
-    private static bool _explode = DefaultExplode;
-    private static bool _keepPropSurface = DefaultKeepPropSurface;
-    private static bool _keepPropFollowing = DefaultKeepPropFollowing;
-    private static double _layoutSpacing = DefaultLayoutSpacing;
-    private static double _xExtents = DefaultXExtents;
-    private static bool _edgeDots = DefaultEdgeDots;
-    private static bool _splitFaces = DefaultSplitFaces;
-    private static string _surfaceLayer = DefaultSurfaceLayerPath;
-    private static string _labelLayer = DefaultLabelLayerPath;
-    private static string _dotLayer = DefaultDotLayerPath;
 
     // Edge-mate dot constants (match MultiUnroll2.py / vMatch.cs)
     private const string EdgeMateName        = vMatch.EdgeMateName; // Shared output object name for matching edge dots.
@@ -121,6 +116,30 @@ namespace vTools.Commands
     private const int    EdgeMateSamples     = 7; // Interior samples used to validate an edge match; two or greater.
     private const int    LabelInteriorSamples = 17; // UV grid resolution used to find interior label positions.
 
+    private static readonly string[] LabelModeNames = { "Text", "Dots", "None" }; // Command option names in LabelMode enum order.
+
+    private enum LabelMode
+    {
+      Text = 0,
+      Dots = 1,
+      None = 2
+    }
+
+    private static LabelMode _labelMode = DefaultLabelMode;
+    private static bool _rotateFlatParts = DefaultRotateFlatParts;
+    private static bool _explode = DefaultExplode;
+    private static bool _keepPropSurface = DefaultKeepPropSurface;
+    private static bool _keepPropFollowing = DefaultKeepPropFollowing;
+    private static double _layoutSpacing = DefaultLayoutSpacing;
+    private static double _xExtents = DefaultXExtents;
+    private static bool _edgeDots = DefaultEdgeDots;
+    private static bool _splitFaces = DefaultSplitFaces;
+    private static string _surfaceLayer = DefaultSurfaceLayerPath;
+    private static string _labelLayer = DefaultLabelLayerPath;
+    private static string _dotLayer = DefaultDotLayerPath;
+
+    protected abstract string NativeUnrollCommand { get; }
+
     // ── Debug logging ─────────────────────────────────────────────────────
     private static void Dbg(string msg) => vTools.Log.Write("vUnrollSrf", msg);
 
@@ -132,9 +151,11 @@ namespace vTools.Commands
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
       LoadSettings();
-      Dbg($"run start model_tol={doc.ModelAbsoluteTolerance:G} doc={doc.Path}");
+      Dbg($"run start command={EnglishName} native={NativeUnrollCommand}" +
+          $" model_tol={doc.ModelAbsoluteTolerance:G} doc={doc.Path}");
       var startIds = SelectedIds(doc);
-      var surfaceIds = GetSurfaceIds(doc, startIds.Where(IsSurfaceLikeId).ToList(), mode);
+      var surfaceIds = GetSurfaceIds(
+        doc, startIds.Where(IsSurfaceLikeId).ToList(), mode, EnglishName);
       if (surfaceIds == null || surfaceIds.Count == 0)
       {
         RestoreSelection(doc, startIds);
@@ -142,7 +163,7 @@ namespace vTools.Commands
       }
 
       var followingIds = GetFollowingIds(
-        doc, startIds.Where(IsFollowingLikeId).ToList(), surfaceIds, mode);
+        doc, startIds.Where(IsFollowingLikeId).ToList(), surfaceIds, mode, EnglishName);
       if (followingIds == null)
       {
         RestoreSelection(doc, startIds);
@@ -150,7 +171,7 @@ namespace vTools.Commands
       }
 
       var options = GetLayoutOptions(
-        doc, "Start point for unrolls - press Enter for world 0", mode);
+        doc, "Start point for unrolls - press Enter for world 0", mode, EnglishName);
       if (options == null)
       {
         RestoreSelection(doc, startIds);
@@ -380,7 +401,8 @@ namespace vTools.Commands
             else
             {
               if (TryPerformNativeCommandUnroll(
-                    doc, src, _explode, curves, Array.Empty<Point>(), followingDots,
+                    doc, src, NativeUnrollCommand, _explode,
+                    curves, Array.Empty<Point>(), followingDots,
                     out unrolledBreps, out unrolledCurves,
                     out unrolledPoints, out unrolledDots,
                     out string nativeDetails))
@@ -389,7 +411,7 @@ namespace vTools.Commands
               }
               else
               {
-                // Retain an API fallback only if the scripted UV command fails.
+                // Retain an API fallback only if the delegated native command fails.
                 unrolledBreps = unroller.PerformUnroll(out _, out _, out _);
                 Dbg($"part={number} unroll_method=rhino_unroller_fallback" +
                     $" reason={nativeDetails}");
@@ -825,7 +847,7 @@ namespace vTools.Commands
       }
 
       _xExtents = xLimit;
-      SaveSettings();
+      SaveSettings(EnglishName);
 
       if (exceeded)
       {
@@ -847,7 +869,8 @@ namespace vTools.Commands
     private static List<Guid>? GetSurfaceIds(
       RhinoDoc doc,
       List<Guid> preselected,
-      RunMode runMode)
+      RunMode runMode,
+      string commandName)
     {
       preselected = Unique(preselected.Where(IsSurfaceLikeId));
       if (preselected.Count > 0)
@@ -870,7 +893,7 @@ namespace vTools.Commands
           return null;
         if (rc == GetResult.Option)
         {
-          HandleSharedOption(doc, go, shared, runMode);
+          HandleSharedOption(doc, go, shared, runMode, commandName);
           continue;
         }
         if (go.CommandResult() != Result.Success)
@@ -883,7 +906,8 @@ namespace vTools.Commands
       RhinoDoc doc,
       List<Guid> seedIds,
       List<Guid> surfaceIds,
-      RunMode runMode)
+      RunMode runMode,
+      string commandName)
     {
       seedIds = Unique(seedIds.Where(IsFollowingLikeId));
       var surfaceSet = new HashSet<Guid>(surfaceIds);
@@ -915,7 +939,7 @@ namespace vTools.Commands
             return null;
           if (rc == GetResult.Option)
           {
-            HandleSharedOption(doc, go, shared, runMode);
+            HandleSharedOption(doc, go, shared, runMode, commandName);
             continue;
           }
           if (go.ObjectsWerePreselected)
@@ -943,7 +967,8 @@ namespace vTools.Commands
     private static LayoutOptions? GetLayoutOptions(
       RhinoDoc doc,
       string prompt,
-      RunMode runMode)
+      RunMode runMode,
+      string commandName)
     {
       var gp = new GetPoint();
       gp.EnableTransparentCommands(true);
@@ -956,7 +981,7 @@ namespace vTools.Commands
       while (true)
       {
         var rc = gp.Get();
-        HandleSharedOption(doc, gp, shared, runMode);
+        HandleSharedOption(doc, gp, shared, runMode, commandName);
         if (gp.CommandResult() == Result.Cancel)
           return null;
         if (gp.CommandResult() == Result.Nothing)
@@ -1034,7 +1059,8 @@ namespace vTools.Commands
       RhinoDoc doc,
       GetBaseClass getter,
       SharedOptions state,
-      RunMode runMode)
+      RunMode runMode,
+      string commandName)
     {
       if (state == null) return;
 
@@ -1101,24 +1127,24 @@ namespace vTools.Commands
       if (option != null && option.Index == state.SurfaceLayerIndex)
       {
         SelectOutputLayer(
-          doc, runMode, "vUnrollSrf surface layer", _surfaceLayer,
+          doc, runMode, $"{commandName} surface layer", _surfaceLayer,
           selected => _surfaceLayer = NormalizeOutputLayer(selected, DefaultSurfaceLayerName, DefaultSurfaceLayerPath));
       }
       if (option != null && option.Index == state.LabelLayerIndex)
       {
         SelectOutputLayer(
-          doc, runMode, "vUnrollSrf label layer", _labelLayer,
+          doc, runMode, $"{commandName} label layer", _labelLayer,
           selected => _labelLayer = NormalizeOutputLayer(selected, DefaultLabelLayerName, DefaultLabelLayerPath));
       }
       if (option != null && option.Index == state.DotLayerIndex)
       {
         SelectOutputLayer(
-          doc, runMode, "vUnrollSrf dot layer", _dotLayer,
+          doc, runMode, $"{commandName} dot layer", _dotLayer,
           selected => _dotLayer = NormalizeOutputLayer(selected, DefaultDotLayerName, DefaultDotLayerPath));
       }
 
       if (option != null)
-        SaveSettings();
+        SaveSettings(commandName);
     }
 
     private static void SelectOutputLayer(
@@ -1238,6 +1264,7 @@ namespace vTools.Commands
     private static bool TryPerformNativeCommandUnroll(
       RhinoDoc doc,
       SourceSurface source,
+      string nativeUnrollCommand,
       bool explode,
       IReadOnlyList<Curve> curves,
       IReadOnlyList<Point> points,
@@ -1285,7 +1312,7 @@ namespace vTools.Commands
           NativeForceExplodePolysurfaces && source.Brep.Faces.Count > 1;
         bool nativeLabels = source.Brep.Faces.Count > 1;
         string command = (NativeUseNoEcho ? "_NoEcho " : string.Empty) +
-          "_-UnrollSrfUV" +
+          nativeUnrollCommand +
           $" _Explode=_{(nativeExplode ? "Yes" : "No")}" +
           $" _Labels=_{(nativeLabels ? "Yes" : "No")}" +
           $" _SelId {commandSourceId:D}" +
@@ -1326,7 +1353,8 @@ namespace vTools.Commands
           .Take(NativeCapturedLogLimit))
           Dbg($"native_output {line}");
 
-        Dbg($"native_options explode={nativeExplode} labels={nativeLabels}");
+        Dbg($"native_options command={nativeUnrollCommand}" +
+            $" explode={nativeExplode} labels={nativeLabels}");
 
         var created = doc.Objects
           .Where(obj => obj != null && !objectIdsBefore.Contains(obj.Id))
@@ -4908,7 +4936,7 @@ namespace vTools.Commands
       });
     }
 
-    private static void SaveSettings()
+    private static void SaveSettings(string commandName)
     {
       var saved = ToolsOptionStore.Update(SettingsSection, section =>
       {
@@ -4926,7 +4954,7 @@ namespace vTools.Commands
         section["dotLayer"] = _dotLayer;
       });
       if (!saved)
-        RhinoApp.WriteLine($"vUnrollSrf: failed to save options: {ToolsOptionStore.LastError}");
+        RhinoApp.WriteLine($"{commandName}: failed to save options: {ToolsOptionStore.LastError}");
     }
 
     private class LayoutOptions

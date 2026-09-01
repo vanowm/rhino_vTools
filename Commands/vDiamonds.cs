@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// Draws an argyle diamond pattern on PLOT, a bounding rectangle on CUT1,
 /// and a size label on Reference.  Ported from Diamonds.py.
 /// </summary>
-public sealed class vDiamonds : Command
+public sealed class vDiamonds : vToolsCommand
 {
   private const string SettingsSection = "vDiamonds";
   private const string WidthKey        = "width";

@@ -16,7 +16,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native fit-box command ported from FitBox.py.
 /// </summary>
-public sealed class vFitBox : Command
+public sealed class vFitBox : vToolsCommand
 {
   private const string OptionsSectionName = "vFitBox";
   private const string AngleStepKey = "angleStepDeg";

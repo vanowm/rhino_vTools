@@ -13,7 +13,8 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vMirror : Rhino.Commands.Command
+[CommandStyle(Style.ScriptRunner)]
+public sealed class vMirror : vToolsCommand
 {
   // Option defaults
   private const bool DefaultCopy = true; // true mirrors copies and keeps originals; false moves originals across the mirror plane.
@@ -30,6 +31,8 @@ public sealed class vMirror : Rhino.Commands.Command
   private const PointStyle PreviewPointStyle = PointStyle.RoundSimple; // Plain marker style used for mirrored point-object previews without active-point crosshairs.
   private const int PreviewSelectedPointSize = 3; // Selected preview point diameter in display pixels; positive integer.
   private const int PreviewGhostPointSize = 3; // Ghosted preview point diameter in display pixels; positive integer.
+  private static readonly Color ThreePointCueColor = Color.White; // RGB color used for the live three-point mirror-plane rectangle.
+  private const int ThreePointCueThickness = 1; // Three-point mirror-plane rectangle width in display pixels; positive integer.
   private static readonly (string A, string B, string Mode, bool PreserveCase, bool WholeWord)[]
     DefaultTextReplacementValues = // Bidirectional default title swaps: non-empty A/B text, literal/wildcard/regex mode, and matching flags.
     [
@@ -47,6 +50,8 @@ public sealed class vMirror : Rhino.Commands.Command
   private const string OptionYAxis = "YAxis";
   private const string OptionZAxis = "ZAxis";
   private const string OptionObject = "Object";
+  private const string OptionHorizontal = "Horizontal";
+  private const string OptionVertical = "Vertical";
 
   // vMirror-only options intentionally avoid the native prefixes above.
   private const string OptionFlipText = "FlipText";
@@ -64,6 +69,7 @@ public sealed class vMirror : Rhino.Commands.Command
   private const string ChangeTextKey = "changeText";
   private const string DistanceKey = "distance";
   private const string TextReplacementsKey = "textReplacements";
+  private const string NativeMirrorCommand = "_-Mirror"; // Locale-independent Rhino command used to commit the mirrored geometry.
 
   public override string EnglishName => "vMirror";
 
@@ -83,6 +89,7 @@ public sealed class vMirror : Rhino.Commands.Command
           out var objectIds,
           out var selectionAction))
       return Result.Cancel;
+    objectIds = ExpandGroupMembers(doc, objectIds);
 
     Plane constructionPlane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane()
       ?? Plane.WorldXY;
@@ -124,9 +131,17 @@ public sealed class vMirror : Rhino.Commands.Command
           mirrorPlane = constructionPlane;
           gotPlane = mirrorPlane.IsValid;
           break;
+        case MirrorSelectionAction.Horizontal:
+          gotPlane = TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: true, out mirrorPlane);
+          break;
+        case MirrorSelectionAction.Vertical:
+          gotPlane = TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: false, out mirrorPlane);
+          break;
         case MirrorSelectionAction.ThreePoint:
           gotPlane = TryGetThreePointPlane(
-            doc, objectIds, preview,
+            doc, preview,
             ref copy, ref flipText, ref changeText,
             textReplacements, out mirrorPlane);
           break;
@@ -159,183 +174,265 @@ public sealed class vMirror : Rhino.Commands.Command
       return Result.Cancel;
     }
 
-    Transform mirror = Transform.Mirror(mirrorPlane);
-    if (!mirror.IsValid)
+    preview.SetPersistentMirror(
+      Transform.Mirror(mirrorPlane), flipText, changeText, textReplacements);
+    preview.SetGhostOriginals(!copy);
+    preview.Enabled = true;
+    doc.Views.Redraw();
+    if (!TryRunNativeMirror(doc, objectIds, mirrorPlane, copy, out var outputIds))
     {
+      preview.Enabled = false;
       doc.Views.Redraw();
-      RhinoApp.WriteLine("vMirror: could not create the mirror transform.");
+      Log.Write("vMirror", "native Mirror failed");
       return Result.Failure;
     }
 
-    var outputIds = new List<Guid>();
     var changedTitleIds = new List<Guid>();
-    var copiedGroupMembers = new Dictionary<int, List<Guid>>();
-    var copiedGroupNames = new Dictionary<int, string?>();
-    int failed = 0;
-
-    // Suppress all intermediate viewport work while committing the result.
-    // ViewTable.EnableRedraw has existed since Rhino 7.3. The last dynamic
-    // preview remains visible until redraw is re-enabled at the end.
-    bool redrawWasEnabled = doc.Views.RedrawEnabled;
-    if (redrawWasEnabled)
-      doc.Views.EnableRedraw(false, false, false);
-
-    try
+    var failed = 0;
+    var modifiedTextObjects = 0;
+    using (vTitle.SuspendAutomaticBoxSync())
     {
-      // Keep every mirror entry path consistent: originals deselected, final
-      // mirrored objects selected.
-      doc.Objects.UnselectAll();
-
-      using (vTitle.SuspendAutomaticBoxSync())
+      foreach (var outputId in outputIds)
       {
-        foreach (var objectId in objectIds)
-        {
-          var source = doc.Objects.FindId(objectId);
-          if (source == null)
-          {
-            failed++;
-            continue;
-          }
-
-          var sourceGroups = copy
-            ? source.Attributes.GetGroupList()
-            : null;
-          bool hasCopiedGroups =
-            sourceGroups != null && sourceGroups.Length > 0;
-
-          bool needsCustomText = GetCustomTextProcessing(
-            source,
-            flipText,
-            changeText,
-            textReplacements,
-            out string? replacementText);
-
-          Guid outputId;
-
-          // Fastest path: let Rhino's native transform core do the work.
-          // This covers all ordinary geometry in move mode and all ungrouped
-          // ordinary geometry in copy mode. It avoids managed Duplicate() plus
-          // the second duplication performed by ObjectTable.Add().
-          if (!needsCustomText &&
-              (!copy || !hasCopiedGroups))
-          {
-            outputId = doc.Objects.Transform(
-              source, mirror, deleteOriginal: !copy);
-          }
-          else if (copy &&
-                   hasCopiedGroups &&
-                   !needsCustomText &&
-                   source is InstanceObject instance)
-          {
-            // Preserve block instances as instances instead of exploding the
-            // instance-reference geometry through the generic Add path.
-            var attributes = source.Attributes.Duplicate();
-            attributes.RemoveFromAllGroups();
-            outputId = doc.Objects.AddInstanceObject(
-              instance.InstanceDefinition.Index,
-              mirror * instance.InstanceXform,
-              attributes);
-          }
-          else
-          {
-            // Only text requiring FlipText/ChangeText, or copied objects that
-            // need remapped groups, use the managed preparation path.
-            if (!TryPrepareMirroredGeometry(
-                  source,
-                  mirror,
-                  flipText,
-                  replacementText,
-                  out var preparedGeometry))
-            {
-              failed++;
-              continue;
-            }
-
-            using (preparedGeometry)
-            {
-              if (copy)
-              {
-                var attributes = source.Attributes.Duplicate();
-                if (hasCopiedGroups)
-                  attributes.RemoveFromAllGroups();
-
-                outputId =
-                  doc.Objects.Add(preparedGeometry, attributes);
-              }
-              else
-              {
-                bool replaced =
-                  doc.Objects.Replace(
-                    objectId, preparedGeometry, false);
-                outputId =
-                  replaced ? objectId : Guid.Empty;
-              }
-            }
-          }
-
-          if (outputId == Guid.Empty)
-          {
-            failed++;
-            continue;
-          }
-
-          if (!TryRestoreMirroredOrientation(doc, outputId))
-          {
-            Log.Write(
-              "vMirror",
-              $"could not restore mirrored face direction object={outputId}");
-            failed++;
-          }
-
-          outputIds.Add(outputId);
-
-          if (replacementText != null &&
-              source.Attributes.GetUserString(vTitle.TitleFlagKey) ==
-                vTitle.TitleFlagValue)
-          {
-            changedTitleIds.Add(outputId);
-          }
-
-          if (copy && hasCopiedGroups && sourceGroups != null)
-          {
-            RecordCopiedGroupMembership(
+        if (!TryApplyMirroredTextOptions(
               doc,
-              sourceGroups,
               outputId,
-              copiedGroupMembers,
-              copiedGroupNames);
-          }
-        }
-
-        // Create each copied group once, with all member IDs in one call.
-        // This replaces per-object group-attribute bookkeeping.
-        if (copy && copiedGroupMembers.Count > 0)
+              flipText,
+              changeText,
+              textReplacements,
+              out var changedTitle,
+              out var modifiedText))
         {
-          CreateCopiedGroups(
-            doc, copiedGroupMembers, copiedGroupNames);
+          failed++;
+          continue;
         }
 
-        // vTitle owns the frame calculation. Only titles whose text actually
-        // changed require this extra document mutation.
-        foreach (var titleId in changedTitleIds.Distinct())
-          vTitle.SyncBoxForTitleNow(doc, titleId);
+        if (modifiedText)
+          modifiedTextObjects++;
+        if (changedTitle)
+          changedTitleIds.Add(outputId);
       }
 
-      // RhinoCommon has had the IEnumerable<Guid> selection overload since
-      // Rhino 5, so select the whole result set in one call.
-      if (outputIds.Count > 0)
-        doc.Objects.Select(outputIds);
+      foreach (var titleId in changedTitleIds)
+        vTitle.SyncBoxForTitleNow(doc, titleId);
+    }
+
+    doc.Objects.UnselectAll();
+    doc.Objects.Select(outputIds);
+    preview.Enabled = false;
+    doc.Views.Redraw();
+    Log.Write("vMirror",
+      $"mirrored={outputIds.Count} failed={failed} copy={copy} flipText={flipText} " +
+      $"modified_text={modifiedTextObjects} " +
+      $"changeText={changeText} action={selectionAction?.ToString() ?? "PickedPlane"} " +
+      $"distance={distance:G17}");
+    return outputIds.Count > 0 ? Result.Success : Result.Failure;
+  }
+
+  private static bool TryRunNativeMirror(
+    RhinoDoc doc,
+    IReadOnlyCollection<Guid> objectIds,
+    Plane mirrorPlane,
+    bool copy,
+    out List<Guid> outputIds)
+  {
+    outputIds = [];
+    if (!mirrorPlane.IsValid || objectIds.Count == 0)
+      return false;
+
+    var idsBefore = doc.Objects.Select(obj => obj.Id).ToHashSet();
+    var command = new StringBuilder(NativeMirrorCommand);
+    command
+      .Append(" _Copy=_")
+      .Append(copy ? "Yes" : "No")
+      .Append(" _3Point ")
+      .Append(FormatWorldPoint(mirrorPlane.Origin))
+      .Append(' ')
+      .Append(FormatWorldPoint(mirrorPlane.Origin + mirrorPlane.XAxis))
+      .Append(' ')
+      .Append(FormatWorldPoint(mirrorPlane.Origin + mirrorPlane.YAxis));
+
+    var redrawWasEnabled = doc.Views.RedrawEnabled;
+    var ran = false;
+    try
+    {
+      if (redrawWasEnabled)
+        doc.Views.EnableRedraw(false, false, false);
+      doc.Objects.UnselectAll();
+      doc.Objects.Select(objectIds);
+      ran = RhinoApp.RunScript(command.ToString(), false);
     }
     finally
     {
       if (redrawWasEnabled)
-        doc.Views.EnableRedraw(true, true, false);
+        doc.Views.EnableRedraw(true, false, false);
     }
-    Log.Write("vMirror",
-      $"mirrored={outputIds.Count} failed={failed} copy={copy} flipText={flipText} " +
-      $"changeText={changeText} action={selectionAction?.ToString() ?? "PickedPlane"} " +
-      $"distance={distance:G17}");
-    return outputIds.Count > 0 ? Result.Success : Result.Failure;
+
+    var selectedIds = doc.Objects
+      .GetSelectedObjects(includeLights: false, includeGrips: false)
+      .Select(obj => obj.Id)
+      .Where(id => id != Guid.Empty)
+      .Distinct()
+      .ToList();
+    var createdIds = doc.Objects
+      .Select(obj => obj.Id)
+      .Where(id => !idsBefore.Contains(id))
+      .ToList();
+
+    if (copy)
+      outputIds = createdIds;
+    else
+      outputIds = objectIds
+        .Concat(createdIds)
+        .Concat(selectedIds)
+        .Where(id => doc.Objects.FindId(id) != null)
+        .Distinct()
+        .ToList();
+
+    Log.Write(
+      "vMirror",
+      $"native_result ran={ran} inputs={objectIds.Count} created={createdIds.Count} " +
+      $"selected={selectedIds.Count} outputs={outputIds.Count} copy={copy} " +
+      $"input_types={GeometryTypeSummary(doc, objectIds)} " +
+      $"output_types={GeometryTypeSummary(doc, outputIds)}");
+    return outputIds.Count > 0;
+  }
+
+  private static List<Guid> ExpandGroupMembers(
+    RhinoDoc doc,
+    IEnumerable<Guid> objectIds)
+  {
+    var expandedIds = objectIds
+      .Where(id => id != Guid.Empty && doc.Objects.FindId(id) != null)
+      .ToHashSet();
+    var pendingGroups = new Queue<int>(
+      expandedIds
+        .SelectMany(id =>
+          doc.Objects.FindId(id)?.Attributes.GetGroupList() ?? Array.Empty<int>())
+        .Distinct());
+    var visitedGroups = new HashSet<int>();
+    while (pendingGroups.Count > 0)
+    {
+      var groupIndex = pendingGroups.Dequeue();
+      if (!visitedGroups.Add(groupIndex))
+        continue;
+
+      foreach (var member in doc.Groups.GroupMembers(groupIndex) ?? [])
+      {
+        if (member == null || member.Id == Guid.Empty)
+          continue;
+        if (expandedIds.Add(member.Id))
+        {
+          foreach (var nestedGroup in
+                   member.Attributes.GetGroupList() ?? Array.Empty<int>())
+            pendingGroups.Enqueue(nestedGroup);
+        }
+      }
+    }
+
+    return expandedIds.ToList();
+  }
+
+  private static string GeometryTypeSummary(
+    RhinoDoc doc,
+    IEnumerable<Guid> objectIds) =>
+    string.Join(
+      ',',
+      objectIds
+        .Select(doc.Objects.FindId)
+        .Where(obj => obj != null)
+        .GroupBy(obj => obj!.Geometry.GetType().Name)
+        .OrderBy(group => group.Key)
+        .Select(group => $"{group.Key}:{group.Count()}"));
+
+  private static string AnnotationDisplaySummary(AnnotationBase annotation)
+  {
+    var display = annotation switch
+    {
+      TextEntity text =>
+        $"orientation={text.TextOrientation} draw_forward={text.DrawForward}",
+      Dimension dimension =>
+        $"angle={dimension.TextAngleType} orientation={dimension.TextOrientation} " +
+        $"draw_forward={dimension.DrawForward}",
+      Leader leader =>
+        $"angle={leader.LeaderContentAngleStyle} " +
+        $"orientation={leader.DimensionStyle.LeaderTextOrientation} " +
+        $"draw_forward={leader.DrawForward}",
+      _ => $"draw_forward={annotation.DrawForward}",
+    };
+    var plane = annotation.Plane;
+    return $"type={annotation.GetType().Name} {display} " +
+           $"plane_x={FormatWorldVector(plane.XAxis)} " +
+           $"plane_y={FormatWorldVector(plane.YAxis)}";
+  }
+
+  private static string FormatWorldPoint(Point3d point) =>
+    $"w{point.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}," +
+    $"{point.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}," +
+    point.Z.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+  private static string FormatWorldVector(Vector3d vector) =>
+    $"{vector.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}," +
+    $"{vector.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}," +
+    vector.Z.ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+
+  private static bool TryApplyMirroredTextOptions(
+    RhinoDoc doc,
+    Guid objectId,
+    bool flipText,
+    bool changeText,
+    IReadOnlyList<TextReplacementRule> textReplacements,
+    out bool changedTitle,
+    out bool modifiedText)
+  {
+    changedTitle = false;
+    modifiedText = false;
+    var rhinoObject = doc.Objects.FindId(objectId);
+    if (rhinoObject?.Geometry is not AnnotationBase sourceAnnotation)
+      return rhinoObject != null;
+    if (!flipText && (!changeText || sourceAnnotation is not TextEntity))
+      return true;
+
+    using var annotation = sourceAnnotation.Duplicate() as AnnotationBase;
+    if (annotation == null)
+      return false;
+
+    var annotationBefore = flipText
+      ? AnnotationDisplaySummary(annotation)
+      : string.Empty;
+    var modified = false;
+    if (flipText)
+    {
+      if (!AnnotationTextTransform.MakeMirroredTextReadable(doc, annotation))
+        return false;
+      modified = true;
+      changedTitle =
+        rhinoObject.Attributes.GetUserString(vTitle.TitleFlagKey) ==
+        vTitle.TitleFlagValue;
+      Log.Write(
+        "vMirror",
+        $"annotation id={objectId} before=[{annotationBefore}] " +
+        $"after=[{AnnotationDisplaySummary(annotation)}]");
+    }
+
+    if (changeText && annotation is TextEntity text)
+    {
+      var original = text.PlainText ?? string.Empty;
+      var changed = ApplyTextReplacements(original, textReplacements);
+      if (!string.Equals(changed, original, StringComparison.Ordinal))
+      {
+        text.PlainText = changed;
+        modified = true;
+        changedTitle = rhinoObject.Attributes.GetUserString(vTitle.TitleFlagKey) ==
+          vTitle.TitleFlagValue;
+      }
+    }
+
+    if (!modified)
+      return true;
+
+    modifiedText = doc.Objects.Replace(objectId, annotation, false);
+    return modifiedText;
   }
 
   static (bool Copy, bool FlipText, bool ChangeText, double Distance, List<TextReplacementRule> Replacements, bool ReplacementsMissing) LoadOptions() =>
@@ -572,6 +669,8 @@ public sealed class vMirror : Rhino.Commands.Command
     YAxis,
     ZAxis,
     Object,
+    Horizontal,
+    Vertical,
     Left,
     Right,
     Top,
@@ -660,7 +759,8 @@ public sealed class vMirror : Rhino.Commands.Command
     // Phase 2: at least one object/group is now selected. Rebuild GetObject so
     // the complete option list can use EXACTLY the same order as
     // "Start of mirror plane":
-    // 3Point, Copy, XAxis, YAxis, ZAxis, Object, Left, Right, Top, Bottom,
+    // 3Point, Copy, XAxis, YAxis, ZAxis, Object, Horizontal, Vertical,
+    // Left, Right, Top, Bottom,
     // Distance, FlipText, SwapText, EditTextReplacements.
     //
     // The first GetObject leaves its selection selected in the document.
@@ -687,6 +787,8 @@ public sealed class vMirror : Rhino.Commands.Command
     int yAxisOption = get.AddOption(OptionYAxis);
     int zAxisOption = get.AddOption(OptionZAxis);
     int objectOption = get.AddOption(OptionObject);
+    int horizontalOption = get.AddOption(OptionHorizontal);
+    int verticalOption = get.AddOption(OptionVertical);
     int leftOption = get.AddOption(OptionLeft);
     int rightOption = get.AddOption(OptionRight);
     int topOption = get.AddOption(OptionTop);
@@ -732,6 +834,8 @@ public sealed class vMirror : Rhino.Commands.Command
           option == yAxisOption ? MirrorSelectionAction.YAxis :
           option == zAxisOption ? MirrorSelectionAction.ZAxis :
           option == objectOption ? MirrorSelectionAction.Object :
+          option == horizontalOption ? MirrorSelectionAction.Horizontal :
+          option == verticalOption ? MirrorSelectionAction.Vertical :
           option == leftOption ? MirrorSelectionAction.Left :
           option == rightOption ? MirrorSelectionAction.Right :
           option == topOption ? MirrorSelectionAction.Top :
@@ -808,6 +912,8 @@ public sealed class vMirror : Rhino.Commands.Command
       int yAxisOption = get.AddOption(OptionYAxis);
       int zAxisOption = get.AddOption(OptionZAxis);
       int objectOption = get.AddOption(OptionObject);
+      int horizontalOption = get.AddOption(OptionHorizontal);
+      int verticalOption = get.AddOption(OptionVertical);
       int leftOption = get.AddOption(OptionLeft);
       int rightOption = get.AddOption(OptionRight);
       int topOption = get.AddOption(OptionTop);
@@ -833,7 +939,7 @@ public sealed class vMirror : Rhino.Commands.Command
         }
         if (option == threePointOption)
           return TryGetThreePointPlane(
-            doc, objectIds, preview, ref copy, ref flipText, ref changeText,
+            doc, preview, ref copy, ref flipText, ref changeText,
             textReplacements, out mirrorPlane);
         if (option == xAxisOption)
         {
@@ -855,6 +961,12 @@ public sealed class vMirror : Rhino.Commands.Command
         if (option == objectOption)
           return TryGetObjectPlane(
             doc, ref copy, ref flipText, ref changeText, textReplacements, out mirrorPlane);
+        if (option == horizontalOption)
+          return TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: true, out mirrorPlane);
+        if (option == verticalOption)
+          return TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: false, out mirrorPlane);
         if (option == leftOption)
           return TryGetDirectionalMirrorPlane(
             doc, objectIds, constructionPlane, MirrorSide.Left, distance, out mirrorPlane);
@@ -960,6 +1072,8 @@ public sealed class vMirror : Rhino.Commands.Command
       get.SetCommandPrompt("End of mirror plane");
       get.SetBasePoint(firstPoint, true);
       get.DrawLineFromPoint(firstPoint, true);
+      int horizontalOption = get.AddOption(OptionHorizontal);
+      int verticalOption = get.AddOption(OptionVertical);
       var copyToggle = new OptionToggle(copy, "No", "Yes");
       var flipToggle = new OptionToggle(flipText, "No", "Yes");
       var changeTextToggle = new OptionToggle(changeText, "No", "Yes");
@@ -1000,6 +1114,16 @@ public sealed class vMirror : Rhino.Commands.Command
       if (result == GetResult.Option)
       {
         doc.Views.Redraw();
+        if (get.OptionIndex() == horizontalOption)
+        {
+          return TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: true, out mirrorPlane);
+        }
+        if (get.OptionIndex() == verticalOption)
+        {
+          return TryGetCenteredAxisMirrorPlane(
+            doc, objectIds, constructionPlane, horizontal: false, out mirrorPlane);
+        }
         if (get.OptionIndex() == textReplacementsOption)
           EditTextReplacements(textReplacements);
         continue;
@@ -1029,8 +1153,43 @@ public sealed class vMirror : Rhino.Commands.Command
     return mirrorPlane.IsValid;
   }
 
+  static bool TryGetCenteredAxisMirrorPlane(
+    RhinoDoc doc,
+    IReadOnlyList<Guid> objectIds,
+    Plane constructionPlane,
+    bool horizontal,
+    out Plane mirrorPlane)
+  {
+    mirrorPlane = Plane.Unset;
+    BoundingBox bounds = BoundingBox.Unset;
+    foreach (var objectId in objectIds)
+    {
+      var source = doc.Objects.FindId(objectId);
+      if (source == null)
+        continue;
+
+      var objectBounds = source.Geometry.GetBoundingBox(constructionPlane);
+      if (!objectBounds.IsValid)
+        continue;
+      if (!bounds.IsValid)
+        bounds = objectBounds;
+      else
+        bounds.Union(objectBounds);
+    }
+
+    if (!bounds.IsValid)
+      return false;
+
+    var origin = constructionPlane.PointAt(bounds.Center.X, bounds.Center.Y);
+    mirrorPlane = new Plane(
+      origin,
+      horizontal ? constructionPlane.XAxis : constructionPlane.YAxis,
+      constructionPlane.Normal);
+    return mirrorPlane.IsValid;
+  }
+
   static bool TryGetThreePointPlane(
-    RhinoDoc doc, IReadOnlyList<Guid> objectIds, MirrorPreviewConduit preview,
+    RhinoDoc doc, MirrorPreviewConduit preview,
     ref bool copy, ref bool flipText, ref bool changeText,
     List<TextReplacementRule> textReplacements, out Plane mirrorPlane)
   {
@@ -1041,15 +1200,14 @@ public sealed class vMirror : Rhino.Commands.Command
       return false;
     if (!TryGetPlainPoint(
           "Second point of mirror plane", ref copy, ref flipText, ref changeText,
-          textReplacements, out var second))
+          textReplacements, out var second, basePoint: first))
       return false;
 
     while (true)
     {
       var get = new GetPoint();
       get.SetCommandPrompt("Third point of mirror plane");
-      get.SetBasePoint(second, true);
-      get.DrawLineFromPoint(second, true);
+      get.SetBasePoint(first, true);
       var copyToggle = new OptionToggle(copy, "No", "Yes");
       var flipToggle = new OptionToggle(flipText, "No", "Yes");
       var changeTextToggle = new OptionToggle(changeText, "No", "Yes");
@@ -1060,9 +1218,14 @@ public sealed class vMirror : Rhino.Commands.Command
       preview.SetGhostOriginals(!copy);
       get.DynamicDraw += (_, e) =>
       {
-        var dynamicPlane = new Plane(first, second, e.CurrentPoint);
-        if (!dynamicPlane.IsValid)
+        if (!TryBuildThreePointPlaneCue(
+              first,
+              second,
+              e.CurrentPoint,
+              out var dynamicPlane,
+              out var cue))
           return;
+        e.Display.DrawPolyline(cue, ThreePointCueColor, ThreePointCueThickness);
         preview.DrawMirrored(
           e.Display,
           Transform.Mirror(dynamicPlane),
@@ -1098,8 +1261,12 @@ public sealed class vMirror : Rhino.Commands.Command
         return false;
       }
 
-      mirrorPlane = new Plane(first, second, get.Point());
-      if (mirrorPlane.IsValid)
+      if (TryBuildThreePointPlaneCue(
+            first,
+            second,
+            get.Point(),
+            out mirrorPlane,
+            out _))
         return true;
 
       doc.Views.Redraw();
@@ -1109,13 +1276,19 @@ public sealed class vMirror : Rhino.Commands.Command
 
   static bool TryGetPlainPoint(
     string prompt, ref bool copy, ref bool flipText, ref bool changeText,
-    List<TextReplacementRule> textReplacements, out Point3d point)
+    List<TextReplacementRule> textReplacements, out Point3d point,
+    Point3d? basePoint = null)
   {
     point = Point3d.Unset;
     while (true)
     {
       var get = new GetPoint();
       get.SetCommandPrompt(prompt);
+      if (basePoint is { } anchor && anchor.IsValid)
+      {
+        get.SetBasePoint(anchor, true);
+        get.DrawLineFromPoint(anchor, true);
+      }
       var copyToggle = new OptionToggle(copy, "No", "Yes");
       var flipToggle = new OptionToggle(flipText, "No", "Yes");
       var changeTextToggle = new OptionToggle(changeText, "No", "Yes");
@@ -1136,6 +1309,35 @@ public sealed class vMirror : Rhino.Commands.Command
       point = get.Point();
       return point.IsValid;
     }
+  }
+
+  static bool TryBuildThreePointPlaneCue(
+    Point3d first,
+    Point3d second,
+    Point3d current,
+    out Plane plane,
+    out Polyline cue)
+  {
+    plane = Plane.Unset;
+    cue = new Polyline();
+    var firstEdge = second - first;
+    if (!firstEdge.Unitize())
+      return false;
+
+    var toCurrent = current - first;
+    var perpendicularOffset =
+      toCurrent - firstEdge * Vector3d.Multiply(toCurrent, firstEdge);
+    if (perpendicularOffset.IsTiny())
+      return false;
+
+    var projectedThird = first + perpendicularOffset;
+    plane = new Plane(first, second, projectedThird);
+    if (!plane.IsValid)
+      return false;
+
+    var fourth = second + perpendicularOffset;
+    cue = new Polyline([first, second, fourth, projectedThird, first]);
+    return cue.IsValid;
   }
 
   static bool TryGetObjectPlane(
@@ -1664,95 +1866,6 @@ public sealed class vMirror : Rhino.Commands.Command
     internal int Direction { get; }
   }
 
-  static bool GetCustomTextProcessing(
-    RhinoObject source,
-    bool flipText,
-    bool changeText,
-    IReadOnlyList<TextReplacementRule> textReplacements,
-    out string? replacementText)
-  {
-    replacementText = null;
-
-    if (source.Geometry is not TextEntity text)
-      return false;
-
-    bool needsCustom = flipText;
-
-    if (changeText &&
-        source.Attributes.GetUserString(vTitle.TitleFlagKey) ==
-          vTitle.TitleFlagValue)
-    {
-      string original = text.PlainText ?? string.Empty;
-      string changed = ApplyTextReplacements(
-        original, textReplacements);
-
-      if (!string.Equals(
-            changed, original, StringComparison.Ordinal))
-      {
-        replacementText = changed;
-        needsCustom = true;
-      }
-    }
-
-    return needsCustom;
-  }
-
-  static bool TryPrepareMirroredGeometry(
-    RhinoObject source,
-    Transform mirror,
-    bool flipText,
-    string? replacementText,
-    out GeometryBase preparedGeometry)
-  {
-    preparedGeometry = null!;
-
-    GeometryBase? geometry = source.Geometry.Duplicate();
-    if (geometry == null)
-      return false;
-
-    if (!geometry.Transform(mirror))
-    {
-      geometry.Dispose();
-      return false;
-    }
-
-    if (flipText && geometry is TextEntity mirroredText)
-    {
-      Transform flip = TextFlipTransform(
-        mirroredText, Transform.Identity);
-      if (!mirroredText.Transform(flip))
-      {
-        geometry.Dispose();
-        return false;
-      }
-    }
-
-    if (replacementText != null &&
-        geometry is TextEntity titleText)
-    {
-      titleText.PlainText = replacementText;
-    }
-
-    preparedGeometry = geometry;
-    return true;
-  }
-
-  static bool TryRestoreMirroredOrientation(RhinoDoc doc, Guid objectId)
-  {
-    var rhinoObject = doc.Objects.FindId(objectId);
-    if (rhinoObject == null || !HasDirectionalFaces(rhinoObject.Geometry))
-      return true;
-
-    using var geometry = rhinoObject.Geometry.Duplicate();
-    if (geometry == null || !RestoreMirroredOrientation(geometry))
-      return false;
-
-    return doc.Objects.Replace(objectId, geometry, false);
-  }
-
-  static bool HasDirectionalFaces(GeometryBase geometry) =>
-    geometry is Brep or Surface or Mesh or SubD;
-
   static bool RestoreMirroredOrientation(GeometryBase geometry)
   {
     switch (geometry)
@@ -1776,75 +1889,6 @@ public sealed class vMirror : Rhino.Commands.Command
     }
   }
 
-  static void RecordCopiedGroupMembership(
-    RhinoDoc doc,
-    IReadOnlyList<int> sourceGroups,
-    Guid outputId,
-    Dictionary<int, List<Guid>> copiedGroupMembers,
-    Dictionary<int, string?> copiedGroupNames)
-  {
-    foreach (int sourceGroupIndex in sourceGroups)
-    {
-      if (!copiedGroupMembers.TryGetValue(
-            sourceGroupIndex, out var members))
-      {
-        members = new List<Guid>();
-        copiedGroupMembers[sourceGroupIndex] = members;
-
-        // Capture the source name BEFORE adding any groups. Rhino documents
-        // that adding groups can invalidate group indices in some cases.
-        copiedGroupNames[sourceGroupIndex] =
-          doc.Groups.GroupName(sourceGroupIndex);
-      }
-
-      members.Add(outputId);
-    }
-  }
-
-  static void CreateCopiedGroups(
-    RhinoDoc doc,
-    Dictionary<int, List<Guid>> copiedGroupMembers,
-    Dictionary<int, string?> copiedGroupNames)
-  {
-    foreach (var pair in copiedGroupMembers)
-    {
-      var members = pair.Value
-        .Where(id => id != Guid.Empty)
-        .Distinct()
-        .ToList();
-
-      if (members.Count == 0)
-        continue;
-
-      copiedGroupNames.TryGetValue(
-        pair.Key, out string? sourceName);
-
-      if (string.IsNullOrWhiteSpace(sourceName))
-      {
-        doc.Groups.Add(members);
-      }
-      else
-      {
-        string copiedName = OrientCommon.MakeUniqueGroupName(
-          doc, sourceName + "_copy");
-        doc.Groups.Add(copiedName, members);
-      }
-    }
-  }
-
-  static Transform TextFlipTransform(TextEntity source, Transform initial)
-  {
-    using var text = source.Duplicate() as TextEntity;
-    if (text == null || !text.Transform(initial))
-      return Transform.Identity;
-    Plane plane = text.Plane;
-    Transform flip = Transform.Rotation(Math.PI, plane.XAxis, plane.Origin);
-    text.Transform(flip);
-    plane = text.Plane;
-    Transform rotate = Transform.Rotation(Math.PI, plane.Normal, plane.Origin);
-    return rotate * flip;
-  }
-
   sealed class MirrorPreviewConduit : DisplayConduit, IDisposable
   {
     readonly RhinoDoc _doc;
@@ -1860,6 +1904,12 @@ public sealed class vMirror : Rhino.Commands.Command
       BackTransparency = PreviewGhostTransparency,
     };
     bool _ghostOriginals;
+    bool _hasPersistentMirror;
+    Transform _persistentMirror;
+    bool _persistentFlipText;
+    bool _persistentChangeText;
+    IReadOnlyList<TextReplacementRule> _persistentTextReplacements =
+      Array.Empty<TextReplacementRule>();
 
     internal MirrorPreviewConduit(RhinoDoc doc, IEnumerable<Guid> objectIds)
     {
@@ -1870,6 +1920,19 @@ public sealed class vMirror : Rhino.Commands.Command
     internal void SetGhostOriginals(bool ghostOriginals) =>
       _ghostOriginals = ghostOriginals;
 
+    internal void SetPersistentMirror(
+      Transform mirror,
+      bool flipText,
+      bool changeText,
+      IReadOnlyList<TextReplacementRule> textReplacements)
+    {
+      _persistentMirror = mirror;
+      _persistentFlipText = flipText;
+      _persistentChangeText = changeText;
+      _persistentTextReplacements = textReplacements;
+      _hasPersistentMirror = true;
+    }
+
     protected override void ObjectCulling(CullObjectEventArgs e)
     {
       if (_ghostOriginals && e.RhinoObject != null && _objectIds.Contains(e.RhinoObject.Id))
@@ -1878,32 +1941,40 @@ public sealed class vMirror : Rhino.Commands.Command
 
     protected override void PostDrawObjects(DrawEventArgs e)
     {
-      if (!_ghostOriginals)
-        return;
+      if (_ghostOriginals)
+      {
+        var sources = _objectIds
+          .Select(_doc.Objects.FindId)
+          .Where(source => source != null)
+          .Cast<RhinoObject>()
+          .ToList();
+        foreach (var source in sources.Where(source => !IsPointMarker(source)))
+        {
+          DrawGeometry(
+            e.Display, source, Transform.Identity,
+            flipText: false,
+            changeText: false,
+            textReplacements: Array.Empty<TextReplacementRule>(),
+            selected: false);
+        }
+        foreach (var source in sources.Where(IsPointMarker))
+        {
+          DrawGeometry(
+            e.Display, source, Transform.Identity,
+            flipText: false,
+            changeText: false,
+            textReplacements: Array.Empty<TextReplacementRule>(),
+            selected: false);
+        }
+      }
 
-      var sources = _objectIds
-        .Select(_doc.Objects.FindId)
-        .Where(source => source != null)
-        .Cast<RhinoObject>()
-        .ToList();
-      foreach (var source in sources.Where(source => !IsPointMarker(source)))
-      {
-        DrawGeometry(
-          e.Display, source, Transform.Identity,
-          flipText: false,
-          changeText: false,
-          textReplacements: Array.Empty<TextReplacementRule>(),
-          selected: false);
-      }
-      foreach (var source in sources.Where(IsPointMarker))
-      {
-        DrawGeometry(
-          e.Display, source, Transform.Identity,
-          flipText: false,
-          changeText: false,
-          textReplacements: Array.Empty<TextReplacementRule>(),
-          selected: false);
-      }
+      if (_hasPersistentMirror)
+        DrawMirrored(
+          e.Display,
+          _persistentMirror,
+          _persistentFlipText,
+          _persistentChangeText,
+          _persistentTextReplacements);
     }
 
     internal void DrawMirrored(
@@ -1924,8 +1995,12 @@ public sealed class vMirror : Rhino.Commands.Command
         foreach (var objectId in _objectIds)
         {
           var source = _doc.Objects.FindId(objectId);
-          if (!TryGetChangedPreviewTitle(
-                source, textReplacements, out var changedText))
+          if (!TryGetPreviewTitleFrame(
+                source,
+                flipText,
+                changeText,
+                textReplacements,
+                out var changedText))
             continue;
 
           var frameIds = GetSelectedTitleFrameIds(source!);
@@ -1951,7 +2026,7 @@ public sealed class vMirror : Rhino.Commands.Command
           flipText, changeText, textReplacements, selected: true);
 
         if (changedTitles.TryGetValue(source.Id, out var changedText))
-          DrawChangedTitleFrame(
+          DrawTitleFrame(
             display, source, mirror, flipText, changedText, PreviewSelectedColor);
       }
       foreach (var source in previewSources.Where(IsPointMarker))
@@ -1962,20 +2037,25 @@ public sealed class vMirror : Rhino.Commands.Command
       }
     }
 
-    bool TryGetChangedPreviewTitle(
+    bool TryGetPreviewTitleFrame(
       RhinoObject? source,
+      bool flipText,
+      bool changeText,
       IReadOnlyList<TextReplacementRule> textReplacements,
-      out string changedText)
+      out string previewText)
     {
-      changedText = string.Empty;
+      previewText = string.Empty;
       if (source?.Geometry is not TextEntity text ||
           source.Attributes.GetUserString(vTitle.TitleFlagKey) !=
             vTitle.TitleFlagValue)
         return false;
 
       string original = text.PlainText ?? string.Empty;
-      changedText = ApplyTextReplacements(original, textReplacements);
-      return !string.Equals(changedText, original, StringComparison.Ordinal);
+      previewText = changeText
+        ? ApplyTextReplacements(original, textReplacements)
+        : original;
+      return flipText ||
+             !string.Equals(previewText, original, StringComparison.Ordinal);
     }
 
     List<Guid> GetSelectedTitleFrameIds(RhinoObject titleSource)
@@ -2016,7 +2096,7 @@ public sealed class vMirror : Rhino.Commands.Command
         : [];
     }
 
-    static void DrawChangedTitleFrame(
+    static void DrawTitleFrame(
       DisplayPipeline display,
       RhinoObject titleSource,
       Transform mirror,
@@ -2039,7 +2119,8 @@ public sealed class vMirror : Rhino.Commands.Command
       // The flip transform depends on the title plane, not its string content.
       Transform applied = mirror;
       if (flipText)
-        applied = TextFlipTransform(sourceText, mirror) * mirror;
+        applied = AnnotationTextTransform.TextEntityFlipTransform(
+          sourceText, mirror) * mirror;
 
       if (!frame.Transform(applied))
         return;
@@ -2084,9 +2165,11 @@ public sealed class vMirror : Rhino.Commands.Command
         }
 
         Transform applied = transform;
-        if (flipText && geometry is TextEntity sourceText)
-          applied = TextFlipTransform(sourceText, transform) * transform;
         if (!geometry.Transform(applied))
+          return;
+        if (flipText && geometry is AnnotationBase annotationGeometry &&
+            !AnnotationTextTransform.MakeMirroredTextReadable(
+              _doc, annotationGeometry))
           return;
         if (applied.Determinant < 0.0 &&
             !RestoreMirroredOrientation(geometry))
@@ -2163,7 +2246,19 @@ public sealed class vMirror : Rhino.Commands.Command
                   : PreviewGhostThicknessOffset));
             break;
           case TextEntity text:
+            text.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(
+              _doc,
+              text,
+              _doc.Views.ActiveView?.ActiveViewport);
             display.DrawAnnotation(text, color);
+            break;
+          case AnnotationBase displayedAnnotation:
+            displayedAnnotation.DimensionScale =
+              AnnotationTextTransform.ResolveDisplayDimensionScale(
+                _doc,
+                displayedAnnotation,
+                _doc.Views.ActiveView?.ActiveViewport);
+            display.DrawAnnotation(displayedAnnotation, color);
             break;
           case TextDot dot:
             display.PushDepthTesting(false);

@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Duplicates selected object edges and carries source grouping to the output.
 /// </summary>
-public sealed class vDupEdge : Command
+public sealed class vDupEdge : vToolsCommand
 {
   private const string SectionName = "vDupEdge";
   private const string GroupIfNoneKey = "groupIfNone";

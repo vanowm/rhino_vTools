@@ -18,7 +18,7 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vUzip : Command
+public sealed class vUzip : vToolsCommand
 {
   public override string EnglishName => "vUzip";
 

@@ -13,7 +13,7 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vSmooth : Command
+public sealed class vSmooth : vToolsCommand
 {
   private const string SectionName      = "vSmooth";
   private const string StrengthStartKey = "strengthStart";

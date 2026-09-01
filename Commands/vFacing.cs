@@ -19,7 +19,7 @@ namespace vTools.Commands;
 /// All output curves are placed on the same layer as their corresponding input.
 /// The offset curve inherits the layer of the base.
 /// </summary>
-public sealed class vFacing : Command
+public sealed class vFacing : vToolsCommand
 {
   // Option defaults
   private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.

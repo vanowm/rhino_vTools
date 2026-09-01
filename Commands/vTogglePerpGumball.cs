@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Toggles the perpendicular gumball monitor on and off.
 /// </summary>
-public sealed class vTogglePerpGumball : Command
+public sealed class vTogglePerpGumball : vToolsCommand
 {
   // Defaults
   internal const bool DefaultEnabled = false; // true auto-orients eligible gumballs at startup; false leaves them unchanged.

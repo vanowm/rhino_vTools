@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// Adds points along a destination curve by picking corresponding arc-length
 /// positions on a source curve.
 /// </summary>
-public sealed class vPointTrace : Command
+public sealed class vPointTrace : vToolsCommand
 {
   /// <summary>
   /// Rhino command name.

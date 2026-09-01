@@ -14,7 +14,7 @@ namespace vTools.Commands;
 /// Runs a delegated command with a temporary global selection filter.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vFilterExec : Command
+public sealed class vFilterExec : vToolsCommand
 {
   // Defaults
   private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.

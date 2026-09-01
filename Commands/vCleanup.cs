@@ -16,7 +16,7 @@ namespace vTools.Commands;
 /// Simplifies curves, finds overlaps, and locates short curve geometry and control spans.
 /// </summary>
 [CommandStyle(Style.ScriptRunner)]
-public sealed class vCleanup : Command
+public sealed class vCleanup : vToolsCommand
 {
   // Option defaults
   private const double DefaultThreshold = 0.02; // Maximum short-geometry length in model units; zero or greater.
@@ -121,10 +121,15 @@ public sealed class vCleanup : Command
   {
     DisableHighlight(doc);
     LoadOptions();
+    var overlapSettings = vOverlaps.GetDetectionSettings();
+    var overlapSegments = overlapSettings.OverlapSegments;
 
-    var selectionResult = GetScope(doc, out var scopedIds);
+    var selectionResult = GetScope(doc, ref overlapSegments, out var scopedIds);
     if (selectionResult != Result.Success)
       return selectionResult;
+    overlapSettings = (
+      overlapSettings.Tolerance,
+      overlapSegments);
 
     var inputObjects = ResolveScopeObjects(doc, scopedIds);
     var inputCurves = inputObjects
@@ -140,7 +145,8 @@ public sealed class vCleanup : Command
     var deleteShort = IncludesShort(_autoDeleteMode);
     var deleteOverlaps = IncludesOverlaps(_autoDeleteMode);
     var historyRecords = new HashSet<Guid>();
-    if (_simplifyCurves || autoDeleteEnabled)
+    if (_simplifyCurves || autoDeleteEnabled ||
+        (_findOverlaps && overlapSettings.OverlapSegments))
       foreach (var obj in inputCurves)
         historyRecords.UnionWith(HistoryBreakWarning.CaptureAffectedRecords(doc, obj.Id));
     if (!HistoryBreakWarning.Confirm(doc, EnglishName, historyRecords))
@@ -155,20 +161,30 @@ public sealed class vCleanup : Command
     inputObjects = ResolveScopeObjects(doc, scopedIds);
     inputCurves = inputObjects.Where(obj => obj.Geometry is Curve).ToList();
 
-    (double Tolerance, bool Segments) overlapSettings = _findOverlaps
-      ? vOverlaps.GetDetectionSettings()
-      : default;
-    OverlapFinder.Result overlaps = new([], 0, 0, 0);
+    OverlapFinder.Result overlaps = new([], [], [], 0, 0, 0, 0);
+    var overlapTargetIds = new HashSet<Guid>();
+    var splitOverlapSourceCount = 0;
     if (_findOverlaps)
+    {
       overlaps = OverlapFinder.Find(
         inputCurves,
         overlapSettings.Tolerance,
-        overlapSettings.Segments);
+        ResolveConnectivityCurves(doc));
+      overlapTargetIds = ResolveOverlapTargets(
+        doc,
+        overlaps,
+        overlapSettings,
+        scopedIds,
+        out var splitSourceCount);
+      splitOverlapSourceCount += splitSourceCount;
+      inputObjects = ResolveScopeObjects(doc, scopedIds);
+      inputCurves = inputObjects.Where(obj => obj.Geometry is Curve).ToList();
+    }
 
     var shortAnalysis = AnalyzeShortGeometry(inputCurves, _threshold);
-    var foundOverlapCount = overlaps.CoveredObjectIds.Count;
+    var foundOverlapCount = overlapTargetIds.Count;
     var foundShortCount = shortAnalysis.Hits.Count;
-    IReadOnlyCollection<Guid> availableOverlapIds = overlaps.CoveredObjectIds;
+    IReadOnlyCollection<Guid> availableOverlapIds = overlapTargetIds;
     IReadOnlyCollection<ShortHit> availableShortHits = shortAnalysis.Hits;
     var helperIds = new List<Guid>();
     var deletedOverlapCount = 0;
@@ -179,7 +195,7 @@ public sealed class vCleanup : Command
     {
       doc.Objects.UnselectAll();
       if (deleteOverlaps)
-        deletedOverlapCount = SelectObjects(doc, overlaps.CoveredObjectIds);
+        deletedOverlapCount = SelectObjects(doc, overlapTargetIds);
       if (deleteShort)
         deletedShortCount = SelectShortHits(
           doc,
@@ -207,12 +223,27 @@ public sealed class vCleanup : Command
       inputCurves = ResolveScopeObjects(doc, scopedIds)
         .Where(obj => obj.Geometry is Curve)
         .ToList();
-      availableOverlapIds = deleteOverlaps || !_findOverlaps
-        ? []
-        : OverlapFinder.Find(
-            inputCurves,
-            overlapSettings.Tolerance,
-            overlapSettings.Segments).CoveredObjectIds;
+      if (deleteOverlaps || !_findOverlaps)
+      {
+        availableOverlapIds = [];
+      }
+      else
+      {
+        var refreshedOverlaps = OverlapFinder.Find(
+          inputCurves,
+          overlapSettings.Tolerance,
+          ResolveConnectivityCurves(doc));
+        availableOverlapIds = ResolveOverlapTargets(
+          doc,
+          refreshedOverlaps,
+          overlapSettings,
+          scopedIds,
+          out var refreshedSplitSourceCount);
+        splitOverlapSourceCount += refreshedSplitSourceCount;
+        inputCurves = ResolveScopeObjects(doc, scopedIds)
+          .Where(obj => obj.Geometry is Curve)
+          .ToList();
+      }
       availableShortHits = deleteShort
         ? []
         : AnalyzeShortGeometry(inputCurves, _threshold).Hits;
@@ -220,7 +251,7 @@ public sealed class vCleanup : Command
     }
     else
     {
-      SaveObjectNamedSelection(doc, OverlapSelectionName, overlaps.CoveredObjectIds);
+      SaveObjectNamedSelection(doc, OverlapSelectionName, overlapTargetIds);
       doc.Objects.UnselectAll();
       var namedShortCount = SelectShortHits(
         doc,
@@ -267,6 +298,7 @@ public sealed class vCleanup : Command
       $"scope={inputCurves.Count} simplified={simplifiedCount} " +
       $"finalSimplified={finalSimplifiedCount} " +
       $"overlaps={foundOverlapCount}/{overlaps.ItemCount} short={foundShortCount} " +
+      $"overlapSegments={overlapSettings.OverlapSegments} splitSources={splitOverlapSourceCount} " +
       $"autoDelete={_autoDeleteMode} deletedOverlaps={deletedOverlapCount} deletedShort={deletedShortCount} " +
       $"preselect={_preselectMode} selectedOverlaps={preselectedOverlapCount} selectedShort={preselectedShortCount} " +
       $"segments={shortAnalysis.ScannedSegments} controlSpans={shortAnalysis.ScannedControlSpans} " +
@@ -293,7 +325,10 @@ public sealed class vCleanup : Command
     RhinoApp.Idle += idleHandler;
   }
 
-  private static Result GetScope(RhinoDoc doc, out HashSet<Guid> scopedIds)
+  private static Result GetScope(
+    RhinoDoc doc,
+    ref bool overlapSegments,
+    out HashSet<Guid> scopedIds)
   {
     scopedIds = [];
     using var getter = new GetObject();
@@ -318,6 +353,7 @@ public sealed class vCleanup : Command
       var highlightOption = new OptionToggle(_highlightShort, "No", "Yes");
       var simplifyOption = new OptionToggle(_simplifyCurves, "No", "Yes");
       var overlapOption = new OptionToggle(_findOverlaps, "No", "Yes");
+      var overlapSegmentsOption = new OptionToggle(overlapSegments, "No", "Yes");
       getter.AddOptionDouble("Threshold", ref thresholdOption);
       getter.AddOptionToggle("HighlightShort", ref highlightOption);
       var preselectOptionIndex = getter.AddOptionList(
@@ -330,12 +366,15 @@ public sealed class vCleanup : Command
         (int)_autoDeleteMode);
       getter.AddOptionToggle("SimplifyCrv", ref simplifyOption);
       getter.AddOptionToggle("Overlaps", ref overlapOption);
+      getter.AddOptionToggle("OverlapSegments", ref overlapSegmentsOption);
 
       var result = getter.GetMultiple(0, 0);
       _threshold = thresholdOption.CurrentValue;
       _highlightShort = highlightOption.CurrentValue;
       _simplifyCurves = simplifyOption.CurrentValue;
       _findOverlaps = overlapOption.CurrentValue;
+      overlapSegments = overlapSegmentsOption.CurrentValue;
+      vOverlaps.SetOverlapSegments(overlapSegments);
       if (result == GetResult.Option)
       {
         var selectedOption = getter.Option();
@@ -406,6 +445,73 @@ public sealed class vCleanup : Command
       .GetObjectList(settings)
       .Where(obj => obj?.Geometry is Curve)
       .ToList();
+  }
+
+  private static List<RhinoObject> ResolveConnectivityCurves(RhinoDoc doc)
+  {
+    var settings = new ObjectEnumeratorSettings
+    {
+      IncludeLights = false,
+      IncludeGrips = false,
+      IncludePhantoms = false,
+      NormalObjects = true,
+      LockedObjects = true,
+      HiddenObjects = false,
+      DeletedObjects = false
+    };
+    return doc.Objects
+      .GetObjectList(settings)
+      .Where(obj => obj?.Geometry is Curve)
+      .ToList();
+  }
+
+  private static HashSet<Guid> ResolveOverlapTargets(
+    RhinoDoc doc,
+    OverlapFinder.Result overlaps,
+    (double Tolerance, bool OverlapSegments) settings,
+    HashSet<Guid> scopedIds,
+    out int splitSourceCount)
+  {
+    var targetIds = new HashSet<Guid>(overlaps.CoveredObjectIds);
+    var remainingPartialIds = new HashSet<Guid>(
+      overlaps.PartiallyOverlappingObjectIds);
+    splitSourceCount = 0;
+
+    if (!settings.OverlapSegments)
+    {
+      targetIds.UnionWith(remainingPartialIds);
+      return targetIds;
+    }
+
+    if (overlaps.PartialOverlapSpans.Count == 0)
+      return targetIds;
+
+    var undoRecord = doc.BeginUndoRecord("vCleanup Overlap Segments");
+    OverlapSegmentProcessor.Result materialized;
+    try
+    {
+      materialized = OverlapSegmentProcessor.Materialize(
+        doc,
+        overlaps.PartialOverlapSpans,
+        overlaps.CoveredObjectIds,
+        settings.Tolerance);
+    }
+    finally
+    {
+      if (undoRecord != 0)
+        doc.EndUndoRecord(undoRecord);
+    }
+
+    splitSourceCount = materialized.SplitSourceCount;
+    remainingPartialIds.ExceptWith(materialized.ProcessedSourceObjectIds);
+    targetIds.UnionWith(materialized.OverlapObjectIds);
+    if (remainingPartialIds.Count > 0)
+      Log.Write(
+        "vCleanup",
+        $"overlap segment isolation skipped sources={remainingPartialIds.Count}");
+    if (scopedIds.Count > 0)
+      scopedIds.UnionWith(materialized.ResultObjectIds);
+    return targetIds;
   }
 
   private static int SimplifyCurves(RhinoDoc doc, IReadOnlyCollection<RhinoObject> curves)

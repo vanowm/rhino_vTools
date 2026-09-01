@@ -16,7 +16,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Places a point at a configurable center of selected geometry.
 /// </summary>
-public sealed class vCenter : Command
+public sealed class vCenter : vToolsCommand
 {
   private const string OptionsSectionName = "vCenter";
   private const string MethodKey = "method";

@@ -8,7 +8,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native two-point orient command that maps source and target axes using planes.
 /// </summary>
-public sealed class vOrient2pt : Command
+public sealed class vOrient2pt : vToolsCommand
 {
   /// <summary>
   /// Rhino command name.

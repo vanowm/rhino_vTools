@@ -11,8 +11,11 @@ namespace vTools.Commands;
 /// <summary>
 /// Native text flip/rotate command ported from TextFlip.py.
 /// </summary>
-public sealed class vTextFlip : Command
+public sealed class vTextFlip : vToolsCommand
 {
+  // Customizable interaction constants.
+  private const double QuarterTurnRadians = Math.PI * 0.5; // Clockwise/counterclockwise text rotation increment in radians.
+
   /// <summary>
   /// Rhino command name.
   /// </summary>
@@ -28,8 +31,7 @@ public sealed class vTextFlip : Command
     // Match Python startup behavior: preselected text flips immediately.
     if (selectedIds.Count > 0)
     {
-      selectedIds = DoFlip(doc, selectedIds, world: false);
-      selectedIds = DoRotate(doc, selectedIds, Math.PI);
+      selectedIds = DoFlip(doc, selectedIds);
       Highlight(doc, selectedIds);
     }
 
@@ -76,8 +78,7 @@ public sealed class vTextFlip : Command
             continue;
           }
 
-          selectedIds = DoFlip(doc, selectedIds, world: false);
-          selectedIds = DoRotate(doc, selectedIds, Math.PI);
+          selectedIds = DoFlip(doc, selectedIds);
           Highlight(doc, selectedIds);
           continue;
         }
@@ -90,7 +91,7 @@ public sealed class vTextFlip : Command
             continue;
           }
 
-          selectedIds = DoRotate(doc, selectedIds, Math.PI * 0.5);
+          selectedIds = DoRotate(doc, selectedIds, QuarterTurnRadians);
           Highlight(doc, selectedIds);
           continue;
         }
@@ -140,7 +141,7 @@ public sealed class vTextFlip : Command
     doc.Views.Redraw();
   }
 
-  private static List<Guid> DoFlip(RhinoDoc doc, IReadOnlyList<Guid> ids, bool world)
+  private static List<Guid> DoFlip(RhinoDoc doc, IReadOnlyList<Guid> ids)
   {
     var newIds = new List<Guid>();
 
@@ -150,18 +151,17 @@ public sealed class vTextFlip : Command
       if (obj == null)
         continue;
 
-      Transform transform;
-      if (world)
-      {
-        transform = Transform.Scale(Plane.WorldXY, 1.0, 1.0, -1.0);
-      }
-      else
-      {
-        var plane = ObjectPlaneFor(obj);
-        transform = Transform.Rotation(Math.PI, plane.XAxis, plane.Origin);
-      }
+      if (obj.Geometry is not AnnotationBase source)
+        continue;
 
-      var newId = doc.Objects.Transform(obj.Id, transform, true);
+      using var annotation = source.Duplicate() as AnnotationBase;
+      if (annotation == null ||
+          !AnnotationTextTransform.FlipTextFrame(annotation))
+        continue;
+
+      var newId = doc.Objects.Replace(obj.Id, annotation, false)
+        ? obj.Id
+        : Guid.Empty;
       if (newId != Guid.Empty)
         newIds.Add(newId);
     }
@@ -179,9 +179,17 @@ public sealed class vTextFlip : Command
       if (obj == null)
         continue;
 
-      var plane = ObjectPlaneFor(obj);
-      var transform = Transform.Rotation(angleRadians, plane.Normal, plane.Origin);
-      var newId = doc.Objects.Transform(obj.Id, transform, true);
+      if (obj.Geometry is not AnnotationBase source)
+        continue;
+
+      using var annotation = source.Duplicate() as AnnotationBase;
+      if (annotation == null ||
+          !AnnotationTextTransform.RotateText(doc, annotation, angleRadians))
+        continue;
+
+      var newId = doc.Objects.Replace(obj.Id, annotation, false)
+        ? obj.Id
+        : Guid.Empty;
       if (newId != Guid.Empty)
         newIds.Add(newId);
     }
@@ -189,21 +197,4 @@ public sealed class vTextFlip : Command
     return newIds;
   }
 
-  private static Plane ObjectPlaneFor(RhinoObject obj)
-  {
-    if (obj.Geometry is TextEntity text)
-      return text.Plane;
-
-    try
-    {
-      var bbox = obj.Geometry.GetBoundingBox(true);
-      if (bbox.IsValid)
-        return new Plane(bbox.Center, Vector3d.ZAxis);
-    }
-    catch
-    {
-    }
-
-    return Plane.WorldXY;
-  }
 }

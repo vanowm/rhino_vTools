@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Duplicates selected object boundaries and carries source grouping to the output.
 /// </summary>
-public sealed class vDupBorder : Command
+public sealed class vDupBorder : vToolsCommand
 {
   private const string SectionName = "vDupBorder";
   private const string GroupIfNoneKey = "groupIfNone";

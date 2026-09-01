@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// Toggles selected objects between edit points and control points.
 /// </summary>
 [CommandStyle(Style.Transparent | Style.ScriptRunner)]
-public sealed class vToggleControlPoints : Command
+public sealed class vToggleControlPoints : vToolsCommand
 {
   private const string Tag = "vToggleControlPoints";
   private const double OnGeometryToleranceFactor = 0.01; // Fraction of curve scale used to distinguish edit from control points.

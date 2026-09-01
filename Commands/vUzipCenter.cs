@@ -21,7 +21,7 @@ namespace vTools.Commands;
 /// by configurable amounts, fillets the two inside corners, and produces a
 /// single joined open curve. Ported from vUzipCenter.py.
 /// </summary>
-public sealed class vUzipCenter : Command
+public sealed class vUzipCenter : vToolsCommand
 {
   public override string EnglishName => "vUzipCenter";
 

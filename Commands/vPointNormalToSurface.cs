@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Places points on a selected surface normal from picked points in space.
 /// </summary>
-public sealed class vPointNormalToSurface : Command
+public sealed class vPointNormalToSurface : vToolsCommand
 {
   /// <summary>
   /// Rhino command name.

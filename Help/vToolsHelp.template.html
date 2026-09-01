@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vTools Command Help</title>
+<script>
+(function () {
+  const parameters = new URLSearchParams(location.search);
+  const root = document.documentElement;
+  const theme = parameters.get('theme');
+  if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
+  const palette = {
+    background: '--page-background',
+    surface: '--surface-background',
+    field: '--field-background',
+    text: '--text-color',
+    muted: '--muted-color',
+    border: '--border-color',
+    link: '--link-color'
+  };
+  Object.keys(palette).forEach(function (key) {
+    const value = parameters.get(key);
+    if (/^[0-9a-f]{6}$/i.test(value || '')) {
+      root.style.setProperty(palette[key], '#' + value);
+    }
+  });
+}());
+</script>
+<style>
+:root {
+  color-scheme: light;
+  --page-background: #ffffff;
+  --surface-background: #f5f5f5;
+  --field-background: #ffffff;
+  --dialog-background: #e0e3e9;
+  --table-header-background: #dcdcdc;
+  --text-color: #333333;
+  --muted-color: #666666;
+  --border-color: #c0c0c0;
+  --cell-border-color: #d3d3d3;
+  --link-color: #2b72bc;
+  --hover-link-color: #8b0000;
+  --visited-link-color: #800080;
+  --bullet-color: #8b0000;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: "Segoe UI", "Helvetica Neue", Verdana, sans-serif;
+  font-size: 1em;
+  margin: 10px;
+  line-height: 1.3em;
+  color: var(--text-color);
+  background: var(--page-background);
+}
+main { width: 100%; margin: 0; padding: 0; }
+.help-topic { display: none; }
+.help-topic.active { display: block; }
+h1 {
+  font-size: 1.75em;
+  font-weight: 700;
+  border-bottom: solid 1px var(--border-color);
+  margin: 0;
+  line-height: 1.5;
+  padding-bottom: 0;
+  margin-top: 0;
+}
+h2 {
+  font-weight: 700;
+  margin-bottom: 5px;
+  margin-top: 1.25em;
+  line-height: 1em;
+  margin-left: 0;
+}
+h3 {
+  margin-top: 1.5em;
+  font-weight: 700;
+  margin-bottom: 5px;
+  line-height: 1em;
+  margin-left: 0;
+}
+h4 {
+  border-bottom: solid 1px var(--border-color);
+  font-weight: 700;
+  margin-top: 10px;
+  margin-bottom: 3px;
+  margin-left: 0;
+  padding-top: 4px;
+  font-size: 100%;
+}
+h5 {
+  font-weight: 700;
+  font-size: 100%;
+  margin-bottom: 0;
+  margin-left: 0;
+  margin-top: 5px;
+}
+p { margin-bottom: 5px; margin-top: 0; margin-left: 0; }
+ul {
+  margin-top: 5px;
+  margin-left: 15px;
+  padding-left: 0;
+  line-height: 1.3em;
+  padding-bottom: 1px;
+  margin-bottom: 10px;
+}
+ol {
+  margin-bottom: 0;
+  margin-top: 0;
+  margin-left: 1em;
+  padding-left: 0;
+  line-height: 1.3em;
+}
+li { font-size: 100%; padding-left: 0; margin-top: 0; padding-top: 0; }
+ul li::marker { color: var(--bullet-color); }
+.tutorialblock {
+  border-radius: 5px;
+  background-color: var(--surface-background);
+  padding-top: 0;
+  padding-left: 0.5em;
+  padding-right: 10px;
+  position: relative;
+  margin-bottom: 5px;
+  margin-top: 5px;
+  padding-bottom: 5px;
+  border: none 0 var(--cell-border-color);
+}
+p.Dialog_Box_Title {
+  background-color: var(--dialog-background);
+  font-size: 110%;
+  font-weight: 700;
+  margin-top: 1em;
+  padding-bottom: 5px;
+  padding-top: 3px;
+  padding-left: 5px;
+  padding-right: 5px;
+  margin-right: 0;
+  margin-left: -5px;
+}
+.command-option { margin-left: 20px; }
+.command-option p { margin-bottom: 5px; }
+table {
+  border-collapse: collapse;
+  text-align: left;
+  border: solid 1px var(--border-color);
+  border-radius: 5px;
+  margin-right: 5px;
+  margin-top: 10px;
+  margin-bottom: 5px;
+}
+td {
+  border: 1px solid var(--cell-border-color);
+  padding-bottom: 1px;
+  padding-right: 5px;
+  text-align: left;
+  vertical-align: top;
+  padding-left: 5px;
+}
+th {
+  font-weight: 700;
+  vertical-align: top;
+  text-align: left;
+  border-bottom: solid 1px #808080;
+  padding: 2px 5px;
+}
+code { font-family: inherit; font-weight: 600; }
+pre { overflow: auto; padding: 10px; border: 1px solid var(--border-color); background: var(--field-background); }
+pre code { padding: 0; border: 0; background: transparent; font-family: Consolas, monospace; }
+blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid var(--link-color); }
+a:link { text-decoration: none; color: var(--link-color); }
+a:visited { color: var(--visited-link-color); text-decoration: none; }
+a:hover { text-decoration: none; color: var(--hover-link-color); }
+a:active { text-decoration: none; }
+.empty { color: var(--muted-color); }
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page-background: #222222;
+    --surface-background: #333333;
+    --field-background: #333333;
+    --dialog-background: #444444;
+    --table-header-background: #626262;
+    --text-color: #f5f5f5;
+    --muted-color: #c0c0c0;
+    --border-color: #707070;
+    --cell-border-color: #707070;
+    --link-color: #4aa5ff;
+    --hover-link-color: #ff3e3e;
+    --visited-link-color: #ff80ff;
+    --bullet-color: #ff3e3e;
+  }
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page-background: #ffffff;
+  --surface-background: #f5f5f5;
+  --field-background: #ffffff;
+  --dialog-background: #e0e3e9;
+  --table-header-background: #dcdcdc;
+  --text-color: #333333;
+  --muted-color: #666666;
+  --border-color: #c0c0c0;
+  --cell-border-color: #d3d3d3;
+  --link-color: #2b72bc;
+  --hover-link-color: #8b0000;
+  --visited-link-color: #800080;
+  --bullet-color: #8b0000;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page-background: #222222;
+  --surface-background: #333333;
+  --field-background: #333333;
+  --dialog-background: #444444;
+  --table-header-background: #626262;
+  --text-color: #f5f5f5;
+  --muted-color: #c0c0c0;
+  --border-color: #707070;
+  --cell-border-color: #707070;
+  --link-color: #4aa5ff;
+  --hover-link-color: #ff3e3e;
+  --visited-link-color: #ff80ff;
+  --bullet-color: #ff3e3e;
+}
+</style>
+</head>
+<body>
+<main>
+<!-- GENERATED_TOPICS_START -->
+<article class="help-topic active" data-topic="vhelp">
+<h1>vTools commands</h1>
+<div class="command-option">
+<h5><a href="#preview">vCommand</a></h5>
+<p>Previews the shared vTools help layout.</p>
+</div>
+</article>
+<article class="help-topic" data-topic="preview">
+<h1>vCommand</h1>
+<p class="command-description">The vCommand command previews the shared vTools help layout.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select the command input.</li>
+<li>Adjust any available options.</li>
+<li>Confirm the result.</li>
+</ol>
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Option</h5>
+<p>Controls an example command behavior.</p>
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<!-- GENERATED_TOPICS_END -->
+</main>
+<script>
+(function () {
+  const topics = Array.from(document.querySelectorAll('.help-topic'));
+  function showTopic() {
+    const requested = decodeURIComponent(location.hash.slice(1)).toLowerCase();
+    const anchor = requested ? document.getElementById(requested) : null;
+    const topic = topics.find(item => item.dataset.topic === requested) ||
+      (anchor ? anchor.closest('.help-topic') : null) || topics[0];
+    topics.forEach(item => item.classList.toggle('active', item === topic));
+    if (topic) {
+      const heading = topic.querySelector('h1');
+      document.title = (heading ? heading.textContent + ' | ' : '') + 'vTools Command Help';
+    }
+    if (anchor && topic.contains(anchor)) {
+      requestAnimationFrame(() => anchor.scrollIntoView());
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+  window.addEventListener('hashchange', showTopic);
+  showTopic();
+}());
+</script>
+</body>
+</html>

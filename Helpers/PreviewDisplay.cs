@@ -1,5 +1,7 @@
 using System;
 using System.Drawing;
+using Rhino;
+using Rhino.DocObjects;
 using Rhino.Display;
 using Rhino.Geometry;
 
@@ -9,6 +11,19 @@ internal static class PreviewDisplay
 {
   // Thickness values are pixel increments above Rhino's current default curve thickness.
   private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
+
+  // Generic object highlighting is deliberately cyan with a dark outline so it cannot be
+  // confused with Rhino's yellow selected-object display.
+  private static readonly Color ObjectHighlightColor = Color.FromArgb(0, 220, 255); // RGB body/wire color for temporary object highlighting.
+  private static readonly Color ObjectHighlightOutlineColor = Color.FromArgb(0, 55, 72); // RGB outline color around temporarily highlighted geometry.
+  private static readonly Color ObjectHighlightDotBackground = Color.FromArgb(0, 120, 145); // RGB background color for highlighted text dots.
+  private const double ObjectHighlightTransparency = 0.55; // Shaded-object transparency from 0.0 opaque through 1.0 invisible.
+  private const int ObjectHighlightStrokeEmphasis = 1; // Cyan stroke pixels added to Rhino's current curve thickness.
+  private const int ObjectHighlightOutlineEmphasis = 3; // Dark outline pixels added to Rhino's current curve thickness.
+  private const int ObjectHighlightPointSize = 7; // Cyan point-marker diameter in display pixels; one or greater.
+  private const int ObjectHighlightPointOutlineExtra = 2; // Dark point-outline pixels added beyond the cyan marker body.
+  private const float ObjectHighlightSubDStrokeWidth = 2.0f; // Cyan SubD wire width in display pixels; positive float.
+  private const float ObjectHighlightSubDOutlineWidth = 4.0f; // Dark SubD outline width in display pixels; greater than the cyan width.
 
   // Added geometry uses a green center stroke over a wider black outline.
   // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
@@ -122,6 +137,30 @@ internal static class PreviewDisplay
     display.DrawCurve(curve, color, Thickness(display, emphasis));
   }
 
+  private static void DrawObjectHighlightCurve(DisplayPipeline display, Curve curve)
+  {
+    display.DrawCurve(
+      curve,
+      ObjectHighlightOutlineColor,
+      Thickness(display, ObjectHighlightOutlineEmphasis));
+    display.DrawCurve(
+      curve,
+      ObjectHighlightColor,
+      Thickness(display, ObjectHighlightStrokeEmphasis));
+  }
+
+  private static void DrawObjectHighlightBrep(DisplayPipeline display, Brep brep)
+  {
+    display.DrawBrepWires(
+      brep,
+      ObjectHighlightOutlineColor,
+      Thickness(display, ObjectHighlightOutlineEmphasis));
+    display.DrawBrepWires(
+      brep,
+      ObjectHighlightColor,
+      Thickness(display, ObjectHighlightStrokeEmphasis));
+  }
+
   private static void DrawHighlightCurve(
     DisplayPipeline display,
     Curve curve,
@@ -171,4 +210,176 @@ internal static class PreviewDisplay
 
   public static void DrawOverlapCurve(DisplayPipeline display, Curve curve) =>
     DrawHighlightCurve(display, curve, OverlapStyle);
+
+  /// <summary>
+  /// Draws a temporary, selection-distinct highlight over arbitrary document objects.
+  /// Call <see cref="SetObjects"/> as the highlighted set changes and dispose it when the
+  /// owning interaction ends.
+  /// </summary>
+  internal sealed class ObjectHighlighter : DisplayConduit, IDisposable
+  {
+    private readonly RhinoDoc _doc;
+    private readonly HashSet<Guid> _objectIds = [];
+    private readonly DisplayMaterial _material = new(ObjectHighlightColor)
+    {
+      Transparency = ObjectHighlightTransparency,
+      BackTransparency = ObjectHighlightTransparency
+    };
+
+    internal ObjectHighlighter(RhinoDoc doc)
+    {
+      _doc = doc;
+    }
+
+    internal void SetObjects(IEnumerable<Guid> objectIds)
+    {
+      var nextIds = objectIds.ToHashSet();
+      if (_objectIds.SetEquals(nextIds))
+        return;
+
+      _objectIds.Clear();
+      _objectIds.UnionWith(nextIds);
+      Enabled = _objectIds.Count > 0;
+      _doc.Views.Redraw();
+    }
+
+    protected override void PostDrawObjects(DrawEventArgs e)
+    {
+      foreach (var objectId in _objectIds)
+      {
+        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        switch (geometry)
+        {
+          case Brep brep:
+            e.Display.DrawBrepShaded(brep, _material);
+            break;
+          case Extrusion extrusion:
+          {
+            using var brep = extrusion.ToBrep();
+            if (brep != null)
+              e.Display.DrawBrepShaded(brep, _material);
+            break;
+          }
+          case Surface surface:
+          {
+            using var brep = surface.ToBrep();
+            if (brep != null)
+              e.Display.DrawBrepShaded(brep, _material);
+            break;
+          }
+          case Mesh mesh:
+            e.Display.DrawMeshShaded(mesh, _material);
+            break;
+          case SubD subD:
+            e.Display.DrawSubDShaded(subD, _material);
+            break;
+        }
+      }
+    }
+
+    protected override void DrawForeground(DrawEventArgs e)
+    {
+      foreach (var objectId in _objectIds)
+      {
+        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        switch (geometry)
+        {
+          case Curve curve:
+            DrawObjectHighlightCurve(e.Display, curve);
+            break;
+          case Brep brep:
+            DrawObjectHighlightBrep(e.Display, brep);
+            break;
+          case Extrusion extrusion:
+          {
+            using var brep = extrusion.ToBrep();
+            if (brep != null)
+              DrawObjectHighlightBrep(e.Display, brep);
+            break;
+          }
+          case Surface surface:
+          {
+            using var brep = surface.ToBrep();
+            if (brep != null)
+              DrawObjectHighlightBrep(e.Display, brep);
+            break;
+          }
+          case Mesh mesh:
+            e.Display.DrawMeshWires(
+              mesh,
+              ObjectHighlightOutlineColor,
+              Thickness(e.Display, ObjectHighlightOutlineEmphasis));
+            e.Display.DrawMeshWires(
+              mesh,
+              ObjectHighlightColor,
+              Thickness(e.Display, ObjectHighlightStrokeEmphasis));
+            break;
+          case SubD subD:
+            e.Display.DrawSubDWires(
+              subD,
+              ObjectHighlightOutlineColor,
+              ObjectHighlightSubDOutlineWidth);
+            e.Display.DrawSubDWires(
+              subD,
+              ObjectHighlightColor,
+              ObjectHighlightSubDStrokeWidth);
+            break;
+          case Rhino.Geometry.Point point:
+            e.Display.DrawPoint(
+              point.Location,
+              PointStyle.RoundSimple,
+              ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
+              ObjectHighlightOutlineColor);
+            e.Display.DrawPoint(
+              point.Location,
+              PointStyle.RoundSimple,
+              ObjectHighlightPointSize,
+              ObjectHighlightColor);
+            break;
+          case PointCloud pointCloud:
+            e.Display.DrawPointCloud(
+              pointCloud,
+              ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
+              ObjectHighlightOutlineColor);
+            e.Display.DrawPointCloud(
+              pointCloud,
+              ObjectHighlightPointSize,
+              ObjectHighlightColor);
+            break;
+          case TextEntity text:
+            e.Display.DrawText(text, ObjectHighlightColor);
+            break;
+          case AnnotationBase annotation:
+            e.Display.DrawAnnotation(annotation, ObjectHighlightColor);
+            break;
+          case TextDot dot:
+            e.Display.DrawDot(
+              dot,
+              ObjectHighlightColor,
+              ObjectHighlightDotBackground,
+              ObjectHighlightOutlineColor);
+            break;
+          case Hatch hatch:
+            e.Display.DrawHatch(hatch, ObjectHighlightColor, ObjectHighlightOutlineColor);
+            break;
+          case Light light:
+            e.Display.DrawLight(light, ObjectHighlightColor);
+            break;
+          case { } other:
+            e.Display.DrawBox(
+              other.GetBoundingBox(true),
+              ObjectHighlightColor,
+              Thickness(e.Display, ObjectHighlightStrokeEmphasis));
+            break;
+        }
+      }
+    }
+
+    public void Dispose()
+    {
+      Enabled = false;
+      _objectIds.Clear();
+      _doc.Views.Redraw();
+    }
+  }
 }

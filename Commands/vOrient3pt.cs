@@ -8,7 +8,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native three-point orient command that maps source and target construction planes.
 /// </summary>
-public sealed class vOrient3pt : Command
+public sealed class vOrient3pt : vToolsCommand
 {
   /// <summary>
   /// Rhino command name.

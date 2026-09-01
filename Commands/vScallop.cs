@@ -12,7 +12,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native scallop-arc command ported from Scallop.py.
 /// </summary>
-public sealed class vScallop : Command
+public sealed class vScallop : vToolsCommand
 {
   private enum StageResult
   {

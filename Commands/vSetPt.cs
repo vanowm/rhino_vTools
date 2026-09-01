@@ -30,7 +30,7 @@ namespace vTools.Commands;
 ///   5. After a successful SetPt, the used grips remain visible and selected
 ///      so Rhino displays the gumball.
 /// </summary>
-public sealed class vSetPt : Command
+public sealed class vSetPt : vToolsCommand
 {
   private const string Tag = "vSetPt";
   private const string OptionsSectionName = "vSetPt";

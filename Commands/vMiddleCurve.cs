@@ -15,7 +15,7 @@ namespace vTools.Commands;
 /// Native middle-curve command ported from MiddleCurve.py.
 /// Creates an interpolated curve equidistant between two selected input curves.
 /// </summary>
-public sealed class vMiddleCurve : Command
+public sealed class vMiddleCurve : vToolsCommand
 {
   private const string OptionsSectionName = "vMiddleCurve";
   private const string LinesKey = "lines";

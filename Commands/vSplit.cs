@@ -16,7 +16,7 @@ namespace vTools.Commands;
 /// Native interactive split-at-picked-points command.
 /// </summary>
 [CommandStyle(Style.ScriptRunner)]
-public sealed class vSplit : Command
+public sealed class vSplit : vToolsCommand
 {
   private const string OptionsSectionName = "vSplit";
   private const string PointDisplayKey = "pointDisplay";

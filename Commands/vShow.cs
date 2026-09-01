@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// Shows all hidden document objects without cancelling the active command.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vShow : Command
+public sealed class vShow : vToolsCommand
 {
   private const int MaximumRecentSetOptions = 20; // Maximum user hide-set options shown at the prompt; positive integer.
   private const string GeneratedOptionPrefix = "Set"; // Prefix for generated command-option names when a set name is not option-safe.

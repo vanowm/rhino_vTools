@@ -15,7 +15,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native split-at-corners command ported from SplitAtCorners.py.
 /// </summary>
-public sealed class vSplitAtCorners : Command
+public sealed class vSplitAtCorners : vToolsCommand
 {
   private const string OptionsSectionName = "vSplitAtCorners";
   private const string AngleKey = "angle";

@@ -7,7 +7,7 @@ namespace vTools.Commands;
 /// Toggles the viewport frames-per-second overlay.
 /// </summary>
 [CommandStyle(Style.Transparent)]
-public sealed class vFPS : Command
+public sealed class vFPS : vToolsCommand
 {
   public override string EnglishName => "vFPS";
 

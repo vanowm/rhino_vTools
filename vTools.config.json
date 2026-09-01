@@ -75,6 +75,9 @@
   "vGroup": {
     "flattenGroups": true
   },
+  "vGroupsManager": {
+    "autoSelect": false
+  },
   "vJoin": {
     "copy": true,
     "layer": "Source"
@@ -163,7 +166,7 @@
   },
   "vOverlaps": {
     "tolerance": 0.001,
-    "segments": false
+    "overlapSegments": true
   },
   "vPart": {
     "group": false,

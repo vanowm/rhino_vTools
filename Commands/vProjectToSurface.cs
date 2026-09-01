@@ -15,7 +15,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Projects selected curves and points to a selected surface or polysurface.
 /// </summary>
-public sealed class vProjectToSurface : Command
+public sealed class vProjectToSurface : vToolsCommand
 {
   private const string CommandName = "vProjectToSurface";
 

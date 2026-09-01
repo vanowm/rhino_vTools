@@ -35,6 +35,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="Help\vToolsHelp.html">
+      <LogicalName>vTools.Help.vToolsHelp.html</LogicalName>
+    </EmbeddedResource>
+    <Content Include="Help\vToolsHelp.html">
+      <TargetPath>vToolsHelp.html</TargetPath>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </Content>
     <Content Include="vTools.config.json">
       <CopyToOutputDirectory>Never</CopyToOutputDirectory>
       <CopyToPublishDirectory>Never</CopyToPublishDirectory>
@@ -45,6 +53,11 @@
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="GenerateCommandHelp" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' != ''">
+    <Exec
+      Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\GenerateCommandHelp.ps1&quot; -SourcePath &quot;$(MSBuildProjectDirectory)\README.md&quot; -TemplatePath &quot;$(MSBuildProjectDirectory)\Help\vToolsHelp.template.html&quot; -OutputPath &quot;$(MSBuildProjectDirectory)\Help\vToolsHelp.html&quot;" />
+  </Target>
 
   <Target Name="MergeRuntimeConfigDefaults" BeforeTargets="Build" Condition="'$(TargetFramework)' != ''">
     <Exec

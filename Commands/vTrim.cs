@@ -16,15 +16,21 @@ namespace vTools.Commands;
 /// <summary>
 /// Native trim/extend workflow with optional auto-cutter mode.
 /// </summary>
-public sealed class vTrim : Command
+public sealed class vTrim : vToolsCommand
 {
+  // Defaults and customizable constants
+  private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
+  private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
+  private const double MinimumHoverPickRadiusPixels = 6.0; // Minimum screen-space radius, in pixels, for retaining the curve under the cursor.
+  private const double HoverPickRadiusPaddingPixels = 2.0; // Extra pixels added to Rhino's configured mouse pickbox radius.
+  private const double HoverCandidateSwitchAdvantageSquaredPixels = 4.0; // Squared-pixel advantage a new overlapping curve needs before replacing the retained hover.
+  private const int HoverCurveSampleCount = 64; // Initial screen-space samples used to locate the cursor along a non-linear curve; 2 or greater.
+  private const int HoverCurveRefinementIterations = 10; // Ternary refinements applied around the best sampled curve parameter; zero or greater.
+  private const double HoverCurveFallbackSpanDivisor = 192.0; // Domain divisor used when neighbouring screen-pick samples collapse; greater than zero.
+
   private const string OptionsSectionName = "vTrim";
   private const string ExtendAsLineKey = "extendAsLine";
   private const string JoinAfterTrimKey = "joinAfterTrim";
-
-  // Option defaults
-  private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
-  private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
 
   private static bool _extendAsLine = DefaultExtendAsLine;
   private static bool _joinAfterTrim = DefaultJoinAfterTrim;
@@ -644,7 +650,7 @@ public sealed class vTrim : Command
       };
 
       var lastShiftState = ShiftPressed();
-      preview.HoverExtendMode = lastShiftState;
+      preview.SetExtendMode(lastShiftState);
       var modeLocked = false;
       var lockedExtendMode = lastShiftState;
       var shiftReleaseTicks = 0;
@@ -679,7 +685,7 @@ public sealed class vTrim : Command
           modeLocked = true;
           lockedExtendMode = clickCapture.ExtendMode;
           lastShiftState = lockedExtendMode;
-          preview.HoverExtendMode = lockedExtendMode;
+          preview.SetExtendMode(lockedExtendMode);
           RefreshPrompt();
           doc.Views.Redraw();
           return;
@@ -689,7 +695,7 @@ public sealed class vTrim : Command
         {
           if (preview.HoverExtendMode != lockedExtendMode)
           {
-            preview.HoverExtendMode = lockedExtendMode;
+            preview.SetExtendMode(lockedExtendMode);
             doc.Views.Redraw();
           }
 
@@ -704,7 +710,7 @@ public sealed class vTrim : Command
             return;
 
           lastShiftState = true;
-          preview.HoverExtendMode = true;
+          preview.SetExtendMode(true);
           RefreshPrompt();
           doc.Views.Redraw();
         }
@@ -720,7 +726,7 @@ public sealed class vTrim : Command
 
           shiftReleaseTicks = 0;
           lastShiftState = false;
-          preview.HoverExtendMode = false;
+          preview.SetExtendMode(false);
           RefreshPrompt();
           doc.Views.Redraw();
         }
@@ -966,7 +972,7 @@ public sealed class vTrim : Command
     public RhinoObject? HoverObject { get; private set; }
     public Curve? HoverCurve { get; private set; }
     public Point3d HoverPoint { get; private set; } = Point3d.Unset;
-    public bool HoverExtendMode { get; set; }
+    public bool HoverExtendMode { get; private set; }
     public bool ExtendAsLine { get; set; }
     public bool JoinAfterTrim { get; set; }
     public bool HasValidActionPreview { get; private set; }
@@ -990,6 +996,14 @@ public sealed class vTrim : Command
       HoverCurve = curve;
       HoverPoint = point;
       HoverExtendMode = extendMode;
+      ResolveCurrentAction(extendMode);
+    }
+
+    public void SetExtendMode(bool extendMode)
+    {
+      if (HoverExtendMode == extendMode)
+        return;
+
       ResolveCurrentAction(extendMode);
     }
 
@@ -1129,8 +1143,6 @@ public sealed class vTrim : Command
 
       if (HoverObject == null || HoverCurve == null || !HoverPoint.IsValid)
         return;
-
-      ResolveCurrentAction(HoverExtendMode);
 
       if (HoverExtendMode)
       {
@@ -1296,7 +1308,8 @@ public sealed class vTrim : Command
           (hoverObj == null ||
            hoverObj.Id == _lastHoverObject.Id ||
            !pickedDistance.HasValue ||
-           previousSample.DistanceSquared!.Value <= pickedDistance.Value + 4.0);
+           previousSample.DistanceSquared!.Value <=
+             pickedDistance.Value + HoverCandidateSwitchAdvantageSquaredPixels);
 
         if (previousIsPreferred)
         {
@@ -1358,6 +1371,9 @@ public sealed class vTrim : Command
       if (picked == null)
         return false;
 
+      var cursorPoint = new Point2d(screenPoint.X, screenPoint.Y);
+      var bestDistanceSquared = double.PositiveInfinity;
+
       foreach (var objRef in picked)
       {
         var obj = objRef.Object();
@@ -1365,56 +1381,46 @@ public sealed class vTrim : Command
         if (obj == null || curve == null || obj.Geometry is not Curve)
           continue;
 
-        var point = Point3d.Unset;
-        try
+        var sample = CurveBestScreenPick(curve, viewport, cursorPoint);
+        var point = sample.Point;
+        var distanceSquared = sample.DistanceSquared;
+
+        var selectionPoint = objRef.SelectionPoint();
+        var selectionDistanceSquared = selectionPoint.IsValid
+          ? PixelDistanceSquared(viewport, cursorPoint, selectionPoint)
+          : null;
+        if (selectionDistanceSquared.HasValue &&
+            (!distanceSquared.HasValue || selectionDistanceSquared.Value < distanceSquared.Value))
         {
-          using var nurbs = curve.ToNurbsCurve();
-          if (nurbs != null &&
-              pickContext.PickFrustumTest(
-                nurbs,
-                out var parameter,
-                out _,
-                out _))
-          {
-            point = nurbs.PointAt(parameter);
-          }
-        }
-        catch
-        {
+          point = selectionPoint;
+          distanceSquared = selectionDistanceSquared;
         }
 
-        if (!point.IsValid)
-          point = objRef.SelectionPoint();
-        if (!point.IsValid)
-        {
-          var fallback = CurveBestScreenPick(
-            curve,
-            viewport,
-            new Point2d(screenPoint.X, screenPoint.Y));
-          point = fallback.Point;
-        }
-
-        if (!point.IsValid)
+        if (!point.IsValid || !distanceSquared.HasValue ||
+            distanceSquared.Value >= bestDistanceSquared)
           continue;
 
         pickedObject = obj;
         pickedCurve = curve;
         pickedPoint = point;
-        return true;
+        bestDistanceSquared = distanceSquared.Value;
       }
 
-      return false;
+      return pickedObject != null;
     }
 
     private static double PickboxRadiusPixels()
     {
       try
       {
-        return Math.Max(6.0, Rhino.ApplicationSettings.ModelAidSettings.MousePickboxRadius + 2.0);
+        return Math.Max(
+          MinimumHoverPickRadiusPixels,
+          Rhino.ApplicationSettings.ModelAidSettings.MousePickboxRadius +
+            HoverPickRadiusPaddingPixels);
       }
       catch
       {
-        return 6.0;
+        return MinimumHoverPickRadiusPixels;
       }
     }
   }
@@ -1437,7 +1443,7 @@ public sealed class vTrim : Command
     var parameters = new List<double>();
     try
     {
-      var div = curve.DivideByCount(32, true);
+      var div = curve.DivideByCount(HoverCurveSampleCount, true);
       if (div != null)
         parameters.AddRange(div.Select(v => (double)v));
     }
@@ -1447,9 +1453,9 @@ public sealed class vTrim : Command
 
     if (parameters.Count == 0)
     {
-      for (var i = 0; i <= 32; i++)
+      for (var i = 0; i <= HoverCurveSampleCount; i++)
       {
-        var t = d0 + ((d1 - d0) * (i / 32.0));
+        var t = d0 + ((d1 - d0) * (i / (double)HoverCurveSampleCount));
         parameters.Add(t);
       }
     }
@@ -1482,11 +1488,11 @@ public sealed class vTrim : Command
     var right = parameters[Math.Min(parameters.Count - 1, idx + 1)];
     if (right <= left)
     {
-      left = Math.Max(d0, bestT - ((d1 - d0) / 96.0));
-      right = Math.Min(d1, bestT + ((d1 - d0) / 96.0));
+      left = Math.Max(d0, bestT - ((d1 - d0) / HoverCurveFallbackSpanDivisor));
+      right = Math.Min(d1, bestT + ((d1 - d0) / HoverCurveFallbackSpanDivisor));
     }
 
-    for (var i = 0; i < 8; i++)
+    for (var i = 0; i < HoverCurveRefinementIterations; i++)
     {
       var t1 = left + ((right - left) / 3.0);
       var t2 = right - ((right - left) / 3.0);

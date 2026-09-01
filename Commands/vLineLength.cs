@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Native line-length editor command ported from LineLength.py.
 /// </summary>
-public sealed class vLineLength : Command
+public sealed class vLineLength : vToolsCommand
 {
   private const string OptionsSectionName = "vLineLength";
   private const string DesiredLengthKey = "desiredLength";

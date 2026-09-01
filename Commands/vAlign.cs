@@ -13,7 +13,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Aligns selected objects from one curve or edge direction to another in World XY.
 /// </summary>
-public sealed class vAlign : Command
+public sealed class vAlign : vToolsCommand
 {
   private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
   private const double KinkAngleRadians = Math.PI / 6.0; // Minimum selectable kink angle in radians; PI/6 equals 30 degrees.

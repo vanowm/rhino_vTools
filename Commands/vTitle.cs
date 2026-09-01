@@ -14,7 +14,7 @@ using Rhino.Input.Custom;
 
 namespace vTools.Commands;
 
-public sealed class vTitle : Command
+public sealed class vTitle : vToolsCommand
 {
   // Option defaults
   private const string DefaultText = ""; // Plain title text; empty prompts for text.
@@ -22,6 +22,11 @@ public sealed class vTitle : Command
   private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
   private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
   private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
+  private const double DefaultDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.
+  private const double ApproxTextWidthPerCharacter = 0.75; // Positive model-space width multiplier per character relative to text height.
+  private const double ApproxTextLineHeightFactor = 1.4; // Positive model-space line-height multiplier relative to text height.
+  private const double TextOutlineSmallCapsScale = 1.0; // Relative lower-case small-caps size passed to Rhino's text-outline generator; positive multiplier.
+  private const double TextOutlineToleranceFactor = 0.0001; // Curve-outline tolerance relative to requested text height; positive multiplier.
   private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves title output to Rhino's current layer.
   private static readonly Color PreviewTextColor = Color.FromArgb(220, 255, 255, 80); // ARGB color for live title text previews.
   private static readonly Color PreviewFallbackBackgroundColor = Color.FromArgb(200, 60, 60, 60); // ARGB background for dot-based preview fallback.
@@ -95,7 +100,7 @@ public sealed class vTitle : Command
 
       gp.DynamicDraw += (_, e) =>
       {
-        DrawPreview(e, _text, _size, _padding, _box);
+        DrawPreview(doc, e, _text, _size, _padding, _box);
         DrawHoverHighlight(doc, e);
       };
 
@@ -223,7 +228,7 @@ public sealed class vTitle : Command
 
   // ── Dynamic preview ───────────────────────────────────────────────────
 
-  private static void DrawPreview(GetPointDrawEventArgs e,
+  private static void DrawPreview(RhinoDoc doc, GetPointDrawEventArgs e,
     string text, double size, double padding, bool box)
   {
     if (string.IsNullOrEmpty(text))
@@ -241,8 +246,21 @@ public sealed class vTitle : Command
       PlainText = text,
       TextHeight = size,
       Justification = TextJustification.MiddleCenter,
-      DimensionScale = 1.0,
+      DimensionStyleId = doc.DimStyles.Current.Id,
+      DimensionScale = DefaultDimensionScale,
     };
+
+    if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
+          doc,
+          te,
+          e.Viewport,
+          size,
+          DefaultDimensionScale))
+    {
+      Log.Write(
+        "vTitle",
+        $"could not override preview text height size={size:G17}");
+    }
 
     try { te.DrawForward = false; } catch { }
 
@@ -256,7 +274,11 @@ public sealed class vTitle : Command
       try
       {
         e.Display.Draw3dText(
-          new Text3d(text, textPlane, size), PreviewFallbackTextColor);
+          new Text3d(
+            text,
+            textPlane,
+            size * te.DimensionScale),
+          PreviewFallbackTextColor);
       }
       catch
       {
@@ -293,8 +315,21 @@ public sealed class vTitle : Command
       PlainText      = text,
       TextHeight     = size,
       Justification  = TextJustification.MiddleCenter,
-      DimensionScale = 1.0,
+      DimensionStyleId = doc.DimStyles.Current.Id,
+      DimensionScale = DefaultDimensionScale,
     };
+    if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
+          doc,
+          te,
+          vp,
+          size,
+          DefaultDimensionScale))
+    {
+      Log.Write(
+        "vTitle",
+        $"could not override text height size={size:G17} " +
+        $"model_scale={doc.ModelSpaceTextScale:G17}");
+    }
 
     int layerIdx = GetTargetLayerIndex(doc);
     var attr = new ObjectAttributes();
@@ -307,6 +342,16 @@ public sealed class vTitle : Command
     _activeBoxId   = Guid.Empty;
     _activeGrpIdx  = -1;
     if (_activeTextId == Guid.Empty) return;
+    if (doc.Objects.FindId(_activeTextId)?.Geometry is TextEntity storedText)
+    {
+      var effectiveScale = ResolveDisplayDimensionScale(doc, storedText, vp);
+      Log.Write(
+        "vTitle",
+        $"placed size={size:G17} stored_height={storedText.TextHeight:G17} " +
+        $"effective_scale={effectiveScale:G17} " +
+        $"model_scale={doc.ModelSpaceTextScale:G17} " +
+        $"annotation_scaling={doc.ModelSpaceAnnotationScalingEnabled}");
+    }
 
     if (box)
     {
@@ -317,6 +362,13 @@ public sealed class vTitle : Command
           titleObj, placedText);
         if (frame != null)
         {
+          var localFrameBounds = frame.GetBoundingBox(
+            Transform.PlaneToPlane(placedText.Plane, Plane.WorldXY));
+          Log.Write(
+            "vTitle",
+            $"frame width={localFrameBounds.Diagonal.X:G17} " +
+            $"height={localFrameBounds.Diagonal.Y:G17} " +
+            $"padding={padding:G17}");
           var boxAttr = new ObjectAttributes { LayerIndex = layerIdx };
           boxAttr.SetUserString(FrameFlagKey, FrameFlagValue);
           _activeBoxId = doc.Objects.AddCurve(frame, boxAttr);
@@ -408,7 +460,13 @@ public sealed class vTitle : Command
     if (double.TryParse(textRhObj.Attributes.GetUserString(PaddingUserStringKey),
           NumberStyles.Any, CultureInfo.InvariantCulture, out double sp))
       padding = sp;
-    var (tw, th) = ApproxBounds(te.PlainText ?? "", te.TextHeight);
+    var displayScale = ResolveDisplayDimensionScale(
+      doc,
+      te,
+      doc.Views.ActiveView?.ActiveViewport);
+    var (tw, th) = ApproxBounds(
+      te.PlainText ?? "",
+      te.TextHeight * displayScale);
     double padFactor = 1.0 + padding * 2.0 / 100.0;
     hw = tw * padFactor / 2.0;
     hh = th * padFactor / 2.0;
@@ -628,6 +686,18 @@ public sealed class vTitle : Command
     using var newTe = (TextEntity)oldTe.Duplicate();
     newTe.PlainText  = _text;
     newTe.TextHeight = _size;
+    if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
+          doc,
+          newTe,
+          doc.Views.ActiveView?.ActiveViewport,
+          _size,
+          DefaultDimensionScale))
+    {
+      Log.Write(
+        "vTitle",
+        $"could not override edited text height size={_size:G17} " +
+        $"model_scale={doc.ModelSpaceTextScale:G17}");
+    }
     _internalReplace = true;
     try
     {
@@ -728,7 +798,8 @@ public sealed class vTitle : Command
       return null;
 
     double padding = GetPaddingPercent(titleObject);
-    return CreateFrameForText(text, padding);
+    using var displayText = CreateDisplayText(titleObject, text);
+    return CreateFrameForText(displayText, padding);
   }
 
   internal static bool IsTitleFrame(RhinoObject candidate) =>
@@ -757,11 +828,29 @@ public sealed class vTitle : Command
       PlainText = previewText ?? string.Empty,
       TextHeight = sourceText.TextHeight,
       Justification = sourceText.Justification,
-      DimensionScale = sourceText.DimensionScale,
+      DimensionStyleId = sourceText.DimensionStyleId,
+      DimensionScale = DefaultDimensionScale,
     };
 
     try { freshText.DrawForward = sourceText.DrawForward; }
     catch { }
+    try { freshText.TextOrientation = sourceText.TextOrientation; }
+    catch { }
+
+    var doc = titleObject.Document;
+    if (doc != null &&
+        !AnnotationTextTransform.ApplyFixedDisplayTextHeight(
+          doc,
+          freshText,
+          doc.Views.ActiveView?.ActiveViewport,
+          sourceText.TextHeight,
+          DefaultDimensionScale))
+    {
+      Log.Write(
+        "vTitle",
+        $"could not override replacement preview text height " +
+        $"size={sourceText.TextHeight:G17}");
+    }
 
     double padding = GetPaddingPercent(titleObject);
     return CreateFrameForText(freshText, padding);
@@ -782,27 +871,76 @@ public sealed class vTitle : Command
     return padding;
   }
 
+  private static TextEntity CreateDisplayText(
+    RhinoObject titleObject,
+    TextEntity sourceText)
+  {
+    var displayText = sourceText.Duplicate() as TextEntity ?? new TextEntity
+    {
+      Plane = sourceText.Plane,
+      PlainText = sourceText.PlainText ?? string.Empty,
+      TextHeight = sourceText.TextHeight,
+      Justification = sourceText.Justification,
+      DimensionStyleId = sourceText.DimensionStyleId,
+      DimensionScale = DefaultDimensionScale,
+    };
+    ApplyDisplayDimensionScale(titleObject, displayText);
+    return displayText;
+  }
+
+  private static void ApplyDisplayDimensionScale(
+    RhinoObject titleObject,
+    TextEntity text)
+  {
+    var doc = titleObject.Document;
+    if (doc == null)
+      return;
+
+    text.DimensionScale = ResolveDisplayDimensionScale(
+      doc,
+      text,
+      doc.Views.ActiveView?.ActiveViewport);
+  }
+
+  private static double ResolveDisplayDimensionScale(
+    RhinoDoc doc,
+    TextEntity text,
+    RhinoViewport? viewport) =>
+    AnnotationTextTransform.ResolveDisplayDimensionScale(
+      doc,
+      text,
+      viewport);
+
+  private static double ValidDimensionScale(double scale) =>
+    double.IsFinite(scale) && scale > RhinoMath.ZeroTolerance
+      ? scale
+      : DefaultDimensionScale;
+
   /// <summary>
-  /// Creates the rectangle around the ACTUAL glyph outlines. TextEntity's
-  /// annotation bounding box has produced angle-dependent results in this
-  /// workflow, so use Explode() curves as the geometry source of truth.
+  /// Creates a scale-stable rectangle from the requested model-space text
+  /// height. Rhino annotation and exploded-curve bounds can include dimstyle
+  /// scaling even when the stored TextHeight is already correct.
   /// </summary>
   private static PolylineCurve CreateFrameForText(
     TextEntity text,
     double paddingPercent)
   {
-    double hw;
-    double hh;
-
-    if (!TryGetExplodedTextHalfExtents(text, out hw, out hh))
+    var displayScale = ValidDimensionScale(text.DimensionScale);
+    var displayHeight = text.TextHeight * displayScale;
+    if (!TryGetTextOutlineBounds(
+          text,
+          displayHeight,
+          out var textWidth,
+          out var textHeight))
     {
-      var (tw, th) = ApproxBounds(
-        text.PlainText ?? string.Empty, text.TextHeight);
-      hw = tw / 2.0;
-      hh = th / 2.0;
+      (textWidth, textHeight) = ApproxBounds(
+        text.PlainText ?? string.Empty,
+        displayHeight);
     }
+    var hw = textWidth / 2.0;
+    var hh = textHeight / 2.0;
 
-    double pad = text.TextHeight * paddingPercent / 100.0;
+    double pad = displayHeight * paddingPercent / 100.0;
     return RectCurve(
       text.Plane.Origin,
       text.Plane.XAxis,
@@ -811,75 +949,79 @@ public sealed class vTitle : Command
       Math.Max(hh + pad, RhinoMath.ZeroTolerance));
   }
 
-  private static bool TryGetExplodedTextHalfExtents(
+  private static bool TryGetTextOutlineBounds(
     TextEntity text,
-    out double hw,
-    out double hh)
+    double displayHeight,
+    out double width,
+    out double height)
   {
-    hw = 0.0;
-    hh = 0.0;
+    width = 0.0;
+    height = 0.0;
+    if (string.IsNullOrEmpty(text.PlainText) ||
+        !double.IsFinite(displayHeight) ||
+        displayHeight <= RhinoMath.ZeroTolerance)
+      return false;
 
-    Curve[]? curves = null;
+    var font = text.DimensionStyle?.Font;
+    var fontName = font?.FaceName;
+    if (string.IsNullOrWhiteSpace(fontName))
+      return false;
+
+    var fontStyle = 0;
+    if (font!.Bold)
+      fontStyle |= 1;
+    if (font.Italic)
+      fontStyle |= 2;
+
+    Curve[]? outlines = null;
     try
     {
-      curves = text.Explode();
-      if (curves == null || curves.Length == 0)
+      outlines = Curve.CreateTextOutlines(
+        text.PlainText,
+        fontName,
+        displayHeight,
+        fontStyle,
+        !font.IsSingleStrokeFont,
+        Plane.WorldXY,
+        TextOutlineSmallCapsScale,
+        Math.Max(
+          displayHeight * TextOutlineToleranceFactor,
+          RhinoMath.ZeroTolerance));
+      if (outlines == null || outlines.Length == 0)
         return false;
 
-      // Explicitly transform the exploded glyph geometry from the title plane
-      // into WorldXY. Unlike GetBoundingBox(Plane), this guarantees that the
-      // measured coordinates are local to text.Plane.Origin and independent of
-      // the title's model-space position/rotation.
-      var toLocal = Transform.PlaneToPlane(
-        text.Plane, Plane.WorldXY);
-
-      double minX = double.PositiveInfinity;
-      double minY = double.PositiveInfinity;
-      double maxX = double.NegativeInfinity;
-      double maxY = double.NegativeInfinity;
-      bool found = false;
-
-      foreach (var sourceCurve in curves)
+      var bounds = BoundingBox.Empty;
+      foreach (var outline in outlines)
       {
-        if (sourceCurve == null)
+        if (outline == null)
           continue;
 
-        using var localCurve = sourceCurve.DuplicateCurve();
-        if (localCurve == null || !localCurve.Transform(toLocal))
-          continue;
-
-        var bb = localCurve.GetBoundingBox(true);
-        if (!bb.IsValid)
-          continue;
-
-        minX = Math.Min(minX, bb.Min.X);
-        minY = Math.Min(minY, bb.Min.Y);
-        maxX = Math.Max(maxX, bb.Max.X);
-        maxY = Math.Max(maxY, bb.Max.Y);
-        found = true;
+        var outlineBounds = outline.GetBoundingBox(true);
+        if (outlineBounds.IsValid)
+          bounds.Union(outlineBounds);
       }
 
-      if (!found)
+      if (!bounds.IsValid)
         return false;
 
-      // vTitle is MiddleCenter-justified, so its frame remains centered on the
-      // annotation origin. Use the actual local glyph reach on each axis.
-      hw = Math.Max(Math.Abs(minX), Math.Abs(maxX));
-      hh = Math.Max(Math.Abs(minY), Math.Abs(maxY));
-
-      return hw > RhinoMath.ZeroTolerance &&
-             hh > RhinoMath.ZeroTolerance;
+      width = bounds.Diagonal.X;
+      height = bounds.Diagonal.Y;
+      return width > RhinoMath.ZeroTolerance &&
+             height > RhinoMath.ZeroTolerance;
     }
-    catch
+    catch (Exception ex)
     {
+      Log.Write(
+        "vTitle",
+        $"text outline measurement failed: {ex.Message}");
       return false;
     }
     finally
     {
-      if (curves != null)
+      if (outlines != null)
       {
-        foreach (var curve in curves)
-          curve?.Dispose();
+        foreach (var outline in outlines)
+          outline?.Dispose();
       }
     }
   }
@@ -917,8 +1059,17 @@ public sealed class vTitle : Command
   /// <summary>Approximate text extents based on size and character count.</summary>
   private static (double w, double h) ApproxBounds(string text, double size)
   {
-    double h = size * 1.4;
-    double w = Math.Max(text.Length * size * 0.75, size);
+    var lines = text
+      .Replace("\r\n", "\n", StringComparison.Ordinal)
+      .Replace('\r', '\n')
+      .Split('\n');
+    var longestLine = lines.Length == 0
+      ? 0
+      : lines.Max(line => line.Length);
+    double h = Math.Max(lines.Length, 1) * size * ApproxTextLineHeightFactor;
+    double w = Math.Max(
+      longestLine * size * ApproxTextWidthPerCharacter,
+      size);
     return (w, h);
   }
 

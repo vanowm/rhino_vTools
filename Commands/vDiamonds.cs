@@ -24,8 +24,10 @@ public sealed class vDiamonds : vToolsCommand
   private const string ShowBoundaryKey = "showBoundary";
   private const string ShowSizeKey     = "showSize";
   private const string ShowCountKey    = "showCount";
+  private const string LabelInsideKey  = "labelInside";
   private const string BySizeWKey      = "bySizeW";
   private const string BySizeHKey      = "bySizeH";
+  private const string RoundToDiamondKey = "roundToDiamond";
   private const string LayerPlotKey    = "layerPlot";
   private const string LayerCutKey     = "layerCut";
   private const string LayerRefKey     = "layerRef";
@@ -41,8 +43,10 @@ public sealed class vDiamonds : vToolsCommand
   private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
   private const bool DefaultShowSize = true; // true creates the size label; false omits it.
   private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
+  private const LabelInsideMode DefaultLabelInside = LabelInsideMode.No; // FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.
   private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
   private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
+  private const DiamondRoundingMode DefaultRoundToDiamond = DiamondRoundingMode.None; // Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.
 
   private static string _layerPlot = DefaultLayerPlot;
   private static string _layerCut  = DefaultLayerCut;
@@ -52,7 +56,32 @@ public sealed class vDiamonds : vToolsCommand
   private static readonly Color CutColor  = Color.FromArgb(0xCC, 0x33, 0x33); // Color assigned when the CUT1 layer is created.
   private static readonly Color RefColor  = Color.White; // Color assigned when the Reference layer is created.
 
-  private const double LabelGap      = 0.125; // Gap from geometry to size labels in model units; zero or greater.
+  private const double LabelGap = 0.125; // Minimum gap from the boundary to the label stack in model units; zero or greater.
+  private const double LabelLineGapFactor = 0.2; // Gap between stacked annotations as a fraction of the upper label's text height; zero or greater.
+  private const double DetailsLineGapFactor = 0.2; // Gap between the grid-count and boundary-size annotations as a fraction of their shared text height; zero or greater.
+  private const double DetailsTextWidthFactor = 0.8; // Boundary-width share available to the two-row details text before its parenthesis curves are added; greater than zero and less than one.
+  private const double ParenthesisHorizontalGapFactor = 0.12; // Horizontal gap from details text to each parenthesis as a fraction of text height; zero or greater.
+  private const double ParenthesisVerticalPaddingFactor = 0.08; // Vertical extension beyond the details text as a fraction of text height; zero or greater.
+  private const double ParenthesisWidthFactor = 0.12; // Parenthesis outward bow as a fraction of the full parenthesis height; greater than zero.
+  private const double ParenthesisControlHeightFactor = 0.22; // Cubic control-point inset from each parenthesis end as a fraction of parenthesis height; from zero through 0.5.
+  private const double InsideLabelPaddingFraction = 0.1; // Empty inset on each boundary side when LabelInside is enabled; from zero through less than 0.5.
+  private const double RoundUpRatioTolerance = 1e-10; // Dimensionless tolerance subtracted before ceiling a diamond-count increment; small positive value.
+  private static readonly string[] RoundToDiamondNames = ["Full", "Half", "None"]; // Command-line values in DiamondRoundingMode numeric order.
+  private static readonly string[] LabelInsideNames = ["FitAll", "Fit", "No"]; // Command-line values in LabelInsideMode numeric order.
+
+  private enum DiamondRoundingMode
+  {
+    Full,
+    Half,
+    None
+  }
+
+  private enum LabelInsideMode
+  {
+    FitAll,
+    Fit,
+    No
+  }
 
   private static double _width        = DefaultWidth;
   private static double _height       = DefaultHeight;
@@ -61,8 +90,10 @@ public sealed class vDiamonds : vToolsCommand
   private static bool   _showBoundary = DefaultShowBoundary;
   private static bool   _showSize     = DefaultShowSize;
   private static bool   _showCount    = DefaultShowCount;
+  private static LabelInsideMode _labelInside = DefaultLabelInside;
   private static double _bySizeW      = DefaultBySizeWidth; // stored dims (always positive when ever set)
   private static double _bySizeH      = DefaultBySizeHeight;
+  private static DiamondRoundingMode _roundToDiamond = DefaultRoundToDiamond;
   private static bool   _bySizeActive = false; // transient: true only during the current invocation
 
   public override string EnglishName => "vDiamonds";
@@ -74,6 +105,7 @@ public sealed class vDiamonds : vToolsCommand
     EnsureLayer(doc, _layerPlot, PlotColor);
     EnsureLayer(doc, _layerCut,  CutColor);
     EnsureLayer(doc, _layerRef,  RefColor);
+    var lastPlacementPoint = Point3d.Unset;
 
     while (true)
     {
@@ -81,12 +113,26 @@ public sealed class vDiamonds : vToolsCommand
       double W, H, patOffX, patOffY, byCW, byCH;
       if (_bySizeActive && _bySizeW > 0.0 && _bySizeH > 0.0)
       {
-        W       = _bySizeW;
-        H       = _bySizeH;
-        byCW    = Math.Max(1.0, Math.Floor(W / _width));
-        byCH    = Math.Max(1.0, Math.Floor(H / _height));
-        patOffX = (W - byCW * _width)  / 2.0;
-        patOffY = (H - byCH * _height) / 2.0;
+        if (_roundToDiamond != DiamondRoundingMode.None)
+        {
+          var countIncrement = _roundToDiamond == DiamondRoundingMode.Half
+            ? 0.5
+            : 1.0;
+          byCW = DiamondCountAtLeast(_bySizeW, _width, countIncrement);
+          byCH = DiamondCountAtLeast(_bySizeH, _height, countIncrement);
+          W = byCW * _width;
+          H = byCH * _height;
+          patOffX = patOffY = 0.0;
+        }
+        else
+        {
+          W       = _bySizeW;
+          H       = _bySizeH;
+          byCW    = Math.Max(1.0, Math.Floor(W / _width));
+          byCH    = Math.Max(1.0, Math.Floor(H / _height));
+          patOffX = (W - byCW * _width)  / 2.0;
+          patOffY = (H - byCH * _height) / 2.0;
+        }
       }
       else
       {
@@ -111,35 +157,89 @@ public sealed class vDiamonds : vToolsCommand
         new Point3d(0, 0, 0),
       });
 
-      // Reposition size label to centre on full bbox width, then calibrate
-      sizeLabelTe.Plane = new Plane(new Point3d(W / 2.0, H + LabelGap, 0.0), Vector3d.XAxis, Vector3d.YAxis);
+      sizeLabelTe.Plane = Plane.WorldXY;
       CalibrateTextHeight(sizeLabelTe, W);
 
-      // Build count label (shows effective byCW × byCH), calibrate independently
+      // Build one two-row details block: grid count above final boundary size.
+      // Parentheses are separate curves so both rows share one continuous pair.
       TextEntity? countLabelTe = null;
+      TextEntity? boundaryLabelTe = null;
+      var detailParenthesisCurves = new List<NurbsCurve>();
       if (_showCount)
       {
         countLabelTe = new TextEntity
         {
-          Plane         = new Plane(new Point3d(W / 2.0, H + LabelGap, 0.0), Vector3d.XAxis, Vector3d.YAxis),
-          PlainText     = $"({FmtFrac(byCW)} x {FmtFrac(byCH)})",
-          TextHeight    = sizeLabelTe.TextHeight,
+          Plane = Plane.WorldXY,
+          PlainText = $"{FmtFrac(byCW)} x {FmtFrac(byCH)}",
+          TextHeight = sizeLabelTe.TextHeight,
           Justification = TextJustification.BottomCenter,
         };
-        CalibrateTextHeight(countLabelTe, W);
+        boundaryLabelTe = new TextEntity
+        {
+          Plane = Plane.WorldXY,
+          PlainText = $"{FmtFrac(W)} x {FmtFrac(H)}",
+          TextHeight = sizeLabelTe.TextHeight,
+          Justification = TextJustification.BottomCenter,
+        };
+        CalibrateSharedTextHeight(
+          W * DetailsTextWidthFactor,
+          countLabelTe,
+          boundaryLabelTe);
       }
 
-      // Stack: size label sits above count label when both are shown
-      if (_showSize && countLabelTe != null)
+      // Use rendered bounds so the parenthesis descenders clear the boundary,
+      // then place the diamond-size line above the two-row details block.
+      if (countLabelTe != null && boundaryLabelTe != null)
       {
-        double countT = countLabelTe.TextHeight;
-        sizeLabelTe.Plane = new Plane(
-          new Point3d(W / 2.0, H + LabelGap + countT * 1.2, 0.0),
-          Vector3d.XAxis, Vector3d.YAxis);
+        var parenthesisPadding =
+          countLabelTe.TextHeight * ParenthesisVerticalPaddingFactor;
+        var boundaryTop = PlaceTextAbove(
+          boundaryLabelTe,
+          W / 2.0,
+          H + LabelGap + parenthesisPadding);
+        PlaceTextAbove(
+          countLabelTe,
+          W / 2.0,
+          boundaryTop + countLabelTe.TextHeight * DetailsLineGapFactor);
+        detailParenthesisCurves = BuildDetailParentheses(
+          countLabelTe,
+          boundaryLabelTe,
+          out var parenthesisTop);
+        if (_showSize)
+        {
+          PlaceTextAbove(
+            sizeLabelTe,
+            W / 2.0,
+            parenthesisTop + sizeLabelTe.TextHeight * LabelLineGapFactor);
+        }
+      }
+      else if (_showSize)
+      {
+        PlaceTextAbove(sizeLabelTe, W / 2.0, H + LabelGap);
+      }
+
+      if (_labelInside != LabelInsideMode.No)
+      {
+        FitAnnotationsInside(
+          W,
+          H,
+          _labelInside,
+          _showSize ? sizeLabelTe : null,
+          countLabelTe,
+          boundaryLabelTe,
+          detailParenthesisCurves);
       }
 
       // Print bbox size to command history
-      var bySizeNote = _bySizeActive ? $"  (centered {(int)byCW} x {(int)byCH} diamonds)" : "";
+      var bySizeMode = _roundToDiamond switch
+      {
+        DiamondRoundingMode.Full => "full-rounded",
+        DiamondRoundingMode.Half => "half-rounded",
+        _ => "centered"
+      };
+      var bySizeNote = _bySizeActive
+        ? $"  ({bySizeMode} {FmtFrac(byCW)} x {FmtFrac(byCH)} diamonds)"
+        : "";
       RhinoApp.WriteLine($"Boundary box: {FmtFrac(W)} x {FmtFrac(H)}{bySizeNote}");
 
       var fadedPlot = FadeColor(LayerColor(doc, _layerPlot));
@@ -155,12 +255,17 @@ public sealed class vDiamonds : vToolsCommand
         previewItems.Add((sizeLabelTe.Duplicate(), fadedRef));
       if (countLabelTe != null)
         previewItems.Add((countLabelTe.Duplicate(), fadedRef));
+      if (boundaryLabelTe != null)
+        previewItems.Add((boundaryLabelTe.Duplicate(), fadedRef));
+      foreach (var parenthesis in detailParenthesisCurves)
+        previewItems.Add((parenthesis.DuplicateCurve(), fadedRef));
 
       var capturedBase  = new Point3d(0.0, H, 0.0);
       var capturedItems = previewItems;
 
       EventHandler<GetPointDrawEventArgs> onDraw = (_, e) =>
       {
+        lastPlacementPoint = e.CurrentPoint;
         var xform = Transform.Translation(e.CurrentPoint - capturedBase);
         foreach (var (geom, color) in capturedItems)
         {
@@ -182,6 +287,7 @@ public sealed class vDiamonds : vToolsCommand
       gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick diamond pattern placement point");
       gp.AcceptString(true);
+      gp.AcceptNothing(true);
       var idxW        = gp.AddOption("Width",       FmtOpt(_width));
       var idxH        = gp.AddOption("Height",      FmtOpt(_height));
       var idxCW       = gp.AddOption("CountWidth",  FmtOpt(_cw));
@@ -192,6 +298,10 @@ public sealed class vDiamonds : vToolsCommand
       var idxBoundary = gp.AddOptionToggle("Boundary", ref togBoundary);
       var idxSize     = gp.AddOptionToggle("Size",     ref togSize);
       var idxCount    = gp.AddOptionToggle("Count",    ref togCount);
+      var idxLabelInside = gp.AddOptionList(
+        "LabelInside",
+        LabelInsideNames,
+        (int)_labelInside);
 
       gp.DynamicDraw += onDraw;
       var result = gp.Get();
@@ -200,7 +310,7 @@ public sealed class vDiamonds : vToolsCommand
       if (result == GetResult.Cancel)
         return Result.Cancel;
 
-      // Direct string input at placement: "heightxwidth" sets diamond size
+      // Direct string input at placement: "widthxheight" sets diamond size
       if (result == GetResult.String)
       {
         var raw = gp.StringResult().Trim();
@@ -211,8 +321,8 @@ public sealed class vDiamonds : vToolsCommand
           var b = ParseFrac(raw[(xi + 1)..]);
           if (a.HasValue && b.HasValue)
           {
-            if (a.Value > 0.0) _height = a.Value;
-            if (b.Value > 0.0) _width  = b.Value;
+            if (a.Value > 0.0) _width  = a.Value;
+            if (b.Value > 0.0) _height = b.Value;
           }
         }
         else
@@ -257,7 +367,11 @@ public sealed class vDiamonds : vToolsCommand
         {
           double curBsW = _bySizeW > 0.0 ? _bySizeW : W;
           double curBsH = _bySizeH > 0.0 ? _bySizeH : H;
-          var v = GetPairSubprompt("Boundary box size (0 to deactivate)", curBsW, curBsH);
+          var v = GetBySizeSubprompt(
+            "Boundary box size (0 to deactivate)",
+            curBsW,
+            curBsH,
+            _roundToDiamond);
           if (v == null) return Result.Cancel;
           if (v.Value.A <= 0.0 || v.Value.B <= 0.0)
             _bySizeActive = false;  // deactivate only; stored dims are preserved
@@ -266,22 +380,38 @@ public sealed class vDiamonds : vToolsCommand
             _bySizeW = v.Value.A; _bySizeH = v.Value.B;
             _bySizeActive = true;
           }
+          _roundToDiamond = v.Value.RoundToDiamond;
         }
         else if (opt.Index == idxBoundary) _showBoundary = togBoundary.CurrentValue;
         else if (opt.Index == idxSize)     _showSize     = togSize.CurrentValue;
         else if (opt.Index == idxCount)    _showCount    = togCount.CurrentValue;
+        else if (opt.Index == idxLabelInside)
+        {
+          var selectedIndex = opt.CurrentListOptionIndex;
+          selectedIndex = Math.Max(
+            0,
+            Math.Min(LabelInsideNames.Length - 1, selectedIndex));
+          _labelInside = (LabelInsideMode)selectedIndex;
+        }
 
         SaveSettings();
         continue;
       }
 
-      if (result == GetResult.Point)
+      if (result is GetResult.Point or GetResult.Nothing)
       {
-        var xform = Transform.Translation(gp.Point() - capturedBase);
+        var placementPoint = result == GetResult.Point
+          ? gp.Point()
+          : lastPlacementPoint;
+        if (!placementPoint.IsValid)
+          placementPoint = capturedBase;
+        var xform = Transform.Translation(placementPoint - capturedBase);
         AddToDoc(doc, plotCurves,
                  _showBoundary ? cutCurve    : null,
                  _showSize     ? sizeLabelTe : null,
                  countLabelTe,
+                 boundaryLabelTe,
+                 detailParenthesisCurves,
                  xform, _width, _height, byCW, byCH);
         _bySizeActive = false;  // BySize is one-time; deactivate after placement (dims preserved)
         SaveSettings();
@@ -340,15 +470,15 @@ public sealed class vDiamonds : vToolsCommand
     };
     var cutCurve = new PolylineCurve(corners);
 
-    var labelText  = $"{FmtFrac(height)} x {FmtFrac(width)}";
+    var labelText = $"{FmtFrac(width)} x {FmtFrac(height)}";
     var textHeight = W / 10.0;
     var origin     = new Point3d(W / 2.0, H + LabelGap, 0.0);
     var labelPlane = new Plane(origin, Vector3d.XAxis, Vector3d.YAxis);
     var sizeLabelTe = new TextEntity
     {
-      Plane         = labelPlane,
-      PlainText     = labelText,
-      TextHeight    = textHeight,
+      Plane = labelPlane,
+      PlainText = labelText,
+      TextHeight = textHeight,
       Justification = TextJustification.BottomCenter,
     };
 
@@ -396,12 +526,151 @@ public sealed class vDiamonds : vToolsCommand
     return (unique[0], unique[1]);
   }
 
-  private static void CalibrateTextHeight(TextEntity labelTe, double targetWidth)
+  private static void CalibrateTextHeight(TextEntity text, double targetWidth)
   {
-    // TextModelWidth returns the rendered text width in model units at the current TextHeight.
-    double textWidth = labelTe.TextModelWidth;
+    var textWidth = text.TextModelWidth;
     if (textWidth > 0.0)
-      labelTe.TextHeight *= targetWidth / textWidth;
+      text.TextHeight *= targetWidth / textWidth;
+  }
+
+  private static void CalibrateSharedTextHeight(
+    double targetWidth,
+    params TextEntity[] labels)
+  {
+    var widestText = 0.0;
+    foreach (var label in labels)
+      widestText = Math.Max(widestText, label.TextModelWidth);
+
+    if (widestText <= 0.0)
+      return;
+
+    var scale = targetWidth / widestText;
+    foreach (var label in labels)
+      label.TextHeight *= scale;
+  }
+
+  private static double PlaceTextAbove(
+    TextEntity text,
+    double centerX,
+    double minimumY)
+  {
+    text.Plane = Plane.WorldXY;
+    var bounds = text.GetBoundingBox(true);
+    var minOffsetY = bounds.IsValid ? bounds.Min.Y : 0.0;
+    var maxOffsetY = bounds.IsValid ? bounds.Max.Y : text.TextHeight;
+    var originY = minimumY - minOffsetY;
+    text.Plane = new Plane(
+      new Point3d(centerX, originY, 0.0),
+      Vector3d.XAxis,
+      Vector3d.YAxis);
+    return originY + maxOffsetY;
+  }
+
+  private static List<NurbsCurve> BuildDetailParentheses(
+    TextEntity upperText,
+    TextEntity lowerText,
+    out double topY)
+  {
+    var upperBounds = upperText.GetBoundingBox(true);
+    var lowerBounds = lowerText.GetBoundingBox(true);
+    if (!upperBounds.IsValid || !lowerBounds.IsValid)
+    {
+      topY = upperText.Plane.OriginY + upperText.TextHeight;
+      return [];
+    }
+
+    var verticalPadding =
+      upperText.TextHeight * ParenthesisVerticalPaddingFactor;
+    var top = Math.Max(upperBounds.Max.Y, lowerBounds.Max.Y) + verticalPadding;
+    var bottom = Math.Min(upperBounds.Min.Y, lowerBounds.Min.Y) - verticalPadding;
+    var height = Math.Max(upperText.TextHeight, top - bottom);
+    var horizontalGap =
+      upperText.TextHeight * ParenthesisHorizontalGapFactor;
+    var bow = height * ParenthesisWidthFactor;
+    var controlInset = height * ParenthesisControlHeightFactor;
+    var leftInner = Math.Min(upperBounds.Min.X, lowerBounds.Min.X) - horizontalGap;
+    var rightInner = Math.Max(upperBounds.Max.X, lowerBounds.Max.X) + horizontalGap;
+
+    using var left = new BezierCurve(
+      new[]
+      {
+        new Point3d(leftInner, top, 0.0),
+        new Point3d(leftInner - bow, top - controlInset, 0.0),
+        new Point3d(leftInner - bow, bottom + controlInset, 0.0),
+        new Point3d(leftInner, bottom, 0.0),
+      });
+    using var right = new BezierCurve(
+      new[]
+      {
+        new Point3d(rightInner, top, 0.0),
+        new Point3d(rightInner + bow, top - controlInset, 0.0),
+        new Point3d(rightInner + bow, bottom + controlInset, 0.0),
+        new Point3d(rightInner, bottom, 0.0),
+      });
+
+    topY = top;
+    return [left.ToNurbsCurve(), right.ToNurbsCurve()];
+  }
+
+  private static void FitAnnotationsInside(
+    double boundaryWidth,
+    double boundaryHeight,
+    LabelInsideMode mode,
+    TextEntity? sizeLabel,
+    TextEntity? countLabel,
+    TextEntity? boundaryLabel,
+    IReadOnlyList<NurbsCurve> parentheses)
+  {
+    var annotations = new List<GeometryBase>();
+    if (sizeLabel != null)
+      annotations.Add(sizeLabel);
+    if (countLabel != null)
+      annotations.Add(countLabel);
+    if (boundaryLabel != null)
+      annotations.Add(boundaryLabel);
+    foreach (var parenthesis in parentheses)
+      annotations.Add(parenthesis);
+
+    var bounds = BoundingBox.Empty;
+    foreach (var annotation in annotations)
+      bounds.Union(annotation.GetBoundingBox(true));
+    if (!bounds.IsValid)
+      return;
+
+    var availableWidth = boundaryWidth * (1.0 - 2.0 * InsideLabelPaddingFraction);
+    var availableHeight = boundaryHeight * (1.0 - 2.0 * InsideLabelPaddingFraction);
+    var boundsWidth = bounds.Max.X - bounds.Min.X;
+    var boundsHeight = bounds.Max.Y - bounds.Min.Y;
+    if (availableWidth <= RhinoMath.ZeroTolerance ||
+        availableHeight <= RhinoMath.ZeroTolerance ||
+        boundsWidth <= RhinoMath.ZeroTolerance ||
+        boundsHeight <= RhinoMath.ZeroTolerance)
+      return;
+
+    var scale = mode == LabelInsideMode.FitAll
+      ? Math.Min(
+          availableWidth / boundsWidth,
+          availableHeight / boundsHeight)
+      : availableWidth / boundsWidth;
+    var sourceAnchor = mode == LabelInsideMode.FitAll
+      ? bounds.Center
+      : new Point3d(bounds.Center.X, bounds.Min.Y, bounds.Center.Z);
+    var targetAnchor = mode == LabelInsideMode.FitAll
+      ? new Point3d(boundaryWidth * 0.5, boundaryHeight * 0.5, 0.0)
+      : new Point3d(
+          boundaryWidth * 0.5,
+          boundaryHeight * InsideLabelPaddingFraction,
+          0.0);
+    var moveToOrigin = Transform.Translation(Point3d.Origin - sourceAnchor);
+    var resize = Transform.Scale(Point3d.Origin, scale);
+    var moveInside = Transform.Translation(targetAnchor - Point3d.Origin);
+
+    foreach (var annotation in annotations)
+    {
+      annotation.Transform(moveToOrigin);
+      annotation.Transform(resize);
+      annotation.Transform(moveInside);
+    }
   }
 
   private static void AddToDoc(
@@ -410,6 +679,8 @@ public sealed class vDiamonds : vToolsCommand
     PolylineCurve? cutCurve,
     TextEntity? sizeLabelTe,
     TextEntity? countLabelTe,
+    TextEntity? boundaryLabelTe,
+    IReadOnlyList<NurbsCurve> detailParenthesisCurves,
     Transform xform,
     double width, double height, double cw, double ch)
   {
@@ -435,21 +706,29 @@ public sealed class vDiamonds : vToolsCommand
       if (cutId != Guid.Empty) addedIds.Add(cutId);
     }
 
-    foreach (var te in new[] { sizeLabelTe, countLabelTe })
+    foreach (var text in new[] { sizeLabelTe, countLabelTe, boundaryLabelTe })
     {
-      if (te == null) continue;
-      if (te.Duplicate() is TextEntity copy)
-      {
-        copy.Transform(xform);
-        var teId = doc.Objects.AddText(copy, refAttr);
-        if (teId != Guid.Empty) addedIds.Add(teId);
-      }
+      if (text?.Duplicate() is not TextEntity copy)
+        continue;
+
+      copy.Transform(xform);
+      var textId = doc.Objects.AddText(copy, refAttr);
+      if (textId != Guid.Empty)
+        addedIds.Add(textId);
+    }
+
+    foreach (var source in detailParenthesisCurves)
+    {
+      var curve = source.DuplicateCurve();
+      curve.Transform(xform);
+      var curveId = doc.Objects.AddCurve(curve, refAttr);
+      if (curveId != Guid.Empty) addedIds.Add(curveId);
     }
 
     if (addedIds.Count > 1)
     {
       var shortId   = Guid.NewGuid().ToString()[..8];
-      var groupName = $"Diamonds_{FmtFrac(height)}x{FmtFrac(width)}_({FmtFrac(cw)}x{FmtFrac(ch)})_{shortId}";
+      var groupName = $"Diamonds_{FmtFrac(width)}x{FmtFrac(height)}_({FmtFrac(cw)}x{FmtFrac(ch)})_{shortId}";
       var groupIdx  = doc.Groups.Add(groupName);
       foreach (var id in addedIds)
       {
@@ -466,7 +745,7 @@ public sealed class vDiamonds : vToolsCommand
 
   private static void LoadSettings()
   {
-    (_width, _height, _cw, _ch, _showBoundary, _showSize, _showCount, _bySizeW, _bySizeH, _layerPlot, _layerCut, _layerRef) = ToolsOptionStore.Read(SettingsSection, section =>
+    (_width, _height, _cw, _ch, _showBoundary, _showSize, _showCount, _labelInside, _bySizeW, _bySizeH, _roundToDiamond, _layerPlot, _layerCut, _layerRef) = ToolsOptionStore.Read(SettingsSection, section =>
     {
       var w   = _width;
       var h   = _height;
@@ -475,8 +754,10 @@ public sealed class vDiamonds : vToolsCommand
       var sb  = _showBoundary;
       var ss  = _showSize;
       var sc  = _showCount;
+      var labelInside = _labelInside;
       var bsW = _bySizeW;
       var bsH = _bySizeH;
+      var roundToDiamond = _roundToDiamond;
       var lp  = _layerPlot;
       var lc  = _layerCut;
       var lr  = _layerRef;
@@ -488,13 +769,35 @@ public sealed class vDiamonds : vToolsCommand
       if (ToolsOptionStore.TryGetBool(section, ShowBoundaryKey, out var psb)) sb  = psb;
       if (ToolsOptionStore.TryGetBool(section, ShowSizeKey,     out var pss)) ss  = pss;
       if (ToolsOptionStore.TryGetBool(section, ShowCountKey,    out var psc)) sc  = psc;
+      if (ToolsOptionStore.TryGetString(section, LabelInsideKey, out var pli) &&
+          Enum.TryParse(pli, true, out LabelInsideMode parsedLabelInside))
+      {
+        labelInside = parsedLabelInside;
+      }
+      else if (ToolsOptionStore.TryGetBool(section, LabelInsideKey, out var legacyLabelInside))
+      {
+        labelInside = legacyLabelInside
+          ? LabelInsideMode.FitAll
+          : LabelInsideMode.No;
+      }
       if (ToolsOptionStore.TryGetDouble(section, BySizeWKey,    out var pbsW) && pbsW > 0.0) bsW = pbsW;
       if (ToolsOptionStore.TryGetDouble(section, BySizeHKey,    out var pbsH) && pbsH > 0.0) bsH = pbsH;
+      if (ToolsOptionStore.TryGetString(section, RoundToDiamondKey, out var prtd) &&
+          Enum.TryParse(prtd, true, out DiamondRoundingMode parsedRounding))
+      {
+        roundToDiamond = parsedRounding;
+      }
+      else if (ToolsOptionStore.TryGetBool(section, RoundToDiamondKey, out var legacyRounding))
+      {
+        roundToDiamond = legacyRounding
+          ? DiamondRoundingMode.Full
+          : DiamondRoundingMode.None;
+      }
       if (ToolsOptionStore.TryGetString(section, LayerPlotKey,  out var plp) && !string.IsNullOrWhiteSpace(plp)) lp = plp;
       if (ToolsOptionStore.TryGetString(section, LayerCutKey,   out var plc) && !string.IsNullOrWhiteSpace(plc)) lc = plc;
       if (ToolsOptionStore.TryGetString(section, LayerRefKey,   out var plr) && !string.IsNullOrWhiteSpace(plr)) lr = plr;
 
-      return (w, h, cw, ch, sb, ss, sc, bsW, bsH, lp, lc, lr);
+      return (w, h, cw, ch, sb, ss, sc, labelInside, bsW, bsH, roundToDiamond, lp, lc, lr);
     });
   }
 
@@ -508,8 +811,10 @@ public sealed class vDiamonds : vToolsCommand
       section[ShowBoundaryKey] = _showBoundary;
       section[ShowSizeKey]     = _showSize;
       section[ShowCountKey]    = _showCount;
+      section[LabelInsideKey]  = _labelInside.ToString();
       section[BySizeWKey]      = _bySizeW;
       section[BySizeHKey]      = _bySizeH;
+      section[RoundToDiamondKey] = _roundToDiamond.ToString();
       section[LayerPlotKey]    = _layerPlot;
       section[LayerCutKey]     = _layerCut;
       section[LayerRefKey]     = _layerRef;
@@ -552,34 +857,74 @@ public sealed class vDiamonds : vToolsCommand
     return null;
   }
 
-  private static (double A, double B)? GetPairSubprompt(string prompt, double curA, double curB)
+  private static (double A, double B, DiamondRoundingMode RoundToDiamond)? GetBySizeSubprompt(
+    string prompt,
+    double curA,
+    double curB,
+    DiamondRoundingMode roundToDiamond)
   {
-    var gs = new GetString();
-    gs.SetCommandPrompt($"{prompt} ({FmtFrac(curA)} x {FmtFrac(curB)})");
-    gs.AcceptNothing(true);
-    var res = gs.Get();
-    if (res == GetResult.Nothing) return (curA, curB);
-    if (res == GetResult.String)
+    while (true)
     {
-      var raw = gs.StringResult().Trim();
-      if (string.IsNullOrEmpty(raw)) return (curA, curB);
-      var xi = raw.IndexOf('x', StringComparison.OrdinalIgnoreCase);
-      if (xi > 0)
+      var gs = new GetString();
+      gs.SetCommandPrompt($"{prompt} ({FmtFrac(curA)} x {FmtFrac(curB)})");
+      gs.AcceptNothing(true);
+      var roundOption = gs.AddOptionList(
+        "RoundToDiamond",
+        RoundToDiamondNames,
+        (int)roundToDiamond);
+      var res = gs.Get();
+      if (res == GetResult.Nothing)
+        return (curA, curB, roundToDiamond);
+      if (res == GetResult.Option && gs.Option()?.Index == roundOption)
       {
-        var a = ParseFrac(raw[..xi]);
-        var b = ParseFrac(raw[(xi + 1)..]);
-        if (a.HasValue && b.HasValue && a.Value > 0.0 && b.Value > 0.0)
-          return (a.Value, b.Value);
+        var selectedIndex = gs.Option()?.CurrentListOptionIndex ?? (int)roundToDiamond;
+        selectedIndex = Math.Max(
+          0,
+          Math.Min(RoundToDiamondNames.Length - 1, selectedIndex));
+        roundToDiamond = (DiamondRoundingMode)selectedIndex;
+        continue;
       }
-      var single = ParseFrac(raw);
-      if (single.HasValue)
+      if (res == GetResult.String)
       {
-        if (single.Value <= 0.0) return (0.0, 0.0);  // 0 = deactivate signal
-        return (single.Value, curB);
+        var raw = gs.StringResult().Trim();
+        if (string.IsNullOrEmpty(raw))
+          return (curA, curB, roundToDiamond);
+        var xi = raw.IndexOf('x', StringComparison.OrdinalIgnoreCase);
+        if (xi > 0)
+        {
+          var a = ParseFrac(raw[..xi]);
+          var b = ParseFrac(raw[(xi + 1)..]);
+          if (a.HasValue && b.HasValue && a.Value > 0.0 && b.Value > 0.0)
+            return (a.Value, b.Value, roundToDiamond);
+        }
+        var single = ParseFrac(raw);
+        if (single.HasValue)
+        {
+          if (single.Value <= 0.0)
+            return (0.0, 0.0, roundToDiamond);  // 0 = deactivate signal
+          return (single.Value, curB, roundToDiamond);
+        }
+        return (curA, curB, roundToDiamond);
       }
-      return (curA, curB);
+      return null;
     }
-    return null;
+  }
+
+  private static double DiamondCountAtLeast(
+    double minimumBoundarySize,
+    double diamondSize,
+    double countIncrement)
+  {
+    var incrementUnits =
+      minimumBoundarySize / (diamondSize * countIncrement);
+    var count = Math.Max(
+      countIncrement,
+      Math.Ceiling(incrementUnits - RoundUpRatioTolerance) * countIncrement);
+
+    while (count * diamondSize < minimumBoundarySize - RhinoMath.ZeroTolerance)
+      count += countIncrement;
+
+    return count;
   }
 
   /// <summary>

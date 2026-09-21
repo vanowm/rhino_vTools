@@ -39,6 +39,22 @@ internal static class CommandHelpUrl
       Uri.EscapeDataString(commandName.Trim().ToLowerInvariant());
   }
 
+  internal static bool IsCommandTopic(string? currentUrl, string targetUrl)
+  {
+    if (!Uri.TryCreate(currentUrl, UriKind.Absolute, out var current) ||
+        !Uri.TryCreate(targetUrl, UriKind.Absolute, out var target))
+      return string.Equals(currentUrl, targetUrl, StringComparison.OrdinalIgnoreCase);
+
+    return string.Equals(
+             current.GetLeftPart(UriPartial.Path),
+             target.GetLeftPart(UriPartial.Path),
+             StringComparison.OrdinalIgnoreCase) &&
+           string.Equals(
+             current.Fragment,
+             target.Fragment,
+             StringComparison.OrdinalIgnoreCase);
+  }
+
   private static string BuildThemeQuery()
   {
     try

@@ -1,4 +1,4 @@
-# vTools  ·  v26.9.1.1309
+# vTools  ·  v26.9.18.1621
 
 vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and surface editing, fabrication layout, unrolling and matching, alignment, annotation, selection, and object management.
 
@@ -250,12 +250,13 @@ Closed source curves and closed joined chains are created as closed splines.
 
 Options:
 
-    - `Width` / `Height`: single-diamond cell width and height. Accept decimal, fraction (`3+1/8`), or type `heightxwidth` directly at the placement prompt (e.g. `2x3`).
+    - `Width` / `Height`: single-diamond cell width and height. Accept decimal, fraction (`3+1/8`), or type `widthxheight` directly at the placement prompt (e.g. `3x2`).
     - `CountWidth` / `CountHeight`: number of diamond cells across/tall; decimals allowed (`3.5` = 3 full + half cell).
-    - `BySize`: enter a target bounding box size as `widthxheight`. Diamonds are counted by `floor(box/cell)` and centered with equal margins. Does not change `CountWidth`/`CountHeight`. Enter `0` to revert to count mode.
+    - `BySize`: enter a target bounding box size as `widthxheight`. `RoundToDiamond=None` keeps the requested box and centers whole diamonds with equal margins; `Full` or `Half` treats it as a minimum and expands each dimension upward to the next whole- or half-diamond increment. Does not change `CountWidth`/`CountHeight`. Enter `0` to revert to count mode.
     - `Boundary=Yes/No`: show/hide the CUT1 bounding rectangle.
-    - `Size=Yes/No`: show/hide the size label (e.g. `2 x 2`), fitted to bbox width.
-    - `Count=Yes/No`: show/hide the count label (e.g. `(3 x 3)`), fitted to bbox width independently.
+    - `Size=Yes/No`: show/hide the individual diamond size label (e.g. `2 x 2`), fitted to bbox width and stored as one PatternSmith-compatible ASCII annotation.
+    - `Count=Yes/No`: show/hide separate grid-count and boundary-size annotations, enclosed by one pair of parentheses spanning both rows and fitted to the bbox width.
+    - `LabelInside=FitAll/Fit/No`: `FitAll` uniformly scales and centers the complete annotation stack within 10% padding on every boundary side; `Fit` scales it to the padded width and aligns its bottom to the lower 10% inset; `No` keeps the labels above the boundary.
 
 1. Current bounding box dimensions print to command history on every preview update.
 1. Pick the placement point to commit. All objects are grouped. Output layers: `PLOT` (diamond lines), `CUT1` (boundary rect), `Reference` (labels).
@@ -375,8 +376,7 @@ Options:
 
 ### vIsolate flow
 
-1. Preselect objects to keep visible, or run `vIsolate` and select them. Prompted selection includes whole groups and excludes subobjects; a direct set name such as `vIsolate "A"` can be supplied before selecting objects.
-1. Enter an optional Rhino hide-set name, or press Enter for no named set.
+1. In one selection stage, add or remove the objects to keep visible, type an optional set name such as `A`, and press Enter to confirm. Preselection remains editable; prompted selection includes whole groups and excludes subobjects. The pending name is displayed by the `Name` option and can be removed with `ClearName`. A name can also be supplied directly, such as `vIsolate "A"`.
 1. Every other visible, unlocked normal object is hidden natively and the isolated objects remain selected. Named isolation records active set membership; blank input clears any prior membership and uses Rhino's ordinary unnamed hide behavior, matching Rhino's [Isolate](https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm).
 1. `vIsolate` is transparent and can run without cancelling the command already in progress. When nested inside another command, it restores the selection that existed before isolation.
 1. The packaged `vTools` toolbar and tab contain a blue/grey `vIsolate / vShow` flyout linked to the `vIsolate` toolbar. That toolbar contains the general `vIsolate / vShow` button, named `vIsolate A` through `vIsolate E` buttons, and the combined built-in [Isolate](https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm) / [Show](https://docs.mcneel.com/rhino/8/help/en-us/commands/show.htm) button. Named buttons isolate into the matching set on left-click and use transparent [vShow](#vshow-flow) to restore that set on right-click; the built-in button uses `!_Isolate` and `!_Show`.
@@ -679,16 +679,18 @@ Behavior:
 
 ### vRectangle flow
 
-1. If curves are preselected, their total length is used as the width automatically.
-1. Otherwise, set width: select curves to use their total length, type a number, or press Enter to keep the current value.
-1. Set height the same way.
+1. The command starts directly at bottom-left placement using the stored width and height. If curves are preselected, their total length replaces the width automatically.
+1. Type `widthxheight`, such as `123x345` or `10+1/2x4+1/2`, during placement to update both dimensions together.
+1. Enter one, two, or three construction-plane coordinates to place the corner directly; a single value is treated as `(value, 0, 0)`.
 1. Pick the bottom-left corner. Press Enter to reuse the previous bottom-right position.
-1. Live preview shows the rectangle while moving the cursor.
+1. Live preview shows the rectangle and optional dimension label while moving the cursor.
 
 Options:
 
 - `Width`: changes the current rectangle width while picking the corner.
 - `Height`: changes the current rectangle height while picking the corner.
+- `Layer`: places the rectangle on the selected layer; `*Current*`, `.` or `*` follows Rhino's current layer.
+- `Label`: adds a centered `width x height` annotation on the `Reference` layer, formatted with the document's fractional or decimal settings, fitted inside the rectangle with 10% padding on every side, and grouped with the rectangle.
 
 ### vReGroup flow
 

@@ -32,6 +32,8 @@ public sealed class vDir : vToolsCommand
   private static readonly Color AffectedFacePreviewColor = Color.FromArgb(35, 190, 235); // RGB color identifying additional faces that the active direction operation will reverse.
   private const double FacePreviewTransparency = 0.18; // Display-material transparency for reference and affected face previews; range 0.0 opaque to 1.0 invisible.
   private const double BackFacePreviewBrightness = 0.5; // Multiplier applied to preview RGB channels on the back side; range 0.0 black to 1.0 unchanged.
+  private const double HoverPickDistanceTiePixels = 0.5; // Maximum projected cursor-distance difference in pixels treated as a tie before camera depth decides the hovered face.
+  private const double MeshPickDistanceTieTolerance = 1e-9; // Maximum difference between Rhino mesh-pick distance values treated as equal before camera depth decides the hovered face.
   private const int ModifierRefreshIntervalMilliseconds = 30; // Polling interval in milliseconds for modifier-only preview and prompt updates; positive integer.
   private const int ShiftVirtualKey = 0x10; // Win32 virtual-key code used to detect either Shift key.
   private const int ControlVirtualKey = 0x11; // Win32 virtual-key code used to detect either Ctrl key.
@@ -146,7 +148,7 @@ public sealed class vDir : vToolsCommand
         continue;
       }
 
-      var ctrlClickRequest = customMessage as FaceClickRequest;
+      var clickRequest = customMessage as FaceClickRequest;
       if (getResult is GetResult.Cancel or GetResult.Nothing)
         break;
 
@@ -164,10 +166,10 @@ public sealed class vDir : vToolsCommand
 
       FaceTarget target;
       FaceOperation effectiveOperation;
-      if (ctrlClickRequest != null)
+      if (clickRequest != null)
       {
-        target = ctrlClickRequest.Target;
-        effectiveOperation = ctrlClickRequest.Operation;
+        target = clickRequest.Target;
+        effectiveOperation = clickRequest.Operation;
       }
       else
       {
@@ -1504,20 +1506,29 @@ public sealed class vDir : vToolsCommand
           controlPressed,
           e.ShiftKeyDown || IsVirtualKeyPressed(ShiftVirtualKey));
 
-        if (controlPressed)
+        var target = _highlighted;
+        var targetSource = "highlighted";
+        if (!target.HasValue && controlPressed)
         {
-          var target = PickFace(e.View, e.ViewportPoint);
-          if (target.HasValue)
+          var pick = PickFace(e.View, e.ViewportPoint);
+          if (pick.HasValue)
           {
-            e.Cancel = true;
-            GetBaseClass.PostCustomMessage(
-              new FaceClickRequest(target.Value, _operationAtClick.Value));
-            Log.Write(
-              "vDir",
-              $"ctrl_click object={target.Value.ObjectId} " +
-              $"face={target.Value.FaceIndex} " +
-              $"operation={OperationLabel(_operationAtClick.Value)}");
+            target = pick.Value.Target;
+            targetSource = "ctrl_fallback";
           }
+        }
+
+        if (target.HasValue)
+        {
+          e.Cancel = true;
+          GetBaseClass.PostCustomMessage(
+            new FaceClickRequest(target.Value, _operationAtClick.Value));
+          Log.Write(
+            "vDir",
+            $"click object={target.Value.ObjectId} " +
+            $"face={target.Value.FaceIndex} " +
+            $"source={targetSource} " +
+            $"operation={OperationLabel(_operationAtClick.Value)}");
         }
       }
       catch
@@ -1530,7 +1541,8 @@ public sealed class vDir : vToolsCommand
 
     protected override void OnMouseMove(MouseCallbackEventArgs e)
     {
-      var next = PickFace(e.View, e.ViewportPoint);
+      var pick = PickFace(e.View, e.ViewportPoint);
+      var next = pick?.Target;
       var operation = ResolveModifierOperation(_operation);
       if (_suppressedUntilLeave.HasValue)
       {
@@ -1546,6 +1558,18 @@ public sealed class vDir : vToolsCommand
         return;
       }
 
+      if (next != _highlighted && next.HasValue && pick.HasValue)
+      {
+        Log.Write(
+          "vDir",
+          $"hover object={next.Value.ObjectId} " +
+          $"face={next.Value.FaceIndex} " +
+          $"candidates={pick.Value.CandidateCount} " +
+          $"metric={pick.Value.MetricKind} " +
+          $"pick_distance={pick.Value.PickDistance:0.######} " +
+          $"depth={pick.Value.Depth:0.######}");
+      }
+
       _highlighted = next;
       _highlightedOperation = operation;
       _conduit.SetTarget(next, operation);
@@ -1553,7 +1577,7 @@ public sealed class vDir : vToolsCommand
       base.OnMouseMove(e);
     }
 
-    private FaceTarget? PickFace(
+    private HoverPickResult? PickFace(
       Rhino.Display.RhinoView? view,
       System.Drawing.Point viewportPoint)
     {
@@ -1578,16 +1602,167 @@ public sealed class vDir : vToolsCommand
       pickContext.UpdateClippingPlanes();
 
       var picked = _doc.Objects.PickObjects(pickContext);
-      if (picked == null)
+      if (picked == null || picked.Length == 0)
         return null;
 
-      foreach (var objRef in picked)
+      HoverPickResult? best = null;
+      var candidateCount = 0;
+      try
       {
-        if (TryGetTarget(objRef, out var target))
-          return target;
+        foreach (var objRef in picked)
+        {
+          if (!TryGetTarget(objRef, out var target))
+            continue;
+
+          candidateCount++;
+          var hasMeshMetric = TryGetMeshPickMetric(
+            pickContext,
+            objRef,
+            target,
+            out var pickDistance,
+            out var depth,
+            out var metricKind);
+          if (!hasMeshMetric)
+          {
+            var selectionPoint = objRef.SelectionPoint();
+            pickDistance = double.MaxValue;
+            depth = double.MaxValue;
+            metricKind = "none";
+            if (selectionPoint.IsValid)
+            {
+              var clientPoint = viewport.WorldToClient(selectionPoint);
+              var deltaX = clientPoint.X - viewportPoint.X;
+              var deltaY = clientPoint.Y - viewportPoint.Y;
+              pickDistance = Math.Sqrt(deltaX * deltaX + deltaY * deltaY);
+              depth = pickLine.ClosestParameter(selectionPoint);
+              metricKind = "selection_point";
+            }
+          }
+
+          var candidate = new HoverPickResult(
+            target,
+            hasMeshMetric,
+            pickDistance,
+            depth,
+            metricKind,
+            candidateCount);
+          if (!best.HasValue || IsBetterHoverPick(candidate, best.Value))
+            best = candidate;
+        }
+      }
+      finally
+      {
+        foreach (var objRef in picked)
+          objRef.Dispose();
       }
 
-      return null;
+      return best.HasValue
+        ? best.Value with { CandidateCount = candidateCount }
+        : null;
+    }
+
+    private static bool IsBetterHoverPick(
+      HoverPickResult candidate,
+      HoverPickResult current)
+    {
+      if (candidate.HasMeshMetric != current.HasMeshMetric)
+        return candidate.HasMeshMetric;
+
+      if (candidate.HasMeshMetric)
+      {
+        var meshDistanceDifference = candidate.PickDistance - current.PickDistance;
+        if (Math.Abs(meshDistanceDifference) > MeshPickDistanceTieTolerance)
+          return meshDistanceDifference < 0.0;
+
+        return candidate.Depth > current.Depth;
+      }
+
+      var distanceDifference =
+        candidate.PickDistance - current.PickDistance;
+      if (Math.Abs(distanceDifference) > HoverPickDistanceTiePixels)
+        return distanceDifference < 0.0;
+
+      return candidate.Depth < current.Depth;
+    }
+
+    private static bool TryGetMeshPickMetric(
+      PickContext pickContext,
+      ObjRef objRef,
+      FaceTarget target,
+      out double distance,
+      out double depth,
+      out string metricKind)
+    {
+      distance = double.MaxValue;
+      depth = double.MinValue;
+      metricKind = "none";
+      var rhinoObject = objRef.Object();
+      var geometry = rhinoObject?.Geometry;
+      if (rhinoObject == null || geometry == null)
+        return false;
+
+      Mesh? mesh = null;
+      var disposeMesh = false;
+      var face = objRef.Face();
+      if (face != null)
+        mesh = face.GetMesh(MeshType.Render) ?? face.GetMesh(MeshType.Preview);
+
+      if (mesh == null)
+      {
+        var renderMeshes = rhinoObject.GetMeshes(MeshType.Render);
+        if (target.FaceIndex >= 0 && target.FaceIndex < renderMeshes.Length)
+          mesh = renderMeshes[target.FaceIndex];
+      }
+
+      if (mesh == null && geometry is Mesh sourceMesh &&
+          target.FaceIndex >= 0 && target.FaceIndex < sourceMesh.Faces.Count)
+      {
+        mesh = CreateMeshFacePickMesh(sourceMesh, target.FaceIndex);
+        disposeMesh = mesh != null;
+      }
+
+      if (mesh == null)
+        return false;
+
+      try
+      {
+        if (!pickContext.PickFrustumTest(
+              mesh,
+              PickContext.MeshPickStyle.ShadedModePicking,
+              out _,
+              out depth,
+              out distance,
+              out var hitFlag,
+              out _))
+          return false;
+
+        metricKind = $"mesh_{hitFlag.ToString().ToLowerInvariant()}";
+        return true;
+      }
+      finally
+      {
+        if (disposeMesh)
+          mesh.Dispose();
+      }
+    }
+
+    private static Mesh? CreateMeshFacePickMesh(Mesh source, int faceIndex)
+    {
+      if (faceIndex < 0 || faceIndex >= source.Faces.Count)
+        return null;
+
+      var sourceFace = source.Faces[faceIndex];
+      var sourceIndices = sourceFace.IsQuad
+        ? new[] { sourceFace.A, sourceFace.B, sourceFace.C, sourceFace.D }
+        : new[] { sourceFace.A, sourceFace.B, sourceFace.C };
+      var mesh = new Mesh();
+      foreach (var sourceIndex in sourceIndices)
+        mesh.Vertices.Add(source.Vertices[sourceIndex]);
+      if (sourceFace.IsQuad)
+        mesh.Faces.AddFace(0, 1, 2, 3);
+      else
+        mesh.Faces.AddFace(0, 1, 2);
+      return mesh;
     }
   }
 
@@ -1889,4 +2064,12 @@ public sealed class vDir : vToolsCommand
     Guid ObjectId,
     FaceGeometryKind GeometryKind,
     int FaceIndex);
+
+  private readonly record struct HoverPickResult(
+    FaceTarget Target,
+    bool HasMeshMetric,
+    double PickDistance,
+    double Depth,
+    string MetricKind,
+    int CandidateCount);
 }

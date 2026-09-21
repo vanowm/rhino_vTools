@@ -16,18 +16,25 @@ namespace vTools.Commands;
 [CommandStyle(Style.Transparent)]
 public sealed class vIsolate : vToolsCommand
 {
-  private const string Tag = "vIsolate";
-  private const string HideSetPrompt = // Prompt shown when an isolate-set name was not supplied directly.
-    "Name of object set to isolate. Press Enter to isolate with no named set.";
+  // Defaults and customizable constants
+  private const string DefaultHideSetName = ""; // Empty string creates an unnamed isolate; any non-empty text is a Rhino hide-set name.
+  private const string Tag = "vIsolate"; // Command and diagnostic-log name.
+  private const string SelectionPrompt = // Combined object-selection and optional hide-set-name prompt.
+    "Select objects to isolate or type an optional set name";
+  private const string NamePrompt = "Name of object set to isolate"; // Sub-prompt used when the Name option is selected.
+  private const string NameOption = "Name"; // Command option whose value displays the pending hide-set name.
+  private const string EmptyNameLabel = "None"; // Name option value shown for an unnamed isolate.
+  private const string ClearNameOption = "ClearName"; // Command option shown while a non-empty hide-set name is pending.
 
   public override string EnglishName => Tag;
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    var initialSelection = SelectedObjectIds(doc);
     var selectionSnapshot = HideSetState.CaptureNestedSelection(doc);
     try
     {
-      return RunCommandCore(doc);
+      return RunCommandCore(doc, initialSelection);
     }
     finally
     {
@@ -35,13 +42,15 @@ public sealed class vIsolate : vToolsCommand
     }
   }
 
-  private static Result RunCommandCore(RhinoDoc doc)
+  private static Result RunCommandCore(
+    RhinoDoc doc,
+    IReadOnlyCollection<Guid> initialSelection)
   {
-    Log.Write(Tag, "--- run start ---");
+    Log.Write(Tag, $"--- run start --- preselected={initialSelection.Count}");
 
     var isolateIds = GetObjectsToIsolate(
       doc,
-      out var requestedHideSetName,
+      out var hideSetName,
       out var selectionResult);
     if (isolateIds.Count == 0)
     {
@@ -64,24 +73,6 @@ public sealed class vIsolate : vToolsCommand
       doc.Views.Redraw();
       RhinoApp.WriteLine("vIsolate: nothing to hide.");
       return Result.Success;
-    }
-
-    string? hideSetName;
-    if (requestedHideSetName != null)
-    {
-      hideSetName = requestedHideSetName;
-    }
-    else
-    {
-      hideSetName = GetHideSetName(out var nameResult);
-      if (nameResult != Result.Success || hideSetName == null)
-      {
-        RestoreSelection(doc, isolateIds);
-        doc.Views.Redraw();
-        RhinoApp.WriteLine("vIsolate canceled.");
-        Log.Write(Tag, $"  hide-set prompt canceled result={nameResult}");
-        return nameResult;
-      }
     }
 
     doc.Objects.UnselectAll();
@@ -145,73 +136,149 @@ public sealed class vIsolate : vToolsCommand
 
   private static List<Guid> GetObjectsToIsolate(
     RhinoDoc doc,
-    out string? requestedHideSetName,
+    out string hideSetName,
     out Result commandResult)
   {
-    requestedHideSetName = null;
-    var preselected = ValidObjectIds(
-      doc,
-      doc.Objects.GetSelectedObjects(false, false).Select(obj => obj.Id));
-    if (preselected.Count > 0)
-    {
-      commandResult = Result.Success;
-      return preselected;
-    }
+    hideSetName = DefaultHideSetName;
 
     using var getter = new GetObject();
-    getter.SetCommandPrompt("Select objects to isolate");
+    getter.SetCommandPrompt(SelectionPrompt);
     getter.SubObjectSelect = false;
     getter.GroupSelect = true;
-    getter.AcceptNothing(false);
+    getter.AcceptNothing(true);
     getter.AcceptString(true);
     getter.EnablePreSelect(true, true);
+    getter.AlreadySelectedObjectSelect = true;
+    getter.EnableClearObjectsOnEntry(false);
+    getter.EnableUnselectObjectsOnExit(false);
     getter.DeselectAllBeforePostSelect = false;
     getter.EnableTransparentCommands(true);
 
+    var preselectionReturned = false;
     while (true)
     {
-      var getResult = getter.GetMultiple(1, 0);
+      getter.ClearCommandOptions();
+      var nameOptionIndex = getter.AddOption(
+        NameOption,
+        string.IsNullOrEmpty(hideSetName) ? EmptyNameLabel : hideSetName);
+      var clearNameOptionIndex = -1;
+      if (!string.IsNullOrEmpty(hideSetName))
+        clearNameOptionIndex = getter.AddOption(ClearNameOption);
+
+      var getResult = getter.GetMultiple(0, 0);
       commandResult = getter.CommandResult();
       if (commandResult != Result.Success)
         return new List<Guid>();
 
+      if (getResult == GetResult.Option)
+      {
+        var optionIndex = getter.Option()?.Index ?? -1;
+        if (optionIndex == clearNameOptionIndex)
+        {
+          hideSetName = DefaultHideSetName;
+          Log.Write(Tag, "  hide-set cleared");
+          continue;
+        }
+
+        if (optionIndex == nameOptionIndex)
+        {
+          if (!TryGetHideSetName(hideSetName, out hideSetName, out commandResult))
+            return new List<Guid>();
+
+          Log.Write(Tag, $"  hide-set={hideSetName}");
+          var selected = SelectedObjectIds(doc);
+          if (selected.Count > 0)
+          {
+            LogAcceptedSelection(selected.Count, hideSetName);
+            return selected;
+          }
+
+          continue;
+        }
+      }
+
       if (getResult == GetResult.String)
       {
-        requestedHideSetName = HideSetState.NormalizeInput(getter.StringResult());
-        Log.Write(Tag, $"  direct hide-set={requestedHideSetName}");
+        hideSetName = HideSetState.NormalizeInput(getter.StringResult());
+        Log.Write(Tag, $"  hide-set={hideSetName}");
+        var selected = SelectedObjectIds(doc);
+        if (selected.Count > 0)
+        {
+          LogAcceptedSelection(selected.Count, hideSetName);
+          return selected;
+        }
+
         continue;
       }
 
-      if (getResult != GetResult.Object)
-        return new List<Guid>();
+      if (getResult == GetResult.Object &&
+          getter.ObjectsWerePreselected &&
+          !preselectionReturned)
+      {
+        preselectionReturned = true;
+        getter.EnablePreSelect(false, true);
+        continue;
+      }
 
-      break;
+      if (getResult is GetResult.Object or GetResult.Nothing)
+      {
+        var selected = SelectedObjectIds(doc);
+        LogAcceptedSelection(selected.Count, hideSetName);
+        return selected;
+      }
+
+      return new List<Guid>();
     }
-
-    return ValidObjectIds(
-      doc,
-      getter.Objects().Select(objRef => objRef.ObjectId));
   }
 
-  private static string? GetHideSetName(out Result commandResult)
+  private static bool TryGetHideSetName(
+    string currentName,
+    out string hideSetName,
+    out Result commandResult)
   {
+    hideSetName = currentName;
     using var getter = new GetString();
-    getter.SetCommandPrompt(HideSetPrompt);
+    getter.SetCommandPrompt(NamePrompt);
     getter.AcceptNothing(true);
     getter.EnableTransparentCommands(true);
+    if (!string.IsNullOrEmpty(currentName))
+      getter.SetDefaultString(currentName);
 
     var getResult = getter.Get();
     commandResult = getter.CommandResult();
     if (commandResult != Result.Success)
-      return null;
+      return false;
 
-    if (getResult == GetResult.Nothing)
-      return string.Empty;
+    hideSetName = getResult == GetResult.String
+      ? HideSetState.NormalizeInput(getter.StringResult())
+      : DefaultHideSetName;
+    return true;
+  }
 
-    if (getResult != GetResult.String)
-      return null;
+  private static void LogAcceptedSelection(int objectCount, string hideSetName)
+  {
+    Log.Write(Tag,
+      $"  selection accepted objects={objectCount}" +
+      $" hideSet={(string.IsNullOrEmpty(hideSetName) ? "<none>" : hideSetName)}");
+  }
 
-    return HideSetState.NormalizeInput(getter.StringResult());
+  private static List<Guid> SelectedObjectIds(RhinoDoc doc)
+  {
+    var selectedIds = new List<Guid>();
+    foreach (var obj in doc.Objects.GetSelectedObjects(true, true))
+    {
+      selectedIds.Add(obj is GripObject grip ? grip.OwnerId : obj.Id);
+    }
+
+    // Rhino 9 can retain a parent as subobject-selected without returning it from
+    // the ordinary selected-object enumeration used by earlier versions.
+    foreach (var obj in doc.Objects)
+    {
+      if (obj.IsSelected(true) != 0)
+        selectedIds.Add(obj is GripObject grip ? grip.OwnerId : obj.Id);
+    }
+
+    return ValidObjectIds(doc, selectedIds);
   }
 
   private static IEnumerable<RhinoObject> VisibleNormalObjects(RhinoDoc doc)

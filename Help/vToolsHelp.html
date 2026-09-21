@@ -700,7 +700,7 @@ a:active { text-decoration: none; }
 <p class="Dialog_Box_Title">Command-line options</p>
 <div class="command-option">
 <h5>Width / Height</h5>
-<p>single-diamond cell width and height. Accept decimal, fraction (<code>3+1/8</code>), or type <code>heightxwidth</code> directly at the placement prompt (e.g. <code>2x3</code>).</p>
+<p>single-diamond cell width and height. Accept decimal, fraction (<code>3+1/8</code>), or type <code>widthxheight</code> directly at the placement prompt (e.g. <code>3x2</code>).</p>
 </div>
 <div class="command-option">
 <h5>CountWidth / CountHeight</h5>
@@ -708,7 +708,7 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>BySize</h5>
-<p>enter a target bounding box size as <code>widthxheight</code>. Diamonds are counted by <code>floor(box/cell)</code> and centered with equal margins. Does not change <code>CountWidth</code>/<code>CountHeight</code>. Enter <code>0</code> to revert to count mode.</p>
+<p>enter a target bounding box size as <code>widthxheight</code>. <code>RoundToDiamond=None</code> keeps the requested box and centers whole diamonds with equal margins; <code>Full</code> or <code>Half</code> treats it as a minimum and expands each dimension upward to the next whole- or half-diamond increment. Does not change <code>CountWidth</code>/<code>CountHeight</code>. Enter <code>0</code> to revert to count mode.</p>
 </div>
 <div class="command-option">
 <h5>Boundary=Yes/No</h5>
@@ -716,11 +716,15 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>Size=Yes/No</h5>
-<p>show/hide the size label (e.g. <code>2 x 2</code>), fitted to bbox width.</p>
+<p>show/hide the individual diamond size label (e.g. <code>2 x 2</code>), fitted to bbox width and stored as one PatternSmith-compatible ASCII annotation.</p>
 </div>
 <div class="command-option">
 <h5>Count=Yes/No</h5>
-<p>show/hide the count label (e.g. <code>(3 x 3)</code>), fitted to bbox width independently.</p>
+<p>show/hide separate grid-count and boundary-size annotations, enclosed by one pair of parentheses spanning both rows and fitted to the bbox width.</p>
+</div>
+<div class="command-option">
+<h5>LabelInside=FitAll/Fit/No</h5>
+<p><code>FitAll</code> uniformly scales and centers the complete annotation stack within 10% padding on every boundary side; <code>Fit</code> scales it to the padded width and aligns its bottom to the lower 10% inset; <code>No</code> keeps the labels above the boundary.</p>
 </div>
 <ol>
 <li>Current bounding box dimensions print to command history on every preview update.</li>
@@ -961,8 +965,7 @@ a:active { text-decoration: none; }
 <div class="tutorialblock">
 <h4>Steps</h4>
 <ol>
-<li>Preselect objects to keep visible, or run <code>vIsolate</code> and select them. Prompted selection includes whole groups and excludes subobjects; a direct set name such as <code>vIsolate &quot;A&quot;</code> can be supplied before selecting objects.</li>
-<li>Enter an optional Rhino hide-set name, or press Enter for no named set.</li>
+<li>In one selection stage, add or remove the objects to keep visible, type an optional set name such as <code>A</code>, and press Enter to confirm. Preselection remains editable; prompted selection includes whole groups and excludes subobjects. The pending name is displayed by the <code>Name</code> option and can be removed with <code>ClearName</code>. A name can also be supplied directly, such as <code>vIsolate &quot;A&quot;</code>.</li>
 <li>Every other visible, unlocked normal object is hidden natively and the isolated objects remain selected. Named isolation records active set membership; blank input clears any prior membership and uses Rhino&#39;s ordinary unnamed hide behavior, matching Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm">Isolate</a>.</li>
 <li><code>vIsolate</code> is transparent and can run without cancelling the command already in progress. When nested inside another command, it restores the selection that existed before isolation.</li>
 <li>The packaged <code>vTools</code> toolbar and tab contain a blue/grey <code>vIsolate / vShow</code> flyout linked to the <code>vIsolate</code> toolbar. That toolbar contains the general <code>vIsolate / vShow</code> button, named <code>vIsolate A</code> through <code>vIsolate E</code> buttons, and the combined built-in <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/isolate.htm">Isolate</a> / <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/show.htm">Show</a> button. Named buttons isolate into the matching set on left-click and use transparent <a href="#vshow">vShow</a> to restore that set on right-click; the built-in button uses <code>!_Isolate</code> and <code>!_Show</code>.</li>
@@ -1696,11 +1699,11 @@ a:active { text-decoration: none; }
 <div class="tutorialblock">
 <h4>Steps</h4>
 <ol>
-<li>If curves are preselected, their total length is used as the width automatically.</li>
-<li>Otherwise, set width: select curves to use their total length, type a number, or press Enter to keep the current value.</li>
-<li>Set height the same way.</li>
+<li>The command starts directly at bottom-left placement using the stored width and height. If curves are preselected, their total length replaces the width automatically.</li>
+<li>Type <code>widthxheight</code>, such as <code>123x345</code> or <code>10+1/2x4+1/2</code>, during placement to update both dimensions together.</li>
+<li>Enter one, two, or three construction-plane coordinates to place the corner directly; a single value is treated as <code>(value, 0, 0)</code>.</li>
 <li>Pick the bottom-left corner. Press Enter to reuse the previous bottom-right position.</li>
-<li>Live preview shows the rectangle while moving the cursor.</li>
+<li>Live preview shows the rectangle and optional dimension label while moving the cursor.</li>
 </ol>
 
 </div>
@@ -1712,6 +1715,14 @@ a:active { text-decoration: none; }
 <div class="command-option">
 <h5>Height</h5>
 <p>changes the current rectangle height while picking the corner.</p>
+</div>
+<div class="command-option">
+<h5>Layer</h5>
+<p>places the rectangle on the selected layer; <code>*Current*</code>, <code>.</code> or <code>*</code> follows Rhino&#39;s current layer.</p>
+</div>
+<div class="command-option">
+<h5>Label</h5>
+<p>adds a centered <code>width x height</code> annotation on the <code>Reference</code> layer, formatted with the document&#39;s fractional or decimal settings, fitted inside the rectangle with 10% padding on every side, and grouped with the rectangle.</p>
 </div>
 
 <h2>See also</h2>

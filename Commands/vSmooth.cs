@@ -204,6 +204,7 @@ public sealed class vSmooth : vToolsCommand
       Refresh(); // draw target in gold before any neighbour is picked
       while (true)
       {
+        goNb.ClearObjects();
         goNb.ClearCommandOptions();
         var ss = new OptionDouble(_strengthStart, 0.0, 2.0);
         var se = new OptionDouble(_strengthEnd,   0.0, 2.0);
@@ -222,6 +223,9 @@ public sealed class vSmooth : vToolsCommand
           : "Click a connected curve to smooth into");
 
         var res = goNb.Get();
+        Log.Write(Tag,
+          $"neighbor get result={res} objectCount={goNb.ObjectCount}" +
+          $" conn1={conn1?.Id} conn2={conn2?.Id}");
 
         bool changed = false;
         if (ss.CurrentValue != _strengthStart) { _strengthStart = ss.CurrentValue; changed = true; }

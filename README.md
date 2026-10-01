@@ -1,11 +1,11 @@
-# vTools  ·  v26.9.18.1621
+# vTools  ·  v26.10.1.1900
 
 vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and surface editing, fabrication layout, unrolling and matching, alignment, annotation, selection, and object management.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (57):
+- Native commands (60):
   - [vAlign](#valign-flow) *(26.8.20.807)* — rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
@@ -17,8 +17,9 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vDir](#vdir-flow) *(26.8.24.1747)* — flips one face, every face in a polysurface, or faces pointing opposite to a clicked reference face
   - [vDupBorder](#vdupborder-flow) *(26.8.13.829)* — duplicates whole-object or selected-face borders onto a chosen layer while carrying source groups, with optional source removal and grouping for ungrouped inputs
   - [vDupEdge](#vdupedge-flow) *(26.8.13.829)* — duplicates selected Brep, mesh, extrusion, or SubD edges onto a chosen layer while carrying source groups and optionally grouping ungrouped inputs
+  - [vExportDXF](#vexportdxf-flow) *(26.9.29.1802)* — exports selected objects or the document as DXF with Rhino's current export scheme, group blocks, and optional cleanup
   - [vFacing](#vfacing-flow) *(26.5.29.1333)* — builds a four-piece closed facing boundary from a base curve and two side curves by offsetting the base inward by a specified size; collects inside objects and places the result with a DynamicDraw preview
-  - [vFilterExec](#vfilterexec-flow) *(26.7.30.1223)* — runs a command with a temporary selection filter and restores the previous filter afterward
+  - [vFilterExec](#vfilterexec-flow) *(26.7.30.1223)* — runs a command with a temporary selection filter and optional current layer, restoring both afterward
   - [vFitBox](#vfitbox-flow) *(26.4.24.934)* — finds the minimum bounding box for selected objects by optimizing rotation angle
   - [vFPS](#vfps-flow) *(26.7.30.1041)* — toggles a per-viewport FPS overlay measured from short active-view rendering samples
   - [vGroup](#vgroup-flow) *(26.5.27.1300)* — groups selected objects by closed curve, surface, polysurface, or face boundaries; each boundary is grouped with the objects inside it
@@ -45,6 +46,7 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vReGroup](#vregroup-flow) *(26.8.3.845)* — dissolves all existing groups (including nested sub-groups) on the selected objects and collects them into one new group
   - [vScallop](#vscallop-flow) *(26.4.27.2125)* — creates an arc scallop between two points or along a selected line
   - [vSetPt](#vsetpt-flow) *(26.5.28.1145)* — previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using Rhino's [SetPt](https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm) command
+  - [vShade](#vshade-flow) *(26.9.28.1022)* — repeatedly creates identified Reference-layer angle bisectors and perpendicular shade lines, with optional non-crossing connected boundaries
   - [vSmooth](#vsmooth-flow) *(26.8.4.0)* — adjusts a selected curve so it transitions smoothly (G1) into one or two connected neighbours by eliminating kinks at shared endpoints; per-end StrengthStart/StrengthEnd, Copy, and Join options
   - [vShow](#vshow-flow) *(26.7.22.1818)* — shows one named hidden-object set, or all named sets, without cancelling the command already in progress
   - [vSplit](#vsplit-flow) *(26.7.9.1647)* — interactively splits selected curves at picked real point markers with distinct add/remove colors and shapes plus point snapping
@@ -56,6 +58,7 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vToggleAxes](#vtoggleaxes-flow) *(26.6.22.1811)* — toggles visible viewport axes (grid/construction axes plus display-mode Z axis)
   - [vToggleControlPoints](#vtogglecontrolpoints-flow) *(26.7.13.1046)* — toggles selected objects between edit points on the curve and off-curve control points
   - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected grips
+  - [vTogglePerspectivePlan](#vtoggleperspectiveplan-flow) *(26.10.1.1632)* — toggles perspective/CPlane plan or the current viewport's projection, or activates a standard view without interrupting another command
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join of extensions
   - [vTrimOff](#vtrimoff-flow) *(26.5.18.849)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
   - [vUnrollSrf](#vunrollsrf-flow) *(26.5.19.1918)* — develops selected surfaces through Rhino's native [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm) with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output
@@ -132,7 +135,7 @@ over the embedded fallback, so help-only edits do not require a new DLL.
 
 All command options persist by default unless stated otherwise.
 
-Native commands (57): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShow](#vshow-flow), [vSmooth](#vsmooth-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUnrollSrfUV](#vunrollsrfuv-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (60): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vExportDXF](#vexportdxf-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShade](#vshade-flow), [vSmooth](#vsmooth-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTogglePerspectivePlan](#vtoggleperspectiveplan-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUnrollSrfUV](#vunrollsrfuv-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -232,6 +235,23 @@ Options:
 
 With `AutoDelete=No`, results are saved as the document named selections `vCleanup Short geometry` and `vCleanup Overlaps`. All settings persist.
 
+### vExportDXF flow
+
+1. Select objects before starting, or leave nothing selected to export all normal visible, unlocked objects.
+1. `vExportDXF` goes directly to the file dialog using its saved choices. Use `-vExportDXF` to change `NotchTrim`, `NotchTrimLayer`, `NotchJoin`, `TextBreak`, or `Optimize` for one run; `SaveDefaults=Yes` keeps those choices for later exports. Optimization uses [vCleanup](#vcleanup-flow) on the export scope and stops only when actionable findings remain for review.
+1. Choose the DXF path. Selected geometry is moved to the origin in the DXF only; document objects stay in place. Groups become DXF blocks, Rhino's current DXF scheme is used, and the previous selection is restored.
+
+Options:
+
+- `NotchTrim`: `No` keeps touched curves as drawn; `Split` moves the between-leg piece to `NotchTrimLayer`; `Trim` omits that piece from the DXF. Default is `Split`. Only temporary export copies are changed.
+- `NotchTrimLayer`: destination layer for split sections; default is `Reference`.
+- `NotchJoin`: `Yes` by default joins matched V/U notch geometry to touched line or polyline sections in the DXF copy after `Split` or `Trim`, only when the notch and all touched sections share a layer. The between-leg piece stays separate in `Split` mode. Branching notches or source curves with conflicting layers or groups remain unjoined. `No` exports the notch components separately.
+- `Optimize`: `No` by default; `Yes` runs the configured [vCleanup](#vcleanup-flow) routines before export.
+- `TextBreak`: `Yes` by default splits multiline text into separate single-line text objects in the DXF, including text in exported group blocks. Line placement, text styles, layers, and object metadata are preserved; document text is unchanged. Blank rows remain spacing rather than empty objects. `No` keeps multiline text intact.
+- `SaveDefaults`: `No` uses these choices only for the current export; `Yes` saves them for this document and future documents.
+
+[vNotches](#vnotches-flow) has its own independent notch-contact settings for changes made while placing notches.
+
 ### vCurveToSpline flow
 
 1. Select source curves (preselect or postselect is supported). If all selected curves form one connected end-to-end chain they are automatically joined and treated as a single input.
@@ -321,8 +341,16 @@ Options:
 
 1. Enter the command to execute.
 1. Choose one filter or enter a comma-separated combination.
-1. The command runs with that filter, then the previous selection filter is restored.
-1. `vFilterExec` is transparent and remains Rhino's [Repeat](https://docs.mcneel.com/rhino/8/help/en-us/commands/repeat.htm) command after the delegated command ends.
+1. The command runs with that filter and optional temporary current layer. The previous filter and current layer are restored when it finishes, is canceled, or fails.
+
+Options:
+
+- `Layer`: available at both prompts and reads its value from the command line, without opening a layer picker. Enter an existing visible, unlocked, editable layer, including a nested layer by its full path. The default `*Current*`, `.` or `*` leaves the current layer unchanged. Layer choices apply only to this launch and its repeats; a new run defaults to `*Current*`.
+
+Notes:
+
+- `vFilterExec` is transparent and remains Rhino's [Repeat](https://docs.mcneel.com/rhino/8/help/en-us/commands/repeat.htm) command after the delegated command ends. Repeat reuses the command, filter, and layer choice, restoring the layer that was current before each repeat.
+- Aliases and toolbar macros can use `! _vFilterExec _Layer "Reference" #_Line Curves` or `! _vFilterExec _Layer "Surface" #_Sweep2 Curve`; a leading hyphen is optional. Use `All` instead of `Curves` to allow every object type. Existing macros such as `! _vFilterExec #_Sweep2 Curve` remain valid.
 
 Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `Meshes`, `SubDs`, `Extrusions`, `Annotations`, `Hatches`, `Blocks`, `Lights`, `Grips`, `Edges`, `Faces`, and `Vertices`. Singular forms and aliases such as `Text`, `Dimensions`, `ControlPoints`, and `Instances` are accepted. Combine filters with `,`, `+`, `|`, or `;`.
 
@@ -414,12 +442,14 @@ Options (Start point):
     - `Parallel`: defines the direction with two points, then picks the line start.
     - `Perpendicular` and `Tangent`: pick the first curve, keep it feedback-highlighted without selecting it, and defer the exact start point until the end constraint is known.
     - `BiTangent`: hover-clicks two curves and previews the candidate tangent line while hovering the second curve.
+    - `3Point`: pick two line-end constraints, then a curve or point the line must cross in 3D. Use `Point` at any pick to lock an exact point instead of a curve. The last curve is highlighted on hover and valid line solutions preview before clicking. For a fixed endpoint, sliding endpoint curve, and crossing curve, intersections are solved from a temporary point-to-curve surface and reused while hovering. The final crossing must lie on the line segment within document tolerance. Creates one line and ends the command.
     - `Layer`: opens the shared searchable layer selector with `*Current*` as the first item. Choosing `*Current*` follows the document's current layer dynamically; choosing another layer stores its full path. `-vLine` accepts the layer name or full path directly instead. The choice persists. If Rhino's current layer is changed outside this option while vLine is running, that layer overrides the target for the rest of the current command without changing the saved choice.
     - Reference geometry is display-highlighted without changing Rhino object or subobject selection; existing preselection is preserved.
 
 1. Pick the end point.
 Options (End point):
 
+    - `3Point`: after a regular fixed start point, keep that point and pick the sliding endpoint curve and 3D crossing curve. Available for an unconstrained single line.
     - `Normal`, `Angled`, `Vertical`, `FourPoint`, `Bisector`, `Perpendicular`, `Tangent`, `Extension`, and `Parallel`: remain available where compatible with the start definition; incompatible constructions and controls are hidden. `Vertical` constrains the endpoint along the active CPlane Z-axis. A direction-defining mode is offered once per line. Endpoint constraints such as `Perpendicular`, `Tangent`, and `ProjectTo` preserve an existing start direction such as `Extension` and solve only where both constraints are geometrically compatible.
     - `Extension` continues outward when the selected curve already ends at the current chained start; otherwise it uses the selected curve end as the target anchor.
     - When a constraint pair has multiple valid positions, the branch nearest the first curve click remains stable; the endpoint click chooses among solutions on that branch.
@@ -516,6 +546,7 @@ Options (Notch group):
     - `Type`: five checkbox-sized vector buttons select `I`, `V`, open `\/`, flat-capped `U`, or upside-down `T`, in that order. The icons and active highlight update from the current Width and Length values.
     - `Layer`: target layer for notch geometry, using the same packed-ARGB swatches as vObjectPropertiesPlus.
     - `Length`, `Width`, and `Offset`: compact numeric steppers; width controls `V`, `\/`, and `U` arm separation and the `T` crossbar.
+    - The compact icon after the Type buttons previews `NotchTrim`: a continuous contacted curve (`No`), a contrasting between-leg section (`Split`), or a gap (`Trim`). Click it to cycle modes. When both legs of a `V`, open `\/`, or `U` notch touch one offset curve or two curves joined at an endpoint, `Split` moves the between-leg piece to `NotchTrimLayer` (default `Reference`), while `Trim` removes it. With Offset zero, the selected source curves are split or trimmed instead. Outer pieces retain their layer and group; undo and redo restore the edit with the notch.
     - Created notch curves are named `NOTCH` and carry `notches.db.*` user-string attributes describing their source curve, placement, dimensions, side, label settings, and layers. The disconnected `\/` legs and branched `T` stem/crossbar are grouped component curves tracked as one notch.
 
 Options (Label group):
@@ -539,9 +570,9 @@ Options (Multiple group):
 Options (Other panel controls):
 
     - `Percent`: display and place by relative curve position. When disabled, the control is highlighted if selected sequence lengths differ by more than 1/16 inch.
-    - `Group`: group each enabled notch and label output.
+    - `Group`: group an ungrouped source curve with its notch and label outputs. Notches and labels always inherit every existing group of the source segment they land on, whether Group is enabled or not.
     - `Select`: return to individual-curve selection without selecting groups or ending the command. Its inset checkbox defaults unchecked: unchecked selection replaces the current curve set; checked selection keeps the current curves so others can be added or removed. The setting is saved immediately. Existing placed notches remain in the document. Replacement curves inherit Side by sequence, retained curves preserve their source-specific Side and oriented start, and explicitly clicking another end intentionally defines a new start.
-    - Per-curve row — use the grip at the left to drag and reorder curves. The stable, optically centered curve number appears before its enable checkbox and highlights when the row or corresponding viewport curve is hovered. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. The enlarged up/down Side and dynamic single-arrow Reverse controls retain compact click areas and show borderless hover and pressed feedback. Use the borderless link button between rows to join or separate placement sequences. The centered length badges use equal compact padding and `999.999` only as their minimum-width sample for individual and combined linked lengths; cumulative values include a clipping allowance, and larger values remain fully displayable in the scrollable row. The longest and shortest sequences also show transparent-background green `(+difference)` and red `(-difference)` superscripts after the applicable length.
+    - Per-curve row — use the grip at the left to drag and reorder curves. The stable, optically centered curve number appears before its enable checkbox and highlights when the row or corresponding viewport curve is hovered. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. Side and Reverse use compact borderless arrow controls. The smaller icon after Reverse toggles Both sides for that source curve, duplicating both notch geometry and label text; in a linked chain, the segment containing the placement point supplies this setting. The paired components share one placement for preview and undo. The command-line `BothSides` option toggles the curve under the cursor. Use the borderless link button between rows to join or separate placement sequences. The centered length badges use equal compact padding and `999.999` only as their minimum-width sample for individual and combined linked lengths; cumulative values include a clipping allowance, and larger values remain fully displayable in the scrollable row. The longest and shortest sequences also show transparent-background green `(+difference)` and red `(-difference)` superscripts after the applicable length.
     - Distance info: **From start**, **From end**, **From previous** show arc-length values rounded to three decimal places.
     - **Undo** / **Redo** buttons: step backward or forward through placements.
 
@@ -713,12 +744,40 @@ Options:
 1. Select open curves to align. Preselected curves seed the editable selection; add or remove curves before pressing Enter. Each curve keeps the end nearest the cursor when that curve is selected, even if its other end is nearer the eventual common target; deselecting and reselecting the curve captures a new end. Any preselected edit-point or control-point grip also seeds its owning curve and overrides endpoint detection for that curve. Closed curves are ignored.
 1. With preview enabled, thin cyan temporary curves show each preselected grip, or otherwise the endpoint nearest to the viewport cursor, moving to a common target that follows the cursor at the selected points' view depth. Edit-point previews rebuild the curve through the target; control-point previews move the selected CV directly.
 1. Grips are enabled and the identified points are selected automatically. After a successful [SetPt](https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm), including when the points are already at the chosen coordinate, the exact endpoints, edit points, or control points used remain visible and selected so Rhino displays the gumball; cancelling restores each curve's original grip visibility.
-1. Rhino's [SetPt](https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm) command launches with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No`; click the target location to commit.
-1. Press Enter to repeat `vSetPt`.
+1. Pick the target location with `XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No` initially. With `Preview=All` and `Copy=No`, the original curves update when the placement changes, and Rhino replays their recorded history so dependent surfaces show their resulting shape in their document colors. Updates are throttled outside the mouse callback, without adding a delay after each rebuild. The preview is rolled back before Rhino's native [SetPt](https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm) commits the exact picked coordinate; Enter without a point or Escape cancels placement and restores the original curves and their history results. `Preview=Curves` uses temporary curve previews without editing originals or rebuilding history. Copy mode also uses temporary curve previews. Curves that are themselves history children, or sessions with history updates or undo recording disabled, also use temporary curve previews to avoid breaking history before confirmation or showing results that would not update after the final commit.
+1. A committed move, including its history results, is one native Undo/Redo step; preview updates do not remain as separate undo steps. Press Enter to repeat `vSetPt`.
 
 Options:
 
-- `Preview`: `On` shows the live result during curve selection; `Off` hides it. The setting persists.
+- `Preview`: `Off` hides previews; `Curves` shows temporary cyan curve previews without updating history surfaces; `All` (default) also previews supported history results during final placement. Available during selection and placement. The setting persists; an older enabled setting becomes `All`.
+- `XSet`, `YSet`, `ZSet`: choose which coordinates align to the picked location. Disabled coordinates retain their original values. All three start enabled on each run.
+- `Alignment`: `World` (initial value) or the active viewport's `CPlane` coordinate system.
+- `Copy`: `No` (initial value) edits originals; `Yes` copies the edited curves using native SetPt.
+
+### vShade flow
+
+1. Select the first open curve near the end that forms the intended corner.
+1. Select a different open curve near its corresponding corner end. The shade is placed immediately. The chosen curves remain highlighted without becoming selected.
+1. Continue selecting curve pairs for additional corners in any order. Selecting an already placed corner recalculates that corner in place using the current options, retaining its label and position in the shade. Press Enter at the first-curve prompt when finished. Preselect an existing shade result before running `vShade` to continue that shade.
+
+Options:
+
+- `Offset`: sets the bisector distance from the tangent-defined corner to the center of the perpendicular line. Enter a non-negative number directly at either curve prompt to change it. Zero places that line directly at the corner and omits the zero-length bisector.
+- `Chamfer`: sets the total perpendicular cap width, centered on the bisector endpoint. Zero omits the perpendicular line. Existing saved `Length` values are read as `Chamfer` until changed.
+- `Reinforcement`: sets the radius of an arc centered at each perpendicular midpoint and ending on its two incident perimeter connections. Defaults to `6`; zero disables these arcs. An arc is omitted until both connections exist or when the radius lies beyond either one.
+- `Label`: sets the next reinforcement label; Enter at its text prompt disables labels. A nonempty numeric or alphabetic suffix advances after each placed corner (for example, `1` to `2` or `A` to `B`). The next value is stored in the document and starts at `1` in each new document. Labels are 0.5 model units high, centered between a reinforcement arc and its perpendicular line, with the perpendicular line as the text's bottom direction. Numeric labels that could read as a different number upside-down receive a trailing orientation dot (for example, `6.` and `9.`). A corner without a valid reinforcement arc has no visible label.
+- `Connect`: when `Yes`, rebuilds non-crossing perimeter connections among all placed corners, regardless of selection order. Ends belonging to the same source curve are matched first; remaining free ends are paired by proximity. With three or more corners, it closes the loop when valid connections exist, without requiring the first and last picks to share a source curve.
+- `Join`: when `Yes`, joins connected perpendicular caps and perimeter lines into curves; `No` keeps each segment separate. Bisectors and reinforcement arcs remain separate.
+- `Layer`: chooses the layer for perpendicular, connection, and joined-boundary geometry; `*Current*`, `.` or `*` follows Rhino's current layer. Changing the current layer in Rhino's Layers panel also moves the shade output already placed during the active command. Bisectors always use the `Reference` layer; cut outlines keep their separate `CutLayer`.
+- `Scallop`: when `Yes`, replaces each straight perimeter connector with an arc bulging toward the shade interior; `No` keeps straight connectors.
+- `ScallopSize`: sets each arc's midpoint bulge distance. Enter an absolute model-unit value such as `4` or a percentage of that connector's endpoint span such as `5%` (the default). It must be positive; a size that makes scallops cross each other or a chamfer cap is rejected without replacing the existing result.
+- `CutOffset`: offsets each closed shade perimeter outward by this non-negative model-unit distance. Zero (the default) omits the cut outline; open intermediate perimeters do not produce one.
+- `CutLayer`: sets the layer for the outward cut outline. Defaults to `CUT1`, which is created only when a cut outline is produced and the layer does not exist.
+- `ScallopTune`: set `ScallopSize` in the tune prompt, or type a value such as `12%` directly, then click perimeter sides to apply that size individually. `0` makes a clicked side a straight line; a positive model-unit value or percentage makes it an arc. Press Enter to return to corner selection. Individual choices are retained when the shade is continued later, even when `Join` combines the connectors into one boundary object.
+- `OffsetTune`: set `Offset` in the tune prompt, then click a corner's bisector or perpendicular cap to move only that corner to the specified offset. The connected boundary, reinforcement, and cut outline update with it. Press Enter to return to corner selection.
+- `Split`: appears once a closed cut or shade boundary exists. It proposes a low-material-length rotated layout from that boundary. Inside `Split`, `SplitWidth` sets the material width (default `63` model units) in both the cut and placement stages; each proposed part fits within `SplitWidth - 0.5`, and adjacent parts overlap by `0.5` total. Drag an orange cut: the endpoint nearest the grab follows the cursor along the shade boundary, while the opposite endpoint stays fixed. Rhino's active object snaps remain available; parallel cuts are added or removed as needed. `Auto` recalculates the proposal. Press Enter to switch to placing the ghosted parts in faded destination colors; click a placement point or press Enter for the displayed location. Accepting the placement finishes `vShade`; canceling Split resumes the current curve-selection stage. The original shade stays; each accepted split cut becomes one `Reference`-layer line grouped with that shade. Each laid-out part is a separate group whose outside perimeter is the `CutLayer` cut line, assembled from exact segments of the source cut curve. Each common seam has matching upright digits on both parts, fitted inside the 0.5-unit band between the cut edge and the `PLOT`-layer overlap mark. After acceptance, one native undo removes the split copies and source split cuts, leaving the original shade; the next undo reverses the shade creation or edits from this run. Redo restores them in the same order.
+
+The clicked curve ends and their tangent extensions define the corner in the active CPlane. The command creates one shade from all placed corners. Ctrl+Z and Ctrl+Y step through placed corners and tune edits while the command remains active; neither appears as a command option. Connections that would cross existing perimeter lines are omitted. All created output except bisectors belongs to one shade group. When the command finishes, the result includes the [vFitBox](#vfitbox-flow) size of the outer cut curve, or the closed shade perimeter when there is no cut curve. An open boundary has no outside fit-box size. Created objects are named `ShadeBisector`, `ShadePerpendicular`, `ShadeConnection`, `ShadeScallop`, `ShadeBoundary`, `ShadeReinforcement`, `ShadeLabel`, or `ShadeCut` and carry `vShade.*` identification metadata. If both Offset and Chamfer are zero, no geometry is created.
 
 ### vSmooth flow
 
@@ -843,6 +902,29 @@ Notes:
 1. `Perspective` viewports keep default gumball, including when switched to `Parallel` projection.
 1. When turning `OFF`, gumball orientation is reset to Rhino default.
 
+Notes:
+
+- Background gumball updates preserve the help shown for the current command, including other toggle commands.
+
+### vTogglePerspectivePlan flow
+
+1. The plain command switches immediately. From the `Perspective` tab, it enters CPlane plan first unless the viewport is already in parallel plan, then returns to perspective. After a `Projection` change, the next plain toggle always enters plan first. From another tab, it activates the `Perspective` tab and shows its CPlane in plan.
+1. To choose a mode explicitly, use the hyphenated form, for example `_-vTogglePerspectivePlan _Plan`, `_-vTogglePerspectivePlan _Perspective`, `_-vTogglePerspectivePlan _Projection`, or `_-vTogglePerspectivePlan _Top`. The choice applies immediately; Enter uses `Toggle`.
+
+Options:
+
+- `Toggle`: default behavior, without saving a mode preference. An oblique parallel view enters plan rather than perspective; after a `Projection` change, plan also takes priority on the next toggle. If no tab named `Perspective` exists, the command uses the first perspective-projected model view, then the current view as a fallback.
+- `Projection`: toggles only the active viewport between parallel and perspective, without switching tabs, reorienting the camera, or changing the CPlane. Returning to perspective restores that viewport's saved perspective lens, avoiding FOV distortion; 50 mm is used only when no valid perspective lens has been saved. Use `_-vTogglePerspectivePlan _Projection` in place of the projection-toggle macro for native [ViewportProperties](https://docs.mcneel.com/rhino/8/help/en-us/commands/viewportproperties.htm).
+- `Plan`: activates the Perspective view using the same fallback order and sets parallel projection looking down its current [CPlane](https://docs.mcneel.com/rhino/8/help/en-us/commands/cplane.htm).
+- `Perspective`: activates an existing `Perspective` tab, or uses the current tab if none exists, and forces perspective projection. A switch from parallel restores that viewport's saved perspective lens, or uses 50 mm if none is saved; an existing perspective camera keeps its lens.
+- `Top`, `Bottom`, `Front`, `Back`, `Left`, `Right`: activate an existing model-view tab with that name, preserving its camera, zoom, and CPlane. If the tab does not exist, set the corresponding standard World view and CPlane in the current tab without creating or renaming a tab.
+
+Notes:
+
+- Tab names are matched without case sensitivity and ignore surrounding spaces.
+- Perspective lenses are remembered separately for each viewport in the open document, including when switching to plan. Returning to perspective preserves navigation performed in the parallel view instead of restoring an old camera position.
+- The command is transparent and does not modify geometry or selection. While another command is running, call `_vTogglePerspectivePlan` for the immediate toggle, or `_-vTogglePerspectivePlan _Right` for a forced choice. Do not prefix these transparent calls with `!`, which cancels the active command.
+
 ### vTrim flow
 
 1. Choose a workflow: select cutting curves for [Regular mode](#vtrim-regular-mode), or press Enter for [AutoClosest mode](#vtrim-autoclosest-mode).
@@ -858,6 +940,8 @@ Notes:
 1. Hover a target curve. `vTrim` finds the relevant touching or intersecting cutter nearest the hovered curve segment and previews the exact portion that will be removed.
 1. Click to apply the displayed trim. Hold Shift before clicking to preview and apply an extension from the hovered end instead.
 1. Continue hovering and clicking targets, or press Enter when finished.
+
+In parallel plan views, AutoClosest also uses apparent intersections in the view direction, including curves at different depths. Angled and perspective views use 3D contacts only. Trimmed and extended curves keep their original 3D geometry rather than being flattened.
 
 #### AutoClosest options
 

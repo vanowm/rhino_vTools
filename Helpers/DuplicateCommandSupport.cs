@@ -85,7 +85,7 @@ internal static class DuplicateCommandSupport
     doc.Views.Redraw();
   }
 
-  private static void ApplySourceGroups(
+  internal static void ApplySourceGroups(
     RhinoDoc doc,
     Guid sourceId,
     IReadOnlyCollection<Guid> outputIds,

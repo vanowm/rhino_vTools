@@ -37,10 +37,13 @@ public sealed class vChamfer : vToolsCommand
   private const string TrimKey     = "trim";
   private const string JoinKey     = "join";
 
-  // Option defaults
-  private const double DefaultLength = 1.0; // Chamfer setback in model units; zero or greater.
+  // Option defaults and solver settings
+  private const double DefaultLength = 1.0; // Chamfer line length in model units; zero or greater.
   private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
   private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
+  private const int MiddleTangentSolveSamples = 32; // Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.
+  private const int MiddleTangentSolveIterations = 48; // Bisection iterations used to refine the perpendicular-to-middle-tangent solution; positive integer.
+  private const double MiddleTangentResidualTolerance = 1.0e-7; // Maximum absolute cosine error from a perpendicular chamfer; zero or greater.
 
   private static double _length = DefaultLength;
   private static bool   _trim   = DefaultTrim; // true = trim curves; false = add line only
@@ -455,43 +458,9 @@ public sealed class vChamfer : vToolsCommand
 
   // -- Chamfer computation ----------------------------------------------------
 
-  // Shoot a ray perpendicular to `tangent` in the XY plane from `pt`.
-  // Returns (NaN, NaN, Unset) when c2 doesn't extend to this location.
-  private static (double Gap, double TB, Point3d PtB) NormalRayHit(
-    Point3d pt, Vector3d tangent, Curve c2)
-  {
-    var normal = Vector3d.CrossProduct(Vector3d.ZAxis, tangent);
-    if (!normal.Unitize()) return (double.NaN, double.NaN, Point3d.Unset);
-
-    if (!c2.ClosestPoint(pt, out double tGuess)) return (double.NaN, double.NaN, Point3d.Unset);
-    var ptGuess = c2.PointAt(tGuess);
-    if ((ptGuess - pt) * normal < 0.0) normal = -normal;
-
-    double span = Math.Max(pt.DistanceTo(ptGuess) * 4.0, c2.GetLength() + 1.0);
-    var line   = new Line(pt - normal * 1e-3, pt + normal * span);
-    var events = Intersection.CurveLine(c2, line, 1e-6, 1e-6);
-
-    if (events != null && events.Count > 0)
-    {
-      double bestD = double.MaxValue;
-      double bestTB = double.NaN;
-      Point3d bestPt = Point3d.Unset;
-      for (int i = 0; i < events.Count; i++)
-      {
-        if (!events[i].IsPoint) continue;
-        var hitPt = events[i].PointA;
-        if ((hitPt - pt) * normal < -1e-6) continue;
-        double d = hitPt.DistanceTo(pt);
-        if (d < bestD) { bestD = d; bestTB = events[i].ParameterA; bestPt = hitPt; }
-      }
-      if (bestPt.IsValid) return (bestD, bestTB, bestPt);
-    }
-    return (double.NaN, double.NaN, Point3d.Unset);
-  }
-
-  // Two-step gap measurement perpendicular to the MIDDLE curve (average tangents):
-  // step 1 - c1-perp hit gives c2 tangent; step 2 - re-shoot along average tangent.
-  // Step 1 uses ClosestPoint fallback so short-curve geometries don't silently fail.
+  // Solve for the c2 point whose chord from ptA is perpendicular to the average
+  // of the two final outward tangents. Sampling brackets the first solution away
+  // from the corner; bisection then removes the angle error left by a two-pass hit.
   private static (double Gap, double TB, Point3d PtB) EquidistantGap(
     Point3d ptA,
     Vector3d tanA,
@@ -500,26 +469,155 @@ public sealed class vChamfer : vToolsCommand
     bool c2AtStart)
   {
     var awayTanA = c1AtStart ? tanA : -tanA;
+    if (!awayTanA.Unitize())
+      return (double.NaN, double.NaN, Point3d.Unset);
 
-    // Step 1: c1-perp, with ClosestPoint fallback for curves where the ray misses c2.
-    var (g1, tB1, ptB1) = NormalRayHit(ptA, awayTanA, c2);
-    if (double.IsNaN(g1) || !ptB1.IsValid)
+    double c2Length = c2.GetLength();
+    if (!RhinoMath.IsValidDouble(c2Length) || c2Length <= RhinoMath.ZeroTolerance)
+      return (double.NaN, double.NaN, Point3d.Unset);
+
+    bool TryEvaluate(
+      double station,
+      out double perpendicularValue,
+      out double residual,
+      out double parameter,
+      out Point3d point)
     {
-      // Fallback: use ClosestPoint as the initial ptB estimate.
-      if (!c2.ClosestPoint(ptA, out tB1)) return (double.NaN, double.NaN, Point3d.Unset);
-      ptB1 = c2.PointAt(tB1);
-      g1   = ptA.DistanceTo(ptB1);
+      perpendicularValue = double.NaN;
+      residual = double.MaxValue;
+      parameter = double.NaN;
+      point = Point3d.Unset;
+
+      station = Math.Max(0.0, Math.Min(station, c2Length));
+      double lengthFromStart = c2AtStart ? station : c2Length - station;
+      if (!c2.LengthParameter(lengthFromStart, out parameter))
+        return false;
+
+      point = c2.PointAt(parameter);
+      var awayTanB = c2AtStart
+        ? c2.TangentAt(parameter)
+        : -c2.TangentAt(parameter);
+      if (!point.IsValid || !awayTanB.Unitize())
+        return false;
+
+      var middleTangent = awayTanA + awayTanB;
+      if (!middleTangent.Unitize())
+        return false;
+
+      var chord = point - ptA;
+      double chordLength = chord.Length;
+      if (chordLength <= RhinoMath.ZeroTolerance)
+        return false;
+
+      perpendicularValue = chord * middleTangent;
+      residual = Math.Abs(perpendicularValue) / chordLength;
+      return RhinoMath.IsValidDouble(perpendicularValue) &&
+             RhinoMath.IsValidDouble(residual);
     }
 
-    var awayTanB = c2.TangentAt(tB1);
-    if (!c2AtStart)
-      awayTanB = -awayTanB;
+    double bestResidual = double.MaxValue;
+    double bestParameter = double.NaN;
+    Point3d bestPoint = Point3d.Unset;
+    double previousStation = 0.0;
+    double previousValue = double.NaN;
 
-    var avgTan = awayTanA + awayTanB;
-    if (!avgTan.Unitize()) return (g1, tB1, ptB1);
+    for (int i = 0; i <= MiddleTangentSolveSamples; i++)
+    {
+      double station = c2Length * i / MiddleTangentSolveSamples;
+      if (!TryEvaluate(
+            station,
+            out var value,
+            out var residual,
+            out var parameter,
+            out var point))
+        continue;
 
-    var (g2, tB2, ptB2) = NormalRayHit(ptA, avgTan, c2);
-    return (!double.IsNaN(g2) && ptB2.IsValid) ? (g2, tB2, ptB2) : (g1, tB1, ptB1);
+      if (residual < bestResidual)
+      {
+        bestResidual = residual;
+        bestParameter = parameter;
+        bestPoint = point;
+      }
+
+      if (residual <= MiddleTangentResidualTolerance)
+        return (ptA.DistanceTo(point), parameter, point);
+
+      if (RhinoMath.IsValidDouble(previousValue) &&
+          Math.Sign(previousValue) != Math.Sign(value))
+      {
+        double lo = previousStation;
+        double hi = station;
+        double loValue = previousValue;
+
+        for (int iteration = 0; iteration < MiddleTangentSolveIterations; iteration++)
+        {
+          double middle = 0.5 * (lo + hi);
+          if (!TryEvaluate(
+                middle,
+                out var middleValue,
+                out var middleResidual,
+                out var middleParameter,
+                out var middlePoint))
+          {
+            hi = middle;
+            continue;
+          }
+
+          if (middleResidual < bestResidual)
+          {
+            bestResidual = middleResidual;
+            bestParameter = middleParameter;
+            bestPoint = middlePoint;
+          }
+
+          if (middleResidual <= MiddleTangentResidualTolerance)
+            return (ptA.DistanceTo(middlePoint), middleParameter, middlePoint);
+
+          if (Math.Sign(loValue) == Math.Sign(middleValue))
+          {
+            lo = middle;
+            loValue = middleValue;
+          }
+          else
+          {
+            hi = middle;
+          }
+        }
+
+        if (bestPoint.IsValid &&
+            bestResidual <= MiddleTangentResidualTolerance)
+          return (ptA.DistanceTo(bestPoint), bestParameter, bestPoint);
+      }
+
+      previousStation = station;
+      previousValue = value;
+    }
+
+    return bestPoint.IsValid &&
+           bestResidual <= MiddleTangentResidualTolerance
+      ? (ptA.DistanceTo(bestPoint), bestParameter, bestPoint)
+      : (double.NaN, double.NaN, Point3d.Unset);
+  }
+
+  private static double ChamferAngleErrorDegrees(
+    Curve c1,
+    bool c1AtStart,
+    double tA,
+    Curve c2,
+    bool c2AtStart,
+    double tB,
+    Point3d ptA,
+    Point3d ptB)
+  {
+    var awayTanA = c1AtStart ? c1.TangentAt(tA) : -c1.TangentAt(tA);
+    var awayTanB = c2AtStart ? c2.TangentAt(tB) : -c2.TangentAt(tB);
+    var middleTangent = awayTanA + awayTanB;
+    var chord = ptB - ptA;
+    if (!middleTangent.Unitize() || !chord.Unitize())
+      return double.NaN;
+
+    double residual = Math.Max(-1.0, Math.Min(1.0, chord * middleTangent));
+    return RhinoMath.ToDegrees(Math.Asin(Math.Abs(residual)));
   }
 
   // length = desired chamfer line length.
@@ -587,7 +685,12 @@ public sealed class vChamfer : vToolsCommand
 
     tB  = tBfinal;
     ptB = ptBfinal;
-    Log.Write("vChamfer", $"ComputeChamfer  OK  gap={ptA.DistanceTo(ptB):G4}  ptA={P(ptA)}  ptB={P(ptB)}");
+    double angleError = ChamferAngleErrorDegrees(
+      c1, c1AtStart, tA, c2, c2AtStart, tB, ptA, ptB);
+    Log.Write(
+      "vChamfer",
+      $"ComputeChamfer  OK  gap={ptA.DistanceTo(ptB):G4} " +
+      $"angleErrorDeg={angleError:G6} ptA={P(ptA)} ptB={P(ptB)}");
     return true;
   }
 

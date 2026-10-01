@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using Eto.Drawing;
@@ -17,6 +18,26 @@ namespace vTools;
 /// </summary>
 internal static class LayerSelector
 {
+  // Defaults and customizable constants
+  private const bool DefaultAllowVirtualization = true; // true realizes visible dropdown rows only; false permits Eto's nonvirtualized list.
+  private const int VirtualizationThreshold = 1; // Minimum item count for Eto dropdown virtualization; positive integer.
+  private const int LayerIndentSpaces = 4; // Spaces added for each level of the layer hierarchy; non-negative integer.
+  private const int SwatchSize = 18; // Color-swatch width and height, in pixels.
+  private static readonly Color SwatchLightColor = Color.FromArgb(242, 242, 242); // Light checker color behind transparent layer colors.
+  private static readonly Color SwatchDarkColor = Color.FromArgb(191, 191, 191); // Dark checker color behind transparent layer colors.
+  private static readonly Color SwatchBorderColor = Colors.Black; // Outline color of layer swatches.
+  private static readonly Color MissingLayerColor = Colors.White; // Swatch color for a stored layer name that is not in the document.
+  private static readonly Color SpecialChoiceColor = Colors.Gray; // Swatch color of additional command-specific layer choices.
+  private static readonly Size DefaultDialogSize = new(420, 440); // Initial layer-selector client width and height, in logical pixels.
+  private static readonly Size MinimumDialogSize = new(300, 260); // Minimum layer-selector width and height, in logical pixels.
+  private const int LayerRowHeight = 22; // Height of a row in the searchable layer dialog, in logical pixels.
+  private const int SwatchColumnWidth = 26; // Width of the layer-dialog swatch column, in logical pixels.
+  private const int DialogSpacing = 8; // Spacing between dialog controls and buttons, in logical pixels.
+  private const int DialogPadding = 10; // Padding around dialog content, in logical pixels.
+  private const int SlowPopupMilliseconds = 100; // Log popup timings on the first opening and when total layout exceeds this duration.
+
+  private const string Tag = "LayerSelector";
+
   internal readonly record struct SpecialChoice(
     string Value,
     string DisplayText);
@@ -117,16 +138,20 @@ internal static class LayerSelector
 
     var state = new LayerDropDownState(doc, currentLayerValue);
     DropDownStates.Add(dropDown, state);
-    ConfigureDropDown(dropDown);
-    dropDown.Load += (_, _) => ConfigureDropDown(dropDown);
+    dropDown.ItemTextBinding = Binding.Property<LayerListItem, string>(item => item.DisplayText);
+    dropDown.ItemImageBinding = Binding.Property<LayerListItem, Image>(item => item.Swatch);
+    ConfigureDropDown(dropDown, state);
+    dropDown.Load += (_, _) =>
+    {
+      state.Start();
+      ConfigureDropDown(dropDown, state);
+    };
+    dropDown.UnLoad += (_, _) => state.Stop();
     PopulateDropDown(dropDown, state, selectedValue);
     dropDown.DropDownOpening += (_, _) =>
     {
       var selected = GetDropDownValue(dropDown, selectedValue);
-      var revision = GetDropDownRevision(
-        state.Doc, selected, state.CurrentLayerValue);
-      if (revision != state.Revision)
-        PopulateDropDown(dropDown, state, selected);
+      PopulateDropDown(dropDown, state, selected);
     };
     return dropDown;
   }
@@ -138,16 +163,7 @@ internal static class LayerSelector
     DropDown dropDown,
     string fallback)
   {
-    if (dropDown.SelectedIndex < 0 ||
-        dropDown.DataStore is not IEnumerable<LayerListItem> items)
-    {
-      return fallback;
-    }
-
-    var list = items.ToList();
-    return dropDown.SelectedIndex < list.Count
-      ? list[dropDown.SelectedIndex].Value
-      : fallback;
+    return (dropDown.SelectedValue as LayerListItem)?.Value ?? fallback;
   }
 
   internal static void SetDropDownValue(
@@ -169,24 +185,53 @@ internal static class LayerSelector
       dropDown.SelectedIndex = index;
   }
 
-  private static void ConfigureDropDown(DropDown dropDown)
+  private static void ConfigureDropDown(DropDown dropDown, LayerDropDownState state)
   {
-    if (dropDown.ControlObject is not System.Windows.Controls.ComboBox combo)
-      return;
+    try
+    {
+      var handler = dropDown.Handler;
+      var handlerType = handler.GetType();
+      handlerType.GetProperty("AllowVirtualization")?.SetValue(handler, DefaultAllowVirtualization);
+      handlerType.GetProperty("VirtualizationThreshold")?.SetValue(handler, VirtualizationThreshold);
 
-    System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(combo, true);
-    System.Windows.Controls.VirtualizingPanel.SetVirtualizationMode(
-      combo, System.Windows.Controls.VirtualizationMode.Recycling);
-    System.Windows.Controls.ScrollViewer.SetCanContentScroll(combo, true);
+      var combo = FindVisualChild<System.Windows.Controls.ComboBox>(
+        dropDown.ControlObject as System.Windows.DependencyObject);
+      if (combo == null) return;
+      state.AttachNativeControl(combo);
+      System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(combo, DefaultAllowVirtualization);
+      System.Windows.Controls.VirtualizingPanel.SetVirtualizationMode(
+        combo, System.Windows.Controls.VirtualizationMode.Recycling);
+      System.Windows.Controls.ScrollViewer.SetCanContentScroll(combo, true);
 
-    var itemPanel = new System.Windows.FrameworkElementFactory(
-      typeof(System.Windows.Controls.VirtualizingStackPanel));
-    itemPanel.SetValue(
-      System.Windows.Controls.VirtualizingPanel.IsVirtualizingProperty, true);
-    itemPanel.SetValue(
-      System.Windows.Controls.VirtualizingPanel.VirtualizationModeProperty,
-      System.Windows.Controls.VirtualizationMode.Recycling);
-    combo.ItemsPanel = new System.Windows.Controls.ItemsPanelTemplate(itemPanel);
+      if (combo.ItemsPanel?.VisualTree?.Type != typeof(System.Windows.Controls.VirtualizingStackPanel))
+      {
+        var itemPanel = new System.Windows.FrameworkElementFactory(
+          typeof(System.Windows.Controls.VirtualizingStackPanel));
+        itemPanel.SetValue(
+          System.Windows.Controls.VirtualizingPanel.IsVirtualizingProperty, DefaultAllowVirtualization);
+        itemPanel.SetValue(
+          System.Windows.Controls.VirtualizingPanel.VirtualizationModeProperty,
+          System.Windows.Controls.VirtualizationMode.Recycling);
+        combo.ItemsPanel = new System.Windows.Controls.ItemsPanelTemplate(itemPanel);
+      }
+    }
+    catch (Exception ex)
+    {
+      Log.Write(Tag, $"Unable to configure layer-dropdown virtualization: {ex.Message}");
+    }
+  }
+
+  private static T? FindVisualChild<T>(System.Windows.DependencyObject? root)
+    where T : System.Windows.DependencyObject
+  {
+    if (root == null) return null;
+    if (root is T match) return match;
+    for (var i = 0; i < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); i++)
+    {
+      var child = FindVisualChild<T>(System.Windows.Media.VisualTreeHelper.GetChild(root, i));
+      if (child != null) return child;
+    }
+    return null;
   }
 
   private static void PopulateDropDown(
@@ -197,61 +242,54 @@ internal static class LayerSelector
     state.IsUpdating = true;
     try
     {
-      var items = BuildItems(state.Doc, state.CurrentLayerValue);
+      Stopwatch? timer = null;
+      var retiredItems = new List<LayerListItem>();
+      var viewportId = state.Doc.Views.ActiveView?.ActiveViewportID ?? Guid.Empty;
+      if (state.IsDirty || state.ViewportId != viewportId)
+      {
+        timer = Stopwatch.StartNew();
+        var previousItems = state.Layers;
+        state.Layers = BuildItems(state.Doc, state.CurrentLayerValue, previousItems);
+        var retainedItems = state.Layers.ToHashSet();
+        retiredItems.AddRange(previousItems.Where(item => !retainedItems.Contains(item)));
+        state.ViewportId = viewportId;
+        state.IsDirty = false;
+      }
+
+      var items = new List<LayerListItem>(state.Layers);
       if (!items.Any(item => string.Equals(
             item.Value, selectedValue, StringComparison.OrdinalIgnoreCase)))
       {
-        items.Insert(0, new LayerListItem(
-          selectedValue,
-          selectedValue,
-          selectedValue,
-          Colors.White,
-          false));
+        if (state.StatusItem == null || !string.Equals(
+              state.StatusItem.Value, selectedValue, StringComparison.OrdinalIgnoreCase))
+        {
+          if (state.StatusItem != null) retiredItems.Add(state.StatusItem);
+          state.StatusItem = new LayerListItem(selectedValue, selectedValue, selectedValue,
+            MissingLayerColor, false, Guid.Empty);
+        }
+        items.Insert(0, state.StatusItem);
+      }
+      else if (state.StatusItem != null)
+      {
+        retiredItems.Add(state.StatusItem);
+        state.StatusItem = null;
       }
 
-      dropDown.DataStore = items;
-      dropDown.ItemTextBinding = Binding.Property<LayerListItem, string>(
-        item => item.DisplayText);
-      dropDown.ItemImageBinding = Binding.Property<LayerListItem, Image>(
-        item => item.Swatch);
+      if (dropDown.DataStore is not IEnumerable<LayerListItem> existing || !existing.SequenceEqual(items))
+        dropDown.DataStore = items;
       var selectedIndex = items.FindIndex(item => string.Equals(
         item.Value, selectedValue, StringComparison.OrdinalIgnoreCase));
-      dropDown.SelectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
-      state.Revision = GetDropDownRevision(
-        state.Doc, selectedValue, state.CurrentLayerValue);
+      selectedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+      if (dropDown.SelectedIndex != selectedIndex) dropDown.SelectedIndex = selectedIndex;
+      foreach (var item in retiredItems) item.DisposeSwatch();
+      if (timer != null)
+        Log.Write(Tag, $"Layer cache prepared: items={state.Layers.Count} retired={retiredItems.Count}" +
+          $" elapsed_ms={timer.Elapsed.TotalMilliseconds:0.0}");
     }
     finally
     {
       state.IsUpdating = false;
     }
-  }
-
-  private static int GetDropDownRevision(
-    RhinoDoc doc,
-    string selectedValue,
-    string? currentLayerValue)
-  {
-    var hash = new HashCode();
-    hash.Add(selectedValue, StringComparer.OrdinalIgnoreCase);
-    hash.Add(currentLayerValue, StringComparer.OrdinalIgnoreCase);
-    hash.Add(doc.Layers.CurrentLayerIndex);
-    hash.Add(doc.Views.ActiveView?.ActiveViewportID ?? Guid.Empty);
-
-    foreach (var layer in doc.Layers)
-    {
-      if (layer == null)
-        continue;
-
-      hash.Add(layer.Id);
-      hash.Add(layer.Index);
-      hash.Add(layer.ParentLayerId);
-      hash.Add(layer.SortIndex);
-      hash.Add(layer.IsDeleted);
-      hash.Add(layer.FullPath, StringComparer.Ordinal);
-      hash.Add(ResolveLayerDisplayColor(doc, layer).ToArgb());
-    }
-
-    return hash.ToHashCode();
   }
 
   private static bool TryGetManualValue(
@@ -299,7 +337,7 @@ internal static class LayerSelector
     }
   }
 
-  private static bool TryResolveManualValue(
+  internal static bool TryResolveManualValue(
     RhinoDoc doc,
     string? requested,
     string currentLayerValue,
@@ -408,8 +446,8 @@ internal static class LayerSelector
       Title = title;
       Resizable = true;
       Result = false;
-      ClientSize = new Size(420, 440);
-      MinimumSize = new Size(300, 260);
+      ClientSize = DefaultDialogSize;
+      MinimumSize = MinimumDialogSize;
 
       _allItems = BuildItems(doc, currentLayerValue);
       var specialInsertIndex = string.IsNullOrWhiteSpace(currentLayerValue) ? 0 : 1;
@@ -419,8 +457,9 @@ internal static class LayerSelector
           choice.Value,
           choice.DisplayText,
           choice.Value + " " + choice.DisplayText,
-          Colors.Gray,
-          true));
+          SpecialChoiceColor,
+          true,
+          Guid.Empty));
       }
       if (allowNewLayer &&
           !string.IsNullOrWhiteSpace(selectedValue) &&
@@ -431,8 +470,9 @@ internal static class LayerSelector
           selectedValue,
           selectedValue,
           selectedValue,
-          Colors.White,
-          false));
+          MissingLayerColor,
+          false,
+          Guid.Empty));
       }
 
       _layerList = new GridView
@@ -440,7 +480,7 @@ internal static class LayerSelector
         AllowEmptySelection = false,
         AllowMultipleSelection = false,
         DataStore = _allItems,
-        RowHeight = 22,
+        RowHeight = LayerRowHeight,
         GridLines = GridLines.None,
         ShowHeader = false
       };
@@ -451,7 +491,7 @@ internal static class LayerSelector
           Binding = Binding.Property<LayerListItem, Image>(item => item.Swatch)
         },
         Resizable = false,
-        Width = 26
+        Width = SwatchColumnWidth
       });
       _layerList.Columns.Add(new GridColumn
       {
@@ -477,15 +517,15 @@ internal static class LayerSelector
       {
         Orientation = Orientation.Horizontal,
         HorizontalContentAlignment = HorizontalAlignment.Right,
-        Spacing = 8,
+        Spacing = DialogSpacing,
         Items = { cancelButton, _selectButton }
       };
 
       Content = new StackLayout
       {
         HorizontalContentAlignment = HorizontalAlignment.Stretch,
-        Padding = new Padding(10),
-        Spacing = 8,
+        Padding = new Padding(DialogPadding),
+        Spacing = DialogSpacing,
         Items =
         {
           search,
@@ -496,6 +536,10 @@ internal static class LayerSelector
 
       DefaultButton = _selectButton;
       AbortButton = cancelButton;
+      UnLoad += (_, _) =>
+      {
+        foreach (var item in _allItems) item.DisposeSwatch();
+      };
       SelectValue(selectedValue);
     }
 
@@ -547,13 +591,18 @@ internal static class LayerSelector
 
   private static List<LayerListItem> BuildItems(
     RhinoDoc doc,
-    string? currentLayerValue)
+    string? currentLayerValue) => BuildItems(doc, currentLayerValue, Array.Empty<LayerListItem>());
+
+  private static List<LayerListItem> BuildItems(
+    RhinoDoc doc,
+    string? currentLayerValue,
+    IReadOnlyList<LayerListItem> previousItems)
   {
+    var previousById = previousItems.ToDictionary(item => item.LayerId);
     var items = new List<LayerListItem>();
     if (!string.IsNullOrWhiteSpace(currentLayerValue))
     {
-      items.Add(new LayerListItem(
-        currentLayerValue,
+      items.Add(GetCachedItem(previousById, Guid.Empty,
         currentLayerValue,
         currentLayerValue,
         ToEtoColor(ResolveLayerDisplayColor(doc, doc.Layers.CurrentLayer)),
@@ -585,13 +634,12 @@ internal static class LayerSelector
       if (!childrenByParent.TryGetValue(parentId, out var children))
         return;
 
-      foreach (var layer in children.OrderBy(child => child.SortIndex))
+      foreach (var layer in children)
       {
-        var indent = depth == 0 ? string.Empty : new string(' ', depth * 2);
-        items.Add(new LayerListItem(
+        var indent = depth == 0 ? string.Empty : new string(' ', depth * LayerIndentSpaces);
+        items.Add(GetCachedItem(previousById, layer.Id,
           layer.FullPath,
           indent + layer.Name,
-          layer.FullPath,
           ToEtoColor(ResolveLayerDisplayColor(doc, layer)),
           false));
         AddChildren(layer.Id, depth + 1);
@@ -600,6 +648,21 @@ internal static class LayerSelector
 
     AddChildren(Guid.Empty, 0);
     return items;
+  }
+
+  private static LayerListItem GetCachedItem(
+    IReadOnlyDictionary<Guid, LayerListItem> previousItems,
+    Guid layerId,
+    string value,
+    string displayText,
+    Color color,
+    bool isCurrentOption)
+  {
+    if (previousItems.TryGetValue(layerId, out var item) &&
+        item.Value == value && item.DisplayText == displayText &&
+        item.SwatchColor.ToArgb() == color.ToArgb() && item.IsCurrentOption == isCurrentOption)
+      return item;
+    return new LayerListItem(value, displayText, value, color, isCurrentOption, layerId);
   }
 
   private static System.Drawing.Color ResolveLayerDisplayColor(
@@ -639,42 +702,163 @@ internal static class LayerSelector
 
     public RhinoDoc Doc { get; }
     public string? CurrentLayerValue { get; }
-    public int Revision { get; set; }
+    public List<LayerListItem> Layers { get; set; } = new();
+    public LayerListItem? StatusItem { get; set; }
+    public Guid ViewportId { get; set; }
+    public bool IsDirty { get; set; } = true;
     public bool IsUpdating { get; set; }
+    private bool _listening;
+    private System.Windows.Controls.ComboBox? _native;
+    private Stopwatch? _openTimer;
+    private bool _firstOpen = true;
+
+    internal void Start()
+    {
+      if (_listening) return;
+      RhinoDoc.LayerTableEvent += OnLayerTableChanged;
+      _listening = true;
+      IsDirty = true;
+    }
+
+    internal void Stop()
+    {
+      if (_listening) RhinoDoc.LayerTableEvent -= OnLayerTableChanged;
+      _listening = false;
+      DetachNativeControl();
+      foreach (var item in Layers) item.DisposeSwatch();
+      StatusItem?.DisposeSwatch();
+    }
+
+    private void OnLayerTableChanged(object? sender, Rhino.DocObjects.Tables.LayerTableEventArgs e)
+    {
+      if (e.Document.RuntimeSerialNumber == Doc.RuntimeSerialNumber) IsDirty = true;
+    }
+
+    internal void AttachNativeControl(System.Windows.Controls.ComboBox combo)
+    {
+      if (ReferenceEquals(_native, combo)) return;
+      DetachNativeControl();
+      _native = combo;
+      _firstOpen = true;
+      combo.PreviewMouseDown += OnMouseDown;
+      combo.PreviewKeyDown += OnKeyDown;
+      combo.DropDownOpened += OnOpened;
+      combo.DropDownClosed += OnClosed;
+    }
+
+    private void DetachNativeControl()
+    {
+      if (_native != null)
+      {
+        _native.PreviewMouseDown -= OnMouseDown;
+        _native.PreviewKeyDown -= OnKeyDown;
+        _native.DropDownOpened -= OnOpened;
+        _native.DropDownClosed -= OnClosed;
+      }
+      _native = null;
+      _openTimer = null;
+    }
+
+    private void OnMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+      if (e.ChangedButton == System.Windows.Input.MouseButton.Left && _native?.IsDropDownOpen == false)
+        _openTimer = Stopwatch.StartNew();
+    }
+
+    private void OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+      if (_native?.IsDropDownOpen == false &&
+          (e.Key == System.Windows.Input.Key.F4 ||
+           (e.SystemKey == System.Windows.Input.Key.Down &&
+            System.Windows.Input.Keyboard.Modifiers.HasFlag(System.Windows.Input.ModifierKeys.Alt))))
+        _openTimer = Stopwatch.StartNew();
+    }
+
+    private void OnOpened(object? sender, EventArgs e)
+    {
+      var native = _native;
+      if (native == null) return;
+      var timer = _openTimer ??= Stopwatch.StartNew();
+      var openMs = timer.Elapsed.TotalMilliseconds;
+      var first = _firstOpen;
+      _firstOpen = false;
+      native.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
+      {
+        if (!ReferenceEquals(_openTimer, timer)) return;
+        timer.Stop();
+        _openTimer = null;
+        if (first || timer.ElapsedMilliseconds >= SlowPopupMilliseconds)
+          Log.Write(Tag, $"Layer popup: first={first} items={native.Items.Count} open_ms={openMs:0.0}" +
+            $" total_ms={timer.Elapsed.TotalMilliseconds:0.0}" +
+            $" swatch_ms={Layers.Sum(item => item.SwatchMilliseconds) + (StatusItem?.SwatchMilliseconds ?? 0.0):0.0}");
+      }));
+    }
+
+    private void OnClosed(object? sender, EventArgs e) => _openTimer = null;
   }
 
   private sealed class LayerListItem
   {
+    private Image? _swatch;
+
     public LayerListItem(
       string value,
       string displayText,
       string searchText,
       Color color,
-      bool isCurrentOption)
+      bool isCurrentOption,
+      Guid layerId)
     {
       Value = value;
       DisplayText = displayText;
       SearchText = searchText;
       IsCurrentOption = isCurrentOption;
-      Swatch = CreateColorSwatch(color);
+      LayerId = layerId;
+      SwatchColor = color;
     }
 
     public string Value { get; }
     public string DisplayText { get; }
     public string SearchText { get; }
     public bool IsCurrentOption { get; }
-    public Image Swatch { get; }
+    public Guid LayerId { get; }
+    public Color SwatchColor { get; }
+    public double SwatchMilliseconds { get; private set; }
+    public Image Swatch
+    {
+      get
+      {
+        if (_swatch != null) return _swatch;
+        var timer = Stopwatch.StartNew();
+        _swatch = CreateColorSwatch(SwatchColor);
+        SwatchMilliseconds = timer.Elapsed.TotalMilliseconds;
+        return _swatch;
+      }
+    }
+
+    public void DisposeSwatch()
+    {
+      _swatch?.Dispose();
+      _swatch = null;
+      SwatchMilliseconds = 0.0;
+    }
 
     private static Bitmap CreateColorSwatch(Color color)
     {
-      var bitmap = new Bitmap(18, 18, PixelFormat.Format32bppRgba);
-      using var graphics = new Graphics(bitmap);
-      graphics.FillRectangle(Color.FromArgb(242, 242, 242), 0, 0, 9, 9);
-      graphics.FillRectangle(Color.FromArgb(191, 191, 191), 9, 0, 9, 9);
-      graphics.FillRectangle(Color.FromArgb(191, 191, 191), 0, 9, 9, 9);
-      graphics.FillRectangle(Color.FromArgb(242, 242, 242), 9, 9, 9, 9);
-      graphics.FillRectangle(color, 0, 0, 18, 18);
-      graphics.DrawRectangle(Colors.Black, 0, 0, 17, 17);
+      var bitmap = new Bitmap(SwatchSize, SwatchSize, PixelFormat.Format32bppRgba);
+      using var pixels = bitmap.Lock();
+      var half = SwatchSize / 2;
+      Color OverChecker(Color background) => new(
+        color.R * color.A + background.R * (1.0f - color.A),
+        color.G * color.A + background.G * (1.0f - color.A),
+        color.B * color.A + background.B * (1.0f - color.A), 1.0f);
+      var light = OverChecker(SwatchLightColor);
+      var dark = OverChecker(SwatchDarkColor);
+      for (var y = 0; y < SwatchSize; y++)
+        for (var x = 0; x < SwatchSize; x++)
+          pixels.SetPixel(x, y, x == 0 || y == 0 || x == SwatchSize - 1 || y == SwatchSize - 1
+            ? SwatchBorderColor
+            : (x < half) == (y < half) ? light : dark);
       return bitmap;
     }
   }

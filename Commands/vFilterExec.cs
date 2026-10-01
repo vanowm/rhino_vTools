@@ -7,17 +7,19 @@ using Rhino.Commands;
 using Rhino.DocObjects;
 using Rhino.Input;
 using Rhino.Input.Custom;
+using Rhino.UI.DialogPanels;
 
 namespace vTools.Commands;
 
 /// <summary>
-/// Runs a delegated command with a temporary global selection filter.
+/// Runs a delegated command with a temporary selection filter and optional current layer.
 /// </summary>
 [CommandStyle(Style.Transparent)]
 public sealed class vFilterExec : vToolsCommand
 {
   // Defaults
   private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.
+  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Existing full layer path; *Current*, . or * leaves the current layer unchanged.
 
   private const string Tag = "vFilterExec";
 
@@ -48,23 +50,31 @@ public sealed class vFilterExec : vToolsCommand
   private static PendingLaunch? _lastLaunch;
   private static ActiveExecution? _activeExecution;
   private static EventHandler? _launchIdleHandler;
+  private static EventHandler? _startIdleHandler;
   private static EventHandler? _repeatIdleHandler;
   private static bool _registeringRepeat;
+  private static string? _repeatHelpUrl;
 
   public override string EnglishName => "vFilterExec";
+
+  internal static string RepeatCommandHelpUrl =>
+    string.IsNullOrWhiteSpace(_repeatHelpUrl)
+      ? CommandHelpUrl.ForCommand(Tag)
+      : _repeatHelpUrl;
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     CancelPendingLaunch();
     CancelRepeatRegistration();
 
-    if (!TryGetCommand(out var command, out var commandResult))
+    var layerName = DefaultLayer;
+    if (!TryGetCommand(doc, ref layerName, out var command, out var commandResult))
       return commandResult;
 
-    if (!TryGetFilter(out var filter, out var filterResult))
+    if (!TryGetFilter(doc, ref layerName, out var filter, out var filterResult))
       return filterResult;
 
-    QueueLaunch(new PendingLaunch(command, filter));
+    QueueLaunch(new PendingLaunch(command, filter, layerName, doc.RuntimeSerialNumber));
     return Result.Success;
   }
 
@@ -82,18 +92,21 @@ public sealed class vFilterExec : vToolsCommand
       return Result.Success;
 
     var launch = _lastLaunch;
-    if (launch == null)
+    var doc = RhinoDoc.ActiveDoc;
+    if (launch == null || doc == null)
       return Result.Nothing;
 
     CancelPendingLaunch();
     CancelRepeatRegistration();
     Log.Write(Tag,
-      $"repeat command={launch.Command} filter={launch.Filter.CanonicalSpec}");
-    QueueLaunch(launch);
+      $"repeat command={launch.Command} filter={launch.Filter.CanonicalSpec} layer={launch.LayerName}");
+    QueueLaunch(launch with { DocumentSerialNumber = doc.RuntimeSerialNumber });
     return Result.Success;
   }
 
   private static bool TryGetCommand(
+    RhinoDoc doc,
+    ref string layerName,
     out string command,
     out Result commandResult)
   {
@@ -103,24 +116,41 @@ public sealed class vFilterExec : vToolsCommand
     getter.AcceptNothing(false);
     getter.EnableTransparentCommands(true);
 
-    var result = getter.Get();
-    commandResult = getter.CommandResult();
-    if (commandResult != Result.Success)
+    while (true)
+    {
+      getter.ClearCommandOptions();
+      var layerOption = getter.AddOption("Layer", layerName);
+      var result = getter.Get();
+      commandResult = getter.CommandResult();
+      if (commandResult != Result.Success)
+        return false;
+
+      if (result == GetResult.Option && getter.Option().Index == layerOption)
+      {
+        if (!TryGetLayer(doc, ref layerName))
+        {
+          commandResult = Result.Cancel;
+          return false;
+        }
+        continue;
+      }
+
+      command = result == GetResult.String
+        ? NormalizeInput(getter.StringResult())
+        : string.Empty;
+
+      if (!string.IsNullOrWhiteSpace(command))
+        return true;
+
+      RhinoApp.WriteLine("vFilterExec: enter a command to execute.");
+      commandResult = Result.Nothing;
       return false;
-
-    command = result == GetResult.String
-      ? NormalizeInput(getter.StringResult())
-      : string.Empty;
-
-    if (!string.IsNullOrWhiteSpace(command))
-      return true;
-
-    RhinoApp.WriteLine("vFilterExec: enter a command to execute.");
-    commandResult = Result.Nothing;
-    return false;
+    }
   }
 
   private static bool TryGetFilter(
+    RhinoDoc doc,
+    ref string layerName,
     out FilterSelection selection,
     out Result commandResult)
   {
@@ -131,33 +161,78 @@ public sealed class vFilterExec : vToolsCommand
     getter.EnableTransparentCommands(true);
     getter.SetDefaultString(DefaultFilter);
 
-    var optionFilters = new Dictionary<int, string>();
-    foreach (var definition in FilterDefinitions)
+    while (true)
     {
-      var optionIndex = getter.AddOption(definition.Name);
-      if (optionIndex > 0)
-        optionFilters[optionIndex] = definition.Name;
-    }
+      getter.ClearCommandOptions();
+      var layerOption = getter.AddOption("Layer", layerName);
+      var optionFilters = new Dictionary<int, string>();
+      foreach (var definition in FilterDefinitions)
+      {
+        var optionIndex = getter.AddOption(definition.Name);
+        if (optionIndex > 0)
+          optionFilters[optionIndex] = definition.Name;
+      }
 
-    var result = getter.Get();
-    commandResult = getter.CommandResult();
-    if (commandResult != Result.Success)
+      var result = getter.Get();
+      commandResult = getter.CommandResult();
+      if (commandResult != Result.Success)
+        return false;
+
+      if (result == GetResult.Option && getter.Option().Index == layerOption)
+      {
+        if (!TryGetLayer(doc, ref layerName))
+        {
+          commandResult = Result.Cancel;
+          return false;
+        }
+        continue;
+      }
+
+      var filterSpec = result switch
+      {
+        GetResult.Nothing => DefaultFilter,
+        GetResult.String => getter.StringResult(),
+        GetResult.Option when optionFilters.TryGetValue(getter.Option().Index, out var optionFilter) => optionFilter,
+        _ => string.Empty
+      };
+
+      if (TryParseFilter(filterSpec, out selection, out var invalidToken))
+        return true;
+
+      RhinoApp.WriteLine($"vFilterExec: unknown filter '{invalidToken}'.");
+      commandResult = Result.Failure;
       return false;
+    }
+  }
 
-    var filterSpec = result switch
+  private static bool TryGetLayer(RhinoDoc doc, ref string layerName)
+  {
+    using var getter = new GetString();
+    getter.SetCommandPrompt("Temporary layer name (. or * = current layer)");
+    getter.SetDefaultString(layerName);
+    getter.AcceptNothing(true);
+    getter.EnableTransparentCommands(true);
+
+    while (true)
     {
-      GetResult.Nothing => DefaultFilter,
-      GetResult.String => getter.StringResult(),
-      GetResult.Option when optionFilters.TryGetValue(getter.Option().Index, out var optionFilter) => optionFilter,
-      _ => string.Empty
-    };
+      // Consume one macro argument even when the alias runs as Interactive.
+      var result = getter.Get();
+      if (getter.CommandResult() != Result.Success)
+        return false;
 
-    if (TryParseFilter(filterSpec, out selection, out var invalidToken))
-      return true;
+      var requested = result == GetResult.Nothing
+        ? layerName
+        : NormalizeInput(getter.StringResult());
+      if (LayerSelector.TryResolveManualValue(
+            doc, requested, DefaultLayer, allowNewLayer: false, specialChoices: [],
+            out var selectedLayer, out var error))
+      {
+        layerName = selectedLayer;
+        return true;
+      }
 
-    RhinoApp.WriteLine($"vFilterExec: unknown filter '{invalidToken}'.");
-    commandResult = Result.Failure;
-    return false;
+      RhinoApp.WriteLine(error);
+    }
   }
 
   private static bool TryParseFilter(
@@ -259,27 +334,40 @@ public sealed class vFilterExec : vToolsCommand
     if (launch == null)
       return;
 
-    SelectionFilterSettingsState? previousState = null;
     try
     {
       CompleteActiveExecution(false, "replaced by another launch");
-      previousState = SelectionFilterSettings.GetCurrentState();
+      var doc = RhinoDoc.FromRuntimeSerialNumber(launch.DocumentSerialNumber);
+      if (doc == null)
+        throw new InvalidOperationException("The command's document is no longer open.");
+
+      var previousState = SelectionFilterSettings.GetCurrentState();
       var temporaryState = SelectionFilterSettings.GetCurrentState();
       temporaryState.GlobalGeometryFilter = launch.Filter.Mask;
       temporaryState.OneShotGeometryFilter = ObjectType.None;
       temporaryState.Enabled = true;
       temporaryState.SubObjectSelect = launch.Filter.RequiresSubObjects;
+      _activeExecution = new ActiveExecution(previousState, doc.RuntimeSerialNumber);
+      ApplyLayer(doc, launch.LayerName, _activeExecution);
       SelectionFilterSettings.UpdateFromState(temporaryState);
 
-      _activeExecution = new ActiveExecution(previousState);
       Command.BeginCommand += OnDelegatedCommandBegin;
       Command.EndCommand += OnDelegatedCommandEnd;
 
-      Log.Write(Tag, $"launch command={launch.Command} filter={launch.Filter.CanonicalSpec}");
-      _ = RhinoApp.RunScript(launch.Command, false);
+      Log.Write(Tag, $"launch command={launch.Command} filter={launch.Filter.CanonicalSpec} layer={launch.LayerName}");
+      var accepted = RhinoApp.RunScript(doc.RuntimeSerialNumber, launch.Command, false);
 
+      // Idle launches can return before BeginCommand; keep the temporary state until EndCommand.
       if (_activeExecution is { HasStarted: false })
-        CompleteActiveExecution(true, "delegated command did not start");
+      {
+        if (!accepted)
+          CompleteActiveExecution(true, "delegated command rejected");
+        else
+        {
+          _startIdleHandler = OnCheckDelegatedStartOnIdle;
+          RhinoApp.Idle += _startIdleHandler;
+        }
+      }
     }
     catch (Exception ex)
     {
@@ -287,25 +375,28 @@ public sealed class vFilterExec : vToolsCommand
       RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
       if (_activeExecution != null)
         CompleteActiveExecution(true, "launch failed");
-      else if (previousState != null)
-      {
-        RestoreFilter(previousState);
-        QueueRepeatRegistration();
-      }
       else
         QueueRepeatRegistration();
     }
   }
 
+  private static void OnCheckDelegatedStartOnIdle(object? sender, EventArgs e)
+  {
+    if (Command.InCommand())
+      return;
+
+    CompleteActiveExecution(true, "delegated command did not start");
+  }
+
   private static void OnDelegatedCommandBegin(object? sender, CommandEventArgs e)
   {
     var execution = _activeExecution;
-    if (execution == null || execution.HasStarted)
+    if (execution == null || execution.HasStarted ||
+        execution.DocumentSerialNumber != e.Document.RuntimeSerialNumber)
       return;
 
     execution.HasStarted = true;
     execution.CommandId = e.CommandId;
-    execution.DocumentSerialNumber = e.Document.RuntimeSerialNumber;
     Log.Write(Tag,
       $"delegated begin command={e.CommandEnglishName} id={e.CommandId}");
   }
@@ -333,10 +424,30 @@ public sealed class vFilterExec : vToolsCommand
       return;
 
     _activeExecution = null;
+    if (_startIdleHandler != null)
+      RhinoApp.Idle -= _startIdleHandler;
+    _startIdleHandler = null;
     Command.BeginCommand -= OnDelegatedCommandBegin;
     Command.EndCommand -= OnDelegatedCommandEnd;
+    RestoreLayer(execution);
     RestoreFilter(execution.PreviousState);
     Log.Write(Tag, $"filter restored reason={reason}");
+
+    if (execution.HasStarted)
+    {
+      try
+      {
+        _repeatHelpUrl = Command.GetCommandContextHelpUrl(execution.CommandId);
+        if (string.IsNullOrWhiteSpace(_repeatHelpUrl))
+          _repeatHelpUrl = CommandHelpPanel.Instance?.HelpUrl;
+        Log.Write(Tag, $"repeat help command={execution.CommandId} url={_repeatHelpUrl ?? "<none>"}");
+      }
+      catch (Exception ex)
+      {
+        _repeatHelpUrl = CommandHelpPanel.Instance?.HelpUrl;
+        Log.Write(Tag, $"repeat help capture failed: {ex.Message}");
+      }
+    }
 
     if (queueRepeat)
       QueueRepeatRegistration();
@@ -352,6 +463,56 @@ public sealed class vFilterExec : vToolsCommand
     {
       Log.Write(Tag, $"filter restore failed: {ex.Message}");
       RhinoApp.WriteLine("vFilterExec: could not restore the previous selection filter.");
+    }
+  }
+
+  private static void ApplyLayer(RhinoDoc doc, string layerName, ActiveExecution execution)
+  {
+    if (LayerSelector.IsCurrentLayerValue(layerName, DefaultLayer))
+      return;
+
+    var index = doc.Layers.FindByFullPath(layerName, RhinoMath.UnsetIntIndex);
+    if (index < 0 || index >= doc.Layers.Count || doc.Layers[index].IsDeleted)
+      throw new InvalidOperationException($"Layer '{layerName}' was not found.");
+
+    var layer = doc.Layers[index];
+    if (layer.IsLocked || !layer.IsVisible || layer.IsReference)
+      throw new InvalidOperationException($"Layer '{layerName}' must be visible, unlocked, and editable.");
+
+    execution.PreviousLayerId = doc.Layers.CurrentLayer.Id;
+    if (!doc.Layers.SetCurrentLayerIndex(index, quiet: true))
+      throw new InvalidOperationException($"Could not make layer '{layerName}' current.");
+
+    Log.Write(Tag, $"layer switched document={doc.RuntimeSerialNumber} previous={execution.PreviousLayerId} target={layer.FullPath}");
+  }
+
+  private static void RestoreLayer(ActiveExecution execution)
+  {
+    if (execution.PreviousLayerId == Guid.Empty)
+      return;
+
+    try
+    {
+      var doc = RhinoDoc.FromRuntimeSerialNumber(execution.DocumentSerialNumber);
+      if (doc == null)
+      {
+        Log.Write(Tag, $"layer restore skipped; document={execution.DocumentSerialNumber} closed");
+        return;
+      }
+
+      var previousLayer = doc.Layers.FindId(execution.PreviousLayerId);
+      if (previousLayer == null || previousLayer.IsDeleted ||
+          !doc.Layers.SetCurrentLayerIndex(previousLayer.Index, quiet: true))
+      {
+        throw new InvalidOperationException("Could not restore the previous current layer.");
+      }
+
+      Log.Write(Tag, $"layer restored document={execution.DocumentSerialNumber} layer={previousLayer.FullPath}");
+    }
+    catch (Exception ex)
+    {
+      Log.Write(Tag, $"layer restore failed: {ex.Message}");
+      RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
     }
   }
 
@@ -392,32 +553,29 @@ public sealed class vFilterExec : vToolsCommand
     bool RequiresSubObjects = false,
     params string[] Aliases);
 
-  private sealed record PendingLaunch(string Command, FilterSelection Filter);
+  private sealed record PendingLaunch(
+    string Command,
+    FilterSelection Filter,
+    string LayerName,
+    uint DocumentSerialNumber);
 
   private sealed class ActiveExecution
   {
-    public ActiveExecution(SelectionFilterSettingsState previousState)
+    public ActiveExecution(SelectionFilterSettingsState previousState, uint documentSerialNumber)
     {
       PreviousState = previousState;
+      DocumentSerialNumber = documentSerialNumber;
     }
 
     public SelectionFilterSettingsState PreviousState { get; }
     public bool HasStarted { get; set; }
     public Guid CommandId { get; set; }
-    public uint DocumentSerialNumber { get; set; }
+    public uint DocumentSerialNumber { get; }
+    public Guid PreviousLayerId { get; set; }
   }
 
   private readonly record struct FilterSelection(
     ObjectType Mask,
     bool RequiresSubObjects,
     string CanonicalSpec);
-}
-
-[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable)]
-public sealed class vFilterExecRepeat : Command
-{
-  public override string EnglishName => "vFilterExecRepeat";
-
-  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
-    vFilterExec.RepeatLast();
 }

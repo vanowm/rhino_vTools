@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using Rhino.ApplicationSettings;
 using Rhino;
 using Rhino.Commands;
 using Rhino.DocObjects;
@@ -14,18 +15,10 @@ namespace vTools.Commands;
 /// Native line command ported from LinePlus.py.
 /// </summary>
 [CommandStyle(Style.NotUndoable)]
-public sealed class vLine : vToolsCommand
+public sealed partial class vLine : vToolsCommand
 {
-  private const string OptionsSectionName = "vLine";
-  private const string ChainModeKey = "chainMode";
-  private const string PriorityKey = "priority";
-  private const string PersistConstraintKey = "persistConstraint";
-  private const string LengthKey = "length";
-  private const string AngleKey          = "angle";
-  private const string AngleRelativeKey  = "angleRelative";
-  private const string LayerKey          = "layer";
+  // Defaults and customizable constants
   private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves output to Rhino's current layer.
-  private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
   private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" }; // Command option names in chain-mode index order.
   private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" }; // Constraint-solution priorities in persisted index order.
@@ -50,6 +43,32 @@ public sealed class vLine : vToolsCommand
   private const double DefaultAngle = 0.0; // Angle in degrees.
   private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
   private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+  private static readonly (string Name, OsnapModes Mode)[] OneShotSnapOptions =
+  [
+    ("NearSnap", OsnapModes.Near),
+    ("CenterSnap", OsnapModes.Center),
+    ("VertexSnap", OsnapModes.Vertex),
+    ("KnotSnap", OsnapModes.Knot),
+    ("QuadrantSnap", OsnapModes.Quadrant),
+    ("MidpointSnap", OsnapModes.Midpoint),
+    ("MidSnap", OsnapModes.Midpoint),
+    ("IntersectionSnap", OsnapModes.Intersection),
+    ("EndSnap", OsnapModes.End),
+    ("PerpendicularSnap", OsnapModes.Perpendicular),
+    ("TangentSnap", OsnapModes.Tangent),
+    ("PointSnap", OsnapModes.Point),
+    ("PtSnap", OsnapModes.Point),
+  ]; // Hidden Rhino one-shot OSnap names accepted while vLine waits for a point.
+
+  private const string OptionsSectionName = "vLine";
+  private const string ChainModeKey = "chainMode";
+  private const string PriorityKey = "priority";
+  private const string PersistConstraintKey = "persistConstraint";
+  private const string LengthKey = "length";
+  private const string AngleKey = "angle";
+  private const string AngleRelativeKey = "angleRelative";
+  private const string LayerKey = "layer";
+  private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
   private static int _chainMode = DefaultChainMode;
   private static int _priority = DefaultPriority;
@@ -60,6 +79,60 @@ public sealed class vLine : vToolsCommand
   private static string _layer = DefaultLayer;
 
   private static bool _debugMode = false;
+
+  private sealed class OneShotOsnapSession : IDisposable
+  {
+    private readonly Dictionary<int, OsnapModes> _options = [];
+    private OsnapModes _originalModes;
+    private OsnapModes _selectedModes;
+    private bool _originalEnabled;
+    private bool _active;
+
+    internal bool Active => _active;
+
+    internal void AddOptions(GetPoint getPoint)
+    {
+      _options.Clear();
+      foreach (var (name, mode) in OneShotSnapOptions)
+      {
+        int index = getPoint.AddOption(name, string.Empty, true);
+        if (index > 0)
+          _options[index] = mode;
+      }
+    }
+
+    internal bool TrySelect(int optionIndex)
+    {
+      if (!_options.TryGetValue(optionIndex, out var mode))
+        return false;
+      if (!_active)
+      {
+        _originalModes = ModelAidSettings.OsnapModes;
+        _originalEnabled = ModelAidSettings.Osnap;
+        _selectedModes = OsnapModes.None;
+        _active = true;
+      }
+      _selectedModes = mode;
+      ModelAidSettings.Osnap = false;
+      ModelAidSettings.OsnapModes = _selectedModes;
+      ModelAidSettings.Osnap = true;
+      Log.Write("vLine", $"one-shot osnap selected={_selectedModes} " +
+        $"active={ModelAidSettings.OsnapModes} enabled={ModelAidSettings.Osnap}");
+      return true;
+    }
+
+    internal void Reset()
+    {
+      if (!_active)
+        return;
+      ModelAidSettings.OsnapModes = _originalModes;
+      ModelAidSettings.Osnap = _originalEnabled;
+      _selectedModes = OsnapModes.None;
+      _active = false;
+    }
+
+    public void Dispose() => Reset();
+  }
 
   /// <summary>
   /// Rhino command name.
@@ -175,6 +248,12 @@ public sealed class vLine : vToolsCommand
         _length = lengthState;
         _angle = angleState;
         _angleRelative = angleRelativeState;
+      }
+
+      if (secondResult.Completed)
+      {
+        SavePersistedOptions();
+        return Result.Success;
       }
 
       if (secondResult.IsUndo)
@@ -635,14 +714,18 @@ public sealed class vLine : vToolsCommand
     var getPoint = new GetPoint();
     getPoint.EnableTransparentCommands(true);
     getPoint.AcceptNothing(true);
+    using var oneShotSnap = new OneShotOsnapSession();
     if (canUndo || canRedo) getPoint.AcceptCustomMessage(true);
-    getPoint.DynamicDraw += (_, e) =>
+    EventHandler<GetPointDrawEventArgs> drawWarning = (_, e) =>
       DrawHiddenLayerWarning(e, doc, layerSession);
+    getPoint.DynamicDraw += drawWarning;
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
     var chainModeIndex = ClampIndex(initialChainMode, ChainModeValues.Length);
 
-    while (true)
+    try
     {
+      while (true)
+      {
       getPoint.SetCommandPrompt(
         layerSession.DecoratePrompt(doc, "Start of line"));
       getPoint.ClearCommandOptions();
@@ -658,10 +741,12 @@ public sealed class vLine : vToolsCommand
       var idxPerp = getPoint.AddOption("Perpendicular");
       var idxTangent = getPoint.AddOption("Tangent");
       var idxBiTangent = getPoint.AddOption("BiTangent");
+      var idxThreePoint = getPoint.AddOption("3Point");
       var idxExtension = getPoint.AddOption("Extension");
       var idxParallel = getPoint.AddOption("Parallel");
       var layerOptionIndex = getPoint.AddOption(
         "Layer", layerSession.OptionLayerName);
+      oneShotSnap.AddOptions(getPoint);
 
       var result = getPoint.Get();
       layerSession.ObserveCurrentLayer(doc);
@@ -680,6 +765,7 @@ public sealed class vLine : vToolsCommand
 
       if (result == GetResult.Point)
       {
+        oneShotSnap.Reset();
         _chainMode = chainModeIndex;
         return FirstPointResult.WithPoint(getPoint.Point(), bothSides.CurrentValue, chainModeIndex);
       }
@@ -692,6 +778,17 @@ public sealed class vLine : vToolsCommand
         var option = getPoint.Option();
         if (option == null)
           continue;
+        if (oneShotSnap.TrySelect(option.Index))
+        {
+          getPoint.DynamicDraw -= drawWarning;
+          getPoint.Dispose();
+          getPoint = new GetPoint();
+          getPoint.EnableTransparentCommands(true);
+          getPoint.AcceptNothing(true);
+          if (canUndo || canRedo) getPoint.AcceptCustomMessage(true);
+          getPoint.DynamicDraw += drawWarning;
+          continue;
+        }
 
         if (option.Index == layerOptionIndex)
         {
@@ -703,6 +800,14 @@ public sealed class vLine : vToolsCommand
         {
           _chainMode = chainModeIndex;
           return RunBiTangent(doc, layerSession)
+            ? FirstPointResult.CompletedResult(bothSides.CurrentValue, chainModeIndex)
+            : FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
+        }
+
+        if (option.Index == idxThreePoint)
+        {
+          _chainMode = chainModeIndex;
+          return RunThreePoint(doc, layerSession)
             ? FirstPointResult.CompletedResult(bothSides.CurrentValue, chainModeIndex)
             : FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
         }
@@ -785,7 +890,13 @@ public sealed class vLine : vToolsCommand
         continue;
       }
 
-      return FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
+        return FirstPointResult.None(bothSides.CurrentValue, chainModeIndex);
+      }
+    }
+    finally
+    {
+      getPoint.DynamicDraw -= drawWarning;
+      getPoint.Dispose();
     }
   }
 
@@ -1077,6 +1188,7 @@ public sealed class vLine : vToolsCommand
     getPoint.AcceptNumber(true, true);
     getPoint.AcceptNothing(true);
     getPoint.AcceptCustomMessage(true);
+    using var oneShotSnap = new OneShotOsnapSession();
 
     var bothSides = new OptionToggle(initialBothSides, "No", "Yes");
     var chainModeIndex = ClampIndex(initialChainMode, ChainModeValues.Length);
@@ -1456,6 +1568,27 @@ public sealed class vLine : vToolsCommand
         var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18);
         if (pt.HasValue)
         {
+          double lockedLength = Math.Abs(lengthOption.CurrentValue);
+          double coincidenceTolerance = Math.Max(
+            doc.ModelAbsoluteTolerance * 4.0,
+            RhinoMath.SqrtEpsilon);
+          if (lockedLength > doc.ModelAbsoluteTolerance &&
+              pt.Value.DistanceTo(startPoint) <= coincidenceTolerance &&
+              TryPerpendicularDirectionInCPlane(
+                curve,
+                pt.Value,
+                curveHint,
+                cplane,
+                out var perpendicularDirection))
+          {
+            Log.Write(
+              "vLine",
+              $"perp coincident fallback length={lockedLength:G6} " +
+              $"bothSides={bothSides.CurrentValue} point={pt.Value} " +
+              $"direction={perpendicularDirection}");
+            return startPoint + (perpendicularDirection * lockedLength);
+          }
+
           DebugLog($"PerpNear: found ({pt.Value.X:F3},{pt.Value.Y:F3},{pt.Value.Z:F3})");
           return pt.Value;
         }
@@ -1984,6 +2117,23 @@ public sealed class vLine : vToolsCommand
     getPoint.DynamicDraw += drawPreview;
     ApplyModePrompt();
 
+    void RestartPointGetter()
+    {
+      getPoint.MouseMove -= trackConstraintHover;
+      getPoint.DynamicDraw -= drawPreview;
+      getPoint.Dispose();
+      getPoint = new GetPoint();
+      getPoint.EnableTransparentCommands(true);
+      getPoint.EnableSnapToCurves(!oneShotSnap.Active);
+      getPoint.SetBasePoint(startPoint, true);
+      getPoint.AcceptNumber(true, true);
+      getPoint.AcceptNothing(true);
+      getPoint.AcceptCustomMessage(true);
+      getPoint.MouseMove += trackConstraintHover;
+      getPoint.DynamicDraw += drawPreview;
+      ApplyModePrompt();
+    }
+
     try
     {
       while (true)
@@ -2021,6 +2171,16 @@ public sealed class vLine : vToolsCommand
           : -1;
         var idxAuto = getPoint.AddOption("Auto");
         var idxProjectTo = getPoint.AddOption("ProjectTo");
+        var idxThreePoint = chainModeIndex == ModeSingle &&
+                            !bothSides.CurrentValue &&
+                            !startConstraint.HasValue &&
+                            !startDirection.HasValue &&
+                            string.IsNullOrWhiteSpace(mode) &&
+                            endAnchor == null &&
+                            !angleLock.CurrentValue &&
+                            lengthOption.CurrentValue <= 0.0
+          ? getPoint.AddOption("3Point")
+          : -1;
         if (allowAngleControls)
           getPoint.AddOptionToggle("AngleRef", ref angleRelative);
         var idxAngle = allowAngleControls
@@ -2036,6 +2196,7 @@ public sealed class vLine : vToolsCommand
           "Debug",
           debugToggle.CurrentValue ? "On" : "Off",
           true);
+        oneShotSnap.AddOptions(getPoint);
 
         if (debugToggle.CurrentValue && !_debugMode)
         {
@@ -2070,6 +2231,7 @@ public sealed class vLine : vToolsCommand
 
         if (result == GetResult.Point)
         {
+          oneShotSnap.Reset();
           var clickedRaw = getPoint.Point();
           if (mode is "perp" or "tangent")
           {
@@ -2131,6 +2293,33 @@ public sealed class vLine : vToolsCommand
           }
 
           Log.Write("vLine", $"accept mode={mode ?? "free"} start={resolvedStart} end={endPoint}");
+          if (activeEndConstraint.HasValue)
+          {
+            var acceptedConstraint = activeEndConstraint.Value;
+            var tangent2d = ToCPlane2d(
+              acceptedConstraint.Curve.TangentAt(acceptedConstraint.SeedParameter),
+              cplane);
+            var direction2d = ToCPlane2d(endPoint - resolvedStart, cplane);
+            double angleErrorDegrees = double.NaN;
+            if (TryUnitize2d(tangent2d, out var tangentUnit) &&
+                TryUnitize2d(direction2d, out var directionUnit))
+            {
+              double dot = Math.Abs(
+                (tangentUnit.X * directionUnit.X) +
+                (tangentUnit.Y * directionUnit.Y));
+              dot = Math.Max(0.0, Math.Min(1.0, dot));
+              angleErrorDegrees = RhinoMath.ToDegrees(
+                acceptedConstraint.Kind == EndpointConstraintKind.Perpendicular
+                  ? Math.Asin(dot)
+                  : Math.Acos(dot));
+            }
+
+            Log.Write(
+              "vLine.Constraint",
+              $"kind={acceptedConstraint.Kind} cplaneAngleErrorDeg={angleErrorDegrees:G6} " +
+              $"length={lengthOption.CurrentValue:G6} bothSides={bothSides.CurrentValue} " +
+              $"curvePoint={acceptedConstraint.Curve.PointAt(acceptedConstraint.SeedParameter)}");
+          }
           var state = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
           return SecondPointResult.WithPoint(resolvedStart, endPoint, bothSides.CurrentValue, chainModeIndex, state);
         }
@@ -2140,6 +2329,21 @@ public sealed class vLine : vToolsCommand
           var option = getPoint.Option();
           if (option == null)
             continue;
+          if (oneShotSnap.TrySelect(option.Index))
+          {
+            RestartPointGetter();
+            continue;
+          }
+
+          if (idxThreePoint > 0 && option.Index == idxThreePoint)
+          {
+            var state = new ConstraintState(mode, persistConstraint.CurrentValue,
+              priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue,
+              angleOption.CurrentValue, angleRelative.CurrentValue);
+            return RunThreePoint(doc, layerSession, startPoint)
+              ? SecondPointResult.CompletedResult(bothSides.CurrentValue, chainModeIndex, state)
+              : SecondPointResult.None(bothSides.CurrentValue, chainModeIndex, state);
+          }
 
           if (option.Index == idxFromFirstPoint)
           {
@@ -2445,6 +2649,7 @@ public sealed class vLine : vToolsCommand
     {
       getPoint.MouseMove -= trackConstraintHover;
       getPoint.DynamicDraw -= drawPreview;
+      getPoint.Dispose();
       projectTargetHighlight?.Dispose();
       projectToGeometry?.Dispose();
     }
@@ -2647,6 +2852,54 @@ public sealed class vLine : vToolsCommand
     return false;
   }
 
+  private static double ClosestLineParameterInCPlane(
+    Line line,
+    Point3d point,
+    Plane cplane)
+  {
+    var direction = ToCPlane2d(line.Direction, cplane);
+    double directionLengthSquared =
+      (direction.X * direction.X) + (direction.Y * direction.Y);
+    if (directionLengthSquared <= RhinoMath.ZeroTolerance)
+      return line.ClosestParameter(point);
+
+    var offset = ToCPlane2d(point - line.From, cplane);
+    double parameter =
+      ((offset.X * direction.X) + (offset.Y * direction.Y)) /
+      directionLengthSquared;
+    return double.IsFinite(parameter)
+      ? parameter
+      : line.ClosestParameter(point);
+  }
+
+  private static bool TryPerpendicularDirectionInCPlane(
+    Curve curve,
+    Point3d curvePoint,
+    Point3d hintPoint,
+    Plane cplane,
+    out Vector3d direction)
+  {
+    direction = Vector3d.Unset;
+    if (!curve.ClosestPoint(curvePoint, out var parameter))
+      return false;
+
+    var tangent = curve.TangentAt(parameter);
+    tangent -= cplane.Normal * Vector3d.Multiply(tangent, cplane.Normal);
+    if (!tangent.Unitize())
+      return false;
+
+    direction = Vector3d.CrossProduct(cplane.Normal, tangent);
+    if (!direction.Unitize())
+      return false;
+
+    var towardHint = hintPoint - curvePoint;
+    towardHint -= cplane.Normal * Vector3d.Multiply(towardHint, cplane.Normal);
+    if (Vector3d.Multiply(towardHint, direction) < 0.0)
+      direction = -direction;
+
+    return true;
+  }
+
   private static double PerpScore2d(Curve curve, double t, Point3d startPoint, Plane cplane)
   {
     var point = curve.PointAt(t);
@@ -2699,9 +2952,10 @@ public sealed class vLine : vToolsCommand
 
   private static Point3d? PerpPointFromStartWithHint(Point3d startPoint, Curve curve, Point3d hintPoint, int samples, int refineIterations)
   {
+    var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
     if (CurveIsLinear(curve, out var line))
     {
-      var t = line.ClosestParameter(startPoint);
+      var t = ClosestLineParameterInCPlane(line, startPoint, cplane);
       var point = line.PointAt(t);
 
       // Only accept the projected perpendicular if it lies on the finite line segment.
@@ -2709,7 +2963,6 @@ public sealed class vLine : vToolsCommand
       if (t >= -RhinoMath.SqrtEpsilon && t <= 1.0 + RhinoMath.SqrtEpsilon)
         return point;
     }
-    var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
 
     var domain = curve.Domain;
     var a = domain.T0;
@@ -2891,7 +3144,10 @@ public sealed class vLine : vToolsCommand
       return pt;
 
     if (CurveIsLinear(bestSeg, out var line))
-      return line.PointAt(line.ClosestParameter(startPoint));
+    {
+      var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+      return line.PointAt(ClosestLineParameterInCPlane(line, startPoint, cplane));
+    }
 
     return null;
   }
@@ -5251,6 +5507,10 @@ public sealed class vLine : vToolsCommand
   {
     public bool IsUndo { get; init; } = false;
     public bool IsRedo { get; init; } = false;
+    public bool Completed { get; init; } = false;
+
+    public static SecondPointResult CompletedResult(bool bothSides, int chainMode, ConstraintState state)
+      => new(false, Point3d.Unset, Point3d.Unset, bothSides, chainMode, state) { Completed = true };
 
     public static SecondPointResult WithPoint(Point3d startPoint, Point3d point, bool bothSides, int chainMode, ConstraintState state)
       => new(true, startPoint, point, bothSides, chainMode, state);

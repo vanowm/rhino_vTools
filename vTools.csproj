@@ -54,7 +54,7 @@
     </Content>
   </ItemGroup>
 
-  <Target Name="GenerateCommandHelp" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' != ''">
+  <Target Name="GenerateCommandHelp" BeforeTargets="PrepareForBuild" Condition="'$(TargetFramework)' != '' and '$(DesignTimeBuild)' != 'true'">
     <Exec
       Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\GenerateCommandHelp.ps1&quot; -SourcePath &quot;$(MSBuildProjectDirectory)\README.md&quot; -TemplatePath &quot;$(MSBuildProjectDirectory)\Help\vToolsHelp.template.html&quot; -OutputPath &quot;$(MSBuildProjectDirectory)\Help\vToolsHelp.html&quot;" />
   </Target>

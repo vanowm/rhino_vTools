@@ -47,6 +47,22 @@ public sealed class vFitBox : vToolsCommand
   /// </summary>
   public override string EnglishName => "vFitBox";
 
+  internal static bool TryFormatGeometryFitSize(
+    RhinoDoc doc,
+    GeometryBase geometry,
+    out string size)
+  {
+    size = string.Empty;
+    LoadPersistedOptions();
+    var geometries = new[] { geometry };
+    var fit = FindBestFit(doc, geometries, ActiveBasePlane(doc), _angleStepDeg, _fitMode);
+    if (fit == null)
+      return false;
+    RefineToAccurateBounds(fit, geometries);
+    size = FormatFitSizes(doc, fit);
+    return true;
+  }
+
   /// <summary>
   /// Executes fit-box solve and adds resulting geometry.
   /// </summary>

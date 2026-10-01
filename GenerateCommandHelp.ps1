@@ -308,6 +308,32 @@ if ($missingDescriptions.Count -gt 0) {
     throw "Missing command descriptions: $($missingDescriptions -join ', ')."
 }
 
+$topicNames = @($matches | ForEach-Object { $_.Groups['name'].Value })
+$duplicates = @($topicNames | Group-Object | Where-Object { $_.Count -gt 1 })
+if ($duplicates.Count -gt 0 -or $descriptions.Count -ne $descriptionMatches.Count) {
+    throw "Command descriptions and help topics must each list every command once."
+}
+$missingTopics = @($descriptions.Keys | Where-Object { $_ -notin $topicNames })
+if ($missingTopics.Count -gt 0) {
+    throw "Missing command help topics: $($missingTopics -join ', ')."
+}
+
+$commandLinks = @($descriptionMatches | ForEach-Object {
+    $name = $_.Groups['name'].Value
+    "[$name](#$($name.ToLowerInvariant())-flow)"
+})
+$updatedSource = [System.Text.RegularExpressions.Regex]::Replace(
+    $source, '(?m)^- Native commands \(\d+\):', "- Native commands ($($matches.Count)):")
+$updatedSource = [System.Text.RegularExpressions.Regex]::Replace(
+    $updatedSource, '(?m)^Native commands \(\d+\):[^\r\n]*',
+    "Native commands ($($matches.Count)): $($commandLinks -join ', ').")
+if ($updatedSource -ne $source) {
+    $updatedSource = [System.Text.RegularExpressions.Regex]::Replace(
+        $updatedSource, '\r?\n', "`r`n")
+    [System.IO.File]::WriteAllText(
+        $SourcePath, $updatedSource, [System.Text.UTF8Encoding]::new($false))
+}
+
 $topics = New-Object System.Text.StringBuilder
 [void]$topics.AppendLine('<article class="help-topic" data-topic="vhelp">')
 [void]$topics.AppendLine('<h1>vTools commands</h1>')
@@ -390,4 +416,4 @@ if ($existing -ne $html) {
     [System.IO.File]::WriteAllText($OutputPath, $html, $encoding)
 }
 
-Write-Host "Generated the vHelp index and $($commandMatches.Count) command topics: $OutputPath"
+Write-Host "Generated help for $($matches.Count) commands (vHelp index and $($commandMatches.Count) topics): $OutputPath"

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Text.Json.Nodes;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Display;
@@ -16,7 +17,7 @@ namespace vTools.Commands;
 /// <summary>
 /// Previews the result of moving preselected edit-point or control-point grips,
 /// or otherwise the cursor-nearest endpoint control point of each selected
-/// open curve, before forwarding those exact grips to -SetPt.
+/// open curve, including history-dependent surfaces during final placement.
 ///
 /// Workflow:
 ///   1. Select curves, starting with any pre-selected curves, and freely
@@ -25,19 +26,42 @@ namespace vTools.Commands;
 ///      curve; otherwise the endpoint nearest the viewport cursor is used.
 ///      The resulting curves preview at a target that follows the cursor.
 ///   3. Grips are turned on and the identified grips are selected.
-///   4. Control is transferred to -SetPt with the defaults
-///      XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No.
+///   4. Pick a target with XSet=Yes YSet=Yes ZSet=Yes Alignment=World Copy=No
+///      initially. Live original-curve edits replay history without restarting the point get.
+///      Roll back the preview, then commit the exact target with native -SetPt.
 ///   5. After a successful SetPt, the used grips remain visible and selected
 ///      so Rhino displays the gumball.
 /// </summary>
-public sealed class vSetPt : vToolsCommand
+// Preview rollback and the committed native SetPt each own an independent undo record.
+[CommandStyle(Style.ScriptRunner | Style.NotUndoable)]
+public sealed partial class vSetPt : vToolsCommand
 {
+  // Defaults and customizable constants
+  private const PreviewMode DefaultPreviewMode = PreviewMode.All; // Off hides previews; Curves previews curves only; All also updates their history results when supported.
+  private static readonly string[] PreviewValues = { "Off", "Curves", "All" }; // PreviewMode option names, in enum order.
+  private const bool DefaultSetCoordinate = true; // true aligns that coordinate to the target; false preserves each original coordinate.
+  private const bool DefaultCopy = false; // true copies the edited curves; false changes the original curves and their history children.
+  private const bool DefaultCancelPlacementOnEnter = true; // true makes empty Enter cancel placement; false requires a point or Escape.
+  private const bool AllowPlacementTransparentCommands = true; // true allows native view/selection commands during placement; false blocks them.
+  private const int WorldAlignment = 0; // AlignmentValues index for World coordinates.
+  private const int DefaultAlignment = WorldAlignment; // Alignment option index: 0 = World, 1 = CPlane.
+  private static readonly string[] AlignmentValues = { "World", "CPlane" }; // Native SetPt coordinate-system option names, in index order.
+  private static readonly Color CurvePreviewColor = Color.Cyan; // Color of temporary curve previews during selection and copy placement.
+  private const int PreviewIntervalMilliseconds = 24; // Minimum interval between curve-only preview refreshes, in milliseconds.
+  private const int SelectionDebounceMilliseconds = 24; // Curve-selection settling delay, in milliseconds.
+  private const int HistoryPreviewIntervalMilliseconds = 50; // Minimum interval between live history preview starts, in milliseconds; rebuild time counts toward the interval.
+  private const double HistoryPreviewToleranceFactor = 0.000001; // Fraction of document absolute tolerance used to ignore preview-position jitter; positive and much smaller than 1.
+
   private const string Tag = "vSetPt";
   private const string OptionsSectionName = "vSetPt";
   private const string PreviewKey = "preview";
 
-  // Option defaults
-  private const bool DefaultShowPreview = true; // true shows live moved-curve previews; false suppresses them.
+  private enum PreviewMode
+  {
+    Off,
+    Curves,
+    All
+  }
 
   private enum PreselectedGripType
   {
@@ -58,41 +82,34 @@ public sealed class vSetPt : vToolsCommand
     PreselectedGrip[] Grips,
     bool GripsWereOn);
 
-  private static bool _restartingAfterDelegate;
-  private static EventHandler? _pendingIdleHandler;
-  private static PendingCurvePick[]? _pendingGripPicks;
-  private static uint _pendingDocSerial;
-
-  private static bool _showPreview = DefaultShowPreview;
+  private static PreviewMode _previewMode = DefaultPreviewMode;
 
   public override string EnglishName => Tag;
 
   private static void LoadPersistedOptions()
   {
-    _showPreview = ToolsOptionStore.Read(
-      OptionsSectionName,
-      section => ToolsOptionStore.TryGetBool(
-        section, PreviewKey, out var preview) ? preview : DefaultShowPreview);
+    _previewMode = ToolsOptionStore.Read(OptionsSectionName, ReadPreviewMode);
+  }
+
+  private static PreviewMode ReadPreviewMode(JsonObject? section)
+  {
+    if (ToolsOptionStore.TryGetString(section, PreviewKey, out var value) &&
+        Enum.TryParse<PreviewMode>(value, true, out var mode) && Enum.IsDefined(mode))
+      return mode;
+    if (ToolsOptionStore.TryGetBool(section, PreviewKey, out var legacyPreview))
+      return legacyPreview ? PreviewMode.All : PreviewMode.Off;
+    return DefaultPreviewMode;
   }
 
   private static void SavePersistedOptions()
   {
     _ = ToolsOptionStore.Update(
       OptionsSectionName,
-      section => section[PreviewKey] = _showPreview);
+      section => section[PreviewKey] = _previewMode.ToString());
   }
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    // Silent no-op re-run after delegating to -SetPt — registers vSetPt
-    // as the repeatable last command without running anything visible.
-    if (_restartingAfterDelegate)
-    {
-      _restartingAfterDelegate = false;
-      return Result.Success;
-    }
-
-    CancelPending();
     Log.Write(Tag, "--- run start ---");
     LoadPersistedOptions();
     var preselectedGrips = CapturePreselectedGrips(doc);
@@ -111,9 +128,7 @@ public sealed class vSetPt : vToolsCommand
     go.DeselectAllBeforePostSelect = false;
     go.AcceptNothing(true);
 
-    var previewToggle = new OptionToggle(_showPreview, "Off", "On");
-    go.AddOptionToggle("Preview", ref previewToggle);
-    var preview = new EndpointPreviewConduit { Enabled = _showPreview };
+    var preview = new EndpointPreviewConduit { Enabled = _previewMode != PreviewMode.Off };
     var cursorTracker = new EndpointCursorCallback(
       doc, preview, preselectedGrips) { Enabled = true };
     var preselectedWaitingForConfirmation = false;
@@ -141,6 +156,8 @@ public sealed class vSetPt : vToolsCommand
     {
       while (true)
       {
+        go.ClearCommandOptions();
+        var previewOption = go.AddOptionList("Preview", PreviewValues, (int)_previewMode);
         var getResult = go.GetMultiple(1, 0);
         cursorTracker.RefreshFromSelection();
 
@@ -152,12 +169,12 @@ public sealed class vSetPt : vToolsCommand
 
         if (getResult == GetResult.Option)
         {
-          var showPreview = previewToggle.CurrentValue;
-          if (_showPreview != showPreview)
+          var previewMode = (PreviewMode)go.Option().CurrentListOptionIndex;
+          if (go.OptionIndex() == previewOption && _previewMode != previewMode)
           {
-            _showPreview = showPreview;
+            _previewMode = previewMode;
             SavePersistedOptions();
-            cursorTracker.SetPreviewEnabled(showPreview);
+            cursorTracker.SetPreviewEnabled(previewMode != PreviewMode.Off);
           }
           continue;
         }
@@ -182,6 +199,8 @@ public sealed class vSetPt : vToolsCommand
       cursorTracker.Enabled = false;
       cursorTracker.Dispose();
       preview.Enabled = false;
+      preview.SetCurves(Array.Empty<Curve>());
+      go.Dispose();
       doc.Views.Redraw();
     }
 
@@ -234,11 +253,7 @@ public sealed class vSetPt : vToolsCommand
 
     Log.Write(Tag, $"  grip picks: {picks.Count}");
 
-    _pendingGripPicks   = picks.ToArray();
-    _pendingDocSerial   = doc.RuntimeSerialNumber;
-    _pendingIdleHandler = OnIdleLaunch;
-    RhinoApp.Idle      += _pendingIdleHandler;
-    return Result.Success;
+    return PlaceSelectedGrips(doc, picks.ToArray());
   }
 
   private sealed class EndpointPreviewConduit : DisplayConduit
@@ -247,22 +262,21 @@ public sealed class vSetPt : vToolsCommand
 
     public void SetCurves(IEnumerable<Curve> curves)
     {
+      var next = curves.ToArray();
+      foreach (var curve in _curves) curve.Dispose();
       _curves.Clear();
-      _curves.AddRange(curves);
+      _curves.AddRange(next);
     }
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
       foreach (var curve in _curves)
-        PreviewDisplay.DrawCurve(e.Display, curve, Color.Cyan);
+        PreviewDisplay.DrawCurve(e.Display, curve, CurvePreviewColor);
     }
   }
 
   private sealed class EndpointCursorCallback : MouseCallback, IDisposable
   {
-    private const int PreviewIntervalMilliseconds = 24; // Minimum live-preview refresh interval in milliseconds.
-    private const int SelectionDebounceMilliseconds = 24; // Selection-change settling delay in milliseconds.
-
     private readonly RhinoDoc _doc;
     private readonly EndpointPreviewConduit _preview;
     private readonly Dictionary<Guid, PreselectedGrip[]>
@@ -559,7 +573,8 @@ public sealed class vSetPt : vToolsCommand
     NurbsCurve curve,
     bool isStart,
     IReadOnlyList<PreselectedGrip>? selectedGrips,
-    Point3d target)
+    Point3d target,
+    Func<Point3d, Point3d>? alignPoint = null)
   {
     var result = curve.DuplicateCurve() as NurbsCurve;
     if (result == null || result.Points.Count == 0)
@@ -597,7 +612,7 @@ public sealed class vSetPt : vToolsCommand
           }
 
           if (bestIndex >= 0 && changedIndices.Add(bestIndex))
-            editPoints[bestIndex] = target;
+            editPoints[bestIndex] = alignPoint?.Invoke(editPoints[bestIndex]) ?? target;
         }
 
         if (changedIndices.Count == 0 || !result.SetGrevillePoints(editPoints))
@@ -632,7 +647,7 @@ public sealed class vSetPt : vToolsCommand
       {
         var selectedControlPoint = result.Points[index];
         changed |= result.Points.SetPoint(
-          index, target, selectedControlPoint.Weight);
+          index, alignPoint?.Invoke(selectedControlPoint.Location) ?? target, selectedControlPoint.Weight);
       }
 
       return changed ? result : null;
@@ -641,7 +656,7 @@ public sealed class vSetPt : vToolsCommand
     var endpointIndex = isStart ? 0 : result.Points.Count - 1;
     var endpointControlPoint = result.Points[endpointIndex];
     return result.Points.SetPoint(
-        endpointIndex, target, endpointControlPoint.Weight)
+        endpointIndex, alignPoint?.Invoke(endpointControlPoint.Location) ?? target, endpointControlPoint.Weight)
       ? result
       : null;
   }
@@ -805,36 +820,8 @@ public sealed class vSetPt : vToolsCommand
     return resolved;
   }
 
-  private static void CancelPending()
+  private static Result PlaceSelectedGrips(RhinoDoc doc, PendingCurvePick[] picks)
   {
-    if (_pendingIdleHandler != null)
-    {
-      RhinoApp.Idle -= _pendingIdleHandler;
-      _pendingIdleHandler = null;
-    }
-    _pendingGripPicks = null;
-    _pendingDocSerial = 0u;
-  }
-
-  private static void OnIdleLaunch(object? sender, EventArgs e)
-  {
-    // Remove the handler and capture pending data before anything else.
-    if (_pendingIdleHandler != null)
-    {
-      RhinoApp.Idle -= _pendingIdleHandler;
-      _pendingIdleHandler = null;
-    }
-
-    var picks     = _pendingGripPicks;
-    var docSerial = _pendingDocSerial;
-    _pendingGripPicks = null;
-    _pendingDocSerial = 0u;
-
-    if (picks == null || picks.Length == 0) return;
-
-    var doc = RhinoDoc.ActiveDoc;
-    if (doc == null || doc.RuntimeSerialNumber != docSerial) return;
-
     UnselectObjectsAndGrips(doc);
     EnableEditPointsForHiddenEndpointPicks(doc, picks);
 
@@ -852,7 +839,6 @@ public sealed class vSetPt : vToolsCommand
       if (grips == null || grips.Length == 0)
       {
         obj.GripsOn = true;
-        obj.CommitChanges();
         grips = obj.GetGrips();
       }
 
@@ -908,10 +894,39 @@ public sealed class vSetPt : vToolsCommand
       UnselectObjectsAndGrips(doc);
       RestoreGripStates(doc, picks);
       doc.Views.Redraw();
-      return;
+      return Result.Failure;
     }
 
-    Log.Write(Tag, $"  launching -SetPt with {selectedCount} grip(s) selected");
+    PlacementTarget? placement;
+    Result placementResult;
+    try
+    {
+      placement = PickPlacementTarget(doc, picks, out placementResult);
+    }
+    catch (Exception ex)
+    {
+      Log.Write(Tag, $"  placement failed: {ex}");
+      RhinoApp.WriteLine("vSetPt: placement failed; see the diagnostic log.");
+      UnselectObjectsAndGrips(doc);
+      RestoreGripStates(doc, picks);
+      SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
+      doc.Views.Redraw();
+      return Result.Failure;
+    }
+    if (placement == null)
+    {
+      Log.Write(Tag, $"  placement ended without changes; preview restored; result={placementResult}");
+      UnselectObjectsAndGrips(doc);
+      RestoreGripStates(doc, picks);
+      SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
+      doc.Views.Redraw();
+      return placementResult;
+    }
+
+    UnselectObjectsAndGrips(doc);
+    EnableEditPointsForHiddenEndpointPicks(doc, picks);
+    SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
+    Log.Write(Tag, $"  committing -SetPt with {selectedCount} grip(s) selected");
 
     // Snapshot endpoints before SetPt; RunScript result is unreliable in Rhino 9 (true even on Escape).
     var endpointsBefore = picks.ToDictionary(
@@ -928,16 +943,32 @@ public sealed class vSetPt : vToolsCommand
       }
     };
 
+    var completed = false;
+    var commitUndoRecord = doc.UndoRecordingEnabled ? doc.BeginUndoRecord(Tag) : 0;
+    if (doc.UndoRecordingEnabled && commitUndoRecord == 0)
+    {
+      Log.Write(Tag, "  could not start final undo record; SetPt not committed");
+      UnselectObjectsAndGrips(doc);
+      RestoreGripStates(doc, picks);
+      SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
+      doc.Views.Redraw();
+      return Result.Failure;
+    }
     Command.EndCommand += onSetPtEnded;
     try
     {
-      _ = RhinoApp.RunScript(
-        "_-SetPt _XSet=_Yes _YSet=_Yes _ZSet=_Yes _Alignment=_World _Copy=_No", false);
-      Log.Write(Tag, $"  -SetPt returned");
+      var accepted = RhinoApp.RunScript(placement.NativeScript, false);
+      Log.Write(Tag, $"  -SetPt returned accepted={accepted} end_observed={setPtResult.HasValue}");
     }
     finally
     {
       Command.EndCommand -= onSetPtEnded;
+      var undoEnded = true;
+      if (commitUndoRecord != 0)
+      {
+        undoEnded = doc.CurrentUndoRecordSerialNumber == commitUndoRecord &&
+          doc.EndUndoRecord(commitUndoRecord);
+      }
       bool moved = picks.Any(p =>
       {
         if (!endpointsBefore.TryGetValue(p.Id, out var before) || before == Point3d.Unset) return false;
@@ -946,7 +977,7 @@ public sealed class vSetPt : vToolsCommand
         var after = p.IsStart ? c.PointAtStart : c.PointAtEnd;
         return after.DistanceTo(before) > doc.ModelAbsoluteTolerance;
       });
-      bool completed = setPtResult == Result.Success ||
+      completed = setPtResult == Result.Success ||
         (setPtResult == null && moved);
       Log.Write(Tag,
         $"  -SetPt result={setPtResult?.ToString() ?? "Unknown"}" +
@@ -962,12 +993,11 @@ public sealed class vSetPt : vToolsCommand
         SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
       }
       doc.Views.Redraw();
+      if (!undoEnded)
+        throw new InvalidOperationException("Could not finish the committed SetPt undo record.");
     }
 
-    // Silently re-run vSetPt so pressing Enter repeats this command, not -SetPt.
-    _restartingAfterDelegate = true;
-    _ = RhinoApp.RunScript("_vSetPt", false);
-    _restartingAfterDelegate = false;
+    return completed ? Result.Success : setPtResult ?? Result.Failure;
   }
 
   private static void UnselectObjectsAndGrips(RhinoDoc doc)
@@ -998,7 +1028,7 @@ public sealed class vSetPt : vToolsCommand
     foreach (var id in objectIds)
       doc.Objects.FindId(id)?.Select(true);
 
-    var editPointsOn = RhinoApp.RunScript("_EditPtOn _Enter", false);
+    var editPointsOn = RhinoApp.RunScript("_EditPtOn", false);
     Log.Write(Tag,
       $"  edit points for hidden endpoint picks: objects={objectIds.Length}" +
       $" result={editPointsOn}");
@@ -1093,7 +1123,6 @@ public sealed class vSetPt : vToolsCommand
         continue;
 
       obj.GripsOn = pick.GripsWereOn;
-      obj.CommitChanges();
     }
   }
 }

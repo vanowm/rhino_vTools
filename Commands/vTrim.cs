@@ -27,6 +27,8 @@ public sealed class vTrim : vToolsCommand
   private const int HoverCurveSampleCount = 64; // Initial screen-space samples used to locate the cursor along a non-linear curve; 2 or greater.
   private const int HoverCurveRefinementIterations = 10; // Ternary refinements applied around the best sampled curve parameter; zero or greater.
   private const double HoverCurveFallbackSpanDivisor = 192.0; // Domain divisor used when neighbouring screen-pick samples collapse; greater than zero.
+  private const double MinApproximateCrossingAngleDegrees = 5.0; // Minimum tangent angle, in degrees, for accepting a world or projected near-contact outside the strict tolerance.
+  private const int FailedAutoTrimDiagnosticCount = 3; // Number of nearest 3-D curve gaps recorded when a clicked AutoClosest trim has no preview.
 
   private const string OptionsSectionName = "vTrim";
   private const string ExtendAsLineKey = "extendAsLine";
@@ -114,7 +116,7 @@ public sealed class vTrim : vToolsCommand
 
       Log.Write(
         "vTrim",
-        "click mode={0} preview={1} target={2} point=({3:G17},{4:G17},{5:G17}) cutters={6} target_length={7:G17} pick_position={8:G17} removed_length={9:G17} output_lengths={10} preview_failure={11}",
+        "click mode={0} preview={1} target={2} point=({3:G17},{4:G17},{5:G17}) cutters={6} target_length={7:G17} pick_position={8:G17} removed_length={9:G17} output_lengths={10} preview_failure={11} view={12} view_projection={13}",
         pick.ExtendMode ? "extend" : "trim",
         pick.HadValidPreview,
         pick.TargetObject.Id,
@@ -126,7 +128,11 @@ public sealed class vTrim : vToolsCommand
         PickPosition(pick),
         PreviewCurveLength(pick),
         PreviewOutputLengths(pick),
-        string.IsNullOrWhiteSpace(pick.PreviewFailure) ? "none" : pick.PreviewFailure);
+        string.IsNullOrWhiteSpace(pick.PreviewFailure) ? "none" : pick.PreviewFailure,
+        doc.Views.ActiveView?.ActiveViewport.Name ?? "none",
+        AllowViewProjection(doc, cutters.AutoMode));
+      if (cutters.AutoMode && !pick.ExtendMode && pick.PreviewTrimPlan == null)
+        LogFailedAutoTrimContacts(doc, pick.TargetObject, pick.TargetCurve);
 
       var changed = false;
       ActionRecord? record = null;
@@ -984,6 +990,7 @@ public sealed class vTrim : vToolsCommand
     private bool _lastValidExtendMode;
     private TrimPlan? _lastValidTrimPlan;
     private ExtendPlan? _lastValidExtendPlan;
+    private Plane? _lastValidViewPlane;
 
     public void SetHover(RhinoObject? obj, Curve? curve, Point3d point, bool extendMode)
     {
@@ -1059,7 +1066,7 @@ public sealed class vTrim : vToolsCommand
             HoverCurve,
             HoverPoint,
             cutters,
-            allowViewProjection: !_autoMode,
+            allowViewProjection: AllowViewProjection(_doc, _autoMode),
             allowBoundaryExtend: false,
             extendAsLine: ExtendAsLine,
             joinAfterTrim: JoinAfterTrim,
@@ -1084,6 +1091,7 @@ public sealed class vTrim : vToolsCommand
       _lastValidExtendMode = HoverExtendMode;
       _lastValidTrimPlan = CurrentTrimPlan;
       _lastValidExtendPlan = CurrentExtendPlan;
+      _lastValidViewPlane = AllowViewProjection(_doc, _autoMode) ? ActiveViewPlane(_doc) : null;
     }
 
     private void RestoreCachedActionIfApplicable()
@@ -1093,7 +1101,9 @@ public sealed class vTrim : vToolsCommand
           HoverCurve == null ||
           !HoverPoint.IsValid ||
           !_lastValidPoint.IsValid ||
-          HoverExtendMode != _lastValidExtendMode)
+          HoverExtendMode != _lastValidExtendMode ||
+          !Nullable.Equals(_lastValidViewPlane,
+            AllowViewProjection(_doc, _autoMode) ? ActiveViewPlane(_doc) : null))
         return;
 
       if (HoverExtendMode)
@@ -1711,6 +1721,12 @@ public sealed class vTrim : vToolsCommand
     return unique;
   }
 
+  private static bool AllowViewProjection(RhinoDoc doc, bool autoMode)
+  {
+    var viewport = doc.Views.ActiveView?.ActiveViewport;
+    return !autoMode || (viewport != null && viewport.IsParallelProjection && viewport.IsPlanView);
+  }
+
   private static Plane? ActiveViewPlane(RhinoDoc doc)
   {
     try
@@ -1740,7 +1756,12 @@ public sealed class vTrim : vToolsCommand
 
     try
     {
-      return Curve.ProjectToPlane(curve, plane.Value);
+      // Project the NURBS form so intersection parameters can be mapped back exactly.
+      var projected = curve.ToNurbsCurve();
+      if (projected != null && projected.Transform(Transform.PlanarProjection(plane.Value)))
+        return projected;
+      projected?.Dispose();
+      return null;
     }
     catch
     {
@@ -1877,6 +1898,7 @@ public sealed class vTrim : vToolsCommand
     double endTol,
     bool includeTargetEndpoints = false)
   {
+    double strictTolerance = StrictCurveContactTolerance(doc, targetCurve, cutterCurve);
     var parameters = CollectInteriorCurveCurveParams(
       targetCurve,
       cutterCurve,
@@ -1885,9 +1907,33 @@ public sealed class vTrim : vToolsCommand
       endTol,
       doc,
       includeTargetEndpoints,
-      StrictCurveContactTolerance(doc, targetCurve, cutterCurve));
+      strictTolerance);
 
     double contactTolerance = Math.Max(RhinoMath.ZeroTolerance, doc.ModelAbsoluteTolerance);
+    if (parameters.Count == 0 && strictTolerance < contactTolerance)
+    {
+      var approximate = CollectInteriorCurveCurveParams(
+        targetCurve, cutterCurve, d0, d1, endTol, doc,
+        includeTargetEndpoints, contactTolerance);
+      foreach (double parameter in approximate)
+      {
+        var targetPoint = targetCurve.PointAt(parameter);
+        if (!cutterCurve.ClosestPoint(targetPoint, out double cutterParameter))
+          continue;
+        double gap = targetPoint.DistanceTo(cutterCurve.PointAt(cutterParameter));
+        if (gap > contactTolerance)
+          continue;
+        var targetTangent = targetCurve.TangentAt(parameter);
+        var cutterTangent = cutterCurve.TangentAt(cutterParameter);
+        if (!targetTangent.Unitize() || !cutterTangent.Unitize())
+          continue;
+        double angle = Vector3d.VectorAngle(targetTangent, cutterTangent);
+        angle = Math.Min(angle, Math.PI - angle);
+        if (gap <= strictTolerance ||
+            angle >= RhinoMath.ToRadians(MinApproximateCrossingAngleDegrees))
+          parameters.Add(parameter);
+      }
+    }
     double tangentTolerance = RhinoMath.ToRadians(2.0);
     foreach (var endpoint in new[]
     {
@@ -1941,45 +1987,41 @@ public sealed class vTrim : vToolsCommand
     return best;
   }
 
-  private static List<double> ParamsClosestSource(
+  private static List<double> CollectViewContactParams(
     RhinoDoc doc,
     Curve targetCurve,
     Curve cutterCurve,
-    Point3d pickPoint,
     double d0,
     double d1,
     double endTol,
-    Plane? viewPlane)
+    Plane? viewPlane,
+    bool includeTargetEndpoints = false)
   {
     var worldParams = CollectCurveContactParams(
-      doc, targetCurve, cutterCurve, d0, d1, endTol);
+      doc, targetCurve, cutterCurve, d0, d1, endTol, includeTargetEndpoints);
 
     var viewParams = new List<double>();
-    var targetProj = ProjectCurveToPlane(targetCurve, viewPlane);
-    var cutterProj = ProjectCurveToPlane(cutterCurve, viewPlane);
+    using var targetProj = ProjectCurveToPlane(targetCurve, viewPlane);
+    using var cutterProj = ProjectCurveToPlane(cutterCurve, viewPlane);
     if (targetProj != null && cutterProj != null && TryGetDomain(targetProj, out var p0, out var p1))
     {
       var projEndTol = Math.Max(1.0e-9, Math.Abs(p1 - p0) * 1.0e-9);
-      var projRaw = CollectInteriorCurveCurveParams(targetProj, cutterProj, p0, p1, projEndTol, doc);
+      var projRaw = CollectCurveContactParams(
+        doc, targetProj, cutterProj, p0, p1, projEndTol, includeTargetEndpoints);
 
       foreach (var tp in projRaw)
       {
-        double tOrig;
-        if (Math.Abs(p1 - p0) <= 1.0e-12)
-        {
-          tOrig = d0;
-        }
-        else
-        {
-          var s = (tp - p0) / (p1 - p0);
-          s = Math.Max(0.0, Math.Min(1.0, s));
-          tOrig = d0 + ((d1 - d0) * s);
-        }
+        if (!targetCurve.GetCurveParameterFromNurbsFormParameter(tp, out double tOrig))
+          continue;
 
         if (targetCurve.IsClosed)
         {
           if (tOrig >= d0 - endTol && tOrig <= d1 + endTol)
             viewParams.Add(tOrig >= d1 - endTol ? d0 : Math.Max(d0, tOrig));
+        }
+        else if (includeTargetEndpoints && tOrig >= d0 - endTol && tOrig <= d1 + endTol)
+        {
+          viewParams.Add(Math.Max(d0, Math.Min(d1, tOrig)));
         }
         else if (tOrig > d0 + endTol && tOrig < d1 - endTol)
         {
@@ -1988,35 +2030,7 @@ public sealed class vTrim : vToolsCommand
       }
     }
 
-    if (worldParams.Count > 0 && viewParams.Count > 0)
-    {
-      var isLinear = false;
-      try
-      {
-        isLinear = targetCurve.IsLinear(doc.ModelAbsoluteTolerance);
-      }
-      catch
-      {
-      }
-
-      if (isLinear)
-      {
-        var merged = worldParams.Concat(viewParams);
-        return UniqueParams(merged, Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-8));
-      }
-
-      var worldD = NearestPickDistanceForParams(targetCurve, pickPoint, worldParams);
-      var viewD = NearestPickDistanceForParams(targetCurve, pickPoint, viewParams);
-      if (!worldD.HasValue)
-        return viewParams;
-      if (!viewD.HasValue)
-        return worldParams;
-      return worldD.Value <= viewD.Value ? worldParams : viewParams;
-    }
-
-    if (worldParams.Count > 0)
-      return worldParams;
-    return viewParams;
+    return UniqueParams(worldParams.Concat(viewParams), Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-8));
   }
 
   private static List<double> CollectSplitParameters(
@@ -2036,7 +2050,7 @@ public sealed class vTrim : vToolsCommand
     foreach (var cutter in cutterCurves)
     {
       parameters.AddRange(allowViewProjection
-        ? ParamsClosestSource(doc, targetCurve, cutter, pickPoint, d0, d1, endTol, viewPlane)
+        ? CollectViewContactParams(doc, targetCurve, cutter, d0, d1, endTol, viewPlane)
         : CollectCurveContactParams(
           doc, targetCurve, cutter, d0, d1, endTol));
     }
@@ -2560,15 +2574,18 @@ public sealed class vTrim : vToolsCommand
 
     var endTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-9);
     var ranked = new List<(double Distance, Curve Curve, List<double> Parameters)>();
+    var viewPlane = AllowViewProjection(doc, autoMode: true) ? ActiveViewPlane(doc) : null;
 
     foreach (var (obj, curve) in EnumerateDocCurves(doc))
     {
       if (obj.Id == targetId)
         continue;
 
-      var paramsForCurve = CollectCurveContactParams(
-        doc, targetCurve, curve, d0, d1, endTol,
-        includeTargetEndpoints: true);
+      var paramsForCurve = viewPlane.HasValue
+        ? CollectViewContactParams(doc, targetCurve, curve, d0, d1, endTol, viewPlane,
+          includeTargetEndpoints: true)
+        : CollectCurveContactParams(doc, targetCurve, curve, d0, d1, endTol,
+          includeTargetEndpoints: true);
       if (paramsForCurve.Count == 0)
         continue;
 
@@ -2613,6 +2630,32 @@ public sealed class vTrim : vToolsCommand
     if (!ReferenceEquals(after.Curve, before.Curve))
       selected.Add(after.Curve);
     return selected;
+  }
+
+  private static void LogFailedAutoTrimContacts(
+    RhinoDoc doc, RhinoObject target, Curve targetCurve)
+  {
+    var gaps = new List<(Guid Id, double Distance)>();
+    foreach (var (candidate, curve) in EnumerateDocCurves(doc))
+    {
+      if (candidate.Id == target.Id)
+        continue;
+      try
+      {
+        if (targetCurve.ClosestPoints(curve, out Point3d onTarget, out Point3d onCutter))
+          gaps.Add((candidate.Id, onTarget.DistanceTo(onCutter)));
+      }
+      catch (Exception ex)
+      {
+        Log.Write("vTrim", $"auto contact diagnostic skipped cutter={candidate.Id}: {ex.Message}");
+      }
+    }
+    var nearest = gaps.OrderBy(item => item.Distance)
+      .Take(FailedAutoTrimDiagnosticCount)
+      .Select(item => $"{item.Id}:{item.Distance:G6}");
+    Log.Write("vTrim", $"auto contact target={target.Id} " +
+      $"modelTolerance={doc.ModelAbsoluteTolerance:G6} " +
+      $"nearest3dGaps=[{string.Join(", ", nearest)}]");
   }
 
   private static bool TryGetExtendAnchor(Curve curve, Point3d pickPoint, out CurveEnd movingEnd, out Point3d anchor)
@@ -2915,16 +2958,6 @@ public sealed class vTrim : vToolsCommand
     return bestPoint.IsValid && double.IsFinite(bestDistance);
   }
 
-  private static double MapProjectedToLineParameter(double projectedT, double projectedStart, double projectedEnd, double lineStart, double lineEnd)
-  {
-    if (Math.Abs(projectedEnd - projectedStart) <= 1.0e-12)
-      return lineStart;
-
-    var s = (projectedT - projectedStart) / (projectedEnd - projectedStart);
-    s = Math.Max(0.0, Math.Min(1.0, s));
-    return lineStart + ((lineEnd - lineStart) * s);
-  }
-
   private static bool TryClosestForwardHit(
     RhinoDoc doc,
     Point3d anchor,
@@ -2945,10 +2978,10 @@ public sealed class vTrim : vToolsCommand
     var rayLength = Math.Max(10000.0, 100000.0 * doc.ModelAbsoluteTolerance);
 
     var line = new Line(anchor, anchor + (direction * rayLength));
-    var lineCurve = new LineCurve(line);
+    using var lineCurve = new LineCurve(line);
 
     var viewPlane = allowViewProjection ? ActiveViewPlane(doc) : null;
-    var projectedLine = allowViewProjection ? ProjectCurveToPlane(lineCurve, viewPlane) : null;
+    using var projectedLine = allowViewProjection ? ProjectCurveToPlane(lineCurve, viewPlane) : null;
     var useViewportFallback = candidateIds != null && candidateIds.Count > 0;
     var viewport = doc.Views.ActiveView?.ActiveViewport;
 
@@ -2963,9 +2996,7 @@ public sealed class vTrim : vToolsCommand
       var candidateBest = double.PositiveInfinity;
       var candidatePoint = Point3d.Unset;
 
-      var worldTolerance = allowViewProjection
-        ? doc.ModelAbsoluteTolerance
-        : StrictCurveContactTolerance(doc, lineCurve, curve);
+      var worldTolerance = StrictCurveContactTolerance(doc, lineCurve, curve);
       var worldEvents = Rhino.Geometry.Intersect.Intersection.CurveCurve(
         lineCurve,
         curve,
@@ -3000,17 +3031,19 @@ public sealed class vTrim : vToolsCommand
 
       if (projectedLine != null)
       {
-        var projectedCurve = ProjectCurveToPlane(curve, viewPlane);
+        using var projectedCurve = ProjectCurveToPlane(curve, viewPlane);
         if (projectedCurve != null)
         {
-          var projEvents = Rhino.Geometry.Intersect.Intersection.CurveCurve(projectedLine, projectedCurve, doc.ModelAbsoluteTolerance, doc.ModelAbsoluteTolerance);
-          if (projEvents != null && TryGetDomain(projectedLine, out var p0, out var p1) && TryGetDomain(lineCurve, out var l0, out var l1))
+          var projectedTolerance = StrictCurveContactTolerance(doc, projectedLine, projectedCurve);
+          var projectedEvents = Rhino.Geometry.Intersect.Intersection.CurveCurve(
+            projectedLine, projectedCurve, projectedTolerance, projectedTolerance);
+          if (projectedEvents != null)
           {
-            foreach (var ev in projEvents)
+            foreach (var ev in projectedEvents)
             {
-              if (ev.IsPoint)
+              if (ev.IsPoint &&
+                  lineCurve.GetCurveParameterFromNurbsFormParameter(ev.ParameterA, out double tLine))
               {
-                var tLine = MapProjectedToLineParameter(ev.ParameterA, p0, p1, l0, l1);
                 var point = lineCurve.PointAt(tLine);
                 if (IsForwardHit(anchor, direction, point, minForward, pathTol, out var dist) && dist < candidateBest)
                 {
@@ -3018,14 +3051,13 @@ public sealed class vTrim : vToolsCommand
                   candidatePoint = point;
                 }
               }
-              else if (ev.IsOverlap)
+              else if (ev.IsOverlap &&
+                       lineCurve.GetCurveParameterFromNurbsFormParameter(ev.OverlapA.T0, out double t0) &&
+                       lineCurve.GetCurveParameterFromNurbsFormParameter(ev.OverlapA.T1, out double t1))
               {
-                var tLine0 = MapProjectedToLineParameter(ev.OverlapA.T0, p0, p1, l0, l1);
-                var tLine1 = MapProjectedToLineParameter(ev.OverlapA.T1, p0, p1, l0, l1);
-                var overlapPoint0 = lineCurve.PointAt(tLine0);
-                var overlapPoint1 = lineCurve.PointAt(tLine1);
-
-                if (TryNearestForwardHitFromOverlap(anchor, direction, overlapPoint0, overlapPoint1, minForward, pathTol, out var overlapPoint, out var overlapDistance) && overlapDistance < candidateBest)
+                if (TryNearestForwardHitFromOverlap(
+                      anchor, direction, lineCurve.PointAt(t0), lineCurve.PointAt(t1),
+                      minForward, pathTol, out var overlapPoint, out var overlapDistance) && overlapDistance < candidateBest)
                 {
                   candidateBest = overlapDistance;
                   candidatePoint = overlapPoint;
@@ -3228,7 +3260,7 @@ public sealed class vTrim : vToolsCommand
 
       try
       {
-        var projectedDriver = ProjectCurveToPlane(driver, viewPlane);
+        using var projectedDriver = ProjectCurveToPlane(driver, viewPlane);
         var projectedEndpoint = viewPlane.Value.ClosestPoint(endpoint);
         if (projectedDriver != null &&
             projectedDriver.ClosestPoint(projectedEndpoint, out var projectedParameter))
@@ -3441,7 +3473,7 @@ public sealed class vTrim : vToolsCommand
       direction,
       targetObj.Id,
       candidateIds,
-      allowViewProjection: !autoMode,
+      allowViewProjection: AllowViewProjection(doc, autoMode),
       out var hitPoint,
       out var extensionDistance);
     if (!hasForwardHit)

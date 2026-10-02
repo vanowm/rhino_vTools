@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using Rhino;
@@ -13,24 +14,31 @@ namespace vTools.Commands;
 
 /// <summary>Transparently toggles perspective/plan, toggles projection, or activates a standard view.</summary>
 [CommandStyle(Style.Transparent | Style.NotUndoable)]
-public sealed class vTogglePerspectivePlan : vToolsCommand
+public sealed class vToggleView : vToolsCommand
 {
   // Defaults and view conventions
   private const ViewMode DefaultMode = ViewMode.Toggle; // Toggle follows the current tab; Projection toggles its projection only; named modes force a view.
+  private const bool DefaultNewTab = false; // true creates missing named model-view tabs; false changes an existing view instead.
+  private const bool FloatingNewView = false; // true creates a floating viewport; false creates a docked model-view tab.
+  private static readonly Rectangle DefaultNewViewBounds = new(0, 0, 800, 600); // Positive pixel bounds used when the active view has no usable client rectangle.
   private const string PerspectiveViewName = "Perspective"; // View-tab name matched after trimming, without case sensitivity.
   private const double PerspectiveLensLength = 50.0; // Positive focal length in millimeters when this viewport has no saved valid perspective lens.
   private const bool SymmetricFrustum = true; // true centers the projection frustum; false allows an asymmetric frustum.
   private const bool UpdateConstructionPlane = true; // true aligns the CPlane when setting a standard/plan view; false preserves the current CPlane.
   private static readonly Plane DefaultPlanPlane = Plane.WorldXY; // World XY fallback if the viewport has no valid construction plane.
 
-  private const string Tag = "vTogglePerspectivePlan";
+  private const string Tag = "vToggleView";
+  private const string NewTabKey = "newTab";
   private static readonly ConditionalWeakTable<RhinoDoc, Dictionary<Guid, double>> PerspectiveLenses = new();
   private static readonly ConditionalWeakTable<RhinoDoc, HashSet<Guid>> PlanFirstViews = new();
+  private bool _newTab = DefaultNewTab;
 
   public override string EnglishName => Tag;
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
+    _newTab = ToolsOptionStore.Read(Tag, section =>
+      ToolsOptionStore.TryGetBool(section, NewTabKey, out var value) ? value : DefaultNewTab);
     var requested = DefaultMode;
     if (mode == RunMode.Scripted)
     {
@@ -43,13 +51,37 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
     {
       var current = doc.Views.ActiveView;
       var view = current;
+      var createdTab = false;
       if (requested != ViewMode.Projection)
       {
         var views = doc.Views.GetStandardRhinoViews() ?? [];
-        view = requested is ViewMode.Toggle or ViewMode.Plan
-          ? FindView(views, current, PerspectiveViewName) ??
-            views.FirstOrDefault(candidate => candidate.ActiveViewport.IsPerspectiveProjection) ?? current
-          : FindView(views, current, requested.ToString()) ?? current;
+        var name = requested is ViewMode.Toggle or ViewMode.Plan ? PerspectiveViewName : requested.ToString();
+        view = FindView(views, current, name);
+        if (view == null && _newTab)
+        {
+          var bounds = current?.ClientRectangle ?? DefaultNewViewBounds;
+          if (bounds.Width <= 0 || bounds.Height <= 0)
+            bounds = DefaultNewViewBounds;
+          var projection = requested is ViewMode.Toggle or ViewMode.Plan or ViewMode.Perspective
+            ? DefinedViewportProjection.Perspective : GetStandardProjection(requested);
+          view = doc.Views.Add(name, projection, bounds, FloatingNewView);
+          if (view == null)
+          {
+            Log.Write(Tag, $"could not create model-view tab; requested={requested} name={name}");
+            RhinoApp.WriteLine($"{Tag}: could not create the {name} tab.");
+            return Result.Failure;
+          }
+          createdTab = true;
+          if (requested is ViewMode.Toggle or ViewMode.Plan or ViewMode.Perspective &&
+              current?.ActiveViewport.GetConstructionPlane() is { } constructionPlane && constructionPlane.Plane.IsValid)
+            view.ActiveViewport.SetConstructionPlane(constructionPlane);
+        }
+        else if (view == null)
+        {
+          view = requested is ViewMode.Toggle or ViewMode.Plan
+            ? views.FirstOrDefault(candidate => candidate.ActiveViewport.IsPerspectiveProjection) ?? current
+            : current;
+        }
       }
       var viewport = view?.ActiveViewport;
       if (view == null || viewport == null)
@@ -66,12 +98,12 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
           ? ViewMode.Perspective
           : ViewMode.Plan
         : requested;
-      var existingStandardView = requested is not (ViewMode.Toggle or ViewMode.Projection or ViewMode.Plan or ViewMode.Perspective) &&
-                                 MatchesView(view, requested.ToString());
+      var standardTab = requested is not (ViewMode.Toggle or ViewMode.Projection or ViewMode.Plan or ViewMode.Perspective) &&
+                        MatchesView(view, requested.ToString());
 
       if (view != current)
         doc.Views.ActiveView = view;
-      var applied = existingStandardView || ApplyProjection(doc, viewport, resolved);
+      var applied = standardTab || ApplyProjection(doc, viewport, resolved);
       if (!applied)
       {
         Log.Write(Tag, $"view change failed; requested={requested} resolved={resolved} view={viewport.Name}");
@@ -86,7 +118,7 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
 
       view.Redraw();
       Log.Write(Tag,
-        $"requested={requested} resolved={resolved} view={viewport.Name} existing_tab={existingStandardView} perspective={viewport.IsPerspectiveProjection} plan={viewport.IsPlanView}" +
+        $"requested={requested} resolved={resolved} view={viewport.Name} existing_tab={standardTab && !createdTab} created_tab={createdTab} new_tab={_newTab} perspective={viewport.IsPerspectiveProjection} plan={viewport.IsPlanView}" +
         (viewport.IsPerspectiveProjection ? $" lens_mm={viewport.Camera35mmLensLength:G17}" : ""));
       RhinoApp.WriteLine(requested == ViewMode.Projection
         ? $"Projection: {(viewport.IsPerspectiveProjection ? "Perspective" : "Parallel")}"
@@ -101,7 +133,7 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
     }
   }
 
-  private static Result GetRequestedMode(out ViewMode requested)
+  private Result GetRequestedMode(out ViewMode requested)
   {
     requested = DefaultMode;
     using var getter = new GetOption();
@@ -111,16 +143,27 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
     var options = new Dictionary<int, ViewMode>();
     foreach (var choice in Enum.GetValues<ViewMode>())
       options[getter.AddOption(choice.ToString())] = choice;
+    var newTab = new OptionToggle(_newTab, "No", "Yes");
+    var newTabOption = getter.AddOptionToggle("NewTab", ref newTab);
 
-    var result = getter.Get();
-    if (getter.CommandResult() != Result.Success)
-      return getter.CommandResult();
-    if (result == GetResult.Nothing)
-      return Result.Success;
-    if (result == GetResult.Option && options.TryGetValue(getter.Option().Index, out requested))
-      return Result.Success;
-
-    return Result.Failure;
+    while (true)
+    {
+      var result = getter.Get();
+      if (getter.CommandResult() != Result.Success)
+        return getter.CommandResult();
+      if (result == GetResult.Nothing)
+        return Result.Success;
+      if (result != GetResult.Option)
+        return Result.Failure;
+      var option = getter.Option().Index;
+      if (option == newTabOption)
+      {
+        _newTab = newTab.CurrentValue;
+        ToolsOptionStore.Update(Tag, section => section[NewTabKey] = _newTab);
+        continue;
+      }
+      return options.TryGetValue(option, out requested) ? Result.Success : Result.Failure;
+    }
   }
 
   private static RhinoView? FindView(IEnumerable<RhinoView> views, RhinoView? current, string name) =>
@@ -159,7 +202,11 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
              viewport.SetToPlanView(plane.Origin, plane.XAxis, plane.YAxis, UpdateConstructionPlane);
     }
 
-    var projection = mode switch
+    return viewport.SetProjection(GetStandardProjection(mode), null, UpdateConstructionPlane);
+  }
+
+  private static DefinedViewportProjection GetStandardProjection(ViewMode mode) =>
+    mode switch
     {
       ViewMode.Top => DefinedViewportProjection.Top,
       ViewMode.Bottom => DefinedViewportProjection.Bottom,
@@ -169,8 +216,6 @@ public sealed class vTogglePerspectivePlan : vToolsCommand
       ViewMode.Right => DefinedViewportProjection.Right,
       _ => throw new ArgumentOutOfRangeException(nameof(mode))
     };
-    return viewport.SetProjection(projection, null, UpdateConstructionPlane);
-  }
 
   private enum ViewMode
   {

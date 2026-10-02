@@ -218,6 +218,9 @@
   "vTogglePerpGumball": {
     "enabled": false
   },
+  "vToggleView": {
+    "newTab": false
+  },
   "vTrim": {
     "extendAsLine": true,
     "joinAfterTrim": true

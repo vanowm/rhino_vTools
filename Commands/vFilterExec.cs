@@ -7,6 +7,7 @@ using Rhino.Commands;
 using Rhino.DocObjects;
 using Rhino.Input;
 using Rhino.Input.Custom;
+using Rhino.UI;
 using Rhino.UI.DialogPanels;
 
 namespace vTools.Commands;
@@ -431,6 +432,7 @@ public sealed class vFilterExec : vToolsCommand
     Command.EndCommand -= OnDelegatedCommandEnd;
     RestoreLayer(execution);
     RestoreFilter(execution.PreviousState);
+    RestoreSelectedPanels(execution.SelectedPanels);
     Log.Write(Tag, $"filter restored reason={reason}");
 
     if (execution.HasStarted)
@@ -466,6 +468,45 @@ public sealed class vFilterExec : vToolsCommand
     }
   }
 
+  private static SelectedPanel[] CaptureSelectedPanels()
+  {
+    try
+    {
+      return Panels.GetOpenPanelIds()
+        .Where(id => Panels.IsPanelVisible(id, isSelectedTab: true))
+        .Select(id => new SelectedPanel(id, Panels.PanelDockBar(id)))
+        .ToArray();
+    }
+    catch (Exception ex)
+    {
+      Log.Write(Tag, $"panel capture failed: {ex.Message}");
+      return [];
+    }
+  }
+
+  private static void RestoreSelectedPanels(IEnumerable<SelectedPanel> selectedPanels)
+  {
+    foreach (var panel in selectedPanels)
+    {
+      try
+      {
+        // Do not reopen closed panels or move tabs the user rearranged during the command.
+        if (!Panels.IsPanelVisible(panel.PanelId) || Panels.IsPanelVisible(panel.PanelId, isSelectedTab: true) ||
+            Panels.PanelDockBar(panel.PanelId) != panel.DockBarId)
+          continue;
+
+        if (panel.DockBarId == Guid.Empty)
+          Panels.OpenPanel(panel.PanelId);
+        else if (Panels.OpenPanel(panel.DockBarId, panel.PanelId, makeSelectedPanel: true) == Guid.Empty)
+          throw new InvalidOperationException($"Could not reactivate panel '{panel.PanelId}'.");
+      }
+      catch (Exception ex)
+      {
+        Log.Write(Tag, $"panel restore failed: {ex.Message}");
+      }
+    }
+  }
+
   private static void ApplyLayer(RhinoDoc doc, string layerName, ActiveExecution execution)
   {
     if (LayerSelector.IsCurrentLayerValue(layerName, DefaultLayer))
@@ -476,10 +517,29 @@ public sealed class vFilterExec : vToolsCommand
       throw new InvalidOperationException($"Layer '{layerName}' was not found.");
 
     var layer = doc.Layers[index];
-    if (layer.IsLocked || !layer.IsVisible || layer.IsReference)
-      throw new InvalidOperationException($"Layer '{layerName}' must be visible, unlocked, and editable.");
+    var layerLocks = new List<LayerLockState>();
+    for (var ancestor = layer; ancestor != null; ancestor = doc.Layers.FindId(ancestor.ParentLayerId))
+    {
+      if (ancestor.IsDeleted || !ancestor.IsVisible || ancestor.IsReference)
+        throw new InvalidOperationException($"Layer '{ancestor.FullPath}' must be visible and editable.");
+
+      if (ancestor.IsLocked || ancestor.GetPersistentLocking())
+        layerLocks.Add(new(ancestor.Id, ancestor.IsLocked, ancestor.GetPersistentLocking()));
+      if (ancestor.ParentLayerId == Guid.Empty)
+        break;
+    }
 
     execution.PreviousLayerId = doc.Layers.CurrentLayer.Id;
+    execution.LayerLocks.AddRange(layerLocks);
+    // Unlock parents first so inherited locks clear before making the destination current.
+    foreach (var state in layerLocks.AsEnumerable().Reverse())
+    {
+      var unlocked = doc.Layers.FindId(state.LayerId)!;
+      unlocked.IsLocked = false;
+      unlocked.SetPersistentLocking(false);
+      if (!doc.Layers.Modify(unlocked, unlocked.Index, quiet: true))
+        throw new InvalidOperationException($"Could not unlock layer '{unlocked.FullPath}'.");
+    }
     if (!doc.Layers.SetCurrentLayerIndex(index, quiet: true))
       throw new InvalidOperationException($"Could not make layer '{layerName}' current.");
 
@@ -491,15 +551,15 @@ public sealed class vFilterExec : vToolsCommand
     if (execution.PreviousLayerId == Guid.Empty)
       return;
 
+    var doc = RhinoDoc.FromRuntimeSerialNumber(execution.DocumentSerialNumber);
+    if (doc == null)
+    {
+      Log.Write(Tag, $"layer restore skipped; document={execution.DocumentSerialNumber} closed");
+      return;
+    }
+
     try
     {
-      var doc = RhinoDoc.FromRuntimeSerialNumber(execution.DocumentSerialNumber);
-      if (doc == null)
-      {
-        Log.Write(Tag, $"layer restore skipped; document={execution.DocumentSerialNumber} closed");
-        return;
-      }
-
       var previousLayer = doc.Layers.FindId(execution.PreviousLayerId);
       if (previousLayer == null || previousLayer.IsDeleted ||
           !doc.Layers.SetCurrentLayerIndex(previousLayer.Index, quiet: true))
@@ -513,6 +573,26 @@ public sealed class vFilterExec : vToolsCommand
     {
       Log.Write(Tag, $"layer restore failed: {ex.Message}");
       RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
+    }
+
+    // Restore children before parents, preserving how they behave when a parent is later unlocked.
+    foreach (var state in execution.LayerLocks)
+    {
+      try
+      {
+        var layer = doc.Layers.FindId(state.LayerId);
+        if (layer == null || layer.IsDeleted)
+          continue;
+        layer.IsLocked = state.IsLocked;
+        layer.SetPersistentLocking(state.PersistentLocking);
+        if (!doc.Layers.Modify(layer, layer.Index, quiet: true))
+          throw new InvalidOperationException($"Could not restore the lock on layer '{layer.FullPath}'.");
+      }
+      catch (Exception ex)
+      {
+        Log.Write(Tag, $"layer lock restore failed: {ex.Message}");
+        RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
+      }
     }
   }
 
@@ -559,6 +639,9 @@ public sealed class vFilterExec : vToolsCommand
     string LayerName,
     uint DocumentSerialNumber);
 
+  private readonly record struct LayerLockState(Guid LayerId, bool IsLocked, bool PersistentLocking);
+  private readonly record struct SelectedPanel(Guid PanelId, Guid DockBarId);
+
   private sealed class ActiveExecution
   {
     public ActiveExecution(SelectionFilterSettingsState previousState, uint documentSerialNumber)
@@ -568,10 +651,12 @@ public sealed class vFilterExec : vToolsCommand
     }
 
     public SelectionFilterSettingsState PreviousState { get; }
+    public SelectedPanel[] SelectedPanels { get; } = CaptureSelectedPanels();
     public bool HasStarted { get; set; }
     public Guid CommandId { get; set; }
     public uint DocumentSerialNumber { get; }
     public Guid PreviousLayerId { get; set; }
+    public List<LayerLockState> LayerLocks { get; } = new();
   }
 
   private readonly record struct FilterSelection(

@@ -434,8 +434,8 @@ a:active { text-decoration: none; }
 <p>Toggles a monitor that auto-orients the gumball perpendicular to selected grips.</p>
 </li>
 <li class="command-option" type="number">
-<h5><a href="#vtoggleperspectiveplan">vTogglePerspectivePlan</a></h5>
-<p>Toggles perspective/CPlane plan or the current viewport&#39;s projection, or activates a standard view without interrupting another command.</p>
+<h5><a href="#vtoggleview">vToggleView</a></h5>
+<p>Toggles perspective/CPlane plan or projection, or activates a standard view with optional tab creation without interrupting another command.</p>
 </li>
 <li class="command-option" type="number">
 <h5><a href="#vtrim">vTrim</a></h5>
@@ -912,18 +912,19 @@ a:active { text-decoration: none; }
 <ol>
 <li>Enter the command to execute.</li>
 <li>Choose one filter or enter a comma-separated combination.</li>
-<li>The command runs with that filter and optional temporary current layer. The previous filter and current layer are restored when it finishes, is canceled, or fails.</li>
+<li>The command runs with that filter and optional temporary current layer. The chosen layer and any locked parent layers are unlocked for the command. The previous filter, current layer, and layer lock states are restored when it finishes, is canceled, or fails.</li>
 </ol>
 
 </div>
 <p class="Dialog_Box_Title">Command-line options</p>
 <div class="command-option">
 <h5>Layer</h5>
-<p>available at both prompts and reads its value from the command line, without opening a layer picker. Enter an existing visible, unlocked, editable layer, including a nested layer by its full path. The default <code>*Current*</code>, <code>.</code> or <code>*</code> leaves the current layer unchanged. Layer choices apply only to this launch and its repeats; a new run defaults to <code>*Current*</code>.</p>
+<p>available at both prompts and reads its value from the command line, without opening a layer picker. Enter an existing visible, editable layer, including a nested layer by its full path. Locked layers and their locked parents are temporarily unlocked; their original locking behavior is restored afterward. Hidden and reference layers cannot be used. The default <code>*Current*</code>, <code>.</code> or <code>*</code> leaves the current layer unchanged. Layer choices apply only to this launch and its repeats; a new run defaults to <code>*Current*</code>.</p>
 </div>
 <h3>Notes</h3>
 <ul>
 <li><code>vFilterExec</code> is transparent and remains Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/repeat.htm">Repeat</a> command after the delegated command ends. Repeat reuses the command, filter, and layer choice, restoring the layer that was current before each repeat.</li>
+<li>If Rhino switches panel tabs while the filter is active, the previously selected tabs are restored when the command finishes, is canceled, or fails. Panels closed or moved during the command are left alone.</li>
 <li>Aliases and toolbar macros can use <code>! _vFilterExec _Layer &quot;Reference&quot; #_Line Curves</code> or <code>! _vFilterExec _Layer &quot;Surface&quot; #_Sweep2 Curve</code>; a leading hyphen is optional. Use <code>All</code> instead of <code>Curves</code> to allow every object type. Existing macros such as <code>! _vFilterExec #_Sweep2 Curve</code> remain valid.</li>
 </ul>
 <p>Filters: <code>All</code>, <code>Points</code>, <code>PointClouds</code>, <code>Curves</code>, <code>Surfaces</code>, <code>Polysurfaces</code>, <code>Meshes</code>, <code>SubDs</code>, <code>Extrusions</code>, <code>Annotations</code>, <code>Hatches</code>, <code>Blocks</code>, <code>Lights</code>, <code>Grips</code>, <code>Edges</code>, <code>Faces</code>, and <code>Vertices</code>. Singular forms and aliases such as <code>Text</code>, <code>Dimensions</code>, <code>ControlPoints</code>, and <code>Instances</code> are accepted. Combine filters with <code>,</code>, <code>+</code>, <code>|</code>, or <code>;</code>.</p>
@@ -2253,43 +2254,47 @@ a:active { text-decoration: none; }
 <h2>See also</h2>
 <p><a href="#vhelp">vHelp</a></p>
 </article>
-<article class="help-topic" data-topic="vtoggleperspectiveplan">
-<h1>vTogglePerspectivePlan</h1>
-<p class="command-description">The vTogglePerspectivePlan command toggles perspective/CPlane plan or the current viewport&#39;s projection, or activates a standard view without interrupting another command.</p>
+<article class="help-topic" data-topic="vtoggleview">
+<h1>vToggleView</h1>
+<p class="command-description">The vToggleView command toggles perspective/CPlane plan or projection, or activates a standard view with optional tab creation without interrupting another command.</p>
 <div class="tutorialblock">
 <h4>Steps</h4>
 <ol>
 <li>The plain command switches immediately. From the <code>Perspective</code> tab, it enters CPlane plan first unless the viewport is already in parallel plan, then returns to perspective. After a <code>Projection</code> change, the next plain toggle always enters plan first. From another tab, it activates the <code>Perspective</code> tab and shows its CPlane in plan.</li>
-<li>To choose a mode explicitly, use the hyphenated form, for example <code>_-vTogglePerspectivePlan _Plan</code>, <code>_-vTogglePerspectivePlan _Perspective</code>, <code>_-vTogglePerspectivePlan _Projection</code>, or <code>_-vTogglePerspectivePlan _Top</code>. The choice applies immediately; Enter uses <code>Toggle</code>.</li>
+<li>To choose a mode explicitly, use the hyphenated form, for example <code>_-vToggleView _Plan</code>, <code>_-vToggleView _Perspective</code>, <code>_-vToggleView _Projection</code>, or <code>_-vToggleView _Top</code>. The choice applies immediately; Enter uses <code>Toggle</code>. To create missing tabs, set <code>NewTab</code> before choosing a mode, for example <code>_-vToggleView _NewTab=_Yes _Right</code>.</li>
 </ol>
 
 </div>
 <p class="Dialog_Box_Title">Command-line options</p>
 <div class="command-option">
 <h5>Toggle</h5>
-<p>default behavior, without saving a mode preference. An oblique parallel view enters plan rather than perspective; after a <code>Projection</code> change, plan also takes priority on the next toggle. If no tab named <code>Perspective</code> exists, the command uses the first perspective-projected model view, then the current view as a fallback.</p>
+<p>default behavior, without saving a mode preference. An oblique parallel view enters plan rather than perspective; after a <code>Projection</code> change, plan also takes priority on the next toggle. If no tab named <code>Perspective</code> exists and <code>NewTab=No</code>, the command uses the first perspective-projected model view, then the current view as a fallback.</p>
 </div>
 <div class="command-option">
 <h5>Projection</h5>
-<p>toggles only the active viewport between parallel and perspective, without switching tabs, reorienting the camera, or changing the CPlane. Returning to perspective restores that viewport&#39;s saved perspective lens, avoiding FOV distortion; 50 mm is used only when no valid perspective lens has been saved. Use <code>_-vTogglePerspectivePlan _Projection</code> in place of the projection-toggle macro for native <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/viewportproperties.htm">ViewportProperties</a>.</p>
+<p>toggles only the active viewport between parallel and perspective, without switching or creating tabs, reorienting the camera, or changing the CPlane. Returning to perspective restores that viewport&#39;s saved perspective lens, avoiding FOV distortion; 50 mm is used only when no valid perspective lens has been saved. Use <code>_-vToggleView _Projection</code> in place of the projection-toggle macro for native <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/viewportproperties.htm">ViewportProperties</a>.</p>
 </div>
 <div class="command-option">
 <h5>Plan</h5>
-<p>activates the Perspective view using the same fallback order and sets parallel projection looking down its current <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/cplane.htm">CPlane</a>.</p>
+<p>activates the Perspective view using the same tab-creation/fallback rules and sets parallel projection looking down its current <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/cplane.htm">CPlane</a>.</p>
 </div>
 <div class="command-option">
 <h5>Perspective</h5>
-<p>activates an existing <code>Perspective</code> tab, or uses the current tab if none exists, and forces perspective projection. A switch from parallel restores that viewport&#39;s saved perspective lens, or uses 50 mm if none is saved; an existing perspective camera keeps its lens.</p>
+<p>activates an existing <code>Perspective</code> tab, creates one when <code>NewTab=Yes</code>, or uses the current tab if none exists and <code>NewTab=No</code>. It forces perspective projection. A switch from parallel restores that viewport&#39;s saved perspective lens, or uses 50 mm if none is saved; an existing perspective camera keeps its lens.</p>
 </div>
 <div class="command-option">
 <h5>Top, Bottom, Front, Back, Left, Right</h5>
-<p>activate an existing model-view tab with that name, preserving its camera, zoom, and CPlane. If the tab does not exist, set the corresponding standard World view and CPlane in the current tab without creating or renaming a tab.</p>
+<p>activate an existing model-view tab with that name, preserving its camera, zoom, and CPlane. If the tab does not exist, <code>NewTab=Yes</code> creates a docked tab with the corresponding standard World view; <code>NewTab=No</code> sets that view and CPlane in the current tab without creating or renaming a tab.</p>
+</div>
+<div class="command-option">
+<h5>NewTab=No/Yes</h5>
+<p>saved preference, default <code>No</code>. <code>Yes</code> creates a missing named model-view tab instead of changing another view; existing matching tabs are always reused. A new Perspective tab inherits the active view&#39;s CPlane. <code>Projection</code> ignores this setting.</p>
 </div>
 <h3>Notes</h3>
 <ul>
 <li>Tab names are matched without case sensitivity and ignore surrounding spaces.</li>
 <li>Perspective lenses are remembered separately for each viewport in the open document, including when switching to plan. Returning to perspective preserves navigation performed in the parallel view instead of restoring an old camera position.</li>
-<li>The command is transparent and does not modify geometry or selection. While another command is running, call <code>_vTogglePerspectivePlan</code> for the immediate toggle, or <code>_-vTogglePerspectivePlan _Right</code> for a forced choice. Do not prefix these transparent calls with <code>!</code>, which cancels the active command.</li>
+<li>The command is transparent and does not modify geometry or selection. While another command is running, call <code>_vToggleView</code> for the immediate toggle, or <code>_-vToggleView _Right</code> for a forced choice. Do not prefix these transparent calls with <code>!</code>, which cancels the active command.</li>
 </ul>
 
 <h2>See also</h2>

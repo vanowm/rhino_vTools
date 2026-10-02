@@ -1,4 +1,4 @@
-# vTools  ·  v26.10.1.1900
+# vTools  ·  v26.10.2.1004
 
 vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and surface editing, fabrication layout, unrolling and matching, alignment, annotation, selection, and object management.
 
@@ -58,7 +58,7 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vToggleAxes](#vtoggleaxes-flow) *(26.6.22.1811)* — toggles visible viewport axes (grid/construction axes plus display-mode Z axis)
   - [vToggleControlPoints](#vtogglecontrolpoints-flow) *(26.7.13.1046)* — toggles selected objects between edit points on the curve and off-curve control points
   - [vTogglePerpGumball](#vtoggleperpgumball-flow) *(26.4.24.1712)* — toggles a monitor that auto-orients the gumball perpendicular to selected grips
-  - [vTogglePerspectivePlan](#vtoggleperspectiveplan-flow) *(26.10.1.1632)* — toggles perspective/CPlane plan or the current viewport's projection, or activates a standard view without interrupting another command
+  - [vToggleView](#vtoggleview-flow) *(26.10.1.1632)* — toggles perspective/CPlane plan or projection, or activates a standard view with optional tab creation without interrupting another command
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join of extensions
   - [vTrimOff](#vtrimoff-flow) *(26.5.18.849)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
   - [vUnrollSrf](#vunrollsrf-flow) *(26.5.19.1918)* — develops selected surfaces through Rhino's native [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm) with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output
@@ -135,7 +135,7 @@ over the embedded fallback, so help-only edits do not require a new DLL.
 
 All command options persist by default unless stated otherwise.
 
-Native commands (60): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vExportDXF](#vexportdxf-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShade](#vshade-flow), [vSmooth](#vsmooth-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vTogglePerspectivePlan](#vtoggleperspectiveplan-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUnrollSrfUV](#vunrollsrfuv-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (60): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vExportDXF](#vexportdxf-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShade](#vshade-flow), [vSmooth](#vsmooth-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vToggleView](#vtoggleview-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUnrollSrfUV](#vunrollsrfuv-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -341,15 +341,16 @@ Options:
 
 1. Enter the command to execute.
 1. Choose one filter or enter a comma-separated combination.
-1. The command runs with that filter and optional temporary current layer. The previous filter and current layer are restored when it finishes, is canceled, or fails.
+1. The command runs with that filter and optional temporary current layer. The chosen layer and any locked parent layers are unlocked for the command. The previous filter, current layer, and layer lock states are restored when it finishes, is canceled, or fails.
 
 Options:
 
-- `Layer`: available at both prompts and reads its value from the command line, without opening a layer picker. Enter an existing visible, unlocked, editable layer, including a nested layer by its full path. The default `*Current*`, `.` or `*` leaves the current layer unchanged. Layer choices apply only to this launch and its repeats; a new run defaults to `*Current*`.
+- `Layer`: available at both prompts and reads its value from the command line, without opening a layer picker. Enter an existing visible, editable layer, including a nested layer by its full path. Locked layers and their locked parents are temporarily unlocked; their original locking behavior is restored afterward. Hidden and reference layers cannot be used. The default `*Current*`, `.` or `*` leaves the current layer unchanged. Layer choices apply only to this launch and its repeats; a new run defaults to `*Current*`.
 
 Notes:
 
 - `vFilterExec` is transparent and remains Rhino's [Repeat](https://docs.mcneel.com/rhino/8/help/en-us/commands/repeat.htm) command after the delegated command ends. Repeat reuses the command, filter, and layer choice, restoring the layer that was current before each repeat.
+- If Rhino switches panel tabs while the filter is active, the previously selected tabs are restored when the command finishes, is canceled, or fails. Panels closed or moved during the command are left alone.
 - Aliases and toolbar macros can use `! _vFilterExec _Layer "Reference" #_Line Curves` or `! _vFilterExec _Layer "Surface" #_Sweep2 Curve`; a leading hyphen is optional. Use `All` instead of `Curves` to allow every object type. Existing macros such as `! _vFilterExec #_Sweep2 Curve` remain valid.
 
 Filters: `All`, `Points`, `PointClouds`, `Curves`, `Surfaces`, `Polysurfaces`, `Meshes`, `SubDs`, `Extrusions`, `Annotations`, `Hatches`, `Blocks`, `Lights`, `Grips`, `Edges`, `Faces`, and `Vertices`. Singular forms and aliases such as `Text`, `Dimensions`, `ControlPoints`, and `Instances` are accepted. Combine filters with `,`, `+`, `|`, or `;`.
@@ -906,24 +907,25 @@ Notes:
 
 - Background gumball updates preserve the help shown for the current command, including other toggle commands.
 
-### vTogglePerspectivePlan flow
+### vToggleView flow
 
 1. The plain command switches immediately. From the `Perspective` tab, it enters CPlane plan first unless the viewport is already in parallel plan, then returns to perspective. After a `Projection` change, the next plain toggle always enters plan first. From another tab, it activates the `Perspective` tab and shows its CPlane in plan.
-1. To choose a mode explicitly, use the hyphenated form, for example `_-vTogglePerspectivePlan _Plan`, `_-vTogglePerspectivePlan _Perspective`, `_-vTogglePerspectivePlan _Projection`, or `_-vTogglePerspectivePlan _Top`. The choice applies immediately; Enter uses `Toggle`.
+1. To choose a mode explicitly, use the hyphenated form, for example `_-vToggleView _Plan`, `_-vToggleView _Perspective`, `_-vToggleView _Projection`, or `_-vToggleView _Top`. The choice applies immediately; Enter uses `Toggle`. To create missing tabs, set `NewTab` before choosing a mode, for example `_-vToggleView _NewTab=_Yes _Right`.
 
 Options:
 
-- `Toggle`: default behavior, without saving a mode preference. An oblique parallel view enters plan rather than perspective; after a `Projection` change, plan also takes priority on the next toggle. If no tab named `Perspective` exists, the command uses the first perspective-projected model view, then the current view as a fallback.
-- `Projection`: toggles only the active viewport between parallel and perspective, without switching tabs, reorienting the camera, or changing the CPlane. Returning to perspective restores that viewport's saved perspective lens, avoiding FOV distortion; 50 mm is used only when no valid perspective lens has been saved. Use `_-vTogglePerspectivePlan _Projection` in place of the projection-toggle macro for native [ViewportProperties](https://docs.mcneel.com/rhino/8/help/en-us/commands/viewportproperties.htm).
-- `Plan`: activates the Perspective view using the same fallback order and sets parallel projection looking down its current [CPlane](https://docs.mcneel.com/rhino/8/help/en-us/commands/cplane.htm).
-- `Perspective`: activates an existing `Perspective` tab, or uses the current tab if none exists, and forces perspective projection. A switch from parallel restores that viewport's saved perspective lens, or uses 50 mm if none is saved; an existing perspective camera keeps its lens.
-- `Top`, `Bottom`, `Front`, `Back`, `Left`, `Right`: activate an existing model-view tab with that name, preserving its camera, zoom, and CPlane. If the tab does not exist, set the corresponding standard World view and CPlane in the current tab without creating or renaming a tab.
+- `Toggle`: default behavior, without saving a mode preference. An oblique parallel view enters plan rather than perspective; after a `Projection` change, plan also takes priority on the next toggle. If no tab named `Perspective` exists and `NewTab=No`, the command uses the first perspective-projected model view, then the current view as a fallback.
+- `Projection`: toggles only the active viewport between parallel and perspective, without switching or creating tabs, reorienting the camera, or changing the CPlane. Returning to perspective restores that viewport's saved perspective lens, avoiding FOV distortion; 50 mm is used only when no valid perspective lens has been saved. Use `_-vToggleView _Projection` in place of the projection-toggle macro for native [ViewportProperties](https://docs.mcneel.com/rhino/8/help/en-us/commands/viewportproperties.htm).
+- `Plan`: activates the Perspective view using the same tab-creation/fallback rules and sets parallel projection looking down its current [CPlane](https://docs.mcneel.com/rhino/8/help/en-us/commands/cplane.htm).
+- `Perspective`: activates an existing `Perspective` tab, creates one when `NewTab=Yes`, or uses the current tab if none exists and `NewTab=No`. It forces perspective projection. A switch from parallel restores that viewport's saved perspective lens, or uses 50 mm if none is saved; an existing perspective camera keeps its lens.
+- `Top`, `Bottom`, `Front`, `Back`, `Left`, `Right`: activate an existing model-view tab with that name, preserving its camera, zoom, and CPlane. If the tab does not exist, `NewTab=Yes` creates a docked tab with the corresponding standard World view; `NewTab=No` sets that view and CPlane in the current tab without creating or renaming a tab.
+- `NewTab=No/Yes`: saved preference, default `No`. `Yes` creates a missing named model-view tab instead of changing another view; existing matching tabs are always reused. A new Perspective tab inherits the active view's CPlane. `Projection` ignores this setting.
 
 Notes:
 
 - Tab names are matched without case sensitivity and ignore surrounding spaces.
 - Perspective lenses are remembered separately for each viewport in the open document, including when switching to plan. Returning to perspective preserves navigation performed in the parallel view instead of restoring an old camera position.
-- The command is transparent and does not modify geometry or selection. While another command is running, call `_vTogglePerspectivePlan` for the immediate toggle, or `_-vTogglePerspectivePlan _Right` for a forced choice. Do not prefix these transparent calls with `!`, which cancels the active command.
+- The command is transparent and does not modify geometry or selection. While another command is running, call `_vToggleView` for the immediate toggle, or `_-vToggleView _Right` for a forced choice. Do not prefix these transparent calls with `!`, which cancels the active command.
 
 ### vTrim flow
 

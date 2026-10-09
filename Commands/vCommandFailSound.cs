@@ -1,111 +1,490 @@
-using System;
-using System.IO;
-using Rhino;
-using Rhino.Commands;
-using Rhino.Input;
-using Rhino.Input.Custom;
-using Rhino.UI;
-
-namespace vTools.Commands;
-
-/// <summary>
-/// Configures and toggles an audible notification when a Rhino command fails.
-/// </summary>
-[CommandStyle(Style.Transparent)]
-public sealed class vCommandFailSound : vToolsCommand
+namespace vTools.Commands
 {
-  // Defaults
-  internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
-  internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
-  internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
+  using System;
+  using System.IO;
+  using Rhino;
+  using Rhino.Commands;
+  using Rhino.Input;
+  using Rhino.Input.Custom;
+  using Rhino.UI;
 
-  public override string EnglishName => "vCommandFailSound";
 
-  protected override Result RunCommand(RhinoDoc doc, RunMode mode)
+  /// <summary>
+  /// Configures and toggles an audible notification when a Rhino command fails.
+  /// </summary>
+  [CommandStyle(Style.Transparent)]
+  public sealed class vCommandFailSound : vToolsCommand
   {
-    CommandFailSoundMonitor.EnsureSettingsLoaded();
+    // Defaults
+    internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
+    internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
+    internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
 
-    while (true)
+    public override string EnglishName => "vCommandFailSound";
+
+    protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
-      using var getter = new GetOption();
-      getter.EnableTransparentCommands(true);
-      getter.AcceptNothing(true);
-      getter.SetCommandPrompt(CommandFailSoundMonitor.GetPrompt());
+      CommandFailSoundMonitor.EnsureSettingsLoaded();
 
-      var enabledOption = new OptionToggle(
-        CommandFailSoundMonitor.Enabled,
-        "No",
-        "Yes");
-      var enabledOptionIndex = getter.AddOptionToggle("Enabled", ref enabledOption);
-      var soundOptionIndex = getter.AddOptionList(
-        "Sound",
-        CommandFailSoundMonitor.SoundNames,
-        CommandFailSoundMonitor.SoundIndex);
-      var audioFileOptionIndex = getter.AddOption("AudioFile");
-      var previewOptionIndex = getter.AddOption("Preview");
-
-      var getResult = getter.Get();
-      if (getResult == GetResult.Cancel)
-        return Result.Cancel;
-
-      if (getResult == GetResult.Nothing)
-        return Result.Success;
-
-      if (getResult != GetResult.Option || getter.Option() == null)
-        return getter.CommandResult();
-
-      var option = getter.Option()!;
-      if (option.Index == enabledOptionIndex)
+      while (true)
       {
-        CommandFailSoundMonitor.SetEnabled(enabledOption.CurrentValue);
+        using var getter = new GetOption();
+        getter.EnableTransparentCommands(true);
+        getter.AcceptNothing(true);
+        getter.SetCommandPrompt(CommandFailSoundMonitor.GetPrompt());
+
+        var enabledOption = new OptionToggle(
+          CommandFailSoundMonitor.Enabled,
+          "No",
+          "Yes");
+        var enabledOptionIndex = getter.AddOptionToggle("Enabled", ref enabledOption);
+        var soundOptionIndex = getter.AddOptionList(
+          "Sound",
+          CommandFailSoundMonitor.SoundNames,
+          CommandFailSoundMonitor.SoundIndex);
+        var audioFileOptionIndex = getter.AddOption("AudioFile");
+        var previewOptionIndex = getter.AddOption("Preview");
+
+        var getResult = getter.Get();
+        if (getResult == GetResult.Cancel)
+          return Result.Cancel;
+
+        if (getResult == GetResult.Nothing)
+          return Result.Success;
+
+        if (getResult != GetResult.Option || getter.Option() == null)
+          return getter.CommandResult();
+
+        var option = getter.Option()!;
+        if (option.Index == enabledOptionIndex)
+        {
+          CommandFailSoundMonitor.SetEnabled(enabledOption.CurrentValue);
+        }
+        else if (option.Index == soundOptionIndex)
+        {
+          CommandFailSoundMonitor.SetSound(option.CurrentListOptionIndex);
+        }
+        else if (option.Index == audioFileOptionIndex)
+        {
+          if (TryChooseAudioFile(CommandFailSoundMonitor.AudioFile, out var audioFile))
+            CommandFailSoundMonitor.SetAudioFile(audioFile);
+        }
+        else if (option.Index == previewOptionIndex)
+        {
+          CommandFailSoundMonitor.Preview();
+        }
       }
-      else if (option.Index == soundOptionIndex)
+    }
+
+    private static bool TryChooseAudioFile(string currentPath, out string audioFile)
+    {
+      audioFile = string.Empty;
+
+      var dialog = new OpenFileDialog
       {
-        CommandFailSoundMonitor.SetSound(option.CurrentListOptionIndex);
-      }
-      else if (option.Index == audioFileOptionIndex)
+        Title = "Select command failure sound",
+        Filter =
+          "Audio files (*.wav;*.mp3;*.wma;*.m4a)|*.wav;*.mp3;*.wma;*.m4a|" +
+          "All files (*.*)|*.*",
+        DefaultExt = "wav",
+        MultiSelect = false
+      };
+
+      if (!string.IsNullOrWhiteSpace(currentPath))
       {
-        if (TryChooseAudioFile(CommandFailSoundMonitor.AudioFile, out var audioFile))
-          CommandFailSoundMonitor.SetAudioFile(audioFile);
+        try
+        {
+          var fullPath = Path.GetFullPath(currentPath);
+          dialog.FileName = fullPath;
+          dialog.InitialDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
+        }
+        catch
+        {
+        }
       }
-      else if (option.Index == previewOptionIndex)
-      {
-        CommandFailSoundMonitor.Preview();
-      }
+
+      if (!dialog.ShowOpenDialog() || string.IsNullOrWhiteSpace(dialog.FileName))
+        return false;
+
+      audioFile = Path.GetFullPath(dialog.FileName);
+      return true;
     }
   }
+}
 
-  private static bool TryChooseAudioFile(string currentPath, out string audioFile)
+namespace vTools.Commands
+{
+  using System;
+  using System.IO;
+  using System.Windows.Media;
+  using Rhino;
+  using Rhino.Commands;
+  using Rhino.Input;
+  using Rhino.Input.Custom;
+  using Rhino.UI;
+
+
+  internal static class CommandFailSoundMonitor
   {
-    audioFile = string.Empty;
+    // Defaults and customizable constants; option defaults are shared with vCommandFailSound.
+    private const string Tag = "vCommandFailSound";
+    private const string SettingsSection = "vCommandFailSound";
+    private const string EnabledKey = "enabled";
+    private const string SoundKey = "sound";
+    private const string AudioFileKey = "audioFile";
 
-    var dialog = new OpenFileDialog
+    internal static readonly string[] SoundNames = // Command option names in persisted sound-index order.
     {
-      Title = "Select command failure sound",
-      Filter =
-        "Audio files (*.wav;*.mp3;*.wma;*.m4a)|*.wav;*.mp3;*.wma;*.m4a|" +
-        "All files (*.*)|*.*",
-      DefaultExt = "wav",
-      MultiSelect = false
+      "Default",
+      "Asterisk",
+      "Exclamation",
+      "Hand",
+      "Question",
+      "Custom"
     };
 
-    if (!string.IsNullOrWhiteSpace(currentPath))
+    private static readonly object Sync = new();
+    private static bool _enabled = vCommandFailSound.DefaultEnabled;
+    private static bool _subscribed;
+    private static bool _settingsLoaded;
+    private static int _soundIndex = vCommandFailSound.DefaultSoundIndex;
+    private static string _audioFile = vCommandFailSound.DefaultAudioFile;
+    private static MediaPlayer? _mediaPlayer;
+
+    internal static bool Enabled
     {
-      try
+      get
       {
-        var fullPath = Path.GetFullPath(currentPath);
-        dialog.FileName = fullPath;
-        dialog.InitialDirectory = Path.GetDirectoryName(fullPath) ?? string.Empty;
-      }
-      catch
-      {
+        lock (Sync)
+          return _enabled;
       }
     }
 
-    if (!dialog.ShowOpenDialog() || string.IsNullOrWhiteSpace(dialog.FileName))
-      return false;
+    internal static int SoundIndex
+    {
+      get
+      {
+        lock (Sync)
+          return _soundIndex;
+      }
+    }
 
-    audioFile = Path.GetFullPath(dialog.FileName);
-    return true;
+    internal static string AudioFile
+    {
+      get
+      {
+        lock (Sync)
+          return _audioFile;
+      }
+    }
+
+    internal static void EnsureSettingsLoaded()
+    {
+      lock (Sync)
+      {
+        if (_settingsLoaded)
+          return;
+
+        var loaded = ToolsOptionStore.Read(
+          SettingsSection,
+          section =>
+          {
+            var enabled = vCommandFailSound.DefaultEnabled;
+            var soundIndex = vCommandFailSound.DefaultSoundIndex;
+            var audioFile = vCommandFailSound.DefaultAudioFile;
+
+            if (ToolsOptionStore.TryGetBool(section, EnabledKey, out var persistedEnabled))
+              enabled = persistedEnabled;
+
+            if (ToolsOptionStore.TryGetString(section, SoundKey, out var soundName))
+            {
+              var persistedIndex = Array.FindIndex(
+                SoundNames,
+                candidate => string.Equals(candidate, soundName, StringComparison.OrdinalIgnoreCase));
+              if (persistedIndex >= 0)
+                soundIndex = persistedIndex;
+            }
+
+            if (ToolsOptionStore.TryGetString(section, AudioFileKey, out var persistedFile))
+              audioFile = persistedFile;
+
+            return (enabled, soundIndex, audioFile);
+          });
+
+        _enabled = loaded.enabled;
+        _soundIndex = loaded.soundIndex;
+        _audioFile = loaded.audioFile;
+        _settingsLoaded = true;
+      }
+    }
+
+    internal static string GetPrompt()
+    {
+      EnsureSettingsLoaded();
+
+      lock (Sync)
+      {
+        var state = _enabled ? "ON" : "OFF";
+        var sound = SoundNames[_soundIndex];
+        if (_soundIndex == SoundNames.Length - 1 && !string.IsNullOrWhiteSpace(_audioFile))
+          sound += $": {Path.GetFileName(_audioFile)}";
+
+        return $"Command failure sound is {state} ({sound}). Press Enter when done";
+      }
+    }
+
+    internal static void Start()
+    {
+      EnsureSettingsLoaded();
+
+      lock (Sync)
+      {
+        if (_enabled)
+          Subscribe();
+      }
+    }
+
+    internal static void SetEnabled(bool enabled)
+    {
+      EnsureSettingsLoaded();
+
+      lock (Sync)
+      {
+        _enabled = enabled;
+        if (_enabled)
+          Subscribe();
+        else
+          Unsubscribe();
+      }
+
+      SaveSettings();
+      Log.Write(Tag, $"enabled -> {enabled}");
+    }
+
+    internal static void SetSound(int soundIndex)
+    {
+      EnsureSettingsLoaded();
+
+      lock (Sync)
+        _soundIndex = Math.Clamp(soundIndex, 0, SoundNames.Length - 1);
+
+      SaveSettings();
+      Log.Write(Tag, $"sound -> {SoundNames[SoundIndex]}");
+    }
+
+    internal static void SetAudioFile(string audioFile)
+    {
+      EnsureSettingsLoaded();
+
+      lock (Sync)
+      {
+        _audioFile = audioFile;
+        _soundIndex = SoundNames.Length - 1;
+      }
+
+      SaveSettings();
+      Log.Write(Tag, $"audio file -> {audioFile}");
+    }
+
+    internal static void Preview()
+    {
+      EnsureSettingsLoaded();
+      _ = PlaySelectedSound(true);
+    }
+
+    internal static void Stop()
+    {
+      lock (Sync)
+      {
+        Unsubscribe();
+        CloseMediaPlayer();
+      }
+    }
+
+    private static void Subscribe()
+    {
+      if (_subscribed)
+        return;
+
+      Command.EndCommand -= OnCommandEnded;
+      Command.EndCommand += OnCommandEnded;
+      _subscribed = true;
+      Log.Write(Tag, "watcher enabled");
+    }
+
+    private static void Unsubscribe()
+    {
+      Command.EndCommand -= OnCommandEnded;
+      if (_subscribed)
+        Log.Write(Tag, "watcher disabled");
+      _subscribed = false;
+    }
+
+    private static void OnCommandEnded(object? sender, CommandEventArgs e)
+    {
+      if (!_enabled || !IsFailure(e.CommandResult))
+        return;
+
+      Log.Write(
+        Tag,
+        $"failure command={e.CommandEnglishName} result={e.CommandResult}");
+      _ = PlaySelectedSound(false);
+    }
+
+    private static bool IsFailure(Result result) =>
+      result != Result.Success &&
+      result != Result.Cancel;
+
+    private static bool PlaySelectedSound(bool preview)
+    {
+      if (!OperatingSystem.IsWindows())
+        return false;
+
+      int soundIndex;
+      string audioFile;
+      lock (Sync)
+      {
+        soundIndex = _soundIndex;
+        audioFile = _audioFile;
+      }
+
+      if (soundIndex == SoundNames.Length - 1)
+      {
+        if (TryPlayAudioFile(audioFile))
+          return true;
+
+        if (preview)
+          RhinoApp.WriteLine("Command failure sound: select an existing audio file.");
+
+        PlaySystemSound(0);
+        return false;
+      }
+
+      return PlaySystemSound(soundIndex);
+    }
+
+    private static bool TryPlayAudioFile(string audioFile)
+    {
+      if (string.IsNullOrWhiteSpace(audioFile) || !File.Exists(audioFile))
+      {
+        Log.Write(Tag, $"audio file unavailable: {audioFile}");
+        return false;
+      }
+
+      try
+      {
+        CloseMediaPlayer();
+
+        var player = new MediaPlayer();
+        player.MediaEnded += (_, _) => ReleaseMediaPlayer(player);
+        player.MediaFailed += (_, args) =>
+        {
+          Log.Write(Tag, $"audio playback failed: {args.ErrorException.Message}");
+          ReleaseMediaPlayer(player);
+          _ = PlaySystemSound(0);
+        };
+
+        lock (Sync)
+          _mediaPlayer = player;
+
+        player.Open(new Uri(Path.GetFullPath(audioFile), UriKind.Absolute));
+        player.Play();
+        return true;
+      }
+      catch (Exception ex)
+      {
+        Log.Write(Tag, $"audio playback failed: {ex.Message}");
+        CloseMediaPlayer();
+        return false;
+      }
+    }
+
+    private static bool PlaySystemSound(int soundIndex)
+    {
+      if (!OperatingSystem.IsWindows())
+        return false;
+
+      CloseMediaPlayer();
+
+      try
+      {
+        var sound = soundIndex switch
+        {
+          1 => System.Media.SystemSounds.Asterisk,
+          2 => System.Media.SystemSounds.Exclamation,
+          3 => System.Media.SystemSounds.Hand,
+          4 => System.Media.SystemSounds.Question,
+          _ => System.Media.SystemSounds.Beep
+        };
+
+        sound.Play();
+        return true;
+      }
+      catch (Exception ex)
+      {
+        Log.Write(Tag, $"system sound failed: {ex.Message}");
+      }
+
+      try
+      {
+        Console.Beep(1200, 120);
+        return true;
+      }
+      catch (Exception ex)
+      {
+        Log.Write(Tag, $"console beep failed: {ex.Message}");
+        return false;
+      }
+    }
+
+    private static void ReleaseMediaPlayer(MediaPlayer player)
+    {
+      lock (Sync)
+      {
+        if (!ReferenceEquals(_mediaPlayer, player))
+          return;
+
+        _mediaPlayer = null;
+      }
+
+      player.Close();
+    }
+
+    private static void CloseMediaPlayer()
+    {
+      MediaPlayer? player;
+      lock (Sync)
+      {
+        player = _mediaPlayer;
+        _mediaPlayer = null;
+      }
+
+      if (player == null)
+        return;
+
+      player.Stop();
+      player.Close();
+    }
+
+    private static void SaveSettings()
+    {
+      int soundIndex;
+      string audioFile;
+      lock (Sync)
+      {
+        soundIndex = _soundIndex;
+        audioFile = _audioFile;
+      }
+
+      var saved = ToolsOptionStore.Update(SettingsSection, section =>
+      {
+        section[EnabledKey] = Enabled;
+        section[SoundKey] = SoundNames[soundIndex];
+        section[AudioFileKey] = audioFile;
+      });
+
+      if (!saved)
+        RhinoApp.WriteLine($"vCommandFailSound: failed to save options: {ToolsOptionStore.LastError}");
+    }
   }
 }

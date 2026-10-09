@@ -17,15 +17,17 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vGroup : vToolsCommand
 {
-  private const string LogName = "vGroup";
-  private const string OptionsSectionName = "vGroup";
-
   // Option defaults
   private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
   private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
 
   // Customizable boundary behavior
   private const double ConnectivitySortTolerance = 1.0; // Maximum endpoint gap in model units used only to order source curves before boundary solving; positive value.
+  private static readonly Color BoundaryHatchColor = Color.FromArgb(199, 148, 228, 255); // Preview fill ARGB components, each in the range 0 through 255.
+  private static readonly Color BoundaryOutlineColor = Color.FromArgb(230, 255, 60, 0); // Preview outline ARGB components, each in the range 0 through 255.
+
+  private const string LogName = "vGroup";
+  private const string OptionsSectionName = "vGroup";
 
   private static readonly HashSet<int> _ourGroupIndices = new();
   private static double _boundaryTolerance = DefaultStoredBoundaryTolerance;
@@ -50,7 +52,7 @@ public sealed class vGroup : vToolsCommand
       ? _boundaryTolerance
       : DefaultBoundaryTolerance(doc);
 
-    // Enable the conduit before the solve so boundaries appear as they are discovered.
+    // Display outer boundaries as each connected part is solved.
     var previewConduit = new BoundaryPreviewConduit();
     previewConduit.Enabled = true;
     BoundarySolve solve;
@@ -90,7 +92,7 @@ public sealed class vGroup : vToolsCommand
 
   private static SelectionData? SelectObjects(RhinoDoc doc)
   {
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select objects to group by curve or face boundary");
     go.GroupSelect = true;
@@ -194,7 +196,7 @@ public sealed class vGroup : vToolsCommand
       var toleranceOption = new OptionDouble(boundaryTolerance, RhinoMath.ZeroTolerance, double.MaxValue);
       while (true)
       {
-        var go = new GetOption();
+        using var go = new GetOption();
         go.SetCommandPrompt("Adjust boundary tolerance. Press Enter to create groups");
         go.AcceptNothing(true);
         go.AcceptNumber(true, true);
@@ -251,6 +253,8 @@ public sealed class vGroup : vToolsCommand
   {
     var tol = doc.ModelAbsoluteTolerance;
     var solve = new BoundarySolve(boundaryTolerance);
+    if (conduit != null)
+      conduit.Solve = solve;
     PrepareBoundaryCurves(doc, selection, tol, boundaryTolerance, log);
 
     if (log)
@@ -619,56 +623,85 @@ public sealed class vGroup : vToolsCommand
     if (log)
       Log.Write(LogName, $"  joining {solve.CoreSegments.Count} core segments...");
 
-    var joined = Curve.JoinCurves(solve.CoreSegments.ToArray(), boundaryTolerance);
-    if (joined == null || joined.Length == 0)
+    var components = GroupBoundaryTopology.ConnectedComponents(
+      solve.CoreSegments.Select(curve => curve.PointAtStart).ToArray(),
+      solve.CoreSegments.Select(curve => curve.PointAtEnd).ToArray(), boundaryTolerance);
+    if (log)
+      Log.Write(LogName, $"  connected boundary components={components.Count}");
+    var candidateIndex = 0;
+    foreach (var component in components)
     {
+      var curves = component.Select(index => solve.CoreSegments[index]).ToArray();
+      var candidates = new List<Curve>();
+      try
+      {
+        candidates = GroupBoundaryTopology.PlanarRegions(curves, tol, boundaryTolerance);
+      }
+      catch (Exception ex)
+      {
+        Log.Write(LogName, $"  planar regions unavailable: {ex.Message}; trying endpoint joins");
+      }
+      // Region tracing follows closed cycles through junctions instead of greedily
+      // joining unrelated branches. Endpoint joining remains available for small gaps.
+      if (candidates.Count == 0)
+        candidates.AddRange(Curve.JoinCurves(curves, boundaryTolerance) ?? Array.Empty<Curve>());
       if (log)
-        Log.Write(LogName, "  JoinCurves returned null/empty");
+        Log.Write(LogName, $"  component segments={curves.Length} candidate loops/chains={candidates.Count}");
+      foreach (var candidate in candidates)
+        AddBoundaryCandidate(candidate, candidateIndex++, solve, doc, tol, boundaryTolerance, log, conduit);
+    }
+  }
+
+  private static void AddBoundaryCandidate(
+    Curve candidate, int index, BoundarySolve solve, RhinoDoc doc,
+    double tol, double boundaryTolerance, bool log, BoundaryPreviewConduit? conduit)
+  {
+    var curve = TryCloseSmallGap(candidate, boundaryTolerance, log, index);
+    if (!ReferenceEquals(curve, candidate))
+      candidate.Dispose();
+    var start = curve.PointAtStart;
+    var end = curve.PointAtEnd;
+    var hasPlane = curve.TryGetPlane(out var plane, tol);
+
+    if (log)
+    {
+      var len = curve.GetLength();
+      var bbox = curve.GetBoundingBox(accurate: false);
+      Log.Write(LogName,
+        $"  joined[{index}] {curve.GetType().Name} IsClosed={curve.IsClosed} TryGetPlane={hasPlane}" +
+        $" len={len:F3}" +
+        $" bbox={bbox.Min.X:F1},{bbox.Min.Y:F1}..{bbox.Max.X:F1},{bbox.Max.Y:F1}" +
+        $" gap={start.DistanceTo(end):G4}");
+    }
+
+    if (!curve.IsClosed || !hasPlane)
+    {
+      // Track the gap of the largest open chain — most likely the intended outer boundary.
+      var gap = curve.PointAtStart.DistanceTo(curve.PointAtEnd);
+      if (gap > 0 && solve.NearMissSourceLength < curve.GetLength())
+      {
+        solve.NearMissGap = gap;
+        solve.NearMissSourceLength = curve.GetLength();
+      }
+      curve.Dispose();
       return;
     }
 
-    for (var i = 0; i < joined.Length; i++)
-    {
-      var curve = joined[i];
-      if (curve == null)
-      {
-        if (log)
-          Log.Write(LogName, $"  joined[{i}] null");
-        continue;
-      }
+    solve.Boundaries.Add(new BoundaryInfo(curve, plane, BuildHatchLines(curve, plane, doc.ModelAbsoluteTolerance, boundaryTolerance)));
+    UpdateDiscoveryBoundaryIndices(solve, tol, doc.ModelAngleToleranceRadians);
+    if (conduit != null) { conduit.Solve = solve; doc.Views.Redraw(); RhinoApp.Wait(); }
+  }
 
-      curve = TryCloseSmallGap(curve, boundaryTolerance, log, i);
-      var start = curve.PointAtStart;
-      var end = curve.PointAtEnd;
-      var hasPlane = curve.TryGetPlane(out var plane, tol);
-
-      if (log)
-      {
-        var len = curve.GetLength();
-        var bbox = curve.GetBoundingBox(accurate: false);
-        Log.Write(LogName,
-          $"  joined[{i}] {curve.GetType().Name} IsClosed={curve.IsClosed} TryGetPlane={hasPlane}" +
-          $" len={len:F3}" +
-          $" bbox={bbox.Min.X:F1},{bbox.Min.Y:F1}..{bbox.Max.X:F1},{bbox.Max.Y:F1}" +
-          $" gap={start.DistanceTo(end):G4}");
-      }
-
-      if (!curve.IsClosed || !hasPlane)
-      {
-        // Track the gap of the largest open chain — most likely the intended outer boundary.
-        var gap = curve.PointAtStart.DistanceTo(curve.PointAtEnd);
-        if (gap > 0 && curve.GetLength() > (solve.NearMissGap > 0 ? 0 : 0) &&
-            (solve.NearMissSourceLength < curve.GetLength()))
-        {
-          solve.NearMissGap = gap;
-          solve.NearMissSourceLength = curve.GetLength();
-        }
-        continue;
-      }
-
-      solve.Boundaries.Add(new BoundaryInfo(curve, plane, BuildHatchLines(curve, plane, doc.ModelAbsoluteTolerance, boundaryTolerance)));
-      if (conduit != null) { conduit.Solve = solve; doc.Views.Redraw(); RhinoApp.Wait(); }
-    }
+  private static void UpdateDiscoveryBoundaryIndices(BoundarySolve solve, double tolerance, double angleTolerance)
+  {
+    var latest = solve.Boundaries.Count - 1;
+    var boundary = solve.Boundaries[latest];
+    if (solve.DiscoveryBoundaryIndices.Any(index => ContainsBoundary(
+          solve.Boundaries[index], boundary, tolerance, solve.Tolerance, angleTolerance)))
+      return;
+    solve.DiscoveryBoundaryIndices.RemoveAll(index => ContainsBoundary(
+      boundary, solve.Boundaries[index], tolerance, solve.Tolerance, angleTolerance));
+    solve.DiscoveryBoundaryIndices.Add(latest);
   }
 
   private static Curve TryCloseSmallGap(Curve curve, double boundaryTolerance, bool log, int index)
@@ -679,18 +712,20 @@ public sealed class vGroup : vToolsCommand
     var start = curve.PointAtStart;
     var end = curve.PointAtEnd;
     var gap = start.DistanceTo(end);
-    if (gap <= 0.0 || gap >= Math.Max(boundaryTolerance, curve.GetLength() * 0.05))
+    if (gap <= 0.0 || gap > boundaryTolerance)
       return curve;
 
-    var bridge = new LineCurve(end, start);
+    using var bridge = new LineCurve(end, start);
     var reclosed = Curve.JoinCurves(new Curve[] { curve, bridge }, boundaryTolerance);
     if (reclosed?.Length == 1 && reclosed[0] != null && reclosed[0].IsClosed)
     {
       if (log)
-        Log.Write(LogName, $"  joined[{index}] gap={gap:G4} < closingTol={boundaryTolerance:G4} -> bridged and closed");
+        Log.Write(LogName, $"  joined[{index}] gap={gap:G4} <= closingTol={boundaryTolerance:G4} -> bridged and closed");
       return reclosed[0];
     }
 
+    foreach (var unused in reclosed ?? Array.Empty<Curve>())
+      unused?.Dispose();
     return curve;
   }
 
@@ -701,6 +736,7 @@ public sealed class vGroup : vToolsCommand
     double tol)
   {
     solve.BoundaryMembers.Clear();
+    solve.GroupBoundaryIndices.Clear();
 
     // Pre-fetch all objects and their bboxes once to avoid repeated FindId calls.
     var allObjects = new (RhinoObject? Obj, BoundingBox Bbox)[selection.AllIds.Count];
@@ -747,39 +783,73 @@ public sealed class vGroup : vToolsCommand
       solve.BoundaryMembers.Add(members);
     }
 
-    // Propagate members of spatially-nested inner boundaries into their containing outer boundaries.
+    // Compare nested loops in their common plane, allowing the configured small depth gap.
+    var nestedIndices = new HashSet<int>();
     for (var inner = 0; inner < solve.BoundaryMembers.Count; inner++)
     {
       for (var outer = 0; outer < solve.BoundaryMembers.Count; outer++)
       {
         if (outer == inner) continue;
-        if (!boundaryBboxes[outer].Contains(boundaryBboxes[inner])) continue;
+        if (!ContainsBoundary(
+              solve.Boundaries[outer], solve.Boundaries[inner],
+              tol, solve.Tolerance, doc.ModelAngleToleranceRadians))
+          continue;
+        nestedIndices.Add(inner);
         foreach (var id in solve.BoundaryMembers[inner])
           solve.BoundaryMembers[outer].Add(id);
       }
     }
+    solve.GroupBoundaryIndices.AddRange(
+      SelectGroupBoundaryIndices(solve.BoundaryMembers, nestedIndices));
+    solve.MembersReady = true;
+    Log.Write(LogName, $"  grouping boundaries={solve.GroupBoundaryIndices.Count} candidates={solve.Boundaries.Count}");
   }
 
-  private static int CreateGroups(RhinoDoc doc, SelectionData selection, BoundarySolve solve)
+  private static bool ContainsBoundary(
+    BoundaryInfo outer,
+    BoundaryInfo inner,
+    double tolerance,
+    double boundaryTolerance,
+    double angleTolerance)
   {
-    var groupCount = 0;
-    for (var i = 0; i < solve.Boundaries.Count; i++)
+    if (Math.Abs(outer.Plane.Normal * inner.Plane.Normal) < Math.Cos(angleTolerance))
+      return false;
+    var toPlane = Transform.PlaneToPlane(outer.Plane, Plane.WorldXY);
+    var outerBox = outer.Curve.GetBoundingBox(toPlane);
+    var innerBox = inner.Curve.GetBoundingBox(toPlane);
+    if (!outerBox.IsValid || !innerBox.IsValid ||
+        innerBox.Min.X < outerBox.Min.X - tolerance || innerBox.Max.X > outerBox.Max.X + tolerance ||
+        innerBox.Min.Y < outerBox.Min.Y - tolerance || innerBox.Max.Y > outerBox.Max.Y + tolerance ||
+        innerBox.Min.Z > outerBox.Max.Z + boundaryTolerance ||
+        innerBox.Max.Z < outerBox.Min.Z - boundaryTolerance)
+      return false;
+    using var projectedInner = Curve.ProjectToPlane(inner.Curve, outer.Plane);
+    return projectedInner != null && Curve.PlanarClosedCurveRelationship(
+      projectedInner, outer.Curve, outer.Plane, tolerance) == RegionContainment.AInsideB;
+  }
+
+  private static IEnumerable<int> SelectGroupBoundaryIndices(
+    IReadOnlyList<HashSet<Guid>> boundaryMembers,
+    IReadOnlySet<int> nestedIndices)
+  {
+    for (var i = 0; i < boundaryMembers.Count; i++)
     {
-      var members = solve.BoundaryMembers[i];
-      if (members.Count < 2)
+      var members = boundaryMembers[i];
+      if (members.Count < 2 || nestedIndices.Contains(i))
         continue;
 
       var isSubset = false;
-      for (var j = 0; j < solve.Boundaries.Count; j++)
+      for (var j = 0; j < boundaryMembers.Count; j++)
       {
         if (j == i)
           continue;
 
-        var otherMembers = solve.BoundaryMembers[j];
-        if (otherMembers.Count <= members.Count)
+        var otherMembers = boundaryMembers[j];
+        if (otherMembers.Count < members.Count)
           continue;
 
-        if (members.IsSubsetOf(otherMembers))
+        if (members.IsSubsetOf(otherMembers) &&
+            (otherMembers.Count > members.Count || j < i && !nestedIndices.Contains(j)))
         {
           isSubset = true;
           break;
@@ -788,6 +858,16 @@ public sealed class vGroup : vToolsCommand
 
       if (isSubset)
         continue;
+      yield return i;
+    }
+  }
+
+  private static int CreateGroups(RhinoDoc doc, SelectionData selection, BoundarySolve solve)
+  {
+    var groupCount = 0;
+    foreach (var i in solve.GroupBoundaryIndices)
+    {
+      var members = solve.BoundaryMembers[i];
 
       Log.Write(LogName, $"  boundary[{i}] members={members.Count} -> group");
       if (_flattenGroups)
@@ -1085,6 +1165,11 @@ public sealed class vGroup : vToolsCommand
     public List<Curve> CoreSegments { get; } = new();
     public List<int> CoreOriginIndices { get; } = new();
     public List<HashSet<Guid>> BoundaryMembers { get; } = new();
+    public List<int> GroupBoundaryIndices { get; } = new();
+    public List<int> DiscoveryBoundaryIndices { get; } = new();
+    public bool MembersReady { get; set; }
+    public IReadOnlyList<int> PreviewBoundaryIndices =>
+      MembersReady ? GroupBoundaryIndices : DiscoveryBoundaryIndices;
     // Gap of the nearest open chain that could close into a boundary if tolerance were raised.
     public double NearMissGap { get; set; } = double.MaxValue;
     public double NearMissSourceLength { get; set; }
@@ -1094,9 +1179,6 @@ public sealed class vGroup : vToolsCommand
 
   private sealed class BoundaryPreviewConduit : DisplayConduit
   {
-    private static readonly Color HatchColor = Color.FromArgb(199, 148, 228, 255); // Translucent fill for detected closed boundaries.
-    private static readonly Color OutlineColor = Color.FromArgb(230, 255, 60, 0); // Outline color for detected closed boundaries.
-
     public BoundarySolve? Solve { get; set; }
 
     protected override void PostDrawObjects(DrawEventArgs e)
@@ -1105,24 +1187,12 @@ public sealed class vGroup : vToolsCommand
       if (solve == null)
         return;
 
-      var bboxes = solve.Boundaries.Select(b => b.Curve.GetBoundingBox(false)).ToArray();
-
-      for (var i = 0; i < solve.Boundaries.Count; i++)
+      foreach (var i in solve.PreviewBoundaryIndices)
       {
-        // Skip boundaries whose bbox is contained inside a larger boundary (nested preview).
-        var isNested = false;
-        for (var j = 0; j < solve.Boundaries.Count; j++)
-        {
-          if (j == i) continue;
-          if (bboxes[j].Contains(bboxes[i]))
-          { isNested = true; break; }
-        }
-        if (isNested) continue;
-
         var boundary = solve.Boundaries[i];
         foreach (var line in boundary.HatchLines)
-          PreviewDisplay.DrawLine(e.Display, line.From, line.To, HatchColor);
-        PreviewDisplay.DrawCurve(e.Display, boundary.Curve, OutlineColor, 2);
+          PreviewDisplay.DrawLine(e.Display, line.From, line.To, BoundaryHatchColor);
+        PreviewDisplay.DrawCurve(e.Display, boundary.Curve, BoundaryOutlineColor, 2);
       }
     }
   }

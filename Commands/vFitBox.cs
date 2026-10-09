@@ -279,7 +279,7 @@ public sealed class vFitBox : vToolsCommand
     fitMode = NormalizeFitMode(_fitMode);
     lastPreviewSizes = string.Empty;
 
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select objects");
     go.AcceptNothing(true);

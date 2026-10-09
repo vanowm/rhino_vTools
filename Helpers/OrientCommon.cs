@@ -50,7 +50,7 @@ internal static class OrientCommon
   /// </summary>
   internal static List<Guid> SelectObjectsToOrient(RhinoDoc doc)
   {
-    var go = new GetObject();
+    using var go = new GetObject();
     go.SetCommandPrompt("Select objects to orient");
     go.EnablePreSelect(true, true);
     go.EnableClearObjectsOnEntry(false);
@@ -146,7 +146,7 @@ internal static class OrientCommon
   {
     point = Point3d.Unset;
 
-    var gp = new GetPoint();
+    using var gp = new GetPoint();
     gp.SetCommandPrompt(prompt);
     if (acceptNothing)
       gp.AcceptNothing(true);

@@ -72,6 +72,7 @@ public sealed class vTitle : vToolsCommand
   {
     RhinoDoc.ReplaceRhinoObject += OnRhinoObjectReplaced;
     RhinoDoc.AddRhinoObject += OnRhinoObjectAdded;
+    RhinoDoc.ModifyObjectAttributes += OnRhinoObjectAttributesModified;
   }
 
   public override string EnglishName => "vTitle";
@@ -199,10 +200,12 @@ public sealed class vTitle : vToolsCommand
           _activeBoxId   = hit.Value.boxId;
           _activeGrpIdx  = hit.Value.grpIdx;
 
-          if (doc.Objects.FindId(_activeTextId)?.Geometry is TextEntity et)
+          var selectedTitle = doc.Objects.FindId(_activeTextId);
+          if (selectedTitle?.Geometry is TextEntity et)
           {
             _text = et.PlainText ?? _text;
             _size = et.TextHeight;
+            _padding = GetPaddingPercent(selectedTitle);
             _box  = _activeBoxId != Guid.Empty;
             SaveSettings();
           }
@@ -456,10 +459,7 @@ public sealed class vTitle : vToolsCommand
     }
 
     // Fallback: approximate from stored padding
-    double padding = DefaultPadding;
-    if (double.TryParse(textRhObj.Attributes.GetUserString(PaddingUserStringKey),
-          NumberStyles.Any, CultureInfo.InvariantCulture, out double sp))
-      padding = sp;
+    double padding = GetPaddingPercent(textRhObj);
     var displayScale = ResolveDisplayDimensionScale(
       doc,
       te,
@@ -612,6 +612,29 @@ public sealed class vTitle : vToolsCommand
     doc.Views.Redraw();
   }
 
+  private static void OnRhinoObjectAttributesModified(object? sender,
+    RhinoModifyObjectAttributesEventArgs e)
+  {
+    if (_internalReplace || _suspendAutoBoxSyncDepth > 0)
+      return;
+    var doc = e.Document;
+    var obj = e.RhinoObject;
+    if (doc == null || doc.UndoActive || doc.RedoActive ||
+        obj?.Geometry is not TextEntity ||
+        e.NewAttributes.GetUserString(TitleFlagKey) != TitleFlagValue)
+      return;
+
+    var oldPadding = ParsePaddingPercent(e.OldAttributes.GetUserString(PaddingUserStringKey));
+    var newPadding = ParsePaddingPercent(e.NewAttributes.GetUserString(PaddingUserStringKey));
+    if (Math.Abs(oldPadding - newPadding) <= RhinoMath.ZeroTolerance)
+      return;
+
+    // Rebuild within the attribute edit's undo operation, not a deferred command.
+    Log.Write("vTitle", $"padding changed {oldPadding:G17} -> {newPadding:G17}; synchronizing frame");
+    UpdateBoxForTitle(doc, obj.Id);
+    doc.Views.Redraw();
+  }
+
   private static void UpdateBoxForTitle(RhinoDoc doc, Guid textId)
   {
     if (textId == Guid.Empty)
@@ -681,6 +704,7 @@ public sealed class vTitle : vToolsCommand
     if (_activeTextId == Guid.Empty) return;
     var textObj = doc.Objects.FindId(_activeTextId);
     if (textObj?.Geometry is not TextEntity oldTe) { _activeTextId = Guid.Empty; return; }
+    using var automaticSync = SuspendAutomaticBoxSync();
 
     // Update text content and size
     using var newTe = (TextEntity)oldTe.Duplicate();
@@ -856,20 +880,14 @@ public sealed class vTitle : vToolsCommand
     return CreateFrameForText(freshText, padding);
   }
 
-  private static double GetPaddingPercent(RhinoObject titleObject)
-  {
-    double padding = DefaultPadding;
-    if (double.TryParse(
-          titleObject.Attributes.GetUserString(PaddingUserStringKey),
-          NumberStyles.Any,
-          CultureInfo.InvariantCulture,
-          out double storedPadding))
-    {
-      padding = storedPadding;
-    }
+  private static double GetPaddingPercent(RhinoObject titleObject) =>
+    ParsePaddingPercent(titleObject.Attributes.GetUserString(PaddingUserStringKey));
 
-    return padding;
-  }
+  private static double ParsePaddingPercent(string? value) =>
+    double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var padding) &&
+    double.IsFinite(padding) && padding >= 0.0
+      ? padding
+      : DefaultPadding;
 
   private static TextEntity CreateDisplayText(
     RhinoObject titleObject,

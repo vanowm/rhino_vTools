@@ -1,27 +1,38 @@
-using System;
-using System.Collections.Generic;
-using System.Drawing;
-using System.Globalization;
-using System.Linq;
-using Rhino;
-using Rhino.Commands;
-using Rhino.DocObjects;
-using Rhino.Display;
-using Rhino.Geometry;
-using Rhino.Input;
-using Rhino.Input.Custom;
-
 namespace vTools.Commands
 {
+  using System;
+  using System.Collections.Generic;
+  using System.Drawing;
+  using System.Globalization;
+  using System.Linq;
+  using Rhino;
+  using Rhino.Commands;
+  using Rhino.DocObjects;
+  using Rhino.Display;
+  using Rhino.Geometry;
+  using Rhino.Input;
+  using Rhino.Input.Custom;
+
   /// <summary>
   /// vMatch — click near an edge mate dot on a flat unrolled part;
   /// the neighbour part is moved and rotated so its mating edge aligns
   /// with the selected edge at the specified gap distance.
   /// Auto sub-mode assembles a whole selection via BFS (with optional
-  /// RandStart / RandNext randomisation).
+  /// StartFrom / RandNext controls).
   /// </summary>
-  public sealed class vMatch : vToolsCommand
+  public sealed partial class vMatch : vToolsCommand
   {
+    // Option defaults
+    private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
+    private const AutoStartMode DefaultStartFrom = AutoStartMode.Pick; // Random chooses the first part; Pick requests a stationary center part and alternates outward sides.
+    private static readonly string[] StartFromNames = ["Random","Pick"]; // Auto start modes in AutoStartMode enum order.
+    private const int DefaultCenteredSide = 1; // Initial preferred root-axis side; +1 then -1 alternate after successful placements.
+    private const double CenteredAxisTolerance = 1e-10; // Model-unit threshold for treating root mate-dot positions as coincident.
+    private const bool DefaultRandNext = true; // In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.
+    private const int AutoLiveRefreshMilliseconds = 150; // Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.
+    private static readonly PreviewDisplay.ObjectHighlightStyle MiddlePartStyle = new( // Magenta body/dark outline and 0-1 transparency distinguish the fixed middle from selection and cyan matching.
+      Color.Magenta,Color.DarkMagenta,Color.White,0.45);
+
     // ── Constants shared with vUnrollSrf / MultiUnroll2.py ────────────────
     internal const string EdgeMateName        = "MultiUnroll_EdgeMate"; // Object name assigned to generated matching edge dots.
     internal const string EdgeMateIdKey       = "MultiUnrollEdgeMateId"; // User-data key for the shared match identifier.
@@ -33,12 +44,8 @@ namespace vTools.Commands
     private const string SectionName   = "vMatch";
     private const string KeyDist       = "distance";
     private const string KeyRandStart  = "randStart";
+    private const string KeyStartFrom = "startFrom";
     private const string KeyRandNext   = "randNext";
-
-    // Option defaults
-    private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
-    private const bool DefaultRandStart = true; // true randomizes the first layout position; false uses deterministic placement.
-    private const bool DefaultRandNext = true; // true randomizes subsequent layout positions; false uses deterministic placement.
 
     private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
     private const double CursorReleaseRadiusPixels = 12.0; // Cursor travel in display pixels required before re-enabling edge snap after a match; zero or greater.
@@ -48,10 +55,11 @@ namespace vTools.Commands
     private static readonly Color MatePartHighlightColor = Color.Cyan; // Matching destination-part highlight color.
 
     private static double _distance   = DefaultDistance;
-    private static bool   _randStart  = DefaultRandStart;
+    private static AutoStartMode _startFrom = DefaultStartFrom;
     private static bool   _randNext   = DefaultRandNext;
 
     private static readonly Random _rng = new Random();
+    private enum AutoStartMode { Random,Pick }
 
     public override string EnglishName => "vMatch";
 
@@ -176,9 +184,7 @@ namespace vTools.Commands
           .FirstOrDefault();
         MateDot = SourceDot == null
           ? null
-          : _dots.FirstOrDefault(dot =>
-              dot.Id != SourceDot.Id &&
-              string.Equals(dot.MateId, SourceDot.MateId, StringComparison.Ordinal));
+          : FindClosestMate(_doc, _dots, SourceDot);
 
         if (MateDot == null)
           SourceDot = null;
@@ -203,6 +209,7 @@ namespace vTools.Commands
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     {
       LoadSettings();
+      var initialAutoSelection = SelectedAutoPartIds(doc);
 
       var dots = ScanDots(doc);
       if (dots.Count == 0)
@@ -214,6 +221,9 @@ namespace vTools.Commands
       var undoMoves = new Stack<MatchMove>();
       var redoMoves = new Stack<MatchMove>();
       var mateEdges = BuildMateEdges(doc, dots);
+      using var overlapPreview = new MatchOverlapPreview(doc);
+      using var autoMembersPreview = new PreviewDisplay.ObjectHighlighter(doc);
+      using var middlePreview = new PreviewDisplay.ObjectHighlighter(doc,MiddlePartStyle);
       using var shortcutSession = new LocalUndoRedoShortcutSession(
         "vMatch",
         redo => new MatchHistoryRequest(redo));
@@ -225,6 +235,7 @@ namespace vTools.Commands
           gp.SetCommandPrompt("Click a highlighted edge to match its part");
           int idxDist = gp.AddOption("Distance", $"{_distance:G}");
           int idxAuto = gp.AddOption("Auto");
+          int idxOverlaps = gp.AddOption("Overlaps");
           int idxRedo = gp.AddOption("Redo", string.Empty, true);
           gp.AcceptNumber(true, true);
           gp.AcceptNothing(false);
@@ -247,6 +258,7 @@ namespace vTools.Commands
             if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, historyRequest.Redo, out int changedGroup))
             {
               RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+              overlapPreview.Refresh();
             }
             continue;
           }
@@ -256,6 +268,7 @@ namespace vTools.Commands
             if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, false, out int changedGroup))
             {
               RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+              overlapPreview.Refresh();
             }
             continue;
           }
@@ -277,19 +290,30 @@ namespace vTools.Commands
               if (ApplyMatchHistory(doc, dots, undoMoves, redoMoves, true, out int changedGroup))
               {
                 RefreshMateEdges(doc, dots, mateEdges, changedGroup);
+                overlapPreview.Refresh();
               }
               continue;
             }
             if (opt != null && opt.Index == idxAuto)
             {
-              dots = AutoAlign(doc, dots, _distance);
+              var autoSelection = SelectedAutoPartIds(doc);
+              if(autoSelection.Count==0) autoSelection=new HashSet<Guid>(initialAutoSelection);
+              initialAutoSelection.Clear();
+              gp.Dispose();
+              dots = AutoAlign(doc, dots, _distance, overlapPreview,middlePreview,autoMembersPreview,autoSelection);
               mateEdges = BuildMateEdges(doc, dots);
               undoMoves.Clear();
               redoMoves.Clear();
               continue;
             }
+            if (opt != null && opt.Index == idxOverlaps)
+            {
+              overlapPreview.TrackGroups(dots.Select(dot => GrpOf(doc, dot.Id)));
+              RhinoApp.WriteLine($"vMatch: {overlapPreview.OverlappingObjectCount} overlapping surfaces.");
+              continue;
+            }
             // Distance — sub-prompt (memory rule: no AddOptionDouble)
-            var gs = new GetString();
+            using var gs = new GetString();
             gs.SetCommandPrompt($"Gap distance");
             gs.SetDefaultString($"{_distance:G}");
             gs.AcceptNothing(true);
@@ -339,8 +363,10 @@ namespace vTools.Commands
           if (!ApplyMatchMove(doc, dots, move, true)) continue;
           long transformMilliseconds = moveTimer.ElapsedMilliseconds;
           undoMoves.Push(move);
+          initialAutoSelection.Clear();
           redoMoves.Clear();
           RefreshMateEdges(doc, dots, mateEdges, mateGrp);
+          overlapPreview.TrackGroups(new[] { srcGrp, mateGrp });
           vTools.Log.Write("vMatch",
             $"move timing transform={transformMilliseconds}ms" +
             $" refresh={moveTimer.ElapsedMilliseconds - transformMilliseconds}ms" +
@@ -437,29 +463,24 @@ namespace vTools.Commands
     }
 
     // ── Auto sub-mode — inner loop with persistent multi-selection ─────────
-    private static List<Dot> AutoAlign(RhinoDoc doc, List<Dot> allDots, double distance)
+    private static List<Dot> AutoAlign(RhinoDoc doc, List<Dot> allDots, double distance, MatchOverlapPreview overlapPreview,
+      PreviewDisplay.ObjectHighlighter middlePreview,PreviewDisplay.ObjectHighlighter autoMembersPreview,IReadOnlyCollection<Guid> preselection)
     {
       var brepsFilt = ObjectType.Brep | ObjectType.Surface | ObjectType.Extrusion;
+      middlePreview.SetObjects(Array.Empty<Guid>());
+      autoMembersPreview.SetObjects(Array.Empty<Guid>());
 
       while (true)
       {
-        // Pass 1: snapshot whatever is currently selected (instant, no prompt)
-        var goPre = new GetObject();
-        goPre.EnableTransparentCommands(true);
-        goPre.GeometryFilter  = brepsFilt;
-        goPre.SubObjectSelect = false;
-        goPre.GroupSelect     = true;
-        goPre.EnablePreSelect(true, true);
-        goPre.EnablePostSelect(false);
-        goPre.GetMultiple(0, 0);
-        var snapIds = new HashSet<Guid>(
-            Enumerable.Range(0, goPre.ObjectCount).Select(i => goPre.Object(i).ObjectId));
+        var snapGroups=preselection.Select(id=>GrpOf(doc,id)).Where(group=>group>=0).ToHashSet();
+        preselection=Array.Empty<Guid>();
+        doc.Objects.UnselectAll();
+        autoMembersPreview.SetObjects(snapGroups.SelectMany(group=>ObjsInGrp(doc,group)));
 
         // Pass 2: interactive — add / remove parts, toggle options
-        var optRs  = new OptionToggle(_randStart, "Off", "On");
         var optRn  = new OptionToggle(_randNext,  "Off", "On");
 
-        var go = new GetObject();
+        using var go = new GetObject();
         go.EnableTransparentCommands(true);
         go.SetCommandPrompt("Add/remove parts, Enter=run");
         go.GeometryFilter            = brepsFilt;
@@ -475,7 +496,7 @@ namespace vTools.Commands
 
         int idxBack = go.AddOption("Back");
         int idxDist = go.AddOption("Distance", $"{_distance:G}");
-        go.AddOptionToggle("RandStart", ref optRs);
+        int idxStart = go.AddOptionList("StartFrom",StartFromNames,(int)_startFrom);
         go.AddOptionToggle("RandNext",  ref optRn);
         go.AcceptNumber(true, true);
 
@@ -483,11 +504,11 @@ namespace vTools.Commands
         while (true)
         {
           var ires = go.GetMultiple(0, 0);
-          bool rsChanged = optRs.CurrentValue != _randStart;
+          var oldStart = _startFrom;
+          if(ires==GetResult.Option&&go.Option()?.Index==idxStart) _startFrom=(AutoStartMode)go.Option()!.CurrentListOptionIndex;
           bool rnChanged = optRn.CurrentValue != _randNext;
-          _randStart = optRs.CurrentValue;
           _randNext  = optRn.CurrentValue;
-          if (rsChanged || rnChanged) SaveSettings();
+          if (oldStart!=_startFrom || rnChanged) SaveSettings();
 
           if (go.CommandResult() == Result.Cancel)
           {
@@ -512,7 +533,7 @@ namespace vTools.Commands
             if (opt != null && opt.Index == idxBack) { goBack = true; break; }
             if (opt != null && opt.Index == idxDist)
             {
-              var gs = new GetString();
+              using var gs = new GetString();
               gs.SetCommandPrompt("Gap distance");
               gs.SetDefaultString($"{_distance:G}");
               gs.AcceptNothing(true);
@@ -539,32 +560,21 @@ namespace vTools.Commands
           return ScanDots(doc);
         }
 
-        // XOR: objects clicked in both passes = user toggled them off
-        var interIds = new HashSet<Guid>(
-            Enumerable.Range(0, go.ObjectCount).Select(i => go.Object(i).ObjectId));
-        var finalIds = new HashSet<Guid>(snapIds);
-        finalIds.SymmetricExceptWith(interIds);
-
-        // Sync Rhino selection to the XOR result (deselect the toggled-off ones)
-        foreach (var id in snapIds.Intersect(interIds))
-          doc.Objects.FindId(id)?.Select(false);
-
-        if (finalIds.Count == 0) continue;
-
-        // Collect group indices in first-seen order
-        var selGrpList = new List<int>();
-        var seenGrps   = new HashSet<int>();
-        foreach (var id in finalIds)
-        {
-          int g = GrpOf(doc, id);
-          if (g >= 0 && seenGrps.Add(g)) selGrpList.Add(g);
-        }
+        var clickedGroups=Enumerable.Range(0,go.ObjectCount).Select(index=>GrpOf(doc,go.Object(index).ObjectId)).Where(group=>group>=0);
+        var selGrpList=CombineAutoGroups(snapGroups,clickedGroups).ToList();
         if (selGrpList.Count == 0) continue;
 
         var selGrpSet = new HashSet<int>(selGrpList);
-        int rootGrp   = _randStart
-          ? selGrpList[_rng.Next(selGrpList.Count)]
-          : selGrpList[0];
+        go.Dispose();
+        distance=_distance;
+        int rootGrp = _startFrom==AutoStartMode.Pick?PickAutoRoot(doc,selGrpSet,brepsFilt):selGrpList[_rng.Next(selGrpList.Count)];
+        if(rootGrp<0) return ScanDots(doc);
+        if(_startFrom==AutoStartMode.Pick)
+        {
+          middlePreview.SetObjects(ObjsInGrp(doc,rootGrp));
+          RhinoApp.WriteLine("vMatch: matching outward from the magenta middle part.");
+          RhinoApp.Wait();
+        }
 
         // mate_id → dots lookup
         var mateMap = new Dictionary<string, List<Dot>>();
@@ -577,8 +587,26 @@ namespace vTools.Commands
 
         var placed = new HashSet<int> { rootGrp };
         var queue  = new List<int>    { rootGrp };
-        doc.Views.RedrawEnabled = false;
-        try
+        void RefreshHighlights(IEnumerable<int> groups) => autoMembersPreview.SetObjects(
+          groups.Where(group=>_startFrom!=AutoStartMode.Pick||group!=rootGrp).SelectMany(group=>ObjsInGrp(doc,group)));
+        doc.Objects.UnselectAll();
+        RefreshHighlights(selGrpSet);
+        var displayTimer=System.Diagnostics.Stopwatch.StartNew();
+        int displayRefreshes=0;
+        long displayMilliseconds=0;
+        Action placementUpdated=()=>
+        {
+          if(!ShouldRefreshAutoDisplay(displayTimer.ElapsedMilliseconds)) return;
+          var started=System.Diagnostics.Stopwatch.StartNew();
+          bool redrawBefore=doc.Views.RedrawEnabled;
+          try { doc.Views.EnableRedraw(false,false,false); RefreshHighlights(selGrpSet); }
+          finally { doc.Views.EnableRedraw(redrawBefore,false,false); }
+          doc.Views.ActiveView?.Redraw(); RhinoApp.Wait();
+          displayMilliseconds+=started.ElapsedMilliseconds; displayRefreshes++; displayTimer.Restart();
+        };
+        if(_startFrom==AutoStartMode.Pick)
+          AssembleFromMiddle(doc,allDots,mateMap,selGrpSet,rootGrp,distance,placed,placementUpdated);
+        else
         {
           while (queue.Count > 0)
           {
@@ -590,62 +618,60 @@ namespace vTools.Commands
             foreach (var src in currDots)
             {
               if (!mateMap.TryGetValue(src.MateId, out var mList)) continue;
-              var mateInfo = mList.FirstOrDefault(m => m.Id != src.Id);
+              var mateInfo = FindClosestMate(doc, mList, src,
+                group => selGrpSet.Contains(group) && !placed.Contains(group));
               if (mateInfo == null) continue;
 
               int mateGrp = GrpOf(doc, mateInfo.Id);
               if (!selGrpSet.Contains(mateGrp) || placed.Contains(mateGrp)) continue;
 
-              var srcDotPt  = src.Position;
-              var srcObjs   = ObjsInGrp(doc, currGrp);
-              var mateObjs  = ObjsInGrp(doc, mateGrp);
-              if (srcObjs.Count == 0 || mateObjs.Count == 0) continue;
-
-              var srcTang  = Tang2d(srcDotPt,           NakedEdges(doc, srcObjs));
-              var mateTang = Tang2d(mateInfo.Position, NakedEdges(doc, mateObjs));
-              if (srcTang == null || mateTang == null) continue;
-
-              var srcOut = Outward2d(doc, srcDotPt, srcTang.Value, srcObjs);
-              var target = new Point3d(srcDotPt.X + srcOut.X * distance,
-                                       srcDotPt.Y + srcOut.Y * distance, 0.0);
-
-              vTools.Log.Write("vMatch",
-                $"auto match id={src.MateId} source_part={src.PartNum}" +
-                $" mate_part={mateInfo.PartNum} source_group={currGrp}" +
-                $" mate_group={mateGrp} source_out={srcOut}");
-
-              var xf = PlaceXform(doc, srcTang.Value, srcOut, target,
-                                   mateInfo.Position, mateTang.Value, mateObjs);
-              if (!xf.HasValue) continue;
-
-              var movedIds = TransformObjectsAndDots(doc, allDots, mateObjs, xf.Value);
-              if (movedIds.Count == 0)
-                continue;
+              if(!TryAutoPlace(doc,allDots,src,mateInfo,currGrp,mateGrp,distance,placementUpdated)) continue;
 
               placed.Add(mateGrp);
               queue.Add(mateGrp);
             }
           }
         }
-        finally { doc.Views.RedrawEnabled = true; }
 
-        doc.Views.Redraw();
+        overlapPreview.TrackGroups(placed);
         allDots = ScanDots(doc);
 
-        // Reselect all assembled parts so the user can see what moved
-        foreach (var grp in selGrpSet)
-          foreach (var id in ObjsInGrp(doc, grp))
-            doc.Objects.FindId(id)?.Select(true);
-        doc.Views.Redraw();
+        RefreshHighlights(placed);
+        Log.Write("vMatch","auto display refreshes={0} elapsed_ms={1} placed={2}",displayRefreshes,displayMilliseconds,placed.Count);
+        return allDots;
       }
     }
 
     // ── Geometry helpers ───────────────────────────────────────────────────
 
+    private static Dot? FindClosestMate(
+      RhinoDoc doc, IEnumerable<Dot> dots, Dot source, Func<int, bool>? eligibleGroup = null)
+    {
+      int sourceGroup = GrpOf(doc, source.Id);
+      return dots.Where(dot => dot.Id != source.Id &&
+          string.Equals(dot.MateId, source.MateId, StringComparison.Ordinal))
+        .Where(dot =>
+        {
+          int group = GrpOf(doc, dot.Id);
+          return group >= 0 && group != sourceGroup && (eligibleGroup == null || eligibleGroup(group));
+        })
+        .OrderBy(dot => source.Position.DistanceToSquared(dot.Position))
+        .ThenBy(dot => dot.Id)
+        .FirstOrDefault();
+    }
+
     private static List<Dot> ScanDots(RhinoDoc doc)
     {
       var result = new List<Dot>();
-      foreach (var obj in doc.Objects)
+      var settings = new ObjectEnumeratorSettings
+      {
+        ObjectTypeFilter = ObjectType.TextDot,
+        NormalObjects = true,
+        LockedObjects = true,
+        HiddenObjects = true,
+        DeletedObjects = false
+      };
+      foreach (var obj in doc.Objects.GetObjectList(settings))
       {
         if (obj.ObjectType != ObjectType.TextDot) continue;
         if (obj.Attributes.Name != EdgeMateName) continue;
@@ -1118,10 +1144,13 @@ namespace vTools.Commands
         if (ToolsOptionStore.TryGetDouble(s, KeyDist, out var d) && d >= 0.0)
           _distance = d;
 
-        if (ToolsOptionStore.TryGetBool(s, KeyRandStart, out var rs))
-          _randStart = rs;
+        if(ToolsOptionStore.TryGetString(s,KeyStartFrom,out var start)&&Enum.TryParse(start,true,out AutoStartMode parsed)&&Enum.IsDefined(parsed))
+          _startFrom=parsed;
+        else if (ToolsOptionStore.TryGetBool(s, KeyRandStart, out var rs))
+          _startFrom = rs?AutoStartMode.Random:AutoStartMode.Pick;
         else if (ToolsOptionStore.TryGetDouble(s, KeyRandStart, out var oldRs))
-          _randStart = oldRs > 0.5;
+          _startFrom = oldRs>0.5?AutoStartMode.Random:AutoStartMode.Pick;
+        else _startFrom=DefaultStartFrom;
 
         if (ToolsOptionStore.TryGetBool(s, KeyRandNext, out var rn))
           _randNext = rn;
@@ -1137,12 +1166,355 @@ namespace vTools.Commands
       var saved = ToolsOptionStore.Update(SectionName, s =>
       {
         s[KeyDist]      = _distance;
-        s[KeyRandStart] = _randStart;
+        s[KeyStartFrom] = _startFrom.ToString();
         s[KeyRandNext]  = _randNext;
       });
       if (!saved)
         RhinoApp.WriteLine($"vMatch: failed to save options: {ToolsOptionStore.LastError}");
     }
   }
+}
 
+namespace vTools.Commands
+{
+  using Rhino;
+  using Rhino.DocObjects;
+  using Rhino.Geometry;
+  using Rhino.Input;
+  using Rhino.Input.Custom;
+
+
+  public sealed partial class vMatch
+  {
+    private static HashSet<Guid> SelectedAutoPartIds(RhinoDoc doc) => doc.Objects.GetSelectedObjects(false,false)
+      .Where(obj=>obj.Geometry is Brep or Surface or Extrusion).Select(obj=>obj.Id).ToHashSet();
+
+    private static HashSet<int> CombineAutoGroups(IEnumerable<int> initial,IEnumerable<int> clicked)
+    {
+      var result=initial.ToHashSet(); result.SymmetricExceptWith(clicked.Distinct()); return result;
+    }
+
+    private static bool ShouldRefreshAutoDisplay(long elapsedMilliseconds) => elapsedMilliseconds>=AutoLiveRefreshMilliseconds;
+
+    private sealed record AutoFrontier(Dot Source,int Group,int Side,int Depth);
+
+    private static int PickAutoRoot(RhinoDoc doc,HashSet<int> groups,ObjectType filter)
+    {
+      var selection=doc.Objects.GetSelectedObjects(false,false).Select(obj=>obj.Id).ToArray();
+      try
+      {
+        doc.Objects.UnselectAll();
+        using var members=new PreviewDisplay.ObjectHighlighter(doc);
+        members.SetObjects(groups.SelectMany(group=>ObjsInGrp(doc,group)));
+        using var getter=new GetObject(); getter.SetCommandPrompt("Pick the middle part to keep fixed");
+        getter.EnableHighlight(false);
+        getter.EnablePressEnterWhenDonePrompt(false);
+        getter.GeometryFilter=filter; getter.GroupSelect=false; getter.SubObjectSelect=false;
+        getter.EnablePreSelect(false,true); getter.AlreadySelectedObjectSelect=true;
+        getter.EnableClearObjectsOnEntry(false); getter.EnableUnselectObjectsOnExit(false); getter.DeselectAllBeforePostSelect=false;
+        getter.SetCustomGeometryFilter((obj,_,_)=>groups.Contains(GrpOf(doc,obj.Id)));
+        if(getter.Get()==GetResult.Object)
+        {
+          int group=GrpOf(doc,getter.Object(0).ObjectId);
+          selection=Array.Empty<Guid>();
+          return group;
+        }
+        return -1;
+      }
+      finally { doc.Objects.UnselectAll(); foreach(var id in selection) doc.Objects.FindId(id)?.Select(true); }
+    }
+
+    private static void AssembleFromMiddle(RhinoDoc doc,List<Dot> dots,Dictionary<string,List<Dot>> mates,HashSet<int> groups,
+      int root,double distance,HashSet<int> placed,Action? placementUpdated=null)
+    {
+      var rootDots=dots.Where(dot=>GrpOf(doc,dot.Id)==root).ToArray();
+      var bounds=BoundingBox.Empty;
+      if(rootDots.Length>1) foreach(var dot in rootDots) bounds.Union(dot.Position);
+      else foreach(var id in ObjsInGrp(doc,root)) if(doc.Objects.FindId(id) is {} obj) bounds.Union(obj.Geometry.GetBoundingBox(true));
+      var center=bounds.IsValid?bounds.Center:rootDots.Select(dot=>dot.Position).FirstOrDefault();
+      var axis=CenteredStartAxis(rootDots.Select(dot=>dot.Position).ToArray());
+      var frontier=new List<AutoFrontier>();
+      void Add(int group,int side,int depth)
+      {
+        foreach(var dot in dots.Where(dot=>GrpOf(doc,dot.Id)==group))
+        {
+          int branch=side==0?((dot.Position-center)*axis<0?-1:1):side;
+          frontier.Add(new(dot,group,branch,depth));
+        }
+      }
+      Add(root,0,1); int desired=DefaultCenteredSide;
+      Log.Write("vMatch","auto center group={0} axis={1}",root,axis);
+      while(frontier.Count>0)
+      {
+        int index=NextCenteredFrontier(frontier.Select(item=>item.Side).ToArray(),frontier.Select(item=>item.Depth).ToArray(),desired,false);
+        var item=frontier[index]; frontier.RemoveAt(index);
+        if(!mates.TryGetValue(item.Source.MateId,out var candidates)) continue;
+        var mate=FindClosestMate(doc,candidates,item.Source,group=>groups.Contains(group)&&!placed.Contains(group));
+        if(mate==null) continue;
+        int target=GrpOf(doc,mate.Id);
+        if(!TryAutoPlace(doc,dots,item.Source,mate,item.Group,target,distance,placementUpdated)) continue;
+        placed.Add(target); Add(target,item.Side,item.Depth+1); desired=-item.Side;
+        Log.Write("vMatch","auto middle step group={0} side={1} depth={2}",target,item.Side,item.Depth);
+      }
+    }
+
+    private static Vector3d CenteredStartAxis(IReadOnlyList<Point3d> points)
+    {
+      double longest=0,x=1,y=0;
+      for(int first=0;first<points.Count;first++) for(int second=first+1;second<points.Count;second++)
+      {
+        double dx=points[second].X-points[first].X,dy=points[second].Y-points[first].Y,length=dx*dx+dy*dy;
+        if(length>longest) { longest=length; x=dx; y=dy; }
+      }
+      double magnitude=Math.Sqrt(x*x+y*y);
+      if(magnitude<=CenteredAxisTolerance) return Vector3d.XAxis;
+      if(x<0||Math.Abs(x)<=CenteredAxisTolerance&&y<0) { x=-x; y=-y; }
+      return new(x/magnitude,y/magnitude,0);
+    }
+
+    private static int NextCenteredFrontier(IReadOnlyList<int> sides,IReadOnlyList<int> depths,int desired,bool random)
+    {
+      int depth=depths.Min();
+      var layer=Enumerable.Range(0,sides.Count).Where(index=>depths[index]==depth).ToArray();
+      var preferred=layer.Where(index=>sides[index]==desired).ToArray();
+      var available=preferred.Length>0?preferred:layer;
+      return available[random?_rng.Next(available.Length):0];
+    }
+
+    private static bool TryAutoPlace(RhinoDoc doc,IReadOnlyList<Dot> dots,Dot source,Dot mate,int sourceGroup,int mateGroup,double distance,
+      Action? placementUpdated=null)
+    {
+      var placementTimer=System.Diagnostics.Stopwatch.StartNew();
+      var sourceObjects=ObjsInGrp(doc,sourceGroup); var mateObjects=ObjsInGrp(doc,mateGroup);
+      if(sourceObjects.Count==0||mateObjects.Count==0) return false;
+      var sourceEdges=NakedEdges(doc,sourceObjects); var mateEdges=NakedEdges(doc,mateObjects);
+      Vector3d? sourceTangent,mateTangent;
+      try { sourceTangent=Tang2d(source.Position,sourceEdges); mateTangent=Tang2d(mate.Position,mateEdges); }
+      finally { foreach(var edge in sourceEdges) edge.Dispose(); foreach(var edge in mateEdges) edge.Dispose(); }
+      if(sourceTangent==null||mateTangent==null) return false;
+      var outward=Outward2d(doc,source.Position,sourceTangent.Value,sourceObjects);
+      var target=new Point3d(source.Position.X+outward.X*distance,source.Position.Y+outward.Y*distance,0);
+      var transform=PlaceXform(doc,sourceTangent.Value,outward,target,mate.Position,mateTangent.Value,mateObjects);
+      if(!transform.HasValue) return false;
+      bool redrawBefore=doc.Views.RedrawEnabled;
+      List<Guid> moved;
+      try { doc.Views.EnableRedraw(false,false,false); moved=TransformObjectsAndDots(doc,dots,mateObjects,transform.Value); }
+      finally { doc.Views.EnableRedraw(redrawBefore,false,false); }
+      if(moved.Count==0) return false;
+      if(placementUpdated!=null) placementUpdated();
+      else { doc.Views.Redraw(); RhinoApp.Wait(); }
+      Log.Write("vMatch","auto match id={0} source_part={1} mate_part={2} source_group={3} mate_group={4} source_out={5} elapsed_ms={6}",source.MateId,source.PartNum,mate.PartNum,sourceGroup,mateGroup,outward,placementTimer.ElapsedMilliseconds);
+      return true;
+    }
+  }
+}
+
+namespace vTools.Commands
+{
+  using Rhino;
+  using Rhino.DocObjects;
+  using Rhino.Geometry;
+  using System.Drawing;
+
+
+  internal sealed class MatchOverlapPreview : IDisposable
+  {
+    // Defaults and customizable detection tolerances
+    private const double FaceCoincidenceToleranceFactor = 5.0; // Document absolute-tolerance multiplier for comparing face planes; one or greater.
+    private static readonly PreviewDisplay.ObjectHighlightStyle OverlapHighlightStyle = new( // Overlap-only palette; RGB colors and shading transparency distinguish it from the cyan matching preview.
+      BodyColor: Color.FromArgb(255, 128, 0), // RGB orange face/wire overlay color.
+      OutlineColor: Color.FromArgb(90, 45, 0), // RGB dark-orange outline around overlapping objects.
+      DotBackground: Color.FromArgb(90, 45, 0), // RGB background for highlighted dots, if present.
+      Transparency: 0.55); // Shaded transparency from 0.0 opaque through 1.0 invisible.
+
+    private readonly RhinoDoc _doc;
+    private readonly HashSet<int> _groups = [];
+    private readonly Dictionary<Guid, ObjectState> _objects = [];
+    private readonly HashSet<Guid> _changedObjects = [];
+    private readonly HashSet<FaceOverlapFinder.FacePair> _overlappingPairs = [];
+    private readonly PreviewDisplay.ObjectHighlighter _highlighter;
+    private double _tolerance;
+    private bool _dirty;
+    private bool _disposed;
+
+    private readonly record struct ObjectState(int Group, uint SerialNumber);
+
+    internal int OverlappingObjectCount => OverlappingObjectIds(_overlappingPairs).Count;
+
+    internal MatchOverlapPreview(RhinoDoc doc)
+    {
+      _doc = doc;
+      _highlighter = new PreviewDisplay.ObjectHighlighter(doc, OverlapHighlightStyle);
+      RhinoDoc.AddRhinoObject += OnObjectChanged;
+      RhinoDoc.DeleteRhinoObject += OnObjectChanged;
+      RhinoDoc.UndeleteRhinoObject += OnObjectChanged;
+      RhinoDoc.ReplaceRhinoObject += OnObjectReplaced;
+      RhinoDoc.ModifyObjectAttributes += OnAttributesChanged;
+      RhinoApp.Idle += OnIdle;
+    }
+
+    internal void TrackGroups(IEnumerable<int> groups)
+    {
+      _groups.UnionWith(groups.Where(index => index >= 0));
+      Refresh();
+    }
+
+    internal void Refresh()
+    {
+      if (_disposed) return;
+      _dirty = false;
+      var timer = System.Diagnostics.Stopwatch.StartNew();
+      try
+      {
+        var current = SurfaceObjects(_doc, _groups);
+        foreach (var (id, entry) in current)
+        {
+          var state = new ObjectState(entry.Group, entry.Object.RuntimeSerialNumber);
+          if (!_objects.TryGetValue(id, out var previous) || previous != state)
+            _changedObjects.Add(id);
+        }
+        foreach (var id in _objects.Keys)
+          if (!current.ContainsKey(id)) _changedObjects.Add(id);
+
+        double tolerance = Math.Max(_doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+        if (tolerance != _tolerance) _changedObjects.UnionWith(current.Keys);
+        if (_changedObjects.Count == 0) return;
+
+        // Keep stationary pairs; only a changed endpoint can change their overlap.
+        var result = FindPairs(current, tolerance, _changedObjects);
+        _overlappingPairs.RemoveWhere(pair =>
+          _changedObjects.Contains(pair.First.ObjectId) || _changedObjects.Contains(pair.Second.ObjectId));
+        _overlappingPairs.UnionWith(result.OverlappingPairs);
+        var overlaps = OverlappingObjectIds(_overlappingPairs);
+        _highlighter.SetObjects(overlaps);
+        _objects.Clear();
+        foreach (var (id, entry) in current)
+          _objects.Add(id, new ObjectState(entry.Group, entry.Object.RuntimeSerialNumber));
+        _tolerance = tolerance;
+        Log.Write("vMatch", $"overlap groups={_groups.Count} changed={_changedObjects.Count} " +
+          $"faces={result.FaceCount} checks={result.PairChecks} surfaces={overlaps.Count} elapsed={timer.ElapsedMilliseconds}ms");
+        _changedObjects.Clear();
+      }
+      catch (Exception ex)
+      {
+        _highlighter.SetObjects(Array.Empty<Guid>());
+        _objects.Clear();
+        _overlappingPairs.Clear();
+        Log.Write("vMatch", $"overlap detection failed: {ex.Message}");
+      }
+    }
+
+    internal static HashSet<Guid> FindOverlappingObjects(RhinoDoc doc, IReadOnlyCollection<int> groups)
+    {
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+      return OverlappingObjectIds(FindPairs(SurfaceObjects(doc, groups), tolerance).OverlappingPairs);
+    }
+
+    private static Dictionary<Guid, (RhinoObject Object, int Group)> SurfaceObjects(
+      RhinoDoc doc, IReadOnlyCollection<int> groups)
+    {
+      var objects = new Dictionary<Guid, (RhinoObject, int)>();
+      foreach (int group in groups)
+        foreach (var obj in doc.Groups.GroupMembers(group) ?? Array.Empty<RhinoObject>())
+          if (!obj.IsDeleted && !obj.IsHidden && obj.IsValid &&
+              obj.Geometry is Brep or Extrusion or Surface)
+            objects.TryAdd(obj.Id, (obj, group));
+      return objects;
+    }
+
+    private static HashSet<Guid> OverlappingObjectIds(IEnumerable<FaceOverlapFinder.FacePair> pairs) =>
+      pairs.SelectMany(pair => new[] { pair.First.ObjectId, pair.Second.ObjectId }).ToHashSet();
+
+    private static FaceOverlapFinder.Result FindPairs(
+      Dictionary<Guid, (RhinoObject Object, int Group)> objects,
+      double tolerance,
+      ISet<Guid>? changedObjects = null)
+    {
+      var faces = new List<FaceOverlapFinder.FaceItem>();
+      var ownedBreps = new List<Brep>();
+      try
+      {
+        foreach (var (id, entry) in objects)
+        {
+          Brep? brep = entry.Object.Geometry as Brep;
+          if (brep == null)
+          {
+            brep = entry.Object.Geometry switch
+            {
+              Extrusion extrusion => extrusion.ToBrep(),
+              Surface surface => surface.ToBrep(),
+              _ => null
+            };
+            if (brep == null) continue;
+            ownedBreps.Add(brep);
+          }
+          foreach (var face in brep.Faces)
+            faces.Add(new FaceOverlapFinder.FaceItem(new(id, face.FaceIndex), face));
+        }
+
+        return FaceOverlapFinder.Find(faces, tolerance * FaceCoincidenceToleranceFactor, tolerance,
+          (first, second) => objects[first.ObjectId].Group != objects[second.ObjectId].Group &&
+            (changedObjects == null || changedObjects.Contains(first.ObjectId) || changedObjects.Contains(second.ObjectId)));
+      }
+      finally
+      {
+        foreach (var brep in ownedBreps) brep.Dispose();
+      }
+    }
+
+    private bool IsTracked(RhinoObject? obj) =>
+      obj?.Document?.RuntimeSerialNumber == _doc.RuntimeSerialNumber &&
+      (obj.Attributes.GetGroupList() ?? Array.Empty<int>()).Any(_groups.Contains);
+
+    private void OnObjectChanged(object? sender, RhinoObjectEventArgs e)
+    {
+      if (IsTracked(e.TheObject))
+      {
+        _changedObjects.Add(e.TheObject.Id);
+        _dirty = true;
+      }
+    }
+
+    private void OnObjectReplaced(object? sender, RhinoReplaceObjectEventArgs e)
+    {
+      if (IsTracked(e.OldRhinoObject) || IsTracked(e.NewRhinoObject))
+      {
+        if (e.OldRhinoObject != null) _changedObjects.Add(e.OldRhinoObject.Id);
+        if (e.NewRhinoObject != null) _changedObjects.Add(e.NewRhinoObject.Id);
+        _dirty = true;
+      }
+    }
+
+    private void OnAttributesChanged(object? sender, RhinoModifyObjectAttributesEventArgs e)
+    {
+      if (e.Document.RuntimeSerialNumber == _doc.RuntimeSerialNumber &&
+          ((e.OldAttributes.GetGroupList() ?? Array.Empty<int>()).Any(_groups.Contains) || IsTracked(e.RhinoObject)))
+      {
+        _changedObjects.Add(e.RhinoObject.Id);
+        _dirty = true;
+      }
+    }
+
+    private void OnIdle(object? sender, EventArgs e)
+    {
+      if (_dirty) Refresh();
+    }
+
+    public void Dispose()
+    {
+      if (_disposed) return;
+      _disposed = true;
+      RhinoDoc.AddRhinoObject -= OnObjectChanged;
+      RhinoDoc.DeleteRhinoObject -= OnObjectChanged;
+      RhinoDoc.UndeleteRhinoObject -= OnObjectChanged;
+      RhinoDoc.ReplaceRhinoObject -= OnObjectReplaced;
+      RhinoDoc.ModifyObjectAttributes -= OnAttributesChanged;
+      RhinoApp.Idle -= OnIdle;
+      _groups.Clear();
+      _objects.Clear();
+      _changedObjects.Clear();
+      _overlappingPairs.Clear();
+      _highlighter.Dispose();
+    }
+  }
 }

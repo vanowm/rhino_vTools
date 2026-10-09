@@ -25,6 +25,15 @@ internal static class PreviewDisplay
   private const float ObjectHighlightSubDStrokeWidth = 2.0f; // Cyan SubD wire width in display pixels; positive float.
   private const float ObjectHighlightSubDOutlineWidth = 4.0f; // Dark SubD outline width in display pixels; greater than the cyan width.
 
+  private static readonly ObjectHighlightStyle DefaultObjectStyle = new( // Generic RGB body, outline, dot background, and 0-1 shading transparency; preserves the cyan style.
+    ObjectHighlightColor, ObjectHighlightOutlineColor, ObjectHighlightDotBackground, ObjectHighlightTransparency);
+  internal static readonly ObjectHighlightStyle WireOnlyObjectStyle = DefaultObjectStyle with { Transparency=1.0 }; // Fully transparent body skips surface meshing; retains the shared cyan/dark outlined wires for batch feedback.
+  internal static readonly ObjectHighlightStyle HistoryWarningStyle = new( // Original vSplit warning palette; used only for history feedback.
+    BodyColor: Color.FromArgb(255, 128, 0), // RGB orange body/wire color for history-affected objects.
+    OutlineColor: Color.FromArgb(155, 30, 100), // RGB dark magenta outline around history-affected objects.
+    DotBackground: Color.FromArgb(155, 30, 100), // RGB background for history-affected text dots.
+    Transparency: 0.25); // Shaded warning transparency from 0.0 opaque through 1.0 invisible.
+
   // Added geometry uses a green center stroke over a wider black outline.
   // StrokeEmphasis controls the colored width; OutlineEmphasis controls the total outlined width.
   private static readonly CurveHighlightStyle AddedStyle = new( // Colors and relative pixel widths for geometry being added.
@@ -64,6 +73,12 @@ internal static class PreviewDisplay
     int StrokeEmphasis,
     Color OutlineColor,
     int OutlineEmphasis);
+
+  internal readonly record struct ObjectHighlightStyle(
+    Color BodyColor,
+    Color OutlineColor,
+    Color DotBackground,
+    double Transparency);
 
   public static int Thickness(DisplayPipeline display, int emphasis = 0) =>
     Math.Max(MinimumCurveThickness, display.DefaultCurveThickness + emphasis);
@@ -137,27 +152,27 @@ internal static class PreviewDisplay
     display.DrawCurve(curve, color, Thickness(display, emphasis));
   }
 
-  private static void DrawObjectHighlightCurve(DisplayPipeline display, Curve curve)
+  private static void DrawObjectHighlightCurve(DisplayPipeline display, Curve curve, ObjectHighlightStyle style)
   {
     display.DrawCurve(
       curve,
-      ObjectHighlightOutlineColor,
+      style.OutlineColor,
       Thickness(display, ObjectHighlightOutlineEmphasis));
     display.DrawCurve(
       curve,
-      ObjectHighlightColor,
+      style.BodyColor,
       Thickness(display, ObjectHighlightStrokeEmphasis));
   }
 
-  private static void DrawObjectHighlightBrep(DisplayPipeline display, Brep brep)
+  private static void DrawObjectHighlightBrep(DisplayPipeline display, Brep brep, ObjectHighlightStyle style)
   {
     display.DrawBrepWires(
       brep,
-      ObjectHighlightOutlineColor,
+      style.OutlineColor,
       Thickness(display, ObjectHighlightOutlineEmphasis));
     display.DrawBrepWires(
       brep,
-      ObjectHighlightColor,
+      style.BodyColor,
       Thickness(display, ObjectHighlightStrokeEmphasis));
   }
 
@@ -187,6 +202,16 @@ internal static class PreviewDisplay
     var size = Math.Max(
       HighlightPointMinimumSize,
       Thickness(display, HighlightPointThicknessEmphasis));
+    DrawHighlightPoint(display, point, style, size);
+  }
+
+  private static void DrawHighlightPoint(
+    DisplayPipeline display,
+    Point3d point,
+    CurveHighlightStyle style,
+    int size)
+  {
+    size = Math.Max(MinimumCurveThickness, size);
     display.DrawPoint(
       point,
       HighlightPointStyle,
@@ -201,6 +226,9 @@ internal static class PreviewDisplay
 
   public static void DrawAddedPoint(DisplayPipeline display, Point3d point) =>
     DrawHighlightPoint(display, point, AddedStyle);
+
+  public static void DrawAddedPoint(DisplayPipeline display, Point3d point, int size) =>
+    DrawHighlightPoint(display, point, AddedStyle, size);
 
   public static void DrawRemovedCurve(DisplayPipeline display, Curve curve) =>
     DrawHighlightCurve(display, curve, RemovedStyle);
@@ -220,34 +248,59 @@ internal static class PreviewDisplay
   {
     private readonly RhinoDoc _doc;
     private readonly HashSet<Guid> _objectIds = [];
-    private readonly DisplayMaterial _material = new(ObjectHighlightColor)
-    {
-      Transparency = ObjectHighlightTransparency,
-      BackTransparency = ObjectHighlightTransparency
-    };
+    private readonly Dictionary<Guid, GeometryBase> _fallbackGeometry = [];
+    private readonly ObjectHighlightStyle _style;
+    private readonly DisplayMaterial _material;
 
-    internal ObjectHighlighter(RhinoDoc doc)
+    internal ObjectHighlighter(RhinoDoc doc) : this(doc, DefaultObjectStyle) { }
+
+    internal ObjectHighlighter(RhinoDoc doc, ObjectHighlightStyle style)
     {
       _doc = doc;
+      _style = style;
+      _material = new DisplayMaterial(style.BodyColor)
+      {
+        Transparency = style.Transparency,
+        BackTransparency = style.Transparency
+      };
     }
 
-    internal void SetObjects(IEnumerable<Guid> objectIds)
+    internal void SetObjects(IEnumerable<Guid> objectIds) => SetObjects(objectIds, null);
+
+    // Snapshot geometry is borrowed from the caller, which must keep it alive until cleared.
+    internal void SetObjects(IEnumerable<Guid> objectIds, IReadOnlyDictionary<Guid, GeometryBase>? fallbackGeometry)
     {
       var nextIds = objectIds.ToHashSet();
-      if (_objectIds.SetEquals(nextIds))
+      var nextFallback = fallbackGeometry?.Where(entry => nextIds.Contains(entry.Key))
+        .ToDictionary(entry => entry.Key, entry => entry.Value) ?? [];
+      if (_objectIds.SetEquals(nextIds) && _fallbackGeometry.Count == nextFallback.Count
+        && nextFallback.All(entry => _fallbackGeometry.TryGetValue(entry.Key, out var old)
+          && ReferenceEquals(old, entry.Value)))
         return;
 
       _objectIds.Clear();
       _objectIds.UnionWith(nextIds);
+      _fallbackGeometry.Clear();
+      foreach (var entry in nextFallback)
+        _fallbackGeometry.Add(entry.Key, entry.Value);
       Enabled = _objectIds.Count > 0;
       _doc.Views.Redraw();
     }
 
+    private GeometryBase? GetGeometry(Guid objectId) =>
+      _doc.Objects.FindId(objectId)?.Geometry ?? _fallbackGeometry.GetValueOrDefault(objectId);
+
     protected override void PostDrawObjects(DrawEventArgs e)
     {
+      if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
+        return;
+
+      if (_style.Transparency >= 1.0)
+        return;
+
       foreach (var objectId in _objectIds)
       {
-        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        var geometry = GetGeometry(objectId);
         switch (geometry)
         {
           case Brep brep:
@@ -279,49 +332,52 @@ internal static class PreviewDisplay
 
     protected override void DrawForeground(DrawEventArgs e)
     {
+      if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
+        return;
+
       foreach (var objectId in _objectIds)
       {
-        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
+        var geometry = GetGeometry(objectId);
         switch (geometry)
         {
           case Curve curve:
-            DrawObjectHighlightCurve(e.Display, curve);
+            DrawObjectHighlightCurve(e.Display, curve, _style);
             break;
           case Brep brep:
-            DrawObjectHighlightBrep(e.Display, brep);
+            DrawObjectHighlightBrep(e.Display, brep, _style);
             break;
           case Extrusion extrusion:
           {
             using var brep = extrusion.ToBrep();
             if (brep != null)
-              DrawObjectHighlightBrep(e.Display, brep);
+              DrawObjectHighlightBrep(e.Display, brep, _style);
             break;
           }
           case Surface surface:
           {
             using var brep = surface.ToBrep();
             if (brep != null)
-              DrawObjectHighlightBrep(e.Display, brep);
+              DrawObjectHighlightBrep(e.Display, brep, _style);
             break;
           }
           case Mesh mesh:
             e.Display.DrawMeshWires(
               mesh,
-              ObjectHighlightOutlineColor,
+              _style.OutlineColor,
               Thickness(e.Display, ObjectHighlightOutlineEmphasis));
             e.Display.DrawMeshWires(
               mesh,
-              ObjectHighlightColor,
+              _style.BodyColor,
               Thickness(e.Display, ObjectHighlightStrokeEmphasis));
             break;
           case SubD subD:
             e.Display.DrawSubDWires(
               subD,
-              ObjectHighlightOutlineColor,
+              _style.OutlineColor,
               ObjectHighlightSubDOutlineWidth);
             e.Display.DrawSubDWires(
               subD,
-              ObjectHighlightColor,
+              _style.BodyColor,
               ObjectHighlightSubDStrokeWidth);
             break;
           case Rhino.Geometry.Point point:
@@ -329,46 +385,46 @@ internal static class PreviewDisplay
               point.Location,
               PointStyle.RoundSimple,
               ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
-              ObjectHighlightOutlineColor);
+              _style.OutlineColor);
             e.Display.DrawPoint(
               point.Location,
               PointStyle.RoundSimple,
               ObjectHighlightPointSize,
-              ObjectHighlightColor);
+              _style.BodyColor);
             break;
           case PointCloud pointCloud:
             e.Display.DrawPointCloud(
               pointCloud,
               ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
-              ObjectHighlightOutlineColor);
+              _style.OutlineColor);
             e.Display.DrawPointCloud(
               pointCloud,
               ObjectHighlightPointSize,
-              ObjectHighlightColor);
+              _style.BodyColor);
             break;
           case TextEntity text:
-            e.Display.DrawText(text, ObjectHighlightColor);
+            e.Display.DrawAnnotation(text, _style.BodyColor);
             break;
           case AnnotationBase annotation:
-            e.Display.DrawAnnotation(annotation, ObjectHighlightColor);
+            e.Display.DrawAnnotation(annotation, _style.BodyColor);
             break;
           case TextDot dot:
             e.Display.DrawDot(
               dot,
-              ObjectHighlightColor,
-              ObjectHighlightDotBackground,
-              ObjectHighlightOutlineColor);
+              _style.BodyColor,
+              _style.DotBackground,
+              _style.OutlineColor);
             break;
           case Hatch hatch:
-            e.Display.DrawHatch(hatch, ObjectHighlightColor, ObjectHighlightOutlineColor);
+            e.Display.DrawHatch(hatch, _style.BodyColor, _style.OutlineColor);
             break;
           case Light light:
-            e.Display.DrawLight(light, ObjectHighlightColor);
+            e.Display.DrawLight(light, _style.BodyColor);
             break;
           case { } other:
             e.Display.DrawBox(
               other.GetBoundingBox(true),
-              ObjectHighlightColor,
+              _style.BodyColor,
               Thickness(e.Display, ObjectHighlightStrokeEmphasis));
             break;
         }
@@ -379,6 +435,7 @@ internal static class PreviewDisplay
     {
       Enabled = false;
       _objectIds.Clear();
+      _fallbackGeometry.Clear();
       _doc.Views.Redraw();
     }
   }

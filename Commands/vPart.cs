@@ -43,6 +43,7 @@ public sealed class vPart : vToolsCommand
   private const string MultiLayerSourceCleanupMessage = "vPart: Cleanup skipped because Layer=Source perimeter uses multiple layers ({0})."; // string.Format template; {0} is a comma-separated list of source layer paths.
   private const int PerimeterContributionSampleCount = 17; // Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.
   private const double InteriorLineBoundaryToleranceScale = 2.0; // Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.
+  private static readonly double[] InteriorSelectionSamples = [0.25, 0.5, 0.75]; // Fractions of an open selected divider tested for containment in another selected closed perimeter; between zero and one.
 
   private static bool _group = DefaultGroup;
   private static bool _joinPerim = DefaultJoinPerimeter;
@@ -97,11 +98,12 @@ public sealed class vPart : vToolsCommand
     var joinPerimToggle = new OptionToggle(_joinPerim, "No", "Yes");
     var cleanupToggle = new OptionToggle(_cleanup, "No", "Yes");
 
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select perimeter curves. Press Enter when done");
     go.GeometryFilter = ObjectType.Curve;
-    go.SubObjectSelect = false;
+    go.SubObjectSelect = true;
+    go.SetCustomGeometryFilter((obj, _, _) => obj.Geometry is Curve);
     go.GroupSelect = false;
     go.EnableClearObjectsOnEntry(false);
     go.EnableUnselectObjectsOnExit(false);
@@ -134,7 +136,12 @@ public sealed class vPart : vToolsCommand
 
       if (go.CommandResult() != Result.Success)
       {
-        for (var i = 0; i < go.ObjectCount; i++) go.Object(i).Object()?.Select(false);
+        for (var i = 0; i < go.ObjectCount; i++)
+        {
+          var obj = go.Object(i).Object();
+          obj?.Select(false);
+          obj?.UnselectAllSubObjects();
+        }
         doc.Views.Redraw();
         L("cancelled");
         return Result.Cancel;
@@ -149,28 +156,53 @@ public sealed class vPart : vToolsCommand
       break;
     }
 
-    var collectedIds = new HashSet<Guid>();
-    var collectedMap = new Dictionary<Guid, ObjRef>();
+    var collectedMap = new Dictionary<
+      (Guid ObjectId, ComponentIndexType Type, int Index), ObjRef>();
     for (var i = 0; i < go.ObjectCount; i++)
     {
       var r = go.Object(i);
-      if (collectedIds.Add(r.ObjectId)) collectedMap[r.ObjectId] = r;
-      L($"  sel[{i}]: {Short(r.ObjectId)}");
+      var component = r.GeometryComponentIndex;
+      var sourceKey = (r.ObjectId, component.ComponentIndexType, component.Index);
+      if (!collectedMap.ContainsKey(sourceKey) || r.SelectionPoint().IsValid)
+        collectedMap[sourceKey] = r;
+      L($"  sel[{i}]: {Short(r.ObjectId)} component={component.ComponentIndexType}:{component.Index}");
     }
 
-    L($"final collection: {collectedIds.Count} curve(s)");
-    foreach (var id in collectedIds) L($"  collected: {Short(id)}");
+    L($"final collection: {collectedMap.Count} curve reference(s)");
+    foreach (var key in collectedMap.Keys)
+      L($"  collected: {Short(key.ObjectId)} component={key.Type}:{key.Index}");
 
     // Collect perimeter curves — keep each with its own attributes
     var perimIds  = new HashSet<Guid>();
+    var selectedSegmentIndices = new Dictionary<Guid, HashSet<int>>();
+    var wholeCurveIds = collectedMap.Keys
+      .Where(key => key.Index < 0)
+      .Select(key => key.ObjectId)
+      .ToHashSet();
     var perimList = new List<(Curve Crv, ObjectAttributes Attr)>();
+    var perimPickPoints = new List<Point3d>();
 
-    foreach (var (id, r) in collectedMap)
+    foreach (var (key, r) in collectedMap)
     {
+      if (key.Index >= 0 && wholeCurveIds.Contains(key.ObjectId))
+        continue;
       if (r.Curve() is { } crv)
       {
-        perimIds.Add(id);
+        if (key.Type == ComponentIndexType.PolycurveSegment && key.Index >= 0)
+        {
+          if (!selectedSegmentIndices.TryGetValue(key.ObjectId, out var indices))
+            selectedSegmentIndices[key.ObjectId] = indices = new HashSet<int>();
+          indices.Add(key.Index);
+        }
+        else
+          perimIds.Add(key.ObjectId);
         perimList.Add((crv.DuplicateCurve(), r.Object()?.Attributes?.Duplicate() ?? new ObjectAttributes()));
+        var pickPoint = r.SelectionPoint();
+        if (pickPoint.IsValid && crv.ClosestPoint(pickPoint, out var pickParameter))
+          pickPoint = crv.PointAt(pickParameter);
+        perimPickPoints.Add(pickPoint);
+        L($"  perimeter input: {Short(key.ObjectId)} component={key.Type}:{key.Index} length={crv.GetLength():G17}");
+        if (pickPoint.IsValid) L($"  boundary pick: ({pickPoint.X:G17},{pickPoint.Y:G17},{pickPoint.Z:G17})");
       }
     }
 
@@ -183,7 +215,12 @@ public sealed class vPart : vToolsCommand
     }
 
     // Deselect source curves now that we have them captured
-    foreach (var r in collectedMap.Values) r.Object()?.Select(false);
+    foreach (var r in collectedMap.Values)
+    {
+      var obj = r.Object();
+      obj?.Select(false);
+      obj?.UnselectAllSubObjects();
+    }
     doc.Views.Redraw();
 
     // ── 2. View plane (needed for perimeter detection and containment testing) ──
@@ -199,7 +236,7 @@ public sealed class vPart : vToolsCommand
 
     var perimLog = new List<string>();
     var (perimeter, bridges, perimeterCurves, boundaryTolerance) = BuildClosedPerimeter(
-      perimList.Select(p => p.Crv).ToList(), plane, tol, perimLog);
+      perimList.Select(p => p.Crv).ToList(), plane, tol, perimLog, perimPickPoints);
     L($"BuildClosedPerimeter: {(perimeter != null ? "OK" : "FAILED")}  bridges={bridges.Count}  boundaryTol={boundaryTolerance:G6}");
     foreach (var entry in perimLog) L($"  perim: {entry}");
     if (perimeter == null)
@@ -221,7 +258,7 @@ public sealed class vPart : vToolsCommand
 
     var boundaryPieces = rawTrimmedPerimeter
       .Where(item => CurveContributesToBoundary(
-        item.Crv, perimeter, boundaryTolerance))
+        item.Crv, perimeter, plane, boundaryTolerance))
       .ToList();
     var sourceBoundaryAttributes = boundaryPieces.Count > 0
       ? boundaryPieces[0].Attr
@@ -245,6 +282,7 @@ public sealed class vPart : vToolsCommand
     var allInsideObjects = CollectInsideObjects(
       doc,
       perimIds,
+      selectedSegmentIndices,
       perimeter,
       plane,
       boundaryTolerance);
@@ -291,6 +329,15 @@ public sealed class vPart : vToolsCommand
 
     var placementPoint = Point3d.Unset;
     var cleanupSkipMessageShown = false;
+    // Destination changes must not silently change the geometry already previewed.
+    // Only an explicit Layer option changes the cleanup scope during placement.
+    var cleanupLayerIndices = ResolveCleanupLayerIndices(
+      doc,
+      layerSession,
+      sourcePerimeterLayerIndices,
+      sourceBoundaryAttributes);
+    var cleanedInsideObjects = allInsideObjects;
+    var cleanedTrimmedPerimeter = rawTrimmedPerimeter;
     while (true)
     {
       var skipMultiLayerSourceCleanup =
@@ -305,26 +352,23 @@ public sealed class vPart : vToolsCommand
       }
       cleanupSkipMessageShown = skipMultiLayerSourceCleanup;
 
-      var cleanupLayerIndices = ResolveCleanupLayerIndices(
-        doc,
-        layerSession,
-        sourcePerimeterLayerIndices,
-        sourceBoundaryAttributes);
-      var cleanedInsideObjects = allInsideObjects
+      cleanedInsideObjects = allInsideObjects
         .Where(item => item.Geom is not Curve curve ||
           !IsRemovableInteriorLine(
             curve,
             item.Attr,
             cleanupLayerIndices,
             perimeter,
+            plane,
             boundaryTolerance))
         .ToList();
-      var cleanedTrimmedPerimeter = rawTrimmedPerimeter
+      cleanedTrimmedPerimeter = rawTrimmedPerimeter
         .Where(item => !IsRemovableInteriorLine(
           item.Crv,
           item.Attr,
           cleanupLayerIndices,
           perimeter,
+          plane,
           boundaryTolerance))
         .ToList();
 
@@ -350,7 +394,7 @@ public sealed class vPart : vToolsCommand
         $" removedInside={allInsideObjects.Count - cleanedInsideObjects.Count}" +
         $" removedSelected={rawTrimmedPerimeter.Count - cleanedTrimmedPerimeter.Count}");
 
-      var gp = new GetPoint();
+      using var gp = new GetPoint();
       gp.EnableTransparentCommands(true);
       gp.SetCommandPrompt("Pick placement point for Part");
       gp.AddOptionToggle("Group", ref groupToggle);
@@ -391,8 +435,15 @@ public sealed class vPart : vToolsCommand
       _cleanup = cleanupToggle.CurrentValue;
       if (gpResult == GetResult.Option)
       {
-        if (gp.Option()?.Index == layerOptionIndex)
-          PromptForLayer(doc, mode, layerSession);
+        if (gp.Option()?.Index == layerOptionIndex &&
+            PromptForLayer(doc, mode, layerSession))
+        {
+          cleanupLayerIndices = ResolveCleanupLayerIndices(
+            doc,
+            layerSession,
+            sourcePerimeterLayerIndices,
+            sourceBoundaryAttributes);
+        }
         SaveOptions();
         continue;
       }
@@ -425,37 +476,15 @@ public sealed class vPart : vToolsCommand
       return attributes;
     }
 
-    var finalCleanupLayerIndices = ResolveCleanupLayerIndices(
-      doc,
-      layerSession,
-      sourcePerimeterLayerIndices,
-      sourceBoundaryAttributes);
-    var cleanedInsideObjectsForCommit = allInsideObjects
-      .Where(item => item.Geom is not Curve curve ||
-        !IsRemovableInteriorLine(
-          curve,
-          item.Attr,
-          finalCleanupLayerIndices,
-          perimeter,
-          boundaryTolerance))
-      .ToList();
-    var cleanedTrimmedPerimeterForCommit = rawTrimmedPerimeter
-      .Where(item => !IsRemovableInteriorLine(
-        item.Crv,
-        item.Attr,
-        finalCleanupLayerIndices,
-        perimeter,
-        boundaryTolerance))
-      .ToList();
     var activeInsideObjects = _cleanup
-      ? cleanedInsideObjectsForCommit
+      ? cleanedInsideObjects
       : allInsideObjects;
     var activeTrimmedPerimeter = _cleanup
-      ? cleanedTrimmedPerimeterForCommit
+      ? cleanedTrimmedPerimeter
       : rawTrimmedPerimeter;
     var removedInteriorLines = _cleanup
-      ? allInsideObjects.Count - cleanedInsideObjectsForCommit.Count +
-        rawTrimmedPerimeter.Count - cleanedTrimmedPerimeterForCommit.Count
+      ? allInsideObjects.Count - cleanedInsideObjects.Count +
+        rawTrimmedPerimeter.Count - cleanedTrimmedPerimeter.Count
       : 0;
     var commitItems = new List<(GeometryBase Geom, ObjectAttributes Attr)>();
     if (_joinPerim)
@@ -506,7 +535,7 @@ public sealed class vPart : vToolsCommand
     return Result.Success;
   }
 
-  private static void PromptForLayer(
+  private static bool PromptForLayer(
     RhinoDoc doc,
     RunMode mode,
     DuplicateOutputLayerSession layerSession)
@@ -525,11 +554,12 @@ public sealed class vPart : vToolsCommand
               SourceLayerOption)
           ],
           out var selectedLayer))
-      return;
+      return false;
 
     _layer = NormalizePerimeterLayerOption(selectedLayer);
     layerSession.ApplyOption(doc, _layer);
     SaveOptions();
+    return true;
   }
 
   private static string NormalizePerimeterLayerOption(string? layerName)
@@ -617,7 +647,7 @@ public sealed class vPart : vToolsCommand
   /// Gap-bridging segments are returned separately for the output Part.
   /// </summary>
   private static (Curve? Closed, List<LineCurve> Bridges, List<Curve> PerimeterCurves, double BoundaryTolerance) BuildClosedPerimeter(
-    List<Curve> curves, Plane plane, double tol, List<string> log)
+    List<Curve> curves, Plane plane, double tol, List<string> log, IReadOnlyList<Point3d>? pickPoints = null)
   {
     var bridges = new List<LineCurve>();
     var workingCurves = curves.Select(c => c.DuplicateCurve()).ToList();
@@ -627,9 +657,12 @@ public sealed class vPart : vToolsCommand
       return (curves[0].DuplicateCurve(), bridges, workingCurves, tol);
 
     // Primary: CreateBooleanRegions handles curves that already meet or cross.
-    var boundary = TryCreateBooleanBoundary(
-      workingCurves, plane, tol, "original", log, out var boundaryTolerance);
-    if (boundary != null)
+    var boundary = TryCreatePickedBoundary(
+      workingCurves, pickPoints, plane, tol, "original", log, out var boundaryTolerance, out var preferredPicks);
+    if (boundary != null && (preferredPicks.Count == 0 || !workingCurves.Any(curve =>
+          !curve.IsClosed && !CurveContributesToBoundary(curve, boundary, plane, boundaryTolerance) &&
+          InteriorSelectionSamples.Any(fraction => boundary.Contains(
+            curve.PointAtNormalizedLength(fraction), plane, boundaryTolerance) == PointContainment.Inside))))
       return (boundary, bridges, workingCurves, boundaryTolerance);
 
     // If an open end stops short, extend it in its own end direction until it
@@ -638,11 +671,16 @@ public sealed class vPart : vToolsCommand
     var extendedEnds = ExtendDisconnectedEndsToSelectedCurves(workingCurves, tol, log);
     if (extendedEnds > 0)
     {
-      boundary = TryCreateBooleanBoundary(
-        workingCurves, plane, tol, "extended", log, out boundaryTolerance);
-      if (boundary != null)
-        return (boundary, bridges, workingCurves, boundaryTolerance);
+      var extendedBoundary = TryCreatePickedBoundary(
+        workingCurves, pickPoints, plane, tol, "extended", log, out var extendedTolerance, out _);
+      if (extendedBoundary != null)
+      {
+        boundary?.Dispose();
+        return (extendedBoundary, bridges, workingCurves, extendedTolerance);
+      }
     }
+    if (boundary != null)
+      return (boundary, bridges, workingCurves, boundaryTolerance);
 
     log.Add("vPart[perim]: no closed Boolean region after end extension — trying endpoint join");
 
@@ -719,14 +757,15 @@ public sealed class vPart : vToolsCommand
     double tol,
     string stage,
     List<string> log,
-    out double usedTolerance)
+    out double usedTolerance,
+    IReadOnlyList<Point3d>? preferredPicks = null)
   {
     usedTolerance = tol;
     foreach (var multiplier in new[] { 1.0, 10.0, 100.0 })
     {
       var regionTolerance = tol * multiplier;
       using var regions = Curve.CreateBooleanRegions(
-        curves.ToArray(), plane, combineRegions: true, regionTolerance);
+        curves.ToArray(), plane, combineRegions: preferredPicks == null || preferredPicks.Count == 0, regionTolerance);
       if (regions == null)
       {
         log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: CreateBooleanRegions returned null");
@@ -735,6 +774,7 @@ public sealed class vPart : vToolsCommand
 
       Curve? bestBoundary = null;
       var bestArea = double.NegativeInfinity;
+      int bestPickRank = int.MaxValue;
 
       for (var r = 0; r < regions.RegionCount; r++)
       {
@@ -742,25 +782,37 @@ public sealed class vPart : vToolsCommand
         if (regionCurves == null || regionCurves.Length == 0)
           continue;
 
-        var outerCandidates = regionCurves[0].IsClosed
+        bool usesOriginalCurve = regionCurves[0].IsClosed;
+        var outerCandidates = usesOriginalCurve
           ? new[] { regionCurves[0] }
-          : Curve.JoinCurves(regionCurves, regionTolerance * 10.0);
-
-        foreach (var candidate in outerCandidates)
+          : Curve.JoinCurves(regionCurves, regionTolerance * 10.0) ?? [];
+        try
         {
-          if (candidate?.IsClosed != true)
-            continue;
+          foreach (var candidate in outerCandidates)
+          {
+            if (candidate?.IsClosed != true)
+              continue;
 
-          var area = ClosedCurveArea(candidate);
-          if (area <= bestArea)
-            continue;
+            var area = ClosedCurveArea(candidate);
+            int pickRank = BoundaryPickRank(candidate, preferredPicks, plane, regionTolerance);
+            if (pickRank > bestPickRank || pickRank == bestPickRank && area <= bestArea)
+              continue;
 
-          bestArea = area;
-          bestBoundary = candidate.DuplicateCurve();
+            bestArea = area;
+            bestPickRank = pickRank;
+            bestBoundary?.Dispose();
+            bestBoundary = candidate.DuplicateCurve();
+          }
+        }
+        finally
+        {
+          if (!usesOriginalCurve)
+            foreach (var candidate in outerCandidates) candidate?.Dispose();
+          foreach (var regionCurve in regionCurves) regionCurve?.Dispose();
         }
       }
 
-      log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}");
+      log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}, clickedSide={bestPickRank < int.MaxValue}");
       if (bestBoundary != null)
       {
         usedTolerance = regionTolerance;
@@ -769,6 +821,51 @@ public sealed class vPart : vToolsCommand
     }
 
     return null;
+  }
+
+  private static Curve? TryCreatePickedBoundary(List<Curve> curves,
+    IReadOnlyList<Point3d>? picks, Plane plane, double tolerance, string stage,
+    List<string> log, out double usedTolerance, out List<Point3d> preferredPicks)
+  {
+    var outerBoundary = TryCreateBooleanBoundary(curves, plane, tolerance, stage, log, out usedTolerance);
+    preferredPicks = PreferredBoundaryPicks(curves, picks, plane, usedTolerance, outerBoundary);
+    if (preferredPicks.Count == 0) return outerBoundary;
+    var pickedBoundary = TryCreateBooleanBoundary(
+      curves, plane, tolerance, stage + "-clicked", log, out var pickedTolerance, preferredPicks);
+    if (pickedBoundary == null) return outerBoundary;
+    outerBoundary?.Dispose();
+    usedTolerance = pickedTolerance;
+    return pickedBoundary;
+  }
+
+  private static List<Point3d> PreferredBoundaryPicks(IReadOnlyList<Curve> curves,
+    IReadOnlyList<Point3d>? picks, Plane plane, double tolerance, Curve? assembledBoundary)
+  {
+    var result = new List<Point3d>();
+    if (picks == null || assembledBoundary == null) return result;
+    bool hasInnerDivider = curves.Any(curve => !curve.IsClosed &&
+      !CurveContributesToBoundary(curve, assembledBoundary, plane, tolerance) &&
+      InteriorSelectionSamples.Any(fraction => assembledBoundary.Contains(
+        curve.PointAtNormalizedLength(fraction), plane, tolerance) == PointContainment.Inside));
+    if (!hasInnerDivider) return result;
+    for (int outer = curves.Count - 1; outer >= 0; outer--)
+    {
+      if (outer >= picks.Count || !picks[outer].IsValid ||
+          !CurveContributesToBoundary(curves[outer], assembledBoundary, plane, tolerance) ||
+          assembledBoundary.Contains(picks[outer], plane, tolerance) != PointContainment.Coincident) continue;
+      result.Add(picks[outer]);
+    }
+    return result;
+  }
+
+  private static int BoundaryPickRank(Curve candidate, IReadOnlyList<Point3d>? picks,
+    Plane plane, double tolerance)
+  {
+    if (picks != null)
+      for (int index = 0; index < picks.Count; index++)
+        if (candidate.Contains(picks[index], plane, tolerance) is PointContainment.Inside or PointContainment.Coincident)
+          return index;
+    return int.MaxValue;
   }
 
   private static int ExtendDisconnectedEndsToSelectedCurves(
@@ -1003,22 +1100,12 @@ public sealed class vPart : vToolsCommand
       for (var oi = 0; oi < crvs.Count; oi++)
       {
         if (oi == si) continue;
-        var events = Intersection.CurveCurve(crv, crvs[oi], tol, tol);
-        if (events == null) continue;
-        foreach (var ev in events)
-        {
-          if (ev.IsOverlap) { AddSplitParameter(ev.OverlapA.T0); AddSplitParameter(ev.OverlapA.T1); }
-          else               AddSplitParameter(ev.ParameterA);
-        }
+        foreach (var parameter in CollectPerimeterSplitParams(crv, crvs[oi], plane, tol))
+          AddSplitParameter(parameter);
       }
 
-      var boundaryEvents = Intersection.CurveCurve(crv, boundary, tol, tol);
-      if (boundaryEvents != null)
-        foreach (var ev in boundaryEvents)
-        {
-          if (ev.IsOverlap) { AddSplitParameter(ev.OverlapA.T0); AddSplitParameter(ev.OverlapA.T1); }
-          else               AddSplitParameter(ev.ParameterA);
-        }
+      foreach (var parameter in CollectPerimeterSplitParams(crv, boundary, plane, tol))
+        AddSplitParameter(parameter);
 
       if (splitParams.Count == 0)
       {
@@ -1069,6 +1156,7 @@ public sealed class vPart : vToolsCommand
   private static List<(GeometryBase Geom, ObjectAttributes Attr)> CollectInsideObjects(
     RhinoDoc doc,
     HashSet<Guid> excludeIds,
+    IReadOnlyDictionary<Guid, HashSet<int>> selectedSegmentIndices,
     Curve perimeter,
     Plane plane,
     double tol)
@@ -1099,14 +1187,23 @@ public sealed class vPart : vToolsCommand
         // If there are no split points, include the whole curve only when the
         // whole sampled curve is inside. This prevents a curve with midpoint
         // inside but ends sticking out from being copied untrimmed.
-        var insidePieces = TrimCurveInsidePerimeter(
-          crv, perimeter, plane, tol).ToList();
-        if (insidePieces.Count == 0)
-          continue;
-
-        foreach (var insidePiece in insidePieces)
+        var segments = selectedSegmentIndices.TryGetValue(obj.Id, out var selectedIndices)
+          ? crv.DuplicateSegments()
+          : null;
+        var candidates = segments == null
+          ? new[] { crv }
+          : segments.Where((_, index) => !selectedIndices!.Contains(index));
+        try
         {
-          result.Add((insidePiece, attr));
+          foreach (var candidate in candidates)
+            foreach (var insidePiece in TrimCurveInsidePerimeter(candidate, perimeter, plane, tol))
+              result.Add((insidePiece, attr));
+        }
+        finally
+        {
+          if (segments != null)
+            foreach (var segment in segments)
+              segment.Dispose();
         }
       }
       else
@@ -1159,6 +1256,7 @@ public sealed class vPart : vToolsCommand
     ObjectAttributes attributes,
     IReadOnlySet<int> perimeterLayerIndices,
     Curve perimeter,
+    Plane plane,
     double tolerance)
   {
     if (!perimeterLayerIndices.Contains(attributes.LayerIndex) ||
@@ -1167,15 +1265,15 @@ public sealed class vPart : vToolsCommand
       return false;
 
     var midpoint = curve.PointAtNormalizedLength(0.5);
-    return !IsOnCurve(
-      midpoint,
-      perimeter,
-      tolerance * InteriorLineBoundaryToleranceScale);
+    return perimeter.Contains(
+      midpoint, plane, tolerance * InteriorLineBoundaryToleranceScale)
+      == PointContainment.Inside;
   }
 
   private static bool CurveContributesToBoundary(
     Curve curve,
     Curve perimeter,
+    Plane plane,
     double tolerance)
   {
     var overlapEvents = Intersection.CurveCurve(
@@ -1194,10 +1292,10 @@ public sealed class vPart : vToolsCommand
     {
       var normalizedLength =
         (sampleIndex + 0.5) / PerimeterContributionSampleCount;
-      if (IsOnCurve(
-            curve.PointAtNormalizedLength(normalizedLength),
-            perimeter,
-            tolerance * InteriorLineBoundaryToleranceScale))
+      if (perimeter.Contains(
+            curve.PointAtNormalizedLength(normalizedLength), plane,
+            tolerance * InteriorLineBoundaryToleranceScale)
+          == PointContainment.Coincident)
         return true;
     }
 
@@ -1222,7 +1320,9 @@ public sealed class vPart : vToolsCommand
         if (piece.GetLength() < tol)
           continue;
 
-        if (IsInsideOrOn(piece.PointAtNormalizedLength(0.5), boundary, plane, tol))
+        if (IsInsideOrOn(
+              piece.PointAtNormalizedLength(0.5), boundary, plane,
+              RhinoMath.ZeroTolerance))
           yield return piece;
       }
 
@@ -1241,7 +1341,12 @@ public sealed class vPart : vToolsCommand
     if (quickSamples.All(s => !s.Inside))
       yield break;
 
-    var intervals = FindInsideCurveIntervals(crv, boundary, plane, tol, quickSamples);
+    // Model-tolerance coincidence at an outside curve's endpoint is only a
+    // contact, not a tiny interior interval that should be copied into the part.
+    var intervalSamples = SampleCurveInsideState(
+      crv, boundary, plane, RhinoMath.ZeroTolerance, 17);
+    var intervals = FindInsideCurveIntervals(
+      crv, boundary, plane, RhinoMath.ZeroTolerance, intervalSamples);
     foreach (var (a, b) in intervals)
     {
       var piece = TrimCurveInterval(crv, a, b, tol);
@@ -1350,39 +1455,37 @@ public sealed class vPart : vToolsCommand
   {
     var splitParams = new List<double>();
 
-    var events = Intersection.CurveCurve(crv, perimeter, tol, tol);
+    // NURBS projection also handles tilted arcs; map hits back to source parameters.
+    using var crv2d = crv.ToNurbsCurve();
+    using var perimeter2d = perimeter.ToNurbsCurve();
+    var projection = Transform.PlanarProjection(plane);
+    if (crv2d == null || perimeter2d == null ||
+        !crv2d.Transform(projection) || !perimeter2d.Transform(projection))
+      return splitParams;
+
+    var events = Intersection.CurveCurve(crv2d, perimeter2d, tol, tol);
     if (events == null || events.Count == 0)
-      events = Intersection.CurveCurve(crv, perimeter, tol * 10.0, tol * 10.0);
-
-    // Fallback to view-plane 2D intersections. This catches curves that cross the
-    // boundary in the active view plane but do not intersect in 3D exactly.
-    if (events == null || events.Count == 0)
-    {
-      var crv2d = crv.DuplicateCurve();
-      var perimeter2d = perimeter.DuplicateCurve();
-      var toWorldXY = Transform.PlaneToPlane(plane, Plane.WorldXY);
-
-      crv2d.Transform(toWorldXY);
-      perimeter2d.Transform(toWorldXY);
-
-      events = Intersection.CurveCurve(crv2d, perimeter2d, tol, tol);
-      if (events == null || events.Count == 0)
-        events = Intersection.CurveCurve(crv2d, perimeter2d, tol * 10.0, tol * 10.0);
-    }
+      events = Intersection.CurveCurve(crv2d, perimeter2d, tol * 10.0, tol * 10.0);
 
     if (events == null)
       return splitParams;
+
+    void AddProjectedParameter(double parameter)
+    {
+      if (crv.GetCurveParameterFromNurbsFormParameter(parameter, out var sourceParameter))
+        AddCurveSplitParam(crv, splitParams, sourceParameter, tol);
+    }
 
     foreach (var ev in events)
     {
       if (ev.IsOverlap)
       {
-        AddCurveSplitParam(crv, splitParams, ev.OverlapA.T0, tol);
-        AddCurveSplitParam(crv, splitParams, ev.OverlapA.T1, tol);
+        AddProjectedParameter(ev.OverlapA.T0);
+        AddProjectedParameter(ev.OverlapA.T1);
       }
       else
       {
-        AddCurveSplitParam(crv, splitParams, ev.ParameterA, tol);
+        AddProjectedParameter(ev.ParameterA);
       }
     }
 

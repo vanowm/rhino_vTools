@@ -1,11 +1,11 @@
-# vTools  ·  v26.10.2.1004
+# vTools  ·  v26.10.9.1452
 
 vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and surface editing, fabrication layout, unrolling and matching, alignment, annotation, selection, and object management.
 
 ## What this project includes
 
 - Rhino plug-in entry point: vToolsPlugIn
-- Native commands (60):
+- Native commands (62):
   - [vAlign](#valign-flow) *(26.8.20.807)* — rotates selected objects in World XY by aligning a hovered target curve to a clicked stationary reference, with faded live preview and optional separation distance
   - [vBiminiParts](#vbiminiparts-flow) *(26.5.21.1827)* — builds bimini cover pocket parts (facings, main pocket, secondary pockets, center reference line) from a selected boundary curve; pipe size configures pocket depths
   - [vCenter](#vcenter-flow) *(26.8.12.1742)* — places a point at the combined bounding-box center, weighted mass center, or equal-weight object center of an editable geometry selection
@@ -29,16 +29,19 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vJoin](#vjoin-flow) *(26.7.30.2016)* — joins selected objects, optionally joining copies while preserving the originals
   - [vLine](#vline-flow) *(26.4.27.2125)* — draws lines with chain modes, native construction modes at either endpoint, automatic angle constraint, and length constraints
   - [vLineLength](#vlinelength-flow) *(26.4.27.2125)* — resizes an open curve to a target total, additive, or subtractive length
-  - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by [vUnrollSrf](#vunrollsrf-flow) or [vUnrollSrfUV](#vunrollsrfuv-flow) to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
+  - [vMatch](#vmatch-flow) *(26.7.1.1535)* — click near an edge-mate dot produced by [vUnrollSrf](#vunrollsrf-flow) to align the neighbouring flat part; Auto mode assembles a whole BFS selection with optional randomisation
   - [vMiddleCurve](#vmiddlecurve-flow) *(26.4.27.2243)* — creates an interpolated curve equidistant between two selected curves; inherits their shared group when both belong to one
   - [vMirror](#vmirror-flow) *(26.8.20.703)* — mirrors selected objects across two-point, three-point, CPlane-axis, or planar-object planes, with persistent copying and text-flipping options
+  - [vNest](#vnest-flow) *(26.10.6.1920)* - manages grain-aware planar part nesting across fixed-size tables with a modeless part editor and automatic re-nesting
   - [vNotches](#vnotches-flow) *(26.6.1.1529)* — places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview
   - [vOffset](#voffset-flow) *(26.4.27.2243)* — runs built-in [`Offset`](https://docs.mcneel.com/rhino/8/help/en-us/commands/offset.htm) continuously and can trim or extend new offsets to curves touching the source endpoints
   - [vOrient2pt](#vorient2pt-flow) *(26.4.24.934)* — orients objects from a source two-point frame to a target two-point frame
   - [vOrient3pt](#vorient3pt-flow) *(26.4.24.934)* — orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient)
   - [vOverlaps](#voverlaps-flow) *(26.7.3.2104)* — selects covered or partially overlapping curves and highlights coincident edge intervals belonging to overlapping surface or polysurface faces
   - [vPart](#vpart-flow) *(26.5.18.1742)* — captures a closed perimeter from selected curves (gaps are bridged automatically), collects all visible objects inside the perimeter (curves trimmed at the boundary; other types included whole), and lets the user place the resulting Part with a full preview
+  - [vPartSplit](#vpartsplit-flow) *(26.10.6.1739)* - splits a selected planar part into individually grouped material-width copies with per-part seam allowance and adjustable nominal-cut previews
   - [vPerpendicularTo](#vperpendicularto-flow) *(26.5.5.757)* — rotates curve A about its nearest endpoint so it is perpendicular to curve B in the active CPlane
+  - [vPointAlongCurve](#vpointalongcurve-flow) *(26.10.2.1206)* - places a point at a chosen arc-length distance from a curve position, with snapped cursor-driven direction and live preview
   - [vPointNormalToSurface](#vpointnormaltosurface-flow) *(26.4.27.2109)* — places points projected onto the closest surface normal evaluation point
   - [vProjectToSurface](#vprojecttosurface-flow) *(26.7.16.1432)* — projects selected curves and points onto one or more target surfaces or polysurfaces with live preview; overhanging curve portions are clipped away
   - [vPointTrace](#vpointtrace-flow) *(26.4.30.1044)* — maps arc-length positions from a source curve onto a destination curve: pick points along the source and a corresponding point is placed on the destination at the same proportional arc-length position
@@ -61,13 +64,13 @@ vTools is a native Rhino 8 and Rhino 9 command suite for precision curve and sur
   - [vToggleView](#vtoggleview-flow) *(26.10.1.1632)* — toggles perspective/CPlane plan or projection, or activates a standard view with optional tab creation without interrupting another command
   - [vTrim](#vtrim-flow) *(26.4.24.1633)* — trims and extends curves with auto-cutter detection and join of extensions
   - [vTrimOff](#vtrimoff-flow) *(26.5.18.849)* — trims selected curves to the outer boundary of the enclosed region they collectively form; protruding ends are removed automatically
-  - [vUnrollSrf](#vunrollsrf-flow) *(26.5.19.1918)* — develops selected surfaces through Rhino's native [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm) with matching labels and shared-edge markers; reruns preserve existing part identities and replace prior flat output
-  - [vUnrollSrfUV](#vunrollsrfuv-flow) *(26.8.26.2030)* — unrolls selected surfaces through Rhino's UV-preserving [UnrollSrfUV](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv) with the same labels, matching, placement, and reusable output workflow
+  - [vUnrollSrf](#vunrollsrf-flow) *(26.5.19.1918)* — unrolls selected surfaces through native [UnrollSrfUV](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv) by default, or [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm) with UV disabled; reruns preserve labels, shared-edge markers, part identities and prior flat placement
   - [vUzip](#vuzip-flow) *(26.4.24.934)* — full U-zip workflow in one command: selects three U-shape arm curves, computes the inward-offset center curve with fillet, and optionally produces glass, vis, and parts output with label and tail settings
   - [vUzipCenter](#vuzipcenter-flow) *(26.5.1.1903)* — offsets a U-shape's three curves inward, fillets the inside corners, and produces a single joined open curve
   - [vUzipParts](#vuzipparts-flow) *(26.5.8.1249)* — creates U-zip parts from a center curve into labeled reference, plot, and cut output groups
 - Shared command configuration file: vTools.config.json
 - Runtime command diagnostics in `vTools.log` beside the loaded DLL
+- Automatic history-break highlighting uses orange shading with a dark magenta outline for affected objects, including temporary copies of deleted history outputs. Rhino's own history warning remains unchanged. Highlights remain visible while the native modal warning is open, even if Rhino has already ended the command, and clear after the warning is accepted or canceled. Undo/Redo, document changes, or two Esc presses also clear them. This follows Rhino's broken-history warning setting; set `HistoryHighlight.enabled` to `false` in `vTools.config.json` and reload the plug-in to disable the monitor.
 - Run `Toolbar\SyncToolbarIcons.ps1` with Rhino closed after changing toolbar artwork; it updates only matching vTools icons in active Rhino 8 and Rhino 9 toolbar files and preserves the rest of each toolbar layout.
 
 ## Requirements
@@ -135,7 +138,7 @@ over the embedded fallback, so help-only edits do not require a new DLL.
 
 All command options persist by default unless stated otherwise.
 
-Native commands (60): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vExportDXF](#vexportdxf-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShade](#vshade-flow), [vSmooth](#vsmooth-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vToggleView](#vtoggleview-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUnrollSrfUV](#vunrollsrfuv-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
+Native commands (62): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow), [vCenter](#vcenter-flow), [vChamfer](#vchamfer-flow), [vCommandFailSound](#vcommandfailsound-flow), [vCleanup](#vcleanup-flow), [vCurveToSpline](#vcurvetospline-flow), [vDiamonds](#vdiamonds-flow), [vDir](#vdir-flow), [vDupBorder](#vdupborder-flow), [vDupEdge](#vdupedge-flow), [vExportDXF](#vexportdxf-flow), [vFacing](#vfacing-flow), [vFilterExec](#vfilterexec-flow), [vFitBox](#vfitbox-flow), [vFPS](#vfps-flow), [vGroup](#vgroup-flow), [vGroupsManager](#vgroupsmanager-flow), [vHelp](#vhelp-flow), [vIsolate](#visolate-flow), [vJoin](#vjoin-flow), [vLine](#vline-flow), [vLineLength](#vlinelength-flow), [vMatch](#vmatch-flow), [vMiddleCurve](#vmiddlecurve-flow), [vMirror](#vmirror-flow), [vNest](#vnest-flow), [vNotches](#vnotches-flow), [vOffset](#voffset-flow), [vOrient2pt](#vorient2pt-flow), [vOrient3pt](#vorient3pt-flow), [vOverlaps](#voverlaps-flow), [vPart](#vpart-flow), [vPartSplit](#vpartsplit-flow), [vPerpendicularTo](#vperpendicularto-flow), [vPointAlongCurve](#vpointalongcurve-flow), [vPointNormalToSurface](#vpointnormaltosurface-flow), [vProjectToSurface](#vprojecttosurface-flow), [vPointTrace](#vpointtrace-flow), [vRectangle](#vrectangle-flow), [vReGroup](#vregroup-flow), [vScallop](#vscallop-flow), [vSetPt](#vsetpt-flow), [vShade](#vshade-flow), [vSmooth](#vsmooth-flow), [vShow](#vshow-flow), [vSplit](#vsplit-flow), [vSplitAtCorners](#vsplitatcorners-flow), [vTangent](#vtangent-flow), [vTextAligned](#vtextaligned-flow), [vTextFlip](#vtextflip-flow), [vTitle](#vtitle-flow), [vToggleAxes](#vtoggleaxes-flow), [vToggleControlPoints](#vtogglecontrolpoints-flow), [vTogglePerpGumball](#vtoggleperpgumball-flow), [vToggleView](#vtoggleview-flow), [vTrim](#vtrim-flow), [vTrimOff](#vtrimoff-flow), [vUnrollSrf](#vunrollsrf-flow), [vUzip](#vuzip-flow), [vUzipCenter](#vuzipcenter-flow), [vUzipParts](#vuzipparts-flow).
 
 1. Load the plug-in assembly in Rhino.
 1. Run one of the native commands.
@@ -149,7 +152,9 @@ Native commands (60): [vAlign](#valign-flow), [vBiminiParts](#vbiminiparts-flow)
 
 Options:
 
-- `Distance`: a non-negative separation from a selected reference edge. Cursor side controls the destination side. Enter `None` to rotate in place around the selected objects' center of mass without translating them. Distance is ignored in reference-free World Ortho mode.
+- `Distance`: a non-negative separation from a selected reference edge. Cursor side controls the destination side. Enter `None` to rotate in place around the selected objects' center of mass without translating them. Accepted changes, including `None`, persist between runs and Rhino sessions even if the command is later canceled. Distance is ignored in reference-free World Ortho mode.
+- `Loop`: `Yes` by default. After each alignment, selection is cleared and the command asks for objects, a reference, and a target again. Preselection is accepted only for the first cycle. `No` finishes after one alignment. Press Esc to finish the loop; completed alignments remain.
+- `SaveDefaults`: `Yes` by default. Set `No` before entering temporary `Distance` or `Loop` values, including in a macro. Temporary choices last for this run and do not change saved defaults; this toggle resets to `Yes` at the next run. Switching back to `Yes` saves the current choices.
 
 ### vBiminiParts flow
 
@@ -238,15 +243,20 @@ With `AutoDelete=No`, results are saved as the document named selections `vClean
 ### vExportDXF flow
 
 1. Select objects before starting, or leave nothing selected to export all normal visible, unlocked objects.
-1. `vExportDXF` goes directly to the file dialog using its saved choices. Use `-vExportDXF` to change `NotchTrim`, `NotchTrimLayer`, `NotchJoin`, `TextBreak`, or `Optimize` for one run; `SaveDefaults=Yes` keeps those choices for later exports. Optimization uses [vCleanup](#vcleanup-flow) on the export scope and stops only when actionable findings remain for review.
+1. `vExportDXF` prepares the export using its saved choices before asking for a filename. Use `-vExportDXF` to change `NotchTrim`, `NotchSplitLayer`, `NotchJoin`, `Explode`, `TextBreak`, `Optimize`, or `CleanupAction` for one run; `SaveDefaults=Yes` keeps those choices for later exports. Optimization processes part geometry only, excluding nest table borders, labels, and label frames without excluding them from the DXF.
 1. Choose the DXF path. Selected geometry is moved to the origin in the DXF only; document objects stay in place. Groups become DXF blocks, Rhino's current DXF scheme is used, and the previous selection is restored.
+1. Nest table wrapper groups and material-table outlines are omitted from the DXF, preserving individual part groups instead of bundling an entire table into one block. Renamed tables are identified by stable metadata; older generated nest tables are also recognized. Table labels export in their own label-sized framed block, without the material rectangle or combined table outline. The rows are centered using measured glyph bounds, with explicit left attachment for compatible import positioning. Unnamed groups receive block names; failed block creation reports an error instead of exporting group members loose. Source groups and document membership are unchanged.
+
+The DXF is written to a temporary file first, then copied over the chosen destination in place without renaming or replacing an existing file. Native temporary-path save messages and extra blank lines are suppressed; warnings, errors and the final destination summary remain visible.
 
 Options:
 
-- `NotchTrim`: `No` keeps touched curves as drawn; `Split` moves the between-leg piece to `NotchTrimLayer`; `Trim` omits that piece from the DXF. Default is `Split`. Only temporary export copies are changed.
-- `NotchTrimLayer`: destination layer for split sections; default is `Reference`.
+- `NotchTrim`: `No` keeps touched curves as drawn; `Split` moves the between-leg piece to `NotchSplitLayer`; `Trim` omits that piece from the DXF. Default is `Split`. Only temporary export copies are changed.
+- `NotchSplitLayer`: destination layer for split sections; default is `Reference`. Previously saved `NotchTrimLayer` values are still read. This does not rename or change vNotches' independent layer option.
+- `Explode`: `No` preserves curve structure; `SplitAtCorners` separates curves at tangent discontinuities, retaining smooth joins; `Full` separates all polycurve/polyline components, including nested components. Default is `No`. Runs after notch splitting/trimming and joining. Only temporary export curves change; group blocks, text, annotations and other geometry stay intact.
 - `NotchJoin`: `Yes` by default joins matched V/U notch geometry to touched line or polyline sections in the DXF copy after `Split` or `Trim`, only when the notch and all touched sections share a layer. The between-leg piece stays separate in `Split` mode. Branching notches or source curves with conflicting layers or groups remain unjoined. `No` exports the notch components separately.
-- `Optimize`: `No` by default; `Yes` runs the configured [vCleanup](#vcleanup-flow) routines before export.
+- `Optimize`: `Yes` by default runs the configured [vCleanup](#vcleanup-flow) detection and simplification routines on part geometry before export; `No` skips cleanup.
+- `CleanupAction`: `Ask` by default highlights remaining overlaps and short geometry and offers `Delete` or `Ignore`. `Delete` removes findings and rechecks within the same export; `Ignore` continues without deleting or splitting findings. These export choices are independent of vCleanup's own `AutoDelete` setting. `SaveDefaults=Yes` saves this action globally; otherwise it applies only to this run. Escape cancels review.
 - `TextBreak`: `Yes` by default splits multiline text into separate single-line text objects in the DXF, including text in exported group blocks. Line placement, text styles, layers, and object metadata are preserved; document text is unchanged. Blank rows remain spacing rather than empty objects. `No` keeps multiline text intact.
 - `SaveDefaults`: `No` uses these choices only for the current export; `Yes` saves them for this document and future documents.
 
@@ -384,14 +394,16 @@ Options:
 
     - All curves are split at their mutual intersection points.
     - Segments with dead-end endpoints (degree-1 nodes) are iteratively removed until only closed-cycle core segments remain.
-    - Surviving segments are joined into closed planar boundaries.
+    - Each connected component is solved separately with Rhino's planar-region tracing, so junctions and unrelated parts do not change which closed boundaries are found. Small depth variations within the boundary tolerance are projected for boundary calculations only, leaving all selected geometry unchanged. Endpoint joining handles gaps within the boundary tolerance.
 
 1. For each closed boundary, all selected objects whose representative point falls inside it are collected. Original curves that defined the boundary (e.g. crossing lines whose midpoint lies outside the inner polygon) are included via source-curve tracking.
-1. Each boundary and its interior objects are added to a Rhino group (minimum 2 members required).
+1. Outer outlines appear progressively as boundaries are found. The completed preview shows only the retained grouping boundaries, not their nested inner outlines. Small depth differences within the boundary tolerance do not create another outline for the same part; distinct parts remain separate. Boundaries with identical member sets create only one group.
+1. Each retained boundary and its interior objects are added to a Rhino group (minimum 2 members required).
 
 ### vGroupsManager flow
 
 1. A modeless tree opens with every document group and its current object count. The Rhino document remains interactive while the window is open. Expand a group to list each member using vObjectPropertiesPlus terminology; text objects show their actual text value instead of `Annotation`. Changing the Rhino document selection selects a complete group row when all of its members are selected; partial group selections use the matching object rows and expand their groups. Tree selection remains strongly visible with a slightly less saturated version of the active color while focus is in Rhino.
+1. Enable `Show children groups` to view any strictly contained group under its smallest containing group, then expand it to see its objects or further subgroups. The hierarchy is inferred from group membership, not names or command metadata. Equal groups and partially overlapping groups are not nested inside one another; ambiguous equal-size parents are resolved consistently. Objects represented by children are not repeated directly under their parent. Uncovered parent members remain visible. The option persists and defaults to the original flat view; changing views preserves tree/document selection and expands ancestors needed to show selected children.
 1. Click either column header to sort groups by name or object count. Select one group and click `Rename`, or double-click its row.
 1. Select any mix of group and individual-object rows with standard Ctrl/Shift selection. Their object union receives a cyan outlined temporary highlight that remains distinct from Rhino's yellow selected-object display.
 1. Click `Select` to replace the document selection with the highlighted union. The unlabeled checkbox at the front of the button performs that selection whenever tree selection changes, is accessible even when no tree row is highlighted, is disabled by default, and persists immediately. Disabling it clears objects selected automatically while preserving unrelated manual selection. Closing the manager clears only its temporary highlights and leaves the document selection unchanged.
@@ -497,15 +509,21 @@ Hidden keywords while editing:
 
 ### vMatch flow
 
-1. Click near an **edge-mate dot** (placed by [vUnrollSrf](#vunrollsrf-flow) or [vUnrollSrfUV](#vunrollsrfuv-flow)) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance, with the parts placed on opposite sides of the matched edges to avoid overlap. Auto assembly retains each transformed part's live dot positions and orientation while traversing the remaining matches.
+1. Click near an **edge-mate dot** (placed by [vUnrollSrf](#vunrollsrf-flow)) on a flat unrolled part. The neighbouring part snaps so its mating edge aligns with the selected edge at the configured gap distance, with the parts placed on opposite sides of the matched edges to avoid overlap. Auto assembly retains each transformed part's live dot positions and orientation while traversing the remaining matches.
 Options:
 
     - `Distance`: gap between matched edges.
-    - `Auto`: `Yes` assembles all selected parts via BFS (Breadth-First Search) starting from a single clicked dot; `No` does one match per click.
-    - `RandStart` *(Auto only)*: randomise the BFS start part.
-    - `RandNext` *(Auto only)*: randomise the order of BFS neighbours.
+    - `Auto`: enters automatic assembly of selected parts, including parts preselected before starting vMatch; press Enter to use that set, or click parts to add/remove them. Ordinary mode does one match per click. StartFrom chooses a random root or requests a stationary middle part.
+    - `Overlaps`: check all part groups with edge-mate dots, including parts not moved during this run, and report how many surfaces overlap. The highlighted results update as parts move until the command ends.
+    - `StartFrom` *(Auto only)*: `Random` by default chooses the starting part randomly. `Pick` requests a single click on a part from the selected set, keeps it fixed as the magenta middle, and matches outward in deterministic alternating opposite-side BFS waves. The side axis comes from the middle part's most widely separated matching dots. Previous RandStart settings are read automatically. Moved parts appear progressively, with rapid display updates coalesced to avoid repeated full-scene redraws. Auto returns to ordinary matching after one batch and leaves affected parts highlighted in cyan, with the picked middle in magenta, until the command ends.
+    - `RandNext` *(Auto only)*: randomise the order of BFS neighbours only with `StartFrom=Random`. Ignored with `StartFrom=Pick`.
 
 Options persist to `vTools.config.json` under `vMatch`.
+
+Notes:
+
+- Surfaces from the matched parts that share area are highlighted using the shared highlighter with orange shading and a dark outline, distinct from the cyan matching preview. Highlights remain while choosing another edge, refresh after matching, Auto assembly, undo/redo, or document moves, and clear when the overlap is removed or the command ends. Unrelated parts are not included unless included by `Overlaps`; touching edges alone do not count as overlapping surfaces.
+- Visible and hidden matching dots are included without changing their visibility. If the same mate ID occurs more than once, the closest matching dot on another part is used. Auto considers only selected parts that have not already been placed; duplicate dots on the source part are ignored.
 
 ### vMiddleCurve flow
 
@@ -535,9 +553,55 @@ Options:
 
 `Copy`, `FlipText`, `SwapText`, `Distance`, and replacement rules persist between runs.
 
+### vNest flow
+
+1. Preselected planar curve-based parts are added as soon as the window opens, including when command-line settings are supplied first; running vNest again adds the current preselection to an existing window without replacing its members. Click parts in the drawing, including edges, canonical interiors or preview copies, to add them without holding Shift; plain clicks retain the existing list and Ctrl-click removes the clicked part. Each added or clicked part becomes the active row and scrolls into view. Blank clicks retain the current selection; ordinary window/crossing selection also adds to existing membership, while Ctrl-drag retains native deselection behavior. An incomplete boundary pick does not clear valid nest members. There is no command-line selection stage or Enter confirmation, and the full-width list follows document selection. Included originals stay highlighted to identify nest membership. Grouped parts remain separate; disjoint ungrouped boundaries are recognized as separate parts. Large Reference-layer text supplies part names where available.
+1. Review the material tables and part list in the modeless window. Selected valid rows identify both originals and preview copies in magenta, distinct from cyan nest membership and Rhino's native selection. Oversized or invalid parts keep their orange warning highlight even when their row is selected. Adding or removing parts retains surviving preview placements and table positions; new parts remain Pending until Nest runs again. Delete removes selected list rows from the nest without deleting source objects. The list follows current queued, trial, placed and skipped states and trial table/rotation values. Include or exclude parts, and edit each part's grain reference, rotation preset or custom increment, actual angle, table, and X/Y position. Edited positions become Fixed; manually edited angles override automatic presets and are retained by Nest.
+1. Copies requests individually nested copies while retaining one source-settings row; each preview and output copy is independently positioned and grouped. Fixed anchors the first copy only, with further copies packed automatically. Select multiple rows to edit common settings together: unequal numbers and presets show `<varies>`, and mixed checkboxes are indeterminate. Table and X/Y remain single-part controls. Per-field reset overlays restore defaults, and Reset restores selected parts to one copy, automatic placement, detected grain and global options without changing originals.
+1. Selection updates capture only newly added or incomplete parts, retaining unchanged rows and their settings. Group membership and outline bounds limit containment checks when resolving new parts; diagnostic selection timings report retained/captured counts separately from nesting time.
+1. The Tables tab lists editable table names, width x occupied length, and occupied material in yards. Length and yardage use one decimal place. Matching three centered annotation rows occupy a tab at the middle of the table's left edge. The label box and table perimeter form one closed polyline without internal dividing edges; the outline and three separate annotations belong to the table group, with no separate label group. Each nested part retains its own child group. DXF export omits the table outline and exports only a label-sized framed block alongside the separate part blocks. Changing a name updates its label without restarting nesting. Settings changes during nesting automatically restart the search using the new values, retaining the current preview until new placements arrive, even with Auto off; Stop still stops without restarting. The accepted group uses the chosen name with a uniqueness suffix if needed. Table decorations are ignored when adding existing nested parts back to the list.
+1. Table labels use a visible glyph height of 8% of material width, independent of model-space annotation scaling, reducing only when needed to fit long text within table length. Border clearance, row gaps and box padding scale with the labels. Horizontal table display spacing accommodates each following label box; vertical labels stay within their table's height. Preview and placed parts use the same display offsets without changing local nest geometry or material calculations.
+1. Nesting reuses bounded geometry caches between runs, skips rotations only when their best possible placement cannot improve the score, and retains exact outline/clearance collision checks. Diagnostic profiles report pair calculations, anchor operations, collision work and cache reuse. Focus/rounding events that leave displayed settings unchanged do not invalidate a run; actual changes retain the prior preview until re-nesting, with Place disabled for a stale layout.
+1. Press Nest to pack the included parts. The same button changes to Stop while searching; Stop retains the best valid layout, including already packed parts during the first pass. The status bar shows a percentage overlay without a remaining-time estimate, then shows elapsed time after completion or Stop, including part preparation. Throttled viewport previews show real trial placements; the best complete collision-free layout is restored when searching finishes. The status tooltip reports placement tests, completed layouts and accepted improvements. Nesting is manual by default; Auto optionally re-nests after relevant edits. The minus button deselects highlighted rows' originals without deleting them. Clear stops the search, clears the list and preview, and deselects originals without deleting geometry. Additional material tables are created automatically. Placed-part count and total consumed material take priority over table count; equal-yield placements favor skinny parts at the left end, then prefer the bottom edge of each horizontal table.
+1. Use Location to move the entire preview with snapping. Before nesting, an empty table follows the cursor by its bottom-left corner; its accepted location is retained when parts are added. Enter accepts the displayed position; Esc restores the previous position. Place commits the accepted preview without rebuilding document selection, creating separately grouped part copies and table outlines in one undo record and retaining the original parts. Close discards the preview without creating geometry or clearing document selection.
+
+Options:
+
+- `Width`: each material table's width in document units; default `60`.
+- `Length`: each material table's length in document units; default `315`.
+- `Gap`: minimum distance between part outlines in document units; default `0` allows touching. Remembered between runs and available in the window and command-line settings. Applied to initial packing, refinement and fixed placements; does not add a table-edge margin or change source/copy outlines.
+- `Grain`: supplies a grain direction. `Auto` uses a detected or user-specified guide; parts without guides use free rotation. `Force` asks for missing guides when Obey grain is enabled. `On` uses a guide if present, otherwise the part's source-plane up/down axis. `Off` ignores guides. The longest open curve named GRAIN or on a GRAIN leaf layer is preferred, case-insensitively and ignoring surrounding spaces. Polylines use their longest segment; other curved guides use the middle tangent. Lifted guides are projected only for direction measurement, without changing original geometry. Pick Grain, Draw, or the selected part's Grain angle field can specify a direction.
+- `ObeyGrain`: `Yes` by default constrains specified grain to up/down across material width, using the deviation allowance and Grain turn rather than free rotation. Each part can enable or disable Obey grain independently. Disabling it preserves the guide but enables full free-rotation choices. Manually entered or fixed angles must still satisfy enabled grain constraints; invalid parts are skipped, not silently rotated or placed.
+- `Rotation`: free-rotation presets for parts not obeying a specified grain: `NoRotation` preserves source angle, `AnyRotation` searches any angle, `45` offers eight source-relative orientations, `90` four, `180` two (the default), and `Custom` uses `RotationStep`. These are increments, not maximum deviations. For grain-constrained parts the selected-part Rotation dropdown instead offers `No reversal` or `Allow 180 reversal`, plus Default to inherit the global Grain turn. No reversal still aligns grain initially and permits its deviation allowance; it does not preserve an arbitrary source angle.
+- `RotationStep`: custom increment in degrees, `0.1` through `360`, enabled when Custom is selected; default `45`. Only discrete custom orientations are searched. Use Any rotation for continuous-angle refinement.
+- `GrainDeviation`: global allowance in degrees either side of permitted grain-aligned directions, `0` through `90`, default `0`; remembered between runs. Each part's Deviation uses this value when Default is checked, or its own allowance otherwise. Grain-constrained parts cannot exceed it even if the free-rotation preset is Any. Unconstrained parts ignore this allowance.
+- `Allow180Turn`: `Yes` by default offers both grain-aligned directions; `No` permits only the forward direction. Both obey GrainDeviation. The window calls these `Allow 180 reversal` and `No reversal`. Each part can override this through its constrained Rotation dropdown. This setting does not restrict unconstrained rotation presets. Mirroring is controlled separately by Flip and must also satisfy enabled grain constraints.
+- `Stack`: `Horizontal` places tables side by side; `Vertical` stacks them downward. Each table stays horizontal in either arrangement. Remembered between runs. Changing Stack retains all part rotations and local placements.
+- `Flip`: allow mirrored parts during nesting; default `No`. Allow Flip enables automatic mirrored alternatives. The selected-part Flipped control fixes its handedness; Auto Rotation restores automatic rotation and flip choices. Mirroring is across material grain, so grain alignment is preserved, and copied annotation text remains readable.
+- `SearchTime`: refinement budget in seconds after the initial layout; default `30`, range `0` through `3600`. Zero skips refinement. Larger values allow more joint layout and pair searches. Native polygon operations may slightly overrun the budget; cancellation is checked between operations. Remembered between runs.
+
+Notes:
+
+- Tables run horizontally, with Length along CPlane X and Width along CPlane Y. Rotation values remain relative to the original parts, so changing table orientation does not silently turn grain-locked parts.
+- Pick Grain accepts any curve belonging to the part, regardless of layer; its tangent at the clicked point defines grain. Choose Draw to enter two snapped points instead. The guide is temporary: it adds no document objects and preserves the existing selection.
+- Packing uses cutting outlines for material fit, polygon contact candidates and overlap checks, so labels and other reference details do not make an otherwise fitting part too large. Concave parts can share space inside overlapping bounding boxes without overlapping their outlines. Fixed placements are reserved first. After the initial layout, full-layout search retains multiple combinations of rotations and contact positions across different part orders, then refines part pairs. Only better complete valid layouts replace the saved best result. Free rotations are refined beyond coarse angle samples. Curves are sampled to polygons; this is a bounded heuristic search, not a guarantee of global optimality. Search statistics and timing are recorded in the plug-in log.
+- Material yield uses the full allocated stock: every table before the last consumes its entire configured length, including unused tail space; only the last table is trimmed to its used length. Opening another table therefore charges the unused remainder of the preceding table, not just the new part's length. Existing tables are filled before allocating another. Skinny grain-guided parts favor the left end of a horizontal table when total material consumption is equivalent.
+- Free-rotation alternatives retain their exact 180-degree counterparts. A dedicated refinement pass turns concave parts in their current footprint and refits partner pieces into the resulting space, using only allowed poses and accepting improved material yield. The status tooltip and diagnostics report actual half-turn tests.
+- Narrow parts with enabled detected or user-specified grain are placed first in the initial pass (at least a 3:1 fitting-pose aspect ratio). With SearchTime greater than zero, a dedicated gap-filling pass relocates them between already placed parts only when total used material length strictly decreases, without moving fixed or larger parts, exceeding any table's existing used length, or adding tables. Filling a gap alone is not an improvement; equal-yield leftward alignment is allowed during other refinement. Grain and overlap constraints remain enforced.
+- Oversized parts, conflicting fixed placements, or parts with no permitted rotation are highlighted on their original geometry and skipped. Place creates only successfully nested parts; the status lists the skipped count. The automatic table safety limit is 128.
+- Geometry is preview-only until Place. Original objects and their groups are not changed. Nest copies preserve source layers and belong to individual part groups and their table group; table outlines use Reference.
+- The cutting outline must be planar. Lifted or other off-plane detail curves are retained in their original geometry and moved with the part; they do not invalidate the whole list. Reference-layer decoration is not used as the cutting outline when a closed non-reference perimeter exists.
+- The [Clipper2](https://github.com/AngusJohnson/Clipper2) polygon engine and [RectpackSharp](https://github.com/ThomasMiz/RectpackSharp) rectangle helper, with their license notices, are embedded in the plug-in; no separate geometry DLL needs to be installed.
+
 ### vNotches flow
 
-1. Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions.
+Use Ctrl+Shift to select individual polycurve or polyline segments, including multiple segments from the same parent. Segments have independent row identities, Side, Reverse, and Both sides settings; touching selections can still link into a chain. The parent curve supplies group membership and source metadata. The Select button supports adding and removing segments as well as whole curves. All curve-ID labels share the width of the widest displayed ID, keeping the following controls vertically aligned.
+
+Numeric fields, label text, and layer selectors show an inline reset icon only when their value differs from the built-in default. The icon restores that field without covering the spinner or dropdown arrows.
+
+Connected runs inside a linked sequence retain their junction kinks even when another linked curve is separated by a gap. A notch snapped to a kink uses the middle orientation of the two touching curves; gaps are never bridged for placement.
+
+1. Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions. For grouped curves, the outermost containing boundary in the part group determines the notch side: an inner curve (typically PLOT) faces toward the outer boundary (typically CUT1), while a curve already on that boundary faces inward. Smaller usable part groups take priority over enclosing assembly groups. Without a usable group boundary, newly selected curves use the inward side when they are closed or form an unambiguous closed boundary with visible curves at the same elevation, including endpoint connections and intersections. Each linked source segment is evaluated in its own direction. Open or ambiguous boundaries retain the existing side; Side remains manually adjustable and is preserved during reordering, linking, and reselection in the current session.
 1. A floating **Notches** panel opens. Click positions along the curve(s) to place notches.
 1. Use the disclosure chevron in each group header to collapse or restore the Notch, Multiple, and Label settings.
 1. Numeric controls and readouts display at most three decimal places without unnecessary trailing zeroes.
@@ -553,17 +617,17 @@ Options (Notch group):
 Options (Label group):
 
     - The `Label` header checkbox controls label output. The remaining label settings stay editable whether output is enabled or not.
-    - Value text box: the label string placed at the notch.
-    - `AutoAdv`: when enabled, increments a trailing numeric suffix after each placement.
-    - `FlipSide`: mirrors the label to the opposite side of the curve.
+    - Value text box: the label string placed at the notch. The next-label icon beside it scans existing document notch labels, including hidden and locked labels, and sets the value after the highest used label. When multiple numeric, alphabetic, or prefixed mixed sequences exist, choose one from the icon's dropdown. Numeric padding is preserved and alphabetic values continue from `Z` to `AA`; unrelated document text is ignored.
+    - `AutoAdv`: when enabled, increments a trailing numeric or alphabetic suffix after each placement.
+    - `Side`: checked prefers labels toward the curve start; unchecked prefers away from it.
     - `Layer`: target layer for label text, using the same packed-ARGB swatches as vObjectPropertiesPlus.
     - `Size`: manual label text height. `Auto` computes height proportionally from notch geometry; the adjacent percentage stepper scales the auto-computed height. When `Auto` is checked the manual size field is disabled; when unchecked the percentage stepper is disabled.
-    - `Offset X` / `Offset Y`: numeric steppers for label position relative to the notch point (along-curve and across-curve).
+    - `Offset X` / `Offset Y`: numeric steppers for label position relative to the notch point (along-curve and across-curve). Label `Side` remembers the direction relative to the curve start: checked prefers toward the start, unchecked away from it, regardless of automatic notch-side changes. Both-side labels use the same along-curve preference.
 
 Options (Multiple group):
 
     - `Start offset` / `End offset`: numeric steppers for the distances from each curve's respective ends to the first and last notch.
-    - `Auto`: uses curvature-aware spacing. Every enabled curve contributes to one shared curvature envelope, so turns occurring at different positions on different curves all add density at their corresponding stations. Curve kinks are preferred station candidates, use the middle kink orientation, and replace nearby regular stations. The adjacent unlabeled integer control sets sensitivity in fine whole-number steps: zero produces uniform maximum-distance spacing, while larger values make tangent changes reduce spacing more strongly. `Distance` becomes the maximum gap, and one sampled turn transition cannot create clustered duplicate stations. Unchecking Auto restores the Number or Distance mode that was selected before Auto and immediately recalculates the inactive companion value.
+    - `Auto`: uses curvature-aware spacing. Every enabled curve contributes to one shared curvature envelope, so turns occurring at different positions on different curves all add density at their corresponding stations. Curve kinks are preferred station candidates, use the middle kink orientation, and replace nearby regular stations. The adjacent unlabeled integer control sets sensitivity in fine whole-number steps: zero produces uniform maximum-distance spacing, while larger values make tangent changes reduce spacing more strongly. `Distance` becomes the maximum gap, and one sampled turn transition cannot create clustered duplicate stations. Existing notches placed in the current session exclude candidates within one local neighboring-station spacing, measured along each curve. If any enabled curve rejects a station for this proximity, that station is skipped on all enabled curves so matched notches remain paired. Unchecking Auto restores the Number or Distance mode that was selected before Auto and immediately recalculates the inactive companion value.
     - `Number`: numeric stepper for the total number of notches; minimum is 1. When `Number=1` a single notch is placed at the start offset position only.
     - `Distance`: editable numeric stepper with a `1.0` button increment. Changing `Number` evenly distributes the fixed start/end span. In regular Distance mode it is the minimum repeated spacing; in Auto mode it is the maximum allowed spacing. Absolute stations use the shortest enabled curve as their distance base while curvature contributions remain combined from every enabled curve.
     - `Add`: creates the previewed notch batch. Notches already added to the current curve selection reserve their locations, so proposed stations closer than the active local spacing are omitted per curve while missing companion-curve stations remain available. Its inset `Separate` checkbox applies Number, Distance, or Auto spacing independently to every physical segment in a linked sequence, then maps the expanded station count across companion curves. For example, `Number=3` on a linked pair creates three notches per segment and six on an accompanying single curve. When labels are enabled, only the first new station receives the label and auto-advance runs once.
@@ -608,6 +672,7 @@ Options (available during source and side selection):
 - `OutputLayer`: `Current` uses Rhino's current layer; `Input` uses the source curve layer.
 - `Group`: `Auto` adds output to the source groups or creates a source/output group when ungrouped; `Yes` creates a separate group containing only that source and its outputs; `No` leaves grouping unchanged.
 - `AutoTrim`: checks each open source endpoint independently. When the endpoint touches another curve, the new offset is trimmed if it crosses that curve, left unchanged if already touching, or extended when it falls short.
+- `DeleteSource`: `No` by default retains the original; `Yes` deletes it only after all offset curves are created successfully. Cancellation or failed output preserves the original, and undo restores it together with removing the offset.
 
 The options retain native order so existing hotkeys remain stable. `Group`, `AutoTrim`, and the other command settings persist; group changes share the offset undo record.
 
@@ -658,10 +723,11 @@ Option persists to `vTools.config.json` under `vOverlaps`.
 
 ### vPart flow
 
-1. Select the outer perimeter curves (preselect or postselect; a single closed curve is also valid).
+1. Select the outer perimeter curves or individual polycurve segments (preselect or postselect; a single closed curve is also valid). Distinct selected segments from the same parent curve are kept separately; unselected segments inside the Part retain their original layer.
+1. When a selected perimeter contains selected open dividing curves, click the perimeter on the side to keep. The perimeter may be a closed curve or assembled from separate curves or selected segments. The part is the region between the divider curves and that clicked outer section; the outer section away from the click is trimmed from the copy. Interior divider ends that stop short can extend to the selected perimeter. Without an explicit perimeter-side pick, the largest-boundary behavior is retained.
 1. The command joins the selected curves into a closed loop.  If endpoints do not quite meet (gaps ≤ 200× model tolerance), straight-line bridge segments are inserted automatically.
 1. All visible objects inside the closed perimeter are collected automatically (excluding the selected perimeter curves). Curves that cross the perimeter are split; only the inside segments are kept. With `Cleanup=Yes`, eligible straight interior lines on the generated perimeter's effective layer are omitted unless they are named or metadata-tagged notch geometry. Non-curve objects (text, dots, points, etc.) are included whole when their representative point falls inside.
-1. A full DynamicDraw preview of the Part (perimeter + inside objects) follows the cursor. The perimeter uses its selected output-layer color; interior objects use their original layer colors.
+1. A full DynamicDraw preview of the Part (perimeter + inside objects) follows the cursor. The perimeter uses its selected output-layer color; interior objects use their original layer colors. Changing Rhino's current layer during placement changes the perimeter destination without changing the previewed geometry or rerunning cleanup on that layer. Choosing the command's `Layer` option explicitly rebuilds the cleanup preview.
 1. Pick the placement point to commit.  The Part is added as new objects at that location; originals are not deleted.
 1. Press Esc to cancel without adding anything.
 
@@ -671,6 +737,29 @@ Options (available during both curve selection and placement):
 - `JoinPerimeter`: when `Yes`, perimeter segments are joined into a single curve instead of being kept as individual segments.
 - `Cleanup`: when `Yes`, omits eligible straight interior pieces only when they are on the generated perimeter's effective layer. In `Layer=*Source*` mode, Cleanup runs only when the perimeter uses one source layer; with multiple source layers it is skipped and reported during placement. Notch geometry and curves on unrelated layers are preserved.
 - `Layer`: chooses the output layer for perimeter segments and gap bridges. `*Current*` follows Rhino's current layer for that command session; `*Source*` preserves each split perimeter segment's source layer, while joined output and bridges use the first actual boundary source layer. In scripted input, `.` selects `*Current*`, and `Source` or `*Source*` selects source layers.
+
+### vPartSplit flow
+
+1. Select one or more curve-based planar parts and their details. Preselection remains visible while adding or removing parts before Enter. The outer boundary can be one closed curve or several connected curves; text, dimensions, dots, and points can accompany the selected curves. Each selected part is split independently.
+1. Review the split proposals. Orange lines on the originals show nominal cuts without seam allowance. The copy previews show their actual cut edges and PLOT sew lines. Drag the middle of a cut to slide it; drag near either end to pivot around the opposite end with object snapping. Parallel cuts are added or removed as needed to keep each final piece within the material width. With multiple sources, Part chooses which part Angle controls.
+1. Press Enter to place the ghosted copies. Width, Seam, Mode, Layout, Distance, Direction, Angle, and Auto remain available during placement. Click to place, or press Enter to accept the displayed location. Esc cancels without changing the original parts.
+
+Options:
+
+- `Width`: material width in document units, default `60`. The final cutting outline, including allowance at every common seam, must fit this width.
+- `Seam`: allowance added to each part at each shared cut, default `0.5` document units. Adjacent parts therefore overlap by `1.0` with the default. Zero creates adjacent cuts without overlap. Width must exceed twice Seam.
+- `Mode`: `Even` distributes nominal cut positions roughly evenly across the part; `MaxWidth` fills each usable material-width band and leaves a smaller final remainder where needed.
+- `Layout`: `Original` preserves each source part's alignment and spreads its pieces perpendicular to their cut lines; `Vertical` turns each copy's longest bounding-box edge upright and places copies side by side, using their rotated widths for spacing and choosing the nearest upright direction to avoid unwanted half-turns. Its orientation follows each piece's bounding box rather than the split line. Multiple source families are placed separately in the batch layout.
+- `Distance`: clear distance between neighboring final cut edges in document units; default `1`. The same distance applies to both layout modes. Changing Layout or Distance retains manually adjusted cuts.
+- `Angle`: split orientation in degrees within the part's plane. Available once the boundary has been identified.
+- `Auto`: recalculates the initial orientation and layout for the current settings. Available during adjustment and placement.
+- `Direction`: `Start` fills from the initial end; `End` fills from the opposite end; `Inward` fills symmetric full-width outer pairs toward the center, leaving one or two smaller center pieces; `Outward` fills full-width center pieces toward both ends, leaving symmetric outer remainders. In MaxWidth this changes the actual cuts while retaining seam allowance in the width limits. In Even, cuts remain evenly spaced and only output order changes. Part chooses which selected source Direction controls; Auto retains each source's direction. Side-by-side copies and part numbering follow the chosen order without mirroring; Original layout retains the parts' original relative alignment.
+
+Notes:
+
+- Source split-line previews omit seam allowance; copied-part previews and final output include it. Curved boundaries remain curved, and interior curve details are clipped as original fragments rather than being closed artificially.
+- Originals are retained. Each output part has its own group and preserves source detail layers. Its cutting perimeter uses the original outer-boundary layer. Each common nominal cut is included in the copied parts as a PLOT sew line. Nominal cut lines on the originals use Reference and are grouped with their source parts.
+- Width, Seam, Mode, Layout, Distance, and the last selected Direction are remembered in the shared configuration. Layout planning is shared with [vShade](#vshade-flow).
 
 ### vPerpendicularTo flow
 
@@ -682,6 +771,26 @@ Behavior:
 - The nearest endpoint pair between A and B is found automatically.
 - Curve A is rotated about its near endpoint in the active CPlane by the angle needed to make it perpendicular to B's tangent at B's near endpoint.
 - Of the two possible perpendicular directions, the one requiring the smaller rotation is chosen.
+
+### vPointAlongCurve flow
+
+Places one point on an open or closed 3D curve at an arc-length distance from a picked starting position.
+
+1. Select a curve, or preselect one before starting.
+1. Pick the starting position on that curve. Object snapping is available.
+1. Move the cursor toward the desired direction. A live point preview follows the chosen side; click to place it. Snapping remains available when choosing direction.
+
+Options (available at every stage):
+
+- `Distance`: non-negative distance along the curve in document units. Type a number directly at any prompt, or use the option. Zero places the point at the starting position. The value persists in `vTools.config.json`.
+- `Project`: what to do beyond an open curve's ends. `Skip` (default) omits out-of-range points; `End` uses the endpoint and displays the actual distance in the preview and command output; `Straight` continues the end tangent; `Smooth` follows a smooth curve extension at the requested arc length. This option also persists and is available at every stage.
+
+Notes:
+
+- Direction always chooses the valid distance point closest to the cursor in the active viewport, whether snapped or not. On a closed curve, distances can wrap around the seam.
+- With `Project=Skip`, the other direction is used if only one side has enough length. If neither direction fits, reduce Distance or change Project. Other Project modes never modify the source curve; only the point is created.
+- The point uses the current layer and inherits the source curve's groups.
+- Macro example: `! _vPointAlongCurve _Distance 5 _Pause _Pause _Pause`. A direct initial number can replace `_Distance 5`.
 
 ### vPointNormalToSurface flow
 
@@ -766,10 +875,11 @@ Options:
 - `Offset`: sets the bisector distance from the tangent-defined corner to the center of the perpendicular line. Enter a non-negative number directly at either curve prompt to change it. Zero places that line directly at the corner and omits the zero-length bisector.
 - `Chamfer`: sets the total perpendicular cap width, centered on the bisector endpoint. Zero omits the perpendicular line. Existing saved `Length` values are read as `Chamfer` until changed.
 - `Reinforcement`: sets the radius of an arc centered at each perpendicular midpoint and ending on its two incident perimeter connections. Defaults to `6`; zero disables these arcs. An arc is omitted until both connections exist or when the radius lies beyond either one.
+- `CreateReinf`: `No` by default; `Yes` creates a detached closed reinforcement part for each valid corner arc. Its outline follows the current finished boundary, including custom edited sides, without cut allowance, and uses `CutLayer`. Copies its corner label, groups each part separately, and moves it outward until its minimum clearance from the outer cut outline is 2 inches converted to document units. With no cut outline, clearance is measured from the finished boundary. Changing this option updates only detached reinforcement parts; it does not rebuild the shade or replace custom sides. Detached parts are excluded from shade splitting.
 - `Label`: sets the next reinforcement label; Enter at its text prompt disables labels. A nonempty numeric or alphabetic suffix advances after each placed corner (for example, `1` to `2` or `A` to `B`). The next value is stored in the document and starts at `1` in each new document. Labels are 0.5 model units high, centered between a reinforcement arc and its perpendicular line, with the perpendicular line as the text's bottom direction. Numeric labels that could read as a different number upside-down receive a trailing orientation dot (for example, `6.` and `9.`). A corner without a valid reinforcement arc has no visible label.
 - `Connect`: when `Yes`, rebuilds non-crossing perimeter connections among all placed corners, regardless of selection order. Ends belonging to the same source curve are matched first; remaining free ends are paired by proximity. With three or more corners, it closes the loop when valid connections exist, without requiring the first and last picks to share a source curve.
 - `Join`: when `Yes`, joins connected perpendicular caps and perimeter lines into curves; `No` keeps each segment separate. Bisectors and reinforcement arcs remain separate.
-- `Layer`: chooses the layer for perpendicular, connection, and joined-boundary geometry; `*Current*`, `.` or `*` follows Rhino's current layer. Changing the current layer in Rhino's Layers panel also moves the shade output already placed during the active command. Bisectors always use the `Reference` layer; cut outlines keep their separate `CutLayer`.
+- `FinishedLayer`: chooses the layer for perpendicular, connection, reinforcement-arc, label and joined-boundary geometry; `*Current*`, `.` or `*` follows Rhino's current layer. Shown immediately before `CutLayer`. Previous `Layer` settings are read automatically. Changing the current layer in Rhino's Layers panel also moves the finished shade output already placed during the active command. Bisectors always use `Reference`; cut outlines and detached reinforcement outlines keep their separate `CutLayer`.
 - `Scallop`: when `Yes`, replaces each straight perimeter connector with an arc bulging toward the shade interior; `No` keeps straight connectors.
 - `ScallopSize`: sets each arc's midpoint bulge distance. Enter an absolute model-unit value such as `4` or a percentage of that connector's endpoint span such as `5%` (the default). It must be positive; a size that makes scallops cross each other or a chamfer cap is rejected without replacing the existing result.
 - `CutOffset`: offsets each closed shade perimeter outward by this non-negative model-unit distance. Zero (the default) omits the cut outline; open intermediate perimeters do not produce one.
@@ -778,7 +888,7 @@ Options:
 - `OffsetTune`: set `Offset` in the tune prompt, then click a corner's bisector or perpendicular cap to move only that corner to the specified offset. The connected boundary, reinforcement, and cut outline update with it. Press Enter to return to corner selection.
 - `Split`: appears once a closed cut or shade boundary exists. It proposes a low-material-length rotated layout from that boundary. Inside `Split`, `SplitWidth` sets the material width (default `63` model units) in both the cut and placement stages; each proposed part fits within `SplitWidth - 0.5`, and adjacent parts overlap by `0.5` total. Drag an orange cut: the endpoint nearest the grab follows the cursor along the shade boundary, while the opposite endpoint stays fixed. Rhino's active object snaps remain available; parallel cuts are added or removed as needed. `Auto` recalculates the proposal. Press Enter to switch to placing the ghosted parts in faded destination colors; click a placement point or press Enter for the displayed location. Accepting the placement finishes `vShade`; canceling Split resumes the current curve-selection stage. The original shade stays; each accepted split cut becomes one `Reference`-layer line grouped with that shade. Each laid-out part is a separate group whose outside perimeter is the `CutLayer` cut line, assembled from exact segments of the source cut curve. Each common seam has matching upright digits on both parts, fitted inside the 0.5-unit band between the cut edge and the `PLOT`-layer overlap mark. After acceptance, one native undo removes the split copies and source split cuts, leaving the original shade; the next undo reverses the shade creation or edits from this run. Redo restores them in the same order.
 
-The clicked curve ends and their tangent extensions define the corner in the active CPlane. The command creates one shade from all placed corners. Ctrl+Z and Ctrl+Y step through placed corners and tune edits while the command remains active; neither appears as a command option. Connections that would cross existing perimeter lines are omitted. All created output except bisectors belongs to one shade group. When the command finishes, the result includes the [vFitBox](#vfitbox-flow) size of the outer cut curve, or the closed shade perimeter when there is no cut curve. An open boundary has no outside fit-box size. Created objects are named `ShadeBisector`, `ShadePerpendicular`, `ShadeConnection`, `ShadeScallop`, `ShadeBoundary`, `ShadeReinforcement`, `ShadeLabel`, or `ShadeCut` and carry `vShade.*` identification metadata. If both Offset and Chamfer are zero, no geometry is created.
+The clicked curve ends and their tangent extensions define the corner in the active CPlane. The command creates one shade from all placed corners. Ctrl+Z and Ctrl+Y step through placed corners and tune edits while the command remains active; neither appears as a command option. Connections that would cross existing perimeter lines are omitted. Main shade output except bisectors belongs to one shade group; detached reinforcement parts have their own groups. When the command finishes, the result includes the [vFitBox](#vfitbox-flow) size of the outer cut curve, or the closed shade perimeter when there is no cut curve. An open boundary has no outside fit-box size. Created objects carry `vShade.*` identification metadata; detached parts are named `ShadeReinforcementPart`. If both Offset and Chamfer are zero, no geometry is created.
 
 ### vSmooth flow
 
@@ -808,7 +918,7 @@ Options:
 1. Click near selected curves to add real warm-yellow circular point-object split markers; point picking is constrained to the chosen curves.
 1. Existing split markers are snap points; hover one to preview it as a cool-blue X, then click to remove it. Both marker states use a black halo and the configured pink outline so they remain visible over similarly colored curves.
 1. Press Enter to apply splitting and replace the original curves with split pieces.
-1. When splitting would break history, affected objects are shaded orange with a dark outline while a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
+1. When splitting would break history, affected objects are shaded orange with a dark magenta outline while a native-style `Rhino N History Warning` with `OK/Cancel` appears before any source curves are replaced. `Cancel` leaves the original geometry unchanged and restores temporary command state. The warning follows Rhino's shared setting and includes affected history records on source curves and dependent children. Other vTools commands and operations delegated to native Rhino commands use Rhino's built-in history warning handling.
 Options:
 
     - `Points`: choose `Default`, `CP`, `EditPoints`, or `Hidden` while choosing split points. `Default` leaves the original point visibility untouched on start and restores each selected curve's original hidden/CP/edit-point state when switched back.
@@ -870,7 +980,7 @@ Options:
 
     - `Text`: title string.
     - `Size`: final model-space text height; document annotation scaling does not change it.
-    - `Padding`: percentage of text height added as padding on each side of the bounding box.
+    - `Padding`: percentage of text height added as padding on each side of the bounding box. Editing the title text object's `vTitlePadding` attribute also resizes its existing frame; use a finite non-negative number (for example, `50` for 50%). Editing an existing title loads its own stored padding.
     - `Box`: `Yes/No` — draw a padded bounding rectangle around the text.
     - `Layer`: opens the shared searchable layer selector. Use `*Current*` to follow the current layer; `-vTitle` accepts a layer name or full path directly. Default is `Reference`.
 
@@ -939,7 +1049,7 @@ Notes:
 #### AutoClosest mode
 
 1. Press Enter without selecting cutting curves.
-1. Hover a target curve. `vTrim` finds the relevant touching or intersecting cutter nearest the hovered curve segment and previews the exact portion that will be removed.
+1. Hover a target curve. `vTrim` finds the nearest valid contact on each side along the curve and previews the exact portion that will be removed. Between two cutters, only the intervening section is removed; both outer sections remain.
 1. Click to apply the displayed trim. Hold Shift before clicking to preview and apply an extension from the hovered end instead.
 1. Continue hovering and clicking targets, or press Enter when finished.
 
@@ -967,13 +1077,15 @@ In parallel plan views, AutoClosest also uses apparent intersections in the view
 1. Select surfaces, polysurfaces, or extrusions to unroll.
 1. Select curves, points, or dots that should follow their nearest surface, or press Enter for none.
 1. Choose the output start point. When replacing already processed parts, press Enter to preserve each part's prior position and orientation.
-1. Flat parts receive matching labels and shared-edge `M###` dots for use with [vMatch](#vmatch-flow). The default top-level output layers are `Unrolled_surface`, `Unrolled_label`, and `Unrolled_dot`, ordered immediately below `Surface`; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly; other parts and their following geometry use Rhino's developable-surface [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm), with RhinoCommon retained only as a failure fallback.
-1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds.
+1. Flat parts receive matching labels and shared-edge `M###` dots for use with [vMatch](#vmatch-flow). The default top-level output layers are `Unrolled_surface`, `Unrolled_label`, and `Unrolled_dot`, ordered immediately below `Surface`; missing layers are created only when their corresponding output is committed. Polysurface markers retain their source-edge face association and exact position on the corresponding flat edge. Text is fitted to the trimmed flat part and the same height is applied to its original-surface label. Planar single-face parts are mapped exactly. Non-rational ruled faces with a collapsed apex use a tolerance-checked conical development that preserves lengths and UV coordinates; other parts and their following geometry use the native command selected by UV. Failures are marked instead of silently switching flattening algorithms.
+1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds. Existing flat labels recover the position of parts whose group contains only labels or dots. If several parts share a combined surface, their old faces are assigned back to their existing groups when every face is identified by an interior part label; the new geometry may have a different shape or face count. Ambiguous old joined geometry is retained with a warning, but every selected source is still unrolled into new output. Other existing parts update normally rather than creating another layout.
 
 Options:
 
+- `UV`: `Yes` by default delegates to native [UnrollSrfUV](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv); `No` delegates to native [UnrollSrf](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm). Available during selection, following-geometry and placement prompts and remembered between runs.
+- `QuietNative`: experimental command-history cleanup, `Yes` by default. After each native unroll call, removes recognized English area-calculation progress, within-tolerance notices, routine surface counts and redundant native numerical area warnings. Earlier history, other warnings, errors, vTools' numbered final-area and edge discrepancies, and unknown/localized messages are preserved. `No` retains native output, with numerical area warnings qualified by part number. Available at all option prompts and remembered between runs.
 - `Labels`: creates `Text`, numbered `Dots`, or `None` for part identification.
-- `RotateFlatParts`: aligns flat parts with the source orientation when enabled; otherwise keeps Rhino's unroller orientation.
+- `RotateFlatParts`: rotates flat parts to roughly match the original source orientation as projected onto World XY, using both source label-frame directions when possible and the remaining direction for edge-on sources. Uses rotation only, not mirroring; labels, following geometry and mate dots move with the part. Otherwise keeps Rhino's unroller orientation. Reruns that preserve an existing part's placement retain its edited orientation.
 - `EdgeDots`: creates matching shared-edge `M###` dots for [vMatch](#vmatch-flow).
 - `Explode`: outputs separate flat faces instead of keeping each unrolled Brep joined.
 - `SplitFaces`: unrolls polysurface faces separately while retaining their source-face associations.
@@ -985,32 +1097,11 @@ Options:
 - `LabelLayer`: layer for committed labels, selected with the shared searchable layer picker.
 - `DotLayer`: layer for committed matching dots, selected with the shared searchable layer picker.
 
-Options are shared with [vUnrollSrfUV](#vunrollsrfuv-flow) and persist to `vTools.config.json` under the `vUnrollSrf` section. Layer choices are saved immediately when changed.
+Individual edge-length discrepancies exceeding the document absolute tolerance are reported by part and source edge (`E1` is the first source topology edge), with a signed length in document units and a percentage of that source edge's length. Hidden transferred samples locate each edge on the actual flat geometry, including consecutive segments of a subdivided boundary; total perimeter and nearest-length guesses are not used. Edges that cannot be mapped are explicitly listed as unverified. Full-precision measurements are recorded in the diagnostic log.
 
-### vUnrollSrfUV flow
+The source currently being processed is highlighted with lightweight outlined wires, and completed flat parts appear progressively in their final layout positions. Output creation keeps redraw suspended; previews update only the active viewport without automatically redrawing other views or the Layers panel. Refreshes combine newly finished parts with the latest source highlight. The first source is shown immediately; later updates adapt to rendering cost, targeting no more than about ten percent display overhead rather than forcing a refresh before every native call. The final result always refreshes all views. The in-place command prompt uses one stable format for part, completed count, percentage and failures without adding progress lines to history. Area discrepancies exceeding estimated measurement error are reported for each identified part, using the final flat geometry, with the signed difference in squared document units and percent. Rhino's own numerical area warnings are suppressed with QuietNative=Yes; with QuietNative=No they retain a part number and `native unroll` prefix, distinguishing them from the independent final-geometry check. Native output with an unexpected face count is rejected rather than replacing existing parts. Native progress messages bypass command-echo settings; QuietNative cleans recognized routine messages afterward by rewriting command history. Routine messages can briefly appear during a long native call before cleanup runs. Cleanup is skipped if the history was replaced/truncated, changes during filtering, or exceeds one million characters. Raw captured output remains available to diagnostics and other active output captures. Diagnostics record individual enable/draw/pump times, total live-display time and history-replay time for performance comparison.
 
-1. Select surfaces, polysurfaces, or extrusions to unroll.
-1. Select curves, points, or dots that should follow their nearest surface, or press Enter for none.
-1. Choose the output start point. When replacing already processed parts, press Enter to preserve each part's prior position and orientation.
-1. Flat parts receive the same labels, shared-edge `M###` dots, layers, following geometry, and source properties as [vUnrollSrf](#vunrollsrf-flow). Planar single-face parts are mapped exactly; other parts delegate to Rhino's UV-preserving [UnrollSrfUV](https://docs.mcneel.com/rhino/8/help/en-us/commands/unrollsrf.htm#unrollsrfuv), with RhinoCommon retained only as a failure fallback.
-1. Rerunning an already processed part preserves its part number and recoverable edge-dot identities, reuses its original label/group, and replaces its previous flat-group members after the new unroll succeeds.
-
-Options:
-
-- `Labels`: creates `Text`, numbered `Dots`, or `None` for part identification.
-- `RotateFlatParts`: aligns flat parts with the source orientation when enabled; otherwise keeps Rhino's unroller orientation.
-- `EdgeDots`: creates matching shared-edge `M###` dots for [vMatch](#vmatch-flow).
-- `Explode`: outputs separate flat faces instead of keeping each unrolled Brep joined.
-- `SplitFaces`: unrolls polysurface faces separately while retaining their source-face associations.
-- `KeepPropSurface`: preserves source surface object properties; otherwise uses the selected surface output layer.
-- `KeepPropFollowing`: preserves properties of following curves, points, and dots; otherwise uses the corresponding output layers.
-- `Spacing`: gap between automatically laid-out flat parts in model units.
-- `XExtents`: maximum layout row width in model units; `0` disables row wrapping.
-- `SurfaceLayer`: layer for committed flat surfaces, selected with the shared searchable layer picker.
-- `LabelLayer`: layer for committed labels, selected with the shared searchable layer picker.
-- `DotLayer`: layer for committed matching dots, selected with the shared searchable layer picker.
-
-Options are shared with [vUnrollSrf](#vunrollsrf-flow) and persist to `vTools.config.json` under the `vUnrollSrf` section. Layer choices are saved immediately when changed.
+Options persist to `vTools.config.json` under the `vUnrollSrf` section. Layer choices are saved immediately when changed. The former vUnrollSrfUV command is consolidated into this command; use UV=Yes for that mode.
 
 ### vUzip flow
 
@@ -1097,6 +1188,8 @@ The plug-in version, Rhino version, and DLL path are written to `vTools.log` bes
 ## Logging
 
 - `vTools.log` beside the loaded DLL — cleared on every Rhino startup. First lines show the Rhino and plug-in versions plus the command list. All commands write diagnostics here via `Log.Write(tag, message)`.
+- Temporary Isolate investigation: `vTools.commands.jsonl` beside the loaded DLL retains separate, timestamped Rhino sessions, native and plug-in command order, command-line history, selection/visibility changes, input state, and undo-record state. It observes without changing geometry, selection, or undo.
+- The trace checks whether native `Isolate` hides objects it should retain. Five completed sessions with verified Isolate tests and no failures qualify for review and removal of the diagnostics; sessions without tests do not advance the count, and failures or incomplete traces reset it. Monitoring does not disable itself. Set `IsolationDiagnostics.enabled` to `false` in the runtime configuration and restart Rhino to disable it manually.
 
 ## Versioning
 

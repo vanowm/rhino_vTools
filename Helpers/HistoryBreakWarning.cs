@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using Rhino;
 using Rhino.ApplicationSettings;
-using Rhino.Display;
-using Rhino.Geometry;
 using Rhino.UI;
 
 namespace vTools;
@@ -55,117 +52,20 @@ internal static class HistoryBreakWarning
 
     var objectLabel = affectedRecords.Count == 1 ? "object" : "objects";
     var message = $"The {commandName} command broke history on {affectedRecords.Count} {objectLabel}.";
-    var highlight = new AffectedBodyConduit(doc, affectedRecords) { Enabled = true };
-    doc.Views.Redraw();
     ShowMessageResult result;
-    try
+    using (var highlight = new PreviewDisplay.ObjectHighlighter(doc, PreviewDisplay.HistoryWarningStyle))
     {
+      highlight.SetObjects(affectedRecords);
       result = Dialogs.ShowMessage(
         message,
         $"Rhino {RhinoApp.Version.Major}  History Warning",
         ShowMessageButton.OKCancel,
         ShowMessageIcon.Warning);
     }
-    finally
-    {
-      highlight.Enabled = false;
-      doc.Views.Redraw();
-    }
 
     var accepted = result == ShowMessageResult.OK;
     Log.Write("History",
       $"{commandName} pending records={affectedRecords.Count} accepted={accepted}");
     return accepted;
-  }
-
-  private sealed class AffectedBodyConduit : DisplayConduit
-  {
-    private static readonly Color Orange = Color.FromArgb(255, 128, 0); // Fill color for objects whose history will break.
-    private static readonly Color Outline = Color.FromArgb(155, 30, 100); // Wire and edge color around affected objects.
-    private readonly RhinoDoc _doc;
-    private readonly IReadOnlyCollection<Guid> _objectIds;
-    private readonly DisplayMaterial _material = new(Orange)
-    {
-      Transparency = 0.25,
-      BackTransparency = 0.25
-    };
-
-    internal AffectedBodyConduit(RhinoDoc doc, IReadOnlyCollection<Guid> objectIds)
-    {
-      _doc = doc;
-      _objectIds = objectIds;
-    }
-
-    protected override void PostDrawObjects(DrawEventArgs e)
-    {
-      foreach (var objectId in _objectIds)
-      {
-        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
-        switch (geometry)
-        {
-          case Brep brep:
-            e.Display.DrawBrepShaded(brep, _material);
-            break;
-          case Extrusion extrusion:
-          {
-            using var extrusionBrep = extrusion.ToBrep();
-            if (extrusionBrep != null) e.Display.DrawBrepShaded(extrusionBrep, _material);
-            break;
-          }
-          case Surface surface:
-          {
-            using var surfaceBrep = surface.ToBrep();
-            if (surfaceBrep != null) e.Display.DrawBrepShaded(surfaceBrep, _material);
-            break;
-          }
-          case Mesh mesh:
-            e.Display.DrawMeshShaded(mesh, _material);
-            break;
-        }
-      }
-    }
-
-    protected override void DrawForeground(DrawEventArgs e)
-    {
-      foreach (var objectId in _objectIds)
-      {
-        var geometry = _doc.Objects.FindId(objectId)?.Geometry;
-        switch (geometry)
-        {
-          case Brep brep:
-            DrawBrepEdges(e.Display, brep);
-            break;
-          case Extrusion extrusion:
-          {
-            using var extrusionBrep = extrusion.ToBrep();
-            if (extrusionBrep != null) DrawBrepEdges(e.Display, extrusionBrep);
-            break;
-          }
-          case Surface surface:
-          {
-            using var surfaceBrep = surface.ToBrep();
-            if (surfaceBrep != null) DrawBrepEdges(e.Display, surfaceBrep);
-            break;
-          }
-          case Mesh mesh:
-            PreviewDisplay.DrawMeshWires(e.Display, mesh, Outline, 3);
-            break;
-          case Curve curve:
-            PreviewDisplay.DrawCurve(e.Display, curve, Outline, 4);
-            PreviewDisplay.DrawCurve(e.Display, curve, Orange, 1);
-            break;
-          case Rhino.Geometry.Point point:
-            e.Display.DrawPoint(point.Location, PointStyle.RoundSimple, 7, Outline);
-            e.Display.DrawPoint(point.Location, PointStyle.RoundSimple, 5, Orange);
-            break;
-        }
-      }
-    }
-
-    private static void DrawBrepEdges(DisplayPipeline display, Brep brep)
-    {
-      foreach (var edge in brep.Edges)
-        PreviewDisplay.DrawCurve(display, edge, Outline, 3);
-    }
   }
 }

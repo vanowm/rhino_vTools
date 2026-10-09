@@ -17,7 +17,7 @@ public sealed class vReGroup : vToolsCommand
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    var go = new GetObject();
+    using var go = new GetObject();
     go.SetCommandPrompt("Select objects to re-group");
     go.GroupSelect     = true;
     go.SubObjectSelect = false;

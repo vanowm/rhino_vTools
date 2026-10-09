@@ -26,6 +26,7 @@ public sealed class vCleanup : vToolsCommand
   private const bool DefaultSimplifyCurves = true; // true simplifies scoped curves before analysis; false preserves their existing structure.
   private const bool DefaultFindOverlaps = true; // true runs shared vOverlaps detection before the short scan; false skips overlap detection.
   private const bool ProtectOpenCurveEnds = true; // true excludes open-curve endpoint segments and endpoint control points; false permits them.
+  private const int MaximumExportCleanupPasses = 100; // Maximum delete/recheck passes per export; prevents looping when native deletion makes no progress.
 
   // Customizable appearance, output, limits, tolerance, and sampling
   private static readonly Color ShortHighlightColor = Color.Magenta; // ARGB viewport color used for all short-geometry overlays.
@@ -117,8 +118,10 @@ public sealed class vCleanup : vToolsCommand
 
   public override string EnglishName => "vCleanup";
 
+  internal enum ExportCleanupAction { Ask, Delete, Ignore }
+
   internal static Result OptimizeForExport(
-    RhinoDoc doc, HashSet<Guid> sourceIds)
+    RhinoDoc doc, HashSet<Guid> sourceIds, ExportCleanupAction action = ExportCleanupAction.Ask)
   {
     LoadOptions();
     var curves = sourceIds
@@ -129,11 +132,12 @@ public sealed class vCleanup : vToolsCommand
     if (curves.Count == 0)
       return Result.Success;
 
+    var selection = doc.Objects.GetSelectedObjects(false, false).Select(obj => obj.Id).ToArray();
+    var gripStates = curves.ToDictionary(obj => obj.Id, obj => obj.GripsOn);
     try
     {
       var overlapSettings = vOverlaps.GetDetectionSettings();
-      if (_simplifyCurves || _autoDeleteMode != CleanupTargetMode.No ||
-          (_findOverlaps && overlapSettings.OverlapSegments))
+      if (_simplifyCurves)
       {
         var historyRecords = curves
           .SelectMany(obj => HistoryBreakWarning.CaptureAffectedRecords(doc, obj.Id))
@@ -149,10 +153,10 @@ public sealed class vCleanup : vToolsCommand
         .ToList();
       var overlapResult = _findOverlaps
         ? OverlapFinder.Find(curves, overlapSettings.Tolerance,
-            ResolveConnectivityCurves(doc))
+            curves)
         : new OverlapFinder.Result([], [], [], 0, 0, 0, 0);
       var overlapTargets = _findOverlaps
-        ? ResolveOverlapTargets(doc, overlapResult, overlapSettings,
+        ? ResolveOverlapTargets(doc, overlapResult, (overlapSettings.Tolerance, false),
             sourceIds, out _)
         : [];
       curves = sourceIds
@@ -163,63 +167,83 @@ public sealed class vCleanup : vToolsCommand
       var shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
       int removedOverlaps = 0;
       int removedShort = 0;
-      if (_autoDeleteMode != CleanupTargetMode.No)
-      {
-        doc.Objects.UnselectAll();
-        if (IncludesOverlaps(_autoDeleteMode))
-          removedOverlaps = SelectObjects(doc, overlapTargets);
-        if (IncludesShort(_autoDeleteMode))
-          removedShort = SelectShortHits(doc, shortAnalysis.Hits, [], false);
-        if (removedOverlaps + removedShort > 0 && !RhinoApp.RunScript("_Delete", false))
-        {
-          DisposeHits(shortAnalysis.Hits);
-          throw new InvalidOperationException("Automatic cleanup deletion failed.");
-        }
-        DisposeHits(shortAnalysis.Hits);
-        doc.Objects.UnselectAll();
-        curves = sourceIds
-          .Select(id => doc.Objects.FindId(id))
-          .Where(obj => obj?.Geometry is Curve)
-          .Cast<RhinoObject>()
-          .ToList();
-        if (_simplifyCurves)
-          simplified += SimplifyCurves(doc, curves);
-        curves = sourceIds
-          .Select(id => doc.Objects.FindId(id))
-          .Where(obj => obj?.Geometry is Curve)
-          .Cast<RhinoObject>()
-          .ToList();
-        overlapResult = _findOverlaps
-          ? OverlapFinder.Find(curves, overlapSettings.Tolerance,
-              ResolveConnectivityCurves(doc))
-          : new OverlapFinder.Result([], [], [], 0, 0, 0, 0);
-        overlapTargets = _findOverlaps
-          ? ResolveOverlapTargets(doc, overlapResult, overlapSettings,
-              sourceIds, out _)
-          : [];
-        curves = sourceIds
-          .Select(id => doc.Objects.FindId(id))
-          .Where(obj => obj?.Geometry is Curve)
-          .Cast<RhinoObject>()
-          .ToList();
-        shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
-      }
       int overlaps = overlapTargets.Count;
       int shortCount = shortAnalysis.Hits.Count;
-      DisposeHits(shortAnalysis.Hits);
+      bool ignored = false;
+      try
+      {
+        for (int pass = 0; overlaps > 0 || shortCount > 0; pass++)
+        {
+          using var highlight = new PreviewDisplay.ObjectHighlighter(doc);
+          highlight.SetObjects(overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId)));
+          doc.Views.Redraw();
+          var choice = action;
+          if (choice == ExportCleanupAction.Ask)
+          {
+            using var getter = new GetOption();
+            getter.SetCommandPrompt($"Cleanup found {overlaps} overlaps and {shortCount} short findings");
+            int deleteOption = getter.AddOption("Delete");
+            getter.AddOption("Ignore");
+            if (getter.Get() != GetResult.Option)
+              return Result.Cancel;
+            choice = getter.OptionIndex() == deleteOption
+              ? ExportCleanupAction.Delete : ExportCleanupAction.Ignore;
+          }
+          if (choice == ExportCleanupAction.Ignore)
+          {
+            ignored = true;
+            break;
+          }
+          if (pass >= MaximumExportCleanupPasses)
+            throw new InvalidOperationException("Cleanup deletion did not resolve the findings. Choose Ignore to export them.");
+          var historyRecords = overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId))
+            .SelectMany(id => HistoryBreakWarning.CaptureAffectedRecords(doc, id)).ToHashSet();
+          if (!HistoryBreakWarning.Confirm(doc, "vExportDXF cleanup deletion", historyRecords))
+            return Result.Cancel;
+          if (_findOverlaps && overlapSettings.OverlapSegments)
+          {
+            overlapTargets = ResolveOverlapTargets(doc, overlapResult, overlapSettings, sourceIds, out _);
+            DisposeHits(shortAnalysis.Hits);
+            curves = sourceIds.Select(id => doc.Objects.FindId(id))
+              .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
+            shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
+          }
+          doc.Objects.UnselectAll();
+          int selectedOverlaps = SelectObjects(doc, overlapTargets);
+          int selectedShort = SelectShortHits(doc, shortAnalysis.Hits, [], false);
+          if (selectedOverlaps + selectedShort == 0 || !RhinoApp.RunScript("_Delete", false))
+            throw new InvalidOperationException("Cleanup findings could not be deleted.");
+          removedOverlaps += selectedOverlaps;
+          removedShort += selectedShort;
+          doc.Objects.UnselectAll();
+          DisposeHits(shortAnalysis.Hits);
+          curves = sourceIds.Select(id => doc.Objects.FindId(id))
+            .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
+          overlapResult = _findOverlaps
+            ? OverlapFinder.Find(curves, overlapSettings.Tolerance, curves)
+            : new OverlapFinder.Result([], [], [], 0, 0, 0, 0);
+          overlapTargets = _findOverlaps
+            ? ResolveOverlapTargets(doc, overlapResult, (overlapSettings.Tolerance, false), sourceIds, out _)
+            : [];
+          curves = sourceIds.Select(id => doc.Objects.FindId(id))
+            .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
+          shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
+          overlaps = overlapTargets.Count;
+          shortCount = shortAnalysis.Hits.Count;
+          Log.Write("vExportDXF", $"cleanup review delete pass={pass + 1} remainingOverlaps={overlaps} remainingShort={shortCount}");
+        }
+      }
+      finally
+      {
+        DisposeHits(shortAnalysis.Hits);
+      }
       Log.Write("vExportDXF", $"optimize scope={curves.Count} simplified={simplified} " +
         $"removedOverlaps={removedOverlaps} removedShort={removedShort} " +
         $"remainingOverlaps={overlaps}/{overlapResult.ItemCount} " +
-        $"remainingShort={shortCount} threshold={_threshold}");
-      if (overlaps > 0 || shortCount > 0)
-      {
-        RhinoApp.WriteLine($"vExportDXF: Optimize found {overlaps} overlaps and " +
-          $"{shortCount} short findings. Run vCleanup to review, then retry export.");
-        return Result.Nothing;
-      }
+        $"remainingShort={shortCount} ignored={ignored} threshold={_threshold}");
       RhinoApp.WriteLine($"vExportDXF: Optimize simplified {simplified} curves, " +
         $"removed {removedOverlaps} overlaps and {removedShort} short findings; " +
-        "no cleanup findings remain.");
+        (ignored ? $"ignored {overlaps} overlaps and {shortCount} short findings." : "no cleanup findings remain."));
       return Result.Success;
     }
     catch (Exception ex)
@@ -227,6 +251,16 @@ public sealed class vCleanup : vToolsCommand
       Log.Write("vExportDXF", $"optimization failed: {ex}");
       RhinoApp.WriteLine("vExportDXF: Optimize failed; see vTools log.");
       return Result.Failure;
+    }
+    finally
+    {
+      doc.Objects.UnselectAll();
+      foreach (var state in gripStates)
+        if (doc.Objects.FindId(state.Key) is { } obj && obj.GripsOn != state.Value)
+          obj.GripsOn = state.Value;
+      foreach (Guid id in selection)
+        doc.Objects.Select(id);
+      doc.Views.Redraw();
     }
   }
 

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Text.Json;
 
 namespace vTools;
 
@@ -17,6 +18,9 @@ namespace vTools;
 /// </summary>
 internal static class Log
 {
+  // Diagnostic output defaults
+  private static readonly JsonSerializerOptions DiagnosticJsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }; // UTF-8 JSON Lines with camelCase property names; one complete event per line.
+
   private static string? _path;
   private static readonly object _lock = new();
 
@@ -56,6 +60,19 @@ internal static class Log
   /// <summary>Appends a tagged formatted message.</summary>
   public static void Write(string tag, string format, params object[] args)
     => Append($"[{tag}] {string.Format(format, args)}");
+
+  /// <summary>Appends an independent structured trace without clearing earlier sessions.</summary>
+  internal static bool WriteDiagnosticJson(string fileName, object entry)
+  {
+    try
+    {
+      var line = JsonSerializer.Serialize(entry, DiagnosticJsonOptions);
+      lock (_lock)
+        File.AppendAllText(PluginPaths.ResolveFile(fileName), line + Environment.NewLine);
+      return true;
+    }
+    catch { return false; }
+  }
 
   // ── Internal ──────────────────────────────────────────────────────────────
 

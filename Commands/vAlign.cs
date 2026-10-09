@@ -15,7 +15,10 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vAlign : vToolsCommand
 {
+  // Defaults and customizable constants
   private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
+  private const bool DefaultLoop = true; // true repeats object/reference/target selection after each alignment; false completes one alignment.
+  private const bool DefaultSaveDefaults = true; // true saves accepted option changes; false uses temporary values for this run only.
   private const double KinkAngleRadians = Math.PI / 6.0; // Minimum selectable kink angle in radians; PI/6 equals 30 degrees.
   private const int TargetCurveSampleCount = 32; // Coarse hover samples per target curve; two or greater.
   private const int TargetCurveRefinementIterations = 8; // Local closest-point refinement passes; zero or greater.
@@ -29,12 +32,42 @@ public sealed class vAlign : vToolsCommand
   private static readonly Color CueColor = Color.LightGray; // Color of the point-to-point alignment cue.
   private static readonly Color FadedPreviewColor = Color.FromArgb(100, 100, 100); // Neutral preview material color.
 
+  private const string OptionsSectionName = "vAlign";
+  private const string DistanceKey = "distance"; // Non-negative model-unit distance; JSON null represents None.
+  private const string LoopKey = "loop";
+
   public override string EnglishName => "vAlign";
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    double? distance = DefaultDistance;
-    var result = SelectMovingObjects(doc, ref distance, out var movingIds);
+    var distance = LoadPersistedDistance();
+    var loop = LoadPersistedLoop();
+    var saveDefaults = DefaultSaveDefaults;
+    var completed = false;
+    var allowPreselection = true;
+    while (true)
+    {
+      var result = RunAlignment(doc, ref distance, ref loop, ref saveDefaults, allowPreselection);
+      if (result != Result.Success)
+        return completed && result == Result.Cancel ? Result.Success : result;
+      completed = true;
+      if (!loop)
+        return Result.Success;
+
+      doc.Objects.UnselectAll();
+      doc.Views.Redraw();
+      allowPreselection = false;
+    }
+  }
+
+  private static Result RunAlignment(
+    RhinoDoc doc,
+    ref double? distance,
+    ref bool loop,
+    ref bool saveDefaults,
+    bool allowPreselection)
+  {
+    var result = SelectMovingObjects(doc, ref distance, ref loop, ref saveDefaults, allowPreselection, out var movingIds);
     if (result != Result.Success)
       return result;
 
@@ -55,6 +88,8 @@ public sealed class vAlign : vToolsCommand
       requireMovingObject: false,
       allowNothing: true,
       ref distance,
+      ref loop,
+      ref saveDefaults,
       out var reference);
     if (result != Result.Success)
       return result;
@@ -81,6 +116,8 @@ public sealed class vAlign : vToolsCommand
         massCenter,
         ref reference,
         ref distance,
+        ref loop,
+        ref saveDefaults,
         out var target,
         out var candidate);
       if (result != Result.Success || target == null || candidate == null)
@@ -136,35 +173,47 @@ public sealed class vAlign : vToolsCommand
   private static Result SelectMovingObjects(
     RhinoDoc doc,
     ref double? distance,
+    ref bool loop,
+    ref bool saveDefaults,
+    bool allowPreselection,
     out List<Guid> objectIds)
   {
     objectIds = [];
+    using var getter = new GetObject();
+    getter.SetCommandPrompt("Select objects to rotate");
+    getter.GeometryFilter = ObjectType.AnyObject;
+    getter.SetCustomGeometryFilter(
+      (rhinoObject, geometry, _) =>
+        geometry != null &&
+        rhinoObject.ObjectType != ObjectType.Grip &&
+        rhinoObject.ObjectType != ObjectType.Light);
+    getter.GroupSelect = true;
+    getter.SubObjectSelect = false;
+    getter.EnablePreSelect(allowPreselection, true);
+    getter.AlreadySelectedObjectSelect = true;
+    getter.EnableClearObjectsOnEntry(false);
+    getter.EnableUnselectObjectsOnExit(false);
+    getter.DeselectAllBeforePostSelect = false;
+    ConfigureDirectDistanceInput(getter);
     while (true)
     {
-      using var getter = new GetObject();
-      getter.SetCommandPrompt("Select objects to rotate");
-      getter.GeometryFilter = ObjectType.AnyObject;
-      getter.SetCustomGeometryFilter(
-        (rhinoObject, geometry, _) =>
-          geometry != null &&
-          rhinoObject.ObjectType != ObjectType.Grip &&
-          rhinoObject.ObjectType != ObjectType.Light);
-      getter.GroupSelect = true;
-      getter.SubObjectSelect = false;
-      getter.EnablePreSelect(true, true);
-      getter.AlreadySelectedObjectSelect = true;
-      getter.EnableClearObjectsOnEntry(false);
-      getter.EnableUnselectObjectsOnExit(false);
-      getter.DeselectAllBeforePostSelect = false;
-      ConfigureDirectDistanceInput(getter);
+      getter.ClearCommandOptions();
       var distanceOption = getter.AddOption("Distance", DistanceLabel(distance));
+      var loopToggle = new OptionToggle(loop, "No", "Yes");
+      var loopOption = getter.AddOptionToggle("Loop", ref loopToggle);
+      var saveToggle = new OptionToggle(saveDefaults, "No", "Yes");
+      var saveOption = getter.AddOptionToggle("SaveDefaults", ref saveToggle);
 
       var getResult = getter.GetMultiple(1, 0);
-      if (HandleDirectDistance(getter, getResult, ref distance))
+      if (HandleSaveDefaultsOption(getter, getResult, saveOption, saveToggle, ref saveDefaults, distance, loop))
+        continue;
+      if (HandleLoopOption(getter, getResult, loopOption, loopToggle, ref loop, distance, saveDefaults))
+        continue;
+      if (HandleDirectDistance(getter, getResult, ref distance, loop, saveDefaults))
         continue;
       if (getResult == GetResult.Option && getter.Option()?.Index == distanceOption)
       {
-        if (!PromptDistance(ref distance))
+        if (!PromptDistance(ref distance, loop, saveDefaults))
           return Result.Cancel;
         continue;
       }
@@ -195,6 +244,8 @@ public sealed class vAlign : vToolsCommand
     bool requireMovingObject,
     bool allowNothing,
     ref double? distance,
+    ref bool loop,
+    ref bool saveDefaults,
     out EdgePick? edgePick)
   {
     edgePick = null;
@@ -203,13 +254,21 @@ public sealed class vAlign : vToolsCommand
       using var getter = CreateEdgeGetter(prompt, allowNothing);
       ConfigureDirectDistanceInput(getter);
       var distanceOption = getter.AddOption("Distance", DistanceLabel(distance));
+      var loopToggle = new OptionToggle(loop, "No", "Yes");
+      var loopOption = getter.AddOptionToggle("Loop", ref loopToggle);
+      var saveToggle = new OptionToggle(saveDefaults, "No", "Yes");
+      var saveOption = getter.AddOptionToggle("SaveDefaults", ref saveToggle);
       var getResult = getter.Get();
 
-      if (HandleDirectDistance(getter, getResult, ref distance))
+      if (HandleSaveDefaultsOption(getter, getResult, saveOption, saveToggle, ref saveDefaults, distance, loop))
+        continue;
+      if (HandleLoopOption(getter, getResult, loopOption, loopToggle, ref loop, distance, saveDefaults))
+        continue;
+      if (HandleDirectDistance(getter, getResult, ref distance, loop, saveDefaults))
         continue;
       if (getResult == GetResult.Option && getter.Option()?.Index == distanceOption)
       {
-        if (!PromptDistance(ref distance))
+        if (!PromptDistance(ref distance, loop, saveDefaults))
           return Result.Cancel;
         continue;
       }
@@ -264,6 +323,8 @@ public sealed class vAlign : vToolsCommand
     Point3d massCenter,
     ref EdgePick? reference,
     ref double? distance,
+    ref bool loop,
+    ref bool saveDefaults,
     out EdgePick? target,
     out TransformCandidate? candidate)
   {
@@ -301,6 +362,10 @@ public sealed class vAlign : vToolsCommand
         var distanceOption = activeReference == null
           ? -1
           : getter.AddOption("Distance", DistanceLabel(distance));
+        var loopToggle = new OptionToggle(loop, "No", "Yes");
+        var loopOption = getter.AddOptionToggle("Loop", ref loopToggle);
+        var saveToggle = new OptionToggle(saveDefaults, "No", "Yes");
+        var saveOption = getter.AddOptionToggle("SaveDefaults", ref saveToggle);
         EdgePick? hoveredTarget = null;
         EdgePick? hoveredReference = null;
         TransformCandidate? hoveredCandidate = null;
@@ -447,13 +512,17 @@ public sealed class vAlign : vToolsCommand
         try
         {
           var getResult = getter.Get();
-          if (HandleDirectDistance(getter, getResult, ref distance))
+          if (HandleSaveDefaultsOption(getter, getResult, saveOption, saveToggle, ref saveDefaults, distance, loop))
+            continue;
+          if (HandleLoopOption(getter, getResult, loopOption, loopToggle, ref loop, distance, saveDefaults))
+            continue;
+          if (HandleDirectDistance(getter, getResult, ref distance, loop, saveDefaults))
             continue;
           if (distanceOption >= 0 &&
               getResult == GetResult.Option &&
               getter.Option()?.Index == distanceOption)
           {
-            if (!PromptDistance(ref distance))
+            if (!PromptDistance(ref distance, loop, saveDefaults))
               return Result.Cancel;
             continue;
           }
@@ -630,14 +699,82 @@ public sealed class vAlign : vToolsCommand
     return false;
   }
 
+  private static bool LoadPersistedLoop() =>
+    ToolsOptionStore.Read(OptionsSectionName, section =>
+      ToolsOptionStore.TryGetBool(section, LoopKey, out var value) ? value : DefaultLoop);
+
+  private static bool HandleLoopOption(
+    GetBaseClass getter,
+    GetResult result,
+    int optionIndex,
+    OptionToggle toggle,
+    ref bool loop,
+    double? distance,
+    bool saveDefaults)
+  {
+    if (result != GetResult.Option || getter.Option()?.Index != optionIndex)
+      return false;
+    loop = toggle.CurrentValue;
+    SavePersistedOptions(distance, loop, saveDefaults);
+    return true;
+  }
+
+  private static bool HandleSaveDefaultsOption(
+    GetBaseClass getter,
+    GetResult result,
+    int optionIndex,
+    OptionToggle toggle,
+    ref bool saveDefaults,
+    double? distance,
+    bool loop)
+  {
+    if (result != GetResult.Option || getter.Option()?.Index != optionIndex)
+      return false;
+    saveDefaults = toggle.CurrentValue;
+    SavePersistedOptions(distance, loop, saveDefaults);
+    return true;
+  }
+
+  private static double? LoadPersistedDistance() =>
+    ToolsOptionStore.Read<double?>(OptionsSectionName, section =>
+    {
+      if (section != null && section.ContainsKey(DistanceKey) && section[DistanceKey] == null)
+        return null;
+      if (ToolsOptionStore.TryGetDouble(section, DistanceKey, out var number) &&
+          double.IsFinite(number) && number >= 0.0)
+        return number;
+      if (ToolsOptionStore.TryGetString(section, DistanceKey, out var text) &&
+          TryParseDistance(text, out var parsed))
+        return parsed;
+      return DefaultDistance;
+    });
+
+  private static void SavePersistedOptions(double? distance, bool loop, bool saveDefaults)
+  {
+    if (!saveDefaults)
+      return;
+    if (!ToolsOptionStore.Update(OptionsSectionName, section =>
+        {
+          if (distance.HasValue)
+            section[DistanceKey] = distance.Value;
+          else
+            section[DistanceKey] = null;
+          section[LoopKey] = loop;
+        }))
+      Log.Write("vAlign", "could not save options: {0}", ToolsOptionStore.LastError);
+  }
+
   private static bool HandleDirectDistance(
     GetObject getter,
     GetResult result,
-    ref double? distance)
+    ref double? distance,
+    bool loop,
+    bool saveDefaults)
   {
     if (result == GetResult.Number)
     {
       distance = Math.Max(0.0, getter.Number());
+      SavePersistedOptions(distance, loop, saveDefaults);
       return true;
     }
 
@@ -647,18 +784,24 @@ public sealed class vAlign : vToolsCommand
     if (!TryParseDistance(getter.StringResult(), out var parsed))
       RhinoApp.WriteLine("vAlign: enter a non-negative distance or None.");
     else
+    {
       distance = parsed;
+      SavePersistedOptions(distance, loop, saveDefaults);
+    }
     return true;
   }
 
   private static bool HandleDirectDistance(
     GetPoint getter,
     GetResult result,
-    ref double? distance)
+    ref double? distance,
+    bool loop,
+    bool saveDefaults)
   {
     if (result == GetResult.Number)
     {
       distance = Math.Max(0.0, getter.Number());
+      SavePersistedOptions(distance, loop, saveDefaults);
       return true;
     }
 
@@ -668,11 +811,14 @@ public sealed class vAlign : vToolsCommand
     if (!TryParseDistance(getter.StringResult(), out var parsed))
       RhinoApp.WriteLine("vAlign: enter a non-negative distance or None.");
     else
+    {
       distance = parsed;
+      SavePersistedOptions(distance, loop, saveDefaults);
+    }
     return true;
   }
 
-  private static bool PromptDistance(ref double? distance)
+  private static bool PromptDistance(ref double? distance, bool loop, bool saveDefaults)
   {
     while (true)
     {
@@ -687,6 +833,7 @@ public sealed class vAlign : vToolsCommand
       if (result == GetResult.Number)
       {
         distance = Math.Max(0.0, getter.Number());
+        SavePersistedOptions(distance, loop, saveDefaults);
         return true;
       }
       if (result != GetResult.String || getter.CommandResult() != Result.Success)
@@ -694,6 +841,7 @@ public sealed class vAlign : vToolsCommand
       if (TryParseDistance(getter.StringResult(), out var parsed))
       {
         distance = parsed;
+        SavePersistedOptions(distance, loop, saveDefaults);
         return true;
       }
       RhinoApp.WriteLine("vAlign: enter a non-negative distance or None.");

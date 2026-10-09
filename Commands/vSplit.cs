@@ -18,8 +18,7 @@ namespace vTools.Commands;
 [CommandStyle(Style.ScriptRunner)]
 public sealed class vSplit : vToolsCommand
 {
-  private const string OptionsSectionName = "vSplit";
-  private const string PointDisplayKey = "pointDisplay";
+  // Defaults and customizable constants
   private const int DefaultPointRadius = 5; // Split-point marker radius in pixels; greater than zero.
   private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
   private const int PointOutlineWidth = 1; // Split-point outline width in display pixels; zero or greater.
@@ -28,6 +27,9 @@ public sealed class vSplit : vToolsCommand
   private static readonly Color SetPointColor = Color.Red; // Body color for points that will split curves.
   private static readonly Color RemovePointColor = Color.Cyan; // Body color for points selected for removal.
   private static readonly Color PointOutlineColor = Color.Pink; // Outline color around split-point bodies.
+
+  private const string OptionsSectionName = "vSplit";
+  private const string PointDisplayKey = "pointDisplay";
 
   public override string EnglishName => "vSplit";
 
@@ -563,7 +565,7 @@ public sealed class vSplit : vToolsCommand
     RhinoDoc doc,
     IReadOnlyDictionary<Guid, PointDisplayMode> pointDisplaySnapshot)
   {
-    var go = new GetObject();
+    using var go = new GetObject();
     go.SetCommandPrompt("Select curves to split");
     go.GeometryFilter = ObjectType.Curve;
     go.SubObjectSelect = false;
@@ -952,7 +954,7 @@ public sealed class vSplit : vToolsCommand
       {
         conduit.SetRemoveAction(null);
 
-        var gp = new GetPoint();
+        using var gp = new GetPoint();
         gp.SetCommandPrompt("Point to split at. Press Enter when done");
         gp.AcceptNothing(true);
         gp.EnableTransparentCommands(true);

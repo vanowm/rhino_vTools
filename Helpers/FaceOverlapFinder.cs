@@ -29,63 +29,52 @@ internal static class FaceOverlapFinder
   internal static Result Find(
     IReadOnlyCollection<FaceItem> inputFaces,
     double coincidenceTolerance,
-    double areaTolerance)
+    double areaTolerance,
+    Func<FaceReference, FaceReference, bool>? pairFilter = null)
   {
     coincidenceTolerance = Math.Max(
       coincidenceTolerance,
       RhinoMath.ZeroTolerance);
     areaTolerance = Math.Max(areaTolerance, RhinoMath.ZeroTolerance);
-    var prepared = inputFaces
+    var faces = inputFaces
       .Where(item => item.Face != null && item.Face.IsValid)
-      .Select(item => Prepare(item, coincidenceTolerance, areaTolerance))
-      .Where(item => item != null)
-      .Cast<PreparedFace>()
+      .Select(item => (Item: item, Bounds: item.Face.GetBoundingBox(accurate: false)))
+      .Where(item => item.Bounds.IsValid)
       .ToList();
+    var prepared = new PreparedFace?[faces.Count];
 
     var overlaps = new HashSet<FaceReference>();
     var overlappingPairs = new List<FacePair>();
     var pairChecks = 0;
     var overlapHits = 0;
 
-    try
+    for (var firstIndex = 0; firstIndex < faces.Count; firstIndex++)
     {
-      for (var firstIndex = 0; firstIndex < prepared.Count; firstIndex++)
+      var firstItem = faces[firstIndex];
+      for (var secondIndex = firstIndex + 1; secondIndex < faces.Count; secondIndex++)
       {
-        var first = prepared[firstIndex];
-        for (var secondIndex = firstIndex + 1; secondIndex < prepared.Count; secondIndex++)
-        {
-          var second = prepared[secondIndex];
-          if (!BoundingBoxesMeet(
-                first.Bounds,
-                second.Bounds,
-                coincidenceTolerance))
-            continue;
+        var secondItem = faces[secondIndex];
+        if (pairFilter != null && !pairFilter(firstItem.Item.Reference, secondItem.Item.Reference) ||
+            !BoundingBoxesMeet(firstItem.Bounds, secondItem.Bounds, coincidenceTolerance))
+          continue;
 
-          pairChecks++;
-          if (!FacesShareArea(
-                first,
-                second,
-                coincidenceTolerance,
-                areaTolerance))
-            continue;
+        var first = prepared[firstIndex] ??= Prepare(firstItem.Item, coincidenceTolerance, areaTolerance);
+        var second = prepared[secondIndex] ??= Prepare(secondItem.Item, coincidenceTolerance, areaTolerance);
+        pairChecks++;
+        if (!FacesShareArea(first, second, coincidenceTolerance, areaTolerance))
+          continue;
 
-          overlaps.Add(first.Reference);
-          overlaps.Add(second.Reference);
-          overlappingPairs.Add(new FacePair(first.Reference, second.Reference));
-          overlapHits++;
-        }
+        overlaps.Add(first.Reference);
+        overlaps.Add(second.Reference);
+        overlappingPairs.Add(new FacePair(first.Reference, second.Reference));
+        overlapHits++;
       }
-    }
-    finally
-    {
-      foreach (var face in prepared)
-        face.SingleFace.Dispose();
     }
 
     return new Result(
       overlaps,
       overlappingPairs,
-      prepared.Count,
+      faces.Count,
       pairChecks,
       overlapHits);
   }
@@ -152,43 +141,20 @@ internal static class FaceOverlapFinder
     return overlapAreas;
   }
 
-  private static PreparedFace? Prepare(
+  private static PreparedFace Prepare(
     FaceItem item,
     double coincidenceTolerance,
     double areaTolerance)
   {
-    var singleFace = item.Face.DuplicateFace(duplicateMeshes: false);
-    if (singleFace == null || !singleFace.IsValid)
-    {
-      singleFace?.Dispose();
-      return null;
-    }
-
-    var bounds = singleFace.GetBoundingBox(accurate: true);
-    if (!bounds.IsValid)
-    {
-      singleFace.Dispose();
-      return null;
-    }
-
     var isPlanar = item.Face.TryGetPlane(
       out var plane,
       coincidenceTolerance);
-    var area = 0.0;
-    using (var properties = AreaMassProperties.Compute(singleFace))
-    {
-      if (properties != null)
-        area = properties.Area;
-    }
 
     return new PreparedFace(
       item.Reference,
       item.Face,
-      singleFace,
-      bounds,
       isPlanar ? plane : null,
-      area,
-      BuildSamples(item.Face, areaTolerance));
+      new Lazy<IReadOnlyCollection<FaceSample>>(() => BuildSamples(item.Face, areaTolerance)));
   }
 
   private static List<FaceSample> BuildSamples(BrepFace face, double tolerance)
@@ -266,12 +232,12 @@ internal static class FaceOverlapFinder
     }
 
     return SamplesReachInterior(
-             first.Samples,
+             first.Samples.Value,
              second.Face,
              coincidenceTolerance,
              areaTolerance) ||
            SamplesReachInterior(
-             second.Samples,
+             second.Samples.Value,
              first.Face,
              coincidenceTolerance,
              areaTolerance);
@@ -522,11 +488,8 @@ internal static class FaceOverlapFinder
   private sealed record PreparedFace(
     FaceReference Reference,
     BrepFace Face,
-    Brep SingleFace,
-    BoundingBox Bounds,
     Plane? Plane,
-    double Area,
-    IReadOnlyCollection<FaceSample> Samples);
+    Lazy<IReadOnlyCollection<FaceSample>> Samples);
 
   private readonly record struct FaceSample(Point3d Point, Vector3d Normal);
 }

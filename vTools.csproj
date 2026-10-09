@@ -35,6 +35,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="ThirdPartyNotices.md">
+      <LogicalName>vTools.ThirdPartyNotices.md</LogicalName>
+    </EmbeddedResource>
+    <PackageReference Include="RectpackSharp" Version="1.2.0" GeneratePathProperty="true" ExcludeAssets="runtime" />
+    <PackageReference Include="Clipper2" Version="2.0.0" GeneratePathProperty="true" ExcludeAssets="runtime" />
+    <EmbeddedResource Include="$(PkgClipper2)\lib\netstandard2.0\Clipper2Lib.dll">
+      <LogicalName>vTools.Dependencies.Clipper2Lib.dll</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="$(PkgRectpackSharp)\lib\net5.0\RectpackSharp.dll">
+      <LogicalName>vTools.Dependencies.RectpackSharp.dll</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="Help\vToolsHelp.html">
       <LogicalName>vTools.Help.vToolsHelp.html</LogicalName>
     </EmbeddedResource>

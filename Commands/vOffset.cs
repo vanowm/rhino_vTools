@@ -14,8 +14,24 @@ namespace vTools.Commands;
 
 public sealed class vOffset : vToolsCommand
 {
+  // Option defaults
+  private const bool DefaultAutoTrim = false; // true trims or extends offset ends at touching cutters; false keeps raw offsets.
+  private const bool DefaultDeleteSource = false; // true deletes the whole input curve after every output is created; false retains the original.
+  private const int DefaultGroupMode = 1; // Zero-based GroupNames index; Auto inherits source groups or creates one when needed.
+  private const double DefaultDistance = 0.5; // Offset distance in model units; zero or greater.
+  private const bool DefaultLoose = false; // true offsets by control points; false uses tolerance-based accurate offsetting.
+  private const int DefaultCorner = 1; // Zero-based CornerNames index.
+  private const bool DefaultThroughPoint = false; // true derives distance from the picked point; false uses the numeric distance.
+  private const bool DefaultTrim = true; // true trims offset self-intersections; false keeps the complete offset result.
+  private const double DefaultTolerance = 0.001; // Intersection tolerance in model units; greater than zero.
+  private const bool DefaultBothSides = false; // true creates offsets on both sides; false creates only the cursor side.
+  private const bool DefaultInCPlane = true; // true offsets in the active CPlane; false uses the curve's best-fit plane.
+  private const int DefaultCap = 0; // Zero-based CapNames index.
+  private const int DefaultOutputLayer = 0; // Zero-based OutputLayerNames index.
+
   private const string OptionsSectionName = "vOffset";
   private const string AutoTrimKey = "autoTrim";
+  private const string DeleteSourceKey = "deleteSource";
   private const string GroupKey = "group";
   private const string DistanceKey = "distance";
   private const string LooseKey = "loose";
@@ -33,21 +49,8 @@ public sealed class vOffset : vToolsCommand
   private static readonly string[] OutputLayerNames = { "Current", "Input" }; // Output-layer choices in persisted index order.
   private static readonly string[] GroupNames = { "No", "Auto", "Yes" }; // Group modes: none, inherit-or-create, or create an explicit source/output group.
 
-  // Option defaults
-  private const bool DefaultAutoTrim = false; // true trims or extends offset ends at touching cutters; false keeps raw offsets.
-  private const int DefaultGroupMode = 1; // Zero-based GroupNames index; Auto inherits source groups or creates one when needed.
-  private const double DefaultDistance = 0.5; // Offset distance in model units; zero or greater.
-  private const bool DefaultLoose = false; // true offsets by control points; false uses tolerance-based accurate offsetting.
-  private const int DefaultCorner = 1; // Zero-based CornerNames index.
-  private const bool DefaultThroughPoint = false; // true derives distance from the picked point; false uses the numeric distance.
-  private const bool DefaultTrim = true; // true trims offset self-intersections; false keeps the complete offset result.
-  private const double DefaultTolerance = 0.001; // Intersection tolerance in model units; greater than zero.
-  private const bool DefaultBothSides = false; // true creates offsets on both sides; false creates only the cursor side.
-  private const bool DefaultInCPlane = true; // true offsets in the active CPlane; false uses the curve's best-fit plane.
-  private const int DefaultCap = 0; // Zero-based CapNames index.
-  private const int DefaultOutputLayer = 0; // Zero-based OutputLayerNames index.
-
   private static bool _autoTrim = DefaultAutoTrim;
+  private static bool _deleteSource = DefaultDeleteSource;
   private static int _groupMode = DefaultGroupMode;
   private static double _distance = DefaultDistance;
   private static bool _loose = DefaultLoose;
@@ -164,6 +167,7 @@ public sealed class vOffset : vToolsCommand
       var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
       var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
       var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
+      var deleteSourceToggle = new OptionToggle(_deleteSource, "No", "Yes");
 
       var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
       getter.AddOptionToggle("Loose", ref looseToggle);
@@ -177,6 +181,7 @@ public sealed class vOffset : vToolsCommand
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
       var groupOptionIndex = getter.AddOptionList("Group", GroupNames, _groupMode);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
+      getter.AddOptionToggle("DeleteSource", ref deleteSourceToggle);
       var result = getter.Get();
 
       if (result == GetResult.CustomMessage &&
@@ -228,6 +233,7 @@ public sealed class vOffset : vToolsCommand
         _inCPlane = inCPlaneToggle.CurrentValue;
         _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
         _autoTrim = autoTrimToggle.CurrentValue;
+        _deleteSource = deleteSourceToggle.CurrentValue;
         SavePersistedOptions();
         continue;
       }
@@ -314,6 +320,7 @@ public sealed class vOffset : vToolsCommand
       var inCPlaneToggle = new OptionToggle(_inCPlane, "No", "Yes");
       var outputLayerToggle = new OptionToggle(_outputLayer == 0, "Input", "Current");
       var autoTrimToggle = new OptionToggle(_autoTrim, "No", "Yes");
+      var deleteSourceToggle = new OptionToggle(_deleteSource, "No", "Yes");
 
       var distanceOptionIndex = getter.AddOptionDouble("Distance", ref distanceOption);
       getter.AddOptionToggle("Loose", ref looseToggle);
@@ -327,6 +334,7 @@ public sealed class vOffset : vToolsCommand
       getter.AddOptionToggle("OutputLayer", ref outputLayerToggle);
       var groupOptionIndex = getter.AddOptionList("Group", GroupNames, _groupMode);
       getter.AddOptionToggle("AutoTrim", ref autoTrimToggle);
+      getter.AddOptionToggle("DeleteSource", ref deleteSourceToggle);
       var result = getter.Get();
 
       if (result == GetResult.CustomMessage &&
@@ -378,6 +386,7 @@ public sealed class vOffset : vToolsCommand
         _inCPlane = inCPlaneToggle.CurrentValue;
         _outputLayer = outputLayerToggle.CurrentValue ? 0 : 1;
         _autoTrim = autoTrimToggle.CurrentValue;
+        _deleteSource = deleteSourceToggle.CurrentValue;
         SavePersistedOptions();
         doc.Views.Redraw();
         continue;
@@ -402,7 +411,8 @@ public sealed class vOffset : vToolsCommand
     _cap,
     _outputLayer,
     _groupMode,
-    _autoTrim);
+    _autoTrim,
+    _deleteSource);
 
   private static int ClampIndex(int value, int count) =>
     Math.Max(0, Math.Min(count - 1, value));
@@ -414,6 +424,7 @@ public sealed class vOffset : vToolsCommand
       section =>
       {
         var autoTrim = _autoTrim;
+        var deleteSource = DefaultDeleteSource;
         var groupMode = _groupMode;
         var distance = _distance;
         var loose = _loose;
@@ -427,6 +438,7 @@ public sealed class vOffset : vToolsCommand
         var outputLayer = _outputLayer;
 
         if (ToolsOptionStore.TryGetBool(section, AutoTrimKey, out var boolValue)) autoTrim = boolValue;
+        if (ToolsOptionStore.TryGetBool(section, DeleteSourceKey, out boolValue)) deleteSource = boolValue;
         if (ToolsOptionStore.TryGetDouble(section, GroupKey, out var groupValue))
           groupMode = (int)Math.Round(groupValue);
         else if (ToolsOptionStore.TryGetBool(section, GroupKey, out boolValue))
@@ -442,10 +454,11 @@ public sealed class vOffset : vToolsCommand
         if (ToolsOptionStore.TryGetDouble(section, CapKey, out doubleValue)) cap = (int)Math.Round(doubleValue);
         if (ToolsOptionStore.TryGetDouble(section, OutputLayerKey, out doubleValue)) outputLayer = (int)Math.Round(doubleValue);
 
-        return (autoTrim, groupMode, distance, loose, corner, throughPoint, trim, tolerance, bothSides, inCPlane, cap, outputLayer);
+        return (autoTrim, groupMode, distance, loose, corner, throughPoint, trim, tolerance, bothSides, inCPlane, cap, outputLayer, deleteSource);
       });
 
     _autoTrim = values.autoTrim;
+    _deleteSource = values.deleteSource;
     _groupMode = ClampIndex(values.groupMode, GroupNames.Length);
     _distance = Math.Max(RhinoMath.ZeroTolerance, values.distance);
     _loose = values.loose;
@@ -466,6 +479,7 @@ public sealed class vOffset : vToolsCommand
       section =>
       {
         section[AutoTrimKey] = _autoTrim;
+        section[DeleteSourceKey] = _deleteSource;
         section[GroupKey] = _groupMode;
         section[DistanceKey] = _distance;
         section[LooseKey] = _loose;
@@ -503,6 +517,11 @@ public sealed class vOffset : vToolsCommand
 
   private static void OnHistoryActionIdle(object? sender, EventArgs e)
   {
+    var doc = RhinoDoc.ActiveDoc;
+    if (DeferredNativeCommand.IsDispatching || RhinoApp.InCommand != 0 ||
+        doc != null && (doc.InCommand(false) != 0 || RhinoGet.InGet(doc)))
+      return;
+
     if (_pendingHistoryIdleHandler != null)
     {
       RhinoApp.Idle -= _pendingHistoryIdleHandler;
@@ -514,7 +533,6 @@ public sealed class vOffset : vToolsCommand
     if (request == null)
       return;
 
-    var doc = RhinoDoc.ActiveDoc;
     if (doc == null || doc.RuntimeSerialNumber != request.DocSerial)
       return;
 
@@ -525,52 +543,57 @@ public sealed class vOffset : vToolsCommand
       RhinoApp.WriteLine(request.Redo
         ? "vOffset: nothing to redo."
         : "vOffset: nothing to undo.");
-      RestartContinuousOffset();
+      RestartContinuousOffset(doc);
       return;
     }
 
     var undoActiveBefore = doc.UndoActive;
     var redoActiveBefore = doc.RedoActive;
-    var commandResult = RhinoApp.RunScript(request.Redo ? "_Redo" : "_Undo", false);
-    var stateMatches = request.Redo
-      ? record.OutputIds.All(id => IsObjectPresent(doc, id))
-      : record.OutputIds.All(id => !IsObjectPresent(doc, id));
-    Log.Write(
-      "vOffset",
-      "{0} command_result={1} undo_active_before={2} redo_active_before={3} state_matches={4}",
-      request.Redo ? "Redo" : "Undo",
-      commandResult,
-      undoActiveBefore,
-      redoActiveBefore,
-      stateMatches);
-
-    if (stateMatches)
+    DeferredNativeCommand.Run(doc, request.Redo ? "_Redo" : "_Undo", commandResult =>
     {
-      source.Pop();
-      destination.Push(record);
-      RhinoApp.WriteLine(request.Redo ? "vOffset: offset redone." : "vOffset: offset undone.");
+      if (RhinoDoc.ActiveDoc?.RuntimeSerialNumber != request.DocSerial)
+        return;
+
+      var stateMatches = commandResult == Result.Success && (request.Redo
+        ? record.OutputIds.All(id => IsObjectPresent(doc, id))
+        : record.OutputIds.All(id => !IsObjectPresent(doc, id)));
       Log.Write(
         "vOffset",
-        "{0} completed outputs={1} undo_available={2} redo_available={3}",
+        "{0} command_result={1} undo_active_before={2} redo_active_before={3} state_matches={4}",
         request.Redo ? "Redo" : "Undo",
-        record.OutputIds.Count,
-        UndoHistory.Count,
-        RedoHistory.Count);
-    }
-    else
-    {
-      RhinoApp.WriteLine(request.Redo
-        ? "vOffset: redo did not restore the expected offset."
-        : "vOffset: undo did not remove the expected offset.");
-      Log.Write(
-        "vOffset",
-        "{0} state mismatch outputs={1}",
-        request.Redo ? "Redo" : "Undo",
-        string.Join(",", record.OutputIds));
-    }
+        commandResult,
+        undoActiveBefore,
+        redoActiveBefore,
+        stateMatches);
 
-    doc.Views.Redraw();
-    RestartContinuousOffset();
+      if (stateMatches)
+      {
+        source.Pop();
+        destination.Push(record);
+        RhinoApp.WriteLine(request.Redo ? "vOffset: offset redone." : "vOffset: offset undone.");
+        Log.Write(
+          "vOffset",
+          "{0} completed outputs={1} undo_available={2} redo_available={3}",
+          request.Redo ? "Redo" : "Undo",
+          record.OutputIds.Count,
+          UndoHistory.Count,
+          RedoHistory.Count);
+      }
+      else
+      {
+        RhinoApp.WriteLine(request.Redo
+          ? "vOffset: redo did not restore the expected offset."
+          : "vOffset: undo did not remove the expected offset.");
+        Log.Write(
+          "vOffset",
+          "{0} state mismatch outputs={1}",
+          request.Redo ? "Redo" : "Undo",
+          string.Join(",", record.OutputIds));
+      }
+
+      doc.Views.Redraw();
+      RestartContinuousOffset(doc);
+    });
   }
 
   private static bool IsObjectPresent(RhinoDoc doc, Guid objectId)
@@ -579,11 +602,10 @@ public sealed class vOffset : vToolsCommand
     return obj != null && !obj.IsDeleted;
   }
 
-  private static void RestartContinuousOffset()
+  private static void RestartContinuousOffset(RhinoDoc doc)
   {
     _continuingAfterOffsetDelegate = true;
-    _ = RhinoApp.RunScript("_vOffset", false);
-    _continuingAfterOffsetDelegate = false;
+    DeferredNativeCommand.Run(doc, "_vOffset", _ => _continuingAfterOffsetDelegate = false);
   }
 
   private static List<Curve> BuildOffsetPreview(
@@ -1071,6 +1093,11 @@ public sealed class vOffset : vToolsCommand
 
   private static void OnLaunchOffsetOnIdle(object? sender, EventArgs e)
   {
+    var doc = RhinoDoc.ActiveDoc;
+    if (DeferredNativeCommand.IsDispatching || RhinoApp.InCommand != 0 ||
+        doc != null && (doc.InCommand(false) != 0 || RhinoGet.InGet(doc)))
+      return;
+
     if (_pendingOffsetIdleHandler != null)
     {
       RhinoApp.Idle -= _pendingOffsetIdleHandler;
@@ -1082,7 +1109,6 @@ public sealed class vOffset : vToolsCommand
     if (pending == null)
       return;
 
-    var doc = RhinoDoc.ActiveDoc;
     if (doc == null || doc.RuntimeSerialNumber != pending.DocSerial)
       return;
 
@@ -1131,13 +1157,12 @@ public sealed class vOffset : vToolsCommand
         UndoHistory.Count,
         doc.CurrentUndoRecordSerialNumber,
         doc.NextUndoRecordSerialNumber);
-      RestartContinuousOffset();
+      RestartContinuousOffset(doc);
       return;
     }
 
     _restartingAfterOffsetDelegate = true;
-    _ = RhinoApp.RunScript("_vOffset", false);
-    _restartingAfterOffsetDelegate = false;
+    DeferredNativeCommand.Run(doc, "_vOffset", _ => _restartingAfterOffsetDelegate = false);
   }
 
   private static List<Guid> RecordFinalOffset(
@@ -1147,6 +1172,11 @@ public sealed class vOffset : vToolsCommand
     ObjectAttributes attributes)
   {
     var outputIds = new List<Guid>();
+    if (curves.Count == 0)
+      return outputIds;
+    if (pending.Settings.DeleteSource && !HistoryBreakWarning.Confirm(doc, "vOffset DeleteSource",
+        HistoryBreakWarning.CaptureAffectedRecords(doc, pending.SourceId)))
+      return outputIds;
     var undoRecord = doc.BeginUndoRecord("vOffset");
     try
     {
@@ -1159,6 +1189,19 @@ public sealed class vOffset : vToolsCommand
           outputIds.Add(outputId);
         else
           Log.Write("vOffset", "Final output add failed");
+      }
+
+      if (pending.Settings.DeleteSource)
+      {
+        if (outputIds.Count != curves.Count || !doc.Objects.Delete(pending.SourceId, quiet: true))
+        {
+          foreach (Guid id in outputIds)
+            doc.Objects.Delete(id, quiet: true);
+          outputIds.Clear();
+          RhinoApp.WriteLine("vOffset: could not complete offset; the original was retained.");
+          Log.Write("vOffset", "DeleteSource offset failed; original retained and outputs removed");
+          return outputIds;
+        }
       }
 
       if (pending.GroupMode != 0 && outputIds.Count > 0)
@@ -1205,7 +1248,7 @@ public sealed class vOffset : vToolsCommand
     }
 
     var groupIndexCreated = doc.Groups.Add(
-      new[] { pending.SourceId }.Concat(outputIds));
+      pending.Settings.DeleteSource ? outputIds : new[] { pending.SourceId }.Concat(outputIds));
     Log.Write(
       "vOffset",
       "Created source/output group source={0} mode={1} group={2} outputs={3}",
@@ -1499,7 +1542,8 @@ public sealed class vOffset : vToolsCommand
     int Cap,
     int OutputLayer,
     int GroupMode,
-    bool AutoTrim);
+    bool AutoTrim,
+    bool DeleteSource = DefaultDeleteSource);
 
   private sealed record PendingOffset(
     OffsetSource Source,

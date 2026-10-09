@@ -145,7 +145,7 @@ public sealed class vFacing : vToolsCommand
       return true;
     }
 
-    var gp = new GetPoint();
+    using var gp = new GetPoint();
     gp.EnableTransparentCommands(true);
     gp.SetCommandPrompt("Pick placement point for Facing");
     gp.AddOption("Size", _size.ToString("G"));
@@ -175,7 +175,7 @@ public sealed class vFacing : vToolsCommand
       }
       else if (gpRes == GetResult.Option)
       {
-        var gs = new GetString();
+        using var gs = new GetString();
         gs.SetCommandPrompt($"Facing size <{_size:G}>");
         gs.SetDefaultString(_size.ToString("G"));
         gs.AcceptNothing(true);
@@ -238,7 +238,7 @@ public sealed class vFacing : vToolsCommand
   {
     result = new List<(Guid, Curve, int)>();
 
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select facing curves (base + two sides). Press Enter when done");
     go.GeometryFilter = ObjectType.Curve;
@@ -260,7 +260,7 @@ public sealed class vFacing : vToolsCommand
 
       if (res == GetResult.Option)
       {
-        var gs = new GetString();
+        using var gs = new GetString();
         gs.SetCommandPrompt($"Facing size <{_size:G}>");
         gs.SetDefaultString(_size.ToString("G"));
         gs.AcceptNothing(true);
@@ -626,7 +626,7 @@ public sealed class vFacing : vToolsCommand
       doc.Objects.FindId(id)?.Select(false);
     doc.Views.Redraw();
 
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select 2 side curves connected to the base");
     go.GeometryFilter = ObjectType.Curve;
@@ -754,7 +754,7 @@ public sealed class vFacing : vToolsCommand
     doc.Views.Redraw();
 
     var sizeOpt = new OptionDouble(_size, 0.001, double.MaxValue);
-    var goBase  = new GetObject();
+    using var goBase = new GetObject();
     goBase.EnableTransparentCommands(true);
     goBase.SetCommandPrompt("Click on the base edge");
     goBase.GeometryFilter = ObjectType.Curve;

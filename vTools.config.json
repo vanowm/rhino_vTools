@@ -1,4 +1,32 @@
 {
+  "IsolationDiagnostics": {
+    "enabled": true
+  },
+  "HistoryHighlight": {
+    "enabled": true
+  },
+  "vPartSplit": {
+    "width": 60.0,
+    "seam": 0.5,
+    "mode": 0,
+    "layout": 1,
+    "distance": 1.0
+  },
+  "vNest": {
+    "width": 60.0,
+    "length": 315.0,
+    "gap": 0.0,
+    "grain": "Auto",
+    "rotationMode": "Step180",
+    "rotationStep": 45.0,
+    "obeyGrain": true,
+    "grainDeviation": 0.0,
+    "allowReverse": true
+  },
+  "vPointAlongCurve": {
+    "distance": 1.0,
+    "project": "Skip"
+  },
   "vCenter": {
     "method": "BoundingBox"
   },
@@ -76,7 +104,8 @@
     "flattenGroups": true
   },
   "vGroupsManager": {
-    "autoSelect": false
+    "autoSelect": false,
+    "showChildrenGroups": false
   },
   "vJoin": {
     "copy": true,
@@ -152,6 +181,7 @@
   },
   "vOffset": {
     "autoTrim": false,
+    "deleteSource": false,
     "group": 1,
     "distance": 0.5,
     "loose": false,
@@ -163,6 +193,9 @@
     "inCPlane": true,
     "cap": 0,
     "outputLayer": 0
+  },
+  "vExportDXF": {
+    "cleanup_action": "Ask"
   },
   "vOverlaps": {
     "tolerance": 0.001,

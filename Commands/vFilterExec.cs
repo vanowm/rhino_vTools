@@ -664,3 +664,15 @@ public sealed class vFilterExec : vToolsCommand
     bool RequiresSubObjects,
     string CanonicalSpec);
 }
+
+[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable)]
+public sealed class vFilterExecRepeat : Command
+{
+  public override string EnglishName => "vFilterExecRepeat";
+
+  protected override string CommandContextHelpUrl =>
+    vFilterExec.RepeatCommandHelpUrl;
+
+  protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+    vFilterExec.RepeatLast();
+}

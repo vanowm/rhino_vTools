@@ -205,6 +205,11 @@ public sealed class vTrim : vToolsCommand
 
   private static void OnLaunchNativeTrimOnIdle(object? sender, EventArgs e)
   {
+    var doc = RhinoDoc.ActiveDoc;
+    if (DeferredNativeCommand.IsDispatching || RhinoApp.InCommand != 0 ||
+        doc != null && (doc.InCommand(false) != 0 || RhinoGet.InGet(doc)))
+      return;
+
     if (_nativeTrimLaunchIdleHandler != null)
     {
       RhinoApp.Idle -= _nativeTrimLaunchIdleHandler;
@@ -219,7 +224,6 @@ public sealed class vTrim : vToolsCommand
     if (cutterIds == null || cutterIds.Length == 0)
       return;
 
-    var doc = RhinoDoc.ActiveDoc;
     if (doc == null || doc.RuntimeSerialNumber != docSerial)
       return;
 
@@ -247,16 +251,18 @@ public sealed class vTrim : vToolsCommand
 
     // _-Trim (scripted) auto-accepts pre-selected cutting curves without
     // requiring an extra Enter confirmation, then waits for target picks.
-    _ = RhinoApp.RunScript("_-Trim", false);
+    DeferredNativeCommand.Run(doc, "_-Trim", _ =>
+    {
+      if (RhinoDoc.ActiveDoc?.RuntimeSerialNumber != docSerial)
+        return;
 
-    doc.Objects.UnselectAll();
-    doc.Views.Redraw();
+      doc.Objects.UnselectAll();
+      doc.Views.Redraw();
 
-    // Silently re-run vTrim (restart flag set so RunCommand returns immediately)
-    // so that pressing Enter afterward repeats vTrim, not _-Trim.
-    _restartingAfterTrimDelegate = true;
-    _ = RhinoApp.RunScript("_vTrim", false);
-    _restartingAfterTrimDelegate = false; // safety clear if RunScript didn't invoke us
+      // Register vTrim as the repeat command only after native trimming finishes.
+      _restartingAfterTrimDelegate = true;
+      DeferredNativeCommand.Run(doc, "_vTrim", _ => _restartingAfterTrimDelegate = false);
+    });
   }
 
   private static void LoadPersistedOptions()
@@ -574,7 +580,7 @@ public sealed class vTrim : vToolsCommand
 
   private static CutterPick PickCutters(RhinoDoc doc)
   {
-    var go = new GetObject();
+    using var go = new GetObject();
     go.EnableTransparentCommands(true);
     go.SetCommandPrompt("Select cutting curves or press Enter for AutoClosest");
     go.GeometryFilter = ObjectType.Curve;
@@ -628,13 +634,14 @@ public sealed class vTrim : vToolsCommand
 
     while (true)
     {
-      var go = new GetObject();
+      using var go = new GetObject();
       go.EnableTransparentCommands(true);
       go.GeometryFilter = ObjectType.Curve;
       go.SubObjectSelect = false;
       go.EnablePreSelect(false, true);
       go.AcceptNothing(true);
       go.AcceptString(true);
+      go.AcceptCustomMessage(true);
       go.DeselectAllBeforePostSelect = false;
       go.EnableClearObjectsOnEntry(false);
       go.EnableUnselectObjectsOnExit(true);
@@ -797,7 +804,7 @@ public sealed class vTrim : vToolsCommand
         doc.Views.Redraw();
       }
 
-      if (go.CommandResult() != Result.Success)
+      if (result != GetResult.CustomMessage && go.CommandResult() != Result.Success)
       {
         pick.State = PickerState.Cancel;
         return pick;
@@ -847,6 +854,30 @@ public sealed class vTrim : vToolsCommand
         pick.ExtendAsLine = extendAsLine;
         pick.JoinAfterTrim = joinAfterTrim;
         return pick;
+      }
+
+      if (result == GetResult.CustomMessage)
+      {
+        if (go.CustomMessage() is HoverClickCapture click && click.CanAccept &&
+            doc.Objects.FindId(click.ObjectId!.Value) is { Geometry: Curve curve } target)
+        {
+          pick.State = PickerState.Ok;
+          pick.TargetObject = target;
+          pick.TargetCurve = curve;
+          pick.PickPoint = click.Point;
+          pick.ExtendMode = click.ExtendMode;
+          pick.ExtendAsLine = extendAsLine;
+          pick.JoinAfterTrim = joinAfterTrim;
+          pick.HadValidPreview = true;
+          pick.PreviewTrimPlan = click.TrimPlan;
+          pick.PreviewExtendPlan = click.ExtendPlan;
+          pick.PreviewFailure = click.PreviewFailure ?? string.Empty;
+          Log.Write("vTrim", "accepted preview click target={0} mode={1}; native pick bypassed",
+            target.Id, click.ExtendMode ? "extend" : "trim");
+          return pick;
+        }
+
+        continue;
       }
 
       if (result != GetResult.Object || go.ObjectCount == 0)
@@ -957,6 +988,9 @@ public sealed class vTrim : vToolsCommand
     public TrimPlan? TrimPlan { get; init; }
     public ExtendPlan? ExtendPlan { get; init; }
     public string? PreviewFailure { get; init; }
+    public bool CanAccept => HasCapture && HadValidPreview &&
+      ObjectId.HasValue && ObjectId.Value != Guid.Empty && Point.IsValid &&
+      (ExtendMode ? ExtendPlan != null : TrimPlan != null);
   }
 
   private sealed class TrimPreviewConduit : Rhino.Display.DisplayConduit
@@ -1231,7 +1265,6 @@ public sealed class vTrim : vToolsCommand
     private RhinoObject? _lastHoverObject;
     private Curve? _lastHoverCurve;
     private Guid? _lastHoverObjectId;
-    private Point3d _lastHoverPoint = Point3d.Unset;
 
     public TrimHoverMouseCallback(RhinoDoc doc, TrimPreviewConduit preview)
     {
@@ -1255,14 +1288,7 @@ public sealed class vTrim : vToolsCommand
       {
       }
 
-      if (_lastHoverObjectId.HasValue && _lastHoverPoint.IsValid)
-      {
-        _preview.SetHover(_lastHoverObject, _lastHoverCurve, _lastHoverPoint, shiftDown);
-      }
-      else
-      {
-        _preview.ResolveCurrentAction(shiftDown);
-      }
+      _preview.SetExtendMode(shiftDown);
 
       var trimPlan = shiftDown ? null : _preview.CurrentTrimPlan;
       var extendPlan = shiftDown ? _preview.CurrentExtendPlan : null;
@@ -1270,14 +1296,19 @@ public sealed class vTrim : vToolsCommand
       LastClick = new HoverClickCapture
       {
         HasCapture = true,
-        ObjectId = _lastHoverObjectId,
-        Point = _lastHoverPoint,
+        ObjectId = _preview.HoverObjectId,
+        Point = _preview.HoverPoint,
         ExtendMode = shiftDown,
         HadValidPreview = trimPlan != null || extendPlan != null,
         TrimPlan = trimPlan,
         ExtendPlan = extendPlan,
         PreviewFailure = _preview.CurrentPreviewFailure
       };
+      if (LastClick.CanAccept)
+      {
+        e.Cancel = true;
+        GetBaseClass.PostCustomMessage(LastClick);
+      }
       base.OnMouseDown(e);
     }
 
@@ -1339,7 +1370,6 @@ public sealed class vTrim : vToolsCommand
       _lastHoverObjectId = hoverObj?.Id;
       _lastHoverObject = hoverObj;
       _lastHoverCurve = hoverCurve;
-      _lastHoverPoint = hoverPoint;
 
       // HoverExtendMode is owned by the shift timer — do not overwrite it here.
       _preview.SetHover(hoverObj, hoverCurve, hoverPoint, _preview.HoverExtendMode);
@@ -2181,7 +2211,7 @@ public sealed class vTrim : vToolsCommand
     return bestIndex;
   }
 
-  private static Curve? TrimOpenCurveFromEnd(Curve targetCurve, Point3d pickPoint, IReadOnlyList<double> splitParameters, double tolScale = 1.0)
+  private static Curve? TrimOpenCurveFromEnd(Curve targetCurve, Point3d pickPoint, IReadOnlyList<double> splitParameters)
   {
     if (targetCurve == null || targetCurve.IsClosed || splitParameters.Count == 0)
       return null;
@@ -2194,9 +2224,7 @@ public sealed class vTrim : vToolsCommand
     var d1 = domain.T1;
     var tFirst = splitParameters.Min();
     var tLast = splitParameters.Max();
-    var tTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-6) * Math.Max(1.0, tolScale);
-
-    if (tPick <= tFirst + tTol)
+    if (tPick <= tFirst)
     {
       try
       {
@@ -2208,7 +2236,7 @@ public sealed class vTrim : vToolsCommand
       }
     }
 
-    if (tPick >= tLast - tTol)
+    if (tPick >= tLast)
     {
       try
       {
@@ -2223,7 +2251,7 @@ public sealed class vTrim : vToolsCommand
     return null;
   }
 
-  private static Curve? TrimOpenCurveFromEndRemovedPiece(Curve targetCurve, Point3d pickPoint, IReadOnlyList<double> splitParameters, double tolScale = 1.0)
+  private static Curve? TrimOpenCurveFromEndRemovedPiece(Curve targetCurve, Point3d pickPoint, IReadOnlyList<double> splitParameters)
   {
     if (targetCurve == null || targetCurve.IsClosed || splitParameters.Count == 0)
       return null;
@@ -2236,9 +2264,7 @@ public sealed class vTrim : vToolsCommand
     var d1 = domain.T1;
     var tFirst = splitParameters.Min();
     var tLast = splitParameters.Max();
-    var tTol = Math.Max(1.0e-9, Math.Abs(d1 - d0) * 1.0e-6) * Math.Max(1.0, tolScale);
-
-    if (tPick <= tFirst + tTol)
+    if (tPick <= tFirst)
     {
       try
       {
@@ -2250,7 +2276,7 @@ public sealed class vTrim : vToolsCommand
       }
     }
 
-    if (tPick >= tLast - tTol)
+    if (tPick >= tLast)
     {
       try
       {
@@ -2367,17 +2393,10 @@ public sealed class vTrim : vToolsCommand
       return false;
     }
 
-    var directScale = 1.0;
     var direct = TrimOpenCurveFromEnd(workingCurve, pickPoint, split);
-    if (direct == null)
-    {
-      directScale = 250.0;
-      direct = TrimOpenCurveFromEnd(workingCurve, pickPoint, split, directScale);
-    }
-
     if (direct != null)
     {
-      var removed = TrimOpenCurveFromEndRemovedPiece(workingCurve, pickPoint, split, directScale);
+      var removed = TrimOpenCurveFromEndRemovedPiece(workingCurve, pickPoint, split);
       if (removed == null)
       {
         failure = "could not resolve removed end segment";
@@ -2596,16 +2615,27 @@ public sealed class vTrim : vToolsCommand
       ranked.Add((nearest.Value, curve, paramsForCurve));
     }
 
-    if (!targetCurve.IsClosed)
-    {
-      var closest = ranked.OrderBy(r => r.Distance).FirstOrDefault();
-      return closest.Curve == null
-        ? new List<Curve>()
-        : new List<Curve> { closest.Curve };
-    }
-
     if (!targetCurve.ClosestPoint(pickPoint, out double pickParameter))
       return ranked.OrderBy(r => r.Distance).Select(r => r.Curve).Take(2).ToList();
+
+    if (!targetCurve.IsClosed)
+    {
+      // An interior removal needs a boundary on each side along the target, not
+      // just the single intersection closest in world space.
+      var openContacts = ranked.SelectMany(item => item.Parameters
+        .Where(parameter => parameter > d0 + endTol && parameter < d1 - endTol)
+        .Select(parameter => (item.Curve, Parameter: parameter))).ToList();
+      var preceding = openContacts.Where(contact => contact.Parameter <= pickParameter)
+        .OrderByDescending(contact => contact.Parameter).FirstOrDefault();
+      var following = openContacts.Where(contact => contact.Parameter > pickParameter)
+        .OrderBy(contact => contact.Parameter).FirstOrDefault();
+      var openCutters = new List<Curve>();
+      if (preceding.Curve != null)
+        openCutters.Add(preceding.Curve);
+      if (following.Curve != null && !ReferenceEquals(following.Curve, preceding.Curve))
+        openCutters.Add(following.Curve);
+      return openCutters;
+    }
 
     double period = d1 - d0;
     double parameterTolerance = Math.Max(1.0e-9, Math.Abs(period) * 1.0e-9);

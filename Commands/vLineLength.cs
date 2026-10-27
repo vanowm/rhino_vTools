@@ -15,21 +15,24 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vLineLength : vToolsCommand
 {
-  private const string OptionsSectionName = "vLineLength";
-  private const string DesiredLengthKey = "desiredLength";
-  private const string ExtendWithLineKey = "extendWithLine";
-  private const string ModeKey = "mode";
-
+  // Defaults and customizable constants
+  private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
+  private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
+  private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+  private const int BoxDragThreshold = 4; // Screen-pixel movement distinguishing a click from an endpoint-selection drag.
+  private const int BoxLineThickness = 1; // Selection rectangle outline width in screen pixels; positive.
+  private const double CurveSnapToleranceFactor = 2.0; // Document-tolerance multiplier for snapped single-curve picking.
+  private static readonly System.Drawing.Color BoxColor = System.Drawing.Color.DodgerBlue; // RGB selection-box outline color.
   private static readonly string[] ModeNames = { "Total", "Add", "Subtract" }; // Command option names in mode-index order.
 
   private const int ModeTotal = 0; // Persisted mode index that sets the final total length.
   private const int ModeAdd = 1; // Persisted mode index that adds the entered length.
   private const int ModeSubtract = 2; // Persisted mode index that subtracts the entered length.
 
-  // Option defaults
-  private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
-  private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
-  private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+  private const string OptionsSectionName = "vLineLength";
+  private const string DesiredLengthKey = "desiredLength";
+  private const string ExtendWithLineKey = "extendWithLine";
+  private const string ModeKey = "mode";
 
   private static double _desiredLength = DefaultDesiredLength;
   private static bool _extendWithLine = DefaultExtendWithLine;
@@ -47,81 +50,108 @@ public sealed class vLineLength : vToolsCommand
   {
     LoadPersistedOptions();
 
-    var history = new Stack<UndoRecord>();
+    var history = new Stack<UndoRecord[]>();
 
-    while (true)
+    try
     {
-      var pick = PickCurveWithPreview(doc, history.Count > 0);
-      if (pick.State == PickerState.Cancel)
-        return Result.Success;
-
-      if (pick.State == PickerState.Undo)
+      while (true)
       {
-        if (history.Count == 0)
+        var pick = PickCurveWithPreview(doc);
+        if (pick.State == PickerState.Cancel)
+          return Result.Success;
+
+        if (pick.State == PickerState.Undo)
         {
-          RhinoApp.WriteLine("vLineLength: nothing to undo.");
+          if (history.Count == 0)
+          {
+            RhinoApp.WriteLine("vLineLength: nothing to undo.");
+            continue;
+          }
+
+          var records = history.Peek();
+          var restored = true;
+          foreach (var record in records)
+            restored &= doc.Objects.Replace(record.ObjectId, record.OriginalCurve);
+          if (restored)
+          {
+            history.Pop();
+            foreach (var record in records) record.OriginalCurve.Dispose();
+            RhinoApp.WriteLine("vLineLength: undo applied.");
+          }
+          else RhinoApp.WriteLine("vLineLength: undo failed for one or more curves.");
+          doc.Views.Redraw();
+
           continue;
         }
 
-        var record = history.Pop();
-        if (!doc.Objects.Replace(record.ObjectId, record.OriginalCurve))
+        if (pick.Curves.Count == 0)
+          return Result.Cancel;
+
+        var changes = new List<UndoRecord>();
+        foreach (var curvePick in pick.Curves)
         {
-          RhinoApp.WriteLine("vLineLength: undo failed.");
+          if (TryResizePickedCurve(doc, curvePick, out var record)) changes.Add(record);
         }
+        if (changes.Count == 0) continue;
+        history.Push(changes.ToArray());
+        SavePersistedOptions();
+        if (pick.Curves.Count > 1)
+          RhinoApp.WriteLine($"vLineLength: resized {changes.Count} curves; {pick.Curves.Count - changes.Count} unchanged.");
         else
-        {
-          RhinoApp.WriteLine("vLineLength: undo applied.");
-          doc.Views.Redraw();
-        }
-
-        continue;
+          RhinoApp.WriteLine($"vLineLength: curve length set to {ComputeTargetLength(changes[0].OriginalCurve.GetLength(), _desiredLength, _mode):g}");
+        doc.Views.Redraw();
       }
+    }
+    finally
+    {
+      foreach (var batch in history)
+        foreach (var record in batch) record.OriginalCurve.Dispose();
+    }
+  }
 
-      if (pick.ObjectId == Guid.Empty)
-        return Result.Cancel;
-
+  private static bool TryResizePickedCurve(RhinoDoc doc, CurvePick pick, out UndoRecord record)
+  {
+      record = default;
       var rhObj = doc.Objects.FindId(pick.ObjectId);
       if (rhObj?.Geometry is not Curve curve)
       {
         RhinoApp.WriteLine("vLineLength: selected curve no longer exists.");
-        continue;
+        return false;
       }
 
       if (curve.IsClosed)
       {
         RhinoApp.WriteLine("vLineLength: closed curves are not supported.");
-        continue;
+        return false;
       }
 
       var original = curve.DuplicateCurve();
       if (original == null)
       {
         RhinoApp.WriteLine("vLineLength: failed to capture curve for undo.");
-        continue;
+        return false;
       }
 
       var extensionStyle = _extendWithLine ? CurveExtensionStyle.Line : CurveExtensionStyle.Smooth;
       var targetLength = ComputeTargetLength(curve.GetLength(), _desiredLength, _mode);
 
-      var resized = ResizeCurve(curve, targetLength, pick.MovingEnd, extensionStyle, doc.ModelAbsoluteTolerance);
+      using var resized = ResizeCurve(curve, targetLength, pick.MovingEnd, extensionStyle, doc.ModelAbsoluteTolerance);
       if (resized == null)
       {
         RhinoApp.WriteLine("vLineLength: failed to resize curve.");
-        continue;
+        original.Dispose();
+        return false;
       }
 
       if (!doc.Objects.Replace(pick.ObjectId, resized))
       {
         RhinoApp.WriteLine("vLineLength: failed to update curve.");
-        continue;
+        original.Dispose();
+        return false;
       }
 
-      history.Push(new UndoRecord(pick.ObjectId, original));
-
-      SavePersistedOptions();
-      RhinoApp.WriteLine($"vLineLength: curve length set to {targetLength:g}");
-      doc.Views.Redraw();
-    }
+      record = new UndoRecord(pick.ObjectId, original);
+      return true;
   }
 
   private static void LoadPersistedOptions()
@@ -166,11 +196,12 @@ public sealed class vLineLength : vToolsCommand
       });
   }
 
-  private static PickResult PickCurveWithPreview(RhinoDoc doc, bool canUndo)
+  private static PickResult PickCurveWithPreview(RhinoDoc doc)
   {
-    var gp = new GetPoint();
+    using var gp = new GetPoint();
     gp.EnableTransparentCommands(true);
-    gp.SetCommandPrompt("Hover snapped open curve to preview, click curve to confirm");
+    gp.SetCommandPrompt("Click a snapped open curve, or drag a box around ends to resize");
+    gp.AcceptNothing(true);
     gp.AcceptNumber(true, false);
     gp.AcceptString(true);
 
@@ -179,10 +210,49 @@ public sealed class vLineLength : vToolsCommand
     var modeIndex = _mode;
 
     var preview = new LineLengthPreviewConduit { Enabled = true };
+    System.Drawing.Point? boxStart = null;
+    var boxEnd = System.Drawing.Point.Empty;
+    RhinoViewport? boxViewport = null;
+    var dragging = false;
+    gp.MouseDown += (_, e) =>
+    {
+      boxStart = e.WindowPoint;
+      boxEnd = e.WindowPoint;
+      boxViewport = e.Viewport;
+      dragging = false;
+    };
+    gp.MouseMove += (_, e) =>
+    {
+      if (!boxStart.HasValue || !e.LeftButtonDown || boxViewport?.Id != e.Viewport.Id) return;
+      boxEnd = e.WindowPoint;
+      dragging |= IsBoxDrag(boxStart.Value, boxEnd);
+    };
 
     EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
     {
+      if (dragging && boxViewport != null && e.Viewport.Id != boxViewport.Id) return;
       preview.ClearPreview();
+
+      if (dragging && boxStart.HasValue && boxViewport != null)
+      {
+        var rectangle = SelectionRectangle(boxStart.Value, boxEnd);
+        e.Display.Draw2dRectangle(rectangle, BoxColor, BoxLineThickness, System.Drawing.Color.Transparent);
+        var items = new List<CurvePreviewItem>();
+        foreach (var pick in PickBoxEnds(doc, boxViewport, rectangle))
+        {
+          if (doc.Objects.FindId(pick.ObjectId)?.Geometry is not Curve selected) continue;
+          var target = ComputeTargetLength(selected.GetLength(), Math.Abs(lengthOption.CurrentValue), modeIndex);
+          var boxStyle = extendToggle.CurrentValue ? CurveExtensionStyle.Line : CurveExtensionStyle.Smooth;
+          using var resized = ResizeCurve(selected, target, pick.MovingEnd, boxStyle, doc.ModelAbsoluteTolerance);
+          if (resized == null) continue;
+          bool added = target >= selected.GetLength();
+          var changed = BuildChangedSegment(selected, resized, selected.GetLength(), target,
+            pick.MovingEnd, added ? ModeAdd : ModeSubtract);
+          if (changed != null) items.Add(new CurvePreviewItem(changed, added));
+        }
+        preview.SetPreview(items);
+        return;
+      }
 
       if (!TryFindOpenCurveAtPoint(doc, e.CurrentPoint, out RhinoObject? _, out var curve) || curve == null)
         return;
@@ -197,7 +267,7 @@ public sealed class vLineLength : vToolsCommand
         targetLength);
       var style = extendToggle.CurrentValue ? CurveExtensionStyle.Line : CurveExtensionStyle.Smooth;
 
-      var previewCurve = ResizeCurve(curve, targetLength, movingEnd, style, doc.ModelAbsoluteTolerance);
+      using var previewCurve = ResizeCurve(curve, targetLength, movingEnd, style, doc.ModelAbsoluteTolerance);
       if (previewCurve == null)
         return;
 
@@ -234,14 +304,16 @@ public sealed class vLineLength : vToolsCommand
       while (true)
       {
         gp.ClearCommandOptions();
-        var undoOptionIndex = canUndo ? gp.AddOption("Undo") : -1;
         gp.AddOptionDouble("Length", ref lengthOption);
         gp.AddOptionToggle("ExtendMode", ref extendToggle);
         var modeOptionIndex = gp.AddOptionList("Mode", ModeNames, modeIndex);
 
-        var result = gp.Get();
+        boxStart = null;
+        boxViewport = null;
+        dragging = false;
+        var result = gp.Get(onMouseUp: true);
         if (gp.CommandResult() != Result.Success)
-          return new PickResult(PickerState.Cancel, Guid.Empty, CurveEnd.None);
+          return new PickResult(PickerState.Cancel, Array.Empty<CurvePick>());
 
         if (result == GetResult.Number)
         {
@@ -278,6 +350,8 @@ public sealed class vLineLength : vToolsCommand
         if (result == GetResult.String)
         {
           var text = (gp.StringResult() ?? string.Empty).Trim().ToLowerInvariant();
+          if (text is "undo" or "_undo" or "u")
+            return new PickResult(PickerState.Undo, Array.Empty<CurvePick>());
           if (text is "total" or "t")
             modeIndex = ModeTotal;
           else if (text is "add" or "a" or "+")
@@ -301,9 +375,6 @@ public sealed class vLineLength : vToolsCommand
 
         if (result == GetResult.Option)
         {
-          if (canUndo && gp.OptionIndex() == undoOptionIndex)
-            return new PickResult(PickerState.Undo, Guid.Empty, CurveEnd.None);
-
           var option = gp.Option();
           if (option != null && option.Index == modeOptionIndex)
             modeIndex = ClampMode(option.CurrentListOptionIndex);
@@ -328,7 +399,22 @@ public sealed class vLineLength : vToolsCommand
         }
 
         if (result != GetResult.Point)
-          return new PickResult(PickerState.Cancel, Guid.Empty, CurveEnd.None);
+          return new PickResult(PickerState.Cancel, Array.Empty<CurvePick>());
+
+        if (dragging && boxStart.HasValue && boxViewport != null)
+        {
+          var picks = PickBoxEnds(doc, boxViewport, SelectionRectangle(boxStart.Value, boxEnd));
+          if (picks.Count == 0)
+          {
+            RhinoApp.WriteLine("vLineLength: no editable open-curve ends inside the box.");
+            continue;
+          }
+          _desiredLength = Math.Abs(lengthOption.CurrentValue);
+          _extendWithLine = extendToggle.CurrentValue;
+          _mode = ClampMode(modeIndex);
+          SavePersistedOptions();
+          return new PickResult(PickerState.Select, picks);
+        }
 
         if (!TryFindOpenCurveAtPoint(doc, gp.Point(), out var rhObj, out var hitCurve) || rhObj == null || hitCurve == null)
         {
@@ -353,7 +439,7 @@ public sealed class vLineLength : vToolsCommand
         _mode = ClampMode(modeIndex);
         SavePersistedOptions();
 
-        return new PickResult(PickerState.Select, rhObj.Id, movingEnd);
+        return new PickResult(PickerState.Select, new[] { new CurvePick(rhObj.Id, movingEnd) });
       }
     }
     finally
@@ -365,6 +451,39 @@ public sealed class vLineLength : vToolsCommand
     }
   }
 
+  private static bool IsBoxDrag(System.Drawing.Point start, System.Drawing.Point end) =>
+    Math.Abs(start.X - end.X) >= BoxDragThreshold || Math.Abs(start.Y - end.Y) >= BoxDragThreshold;
+
+  private static System.Drawing.Rectangle SelectionRectangle(System.Drawing.Point start, System.Drawing.Point end) =>
+    new(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y),
+      Math.Max(1, Math.Abs(end.X - start.X)), Math.Max(1, Math.Abs(end.Y - start.Y)));
+
+  private static List<CurvePick> PickBoxEnds(RhinoDoc doc, RhinoViewport viewport, System.Drawing.Rectangle rectangle)
+  {
+    var picks = new List<CurvePick>();
+    var view = viewport.ParentView;
+    if (view == null) return picks;
+    using var context = new PickContext { View = view, PickStyle = PickStyle.CrossingPick,
+      PickMode = PickMode.Wireframe, PickGroupsEnabled = false };
+    context.SetPickTransform(viewport.GetPickTransform(rectangle));
+    context.UpdateClippingPlanes();
+    var center = new Point2d(rectangle.Left + rectangle.Width / 2.0, rectangle.Top + rectangle.Height / 2.0);
+    var settings = new ObjectEnumeratorSettings { ObjectTypeFilter = ObjectType.Curve,
+      NormalObjects = true, LockedObjects = false, HiddenObjects = false, ReferenceObjects = false };
+    foreach (var obj in doc.Objects.GetObjectList(settings))
+    {
+      if (obj.Geometry is not Curve curve || curve.IsClosed || !obj.IsSelectable(true, false, false, false)) continue;
+      bool start = context.PickFrustumTest(curve.PointAtStart, out _, out _);
+      bool end = context.PickFrustumTest(curve.PointAtEnd, out _, out _);
+      if (!start && !end) continue;
+      var movingEnd = !end ? CurveEnd.Start : !start ? CurveEnd.End :
+        viewport.WorldToClient(curve.PointAtStart).DistanceTo(center) <= viewport.WorldToClient(curve.PointAtEnd).DistanceTo(center)
+          ? CurveEnd.Start : CurveEnd.End;
+      picks.Add(new CurvePick(obj.Id, movingEnd));
+    }
+    return picks;
+  }
+
   private static bool TryFindOpenCurveAtPoint(RhinoDoc doc, Point3d worldPoint, out RhinoObject? bestObject, out Curve? bestCurve)
   {
     bestObject = null;
@@ -374,7 +493,7 @@ public sealed class vLineLength : vToolsCommand
       return false;
 
     var bestDistance = double.MaxValue;
-    var snapTolerance = doc.ModelAbsoluteTolerance * 2.0;
+    var snapTolerance = doc.ModelAbsoluteTolerance * CurveSnapToleranceFactor;
 
     var settings = new ObjectEnumeratorSettings
     {
@@ -518,7 +637,9 @@ public sealed class vLineLength : vToolsCommand
     Cancel
   }
 
-  private readonly record struct PickResult(PickerState State, Guid ObjectId, CurveEnd MovingEnd);
+  private readonly record struct CurvePick(Guid ObjectId, CurveEnd MovingEnd);
+
+  private readonly record struct PickResult(PickerState State, IReadOnlyList<CurvePick> Curves);
 
   private readonly record struct UndoRecord(Guid ObjectId, Curve OriginalCurve);
 
@@ -530,11 +651,13 @@ public sealed class vLineLength : vToolsCommand
 
     public void ClearPreview()
     {
+      foreach (var item in _curveItems) item.Curve.Dispose();
       _curveItems = new List<CurvePreviewItem>();
     }
 
     public void SetPreview(List<CurvePreviewItem>? curveItems)
     {
+      ClearPreview();
       _curveItems = curveItems ?? new List<CurvePreviewItem>();
     }
 

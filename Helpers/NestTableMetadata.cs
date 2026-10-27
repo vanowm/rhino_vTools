@@ -11,6 +11,7 @@ internal static class NestTableMetadata
   internal const string BorderRole = "table-border"; // Table perimeter marker, not an individual part outline.
   internal const string LabelRole = "table-label"; // Table annotation marker, not an individual part label.
   internal const string LabelFrameRole = "table-label-frame"; // Frame of the grouped table-label part; excluded from nesting-source capture.
+  internal const string LabelDividerRole = "table-label-divider"; // Shared table/label closing edge; decoration only, omitted from exported label blocks and parts.
   private const string LegacyBorderName = "NestTable"; // Rectangle object name used by pre-metadata nest output.
   private const string LegacyGroupPrefix = "vNest_"; // Former generated table group prefix followed by a session identifier.
   private const string LegacyTableToken = "_table_"; // Former generated table group delimiter; individual part groups use a different delimiter.
@@ -21,11 +22,12 @@ internal static class NestTableMetadata
     attributes.SetUserString("vNest.session",session); attributes.SetUserString("vNest.table",(table+1).ToString());
     attributes.SetUserString("vNest.tableName",name);
   }
-  private static bool Marker(ObjectAttributes attributes)=>attributes.GetUserString(RoleKey) is BorderRole or LabelRole or LabelFrameRole;
+  private static bool Marker(ObjectAttributes attributes)=>attributes.GetUserString(RoleKey) is BorderRole or LabelRole or LabelFrameRole or LabelDividerRole;
   internal static bool HasDecorationRole(ObjectAttributes attributes) => Marker(attributes);
   internal static bool IsTableBorder(RhinoDoc doc, RhinoObject obj) =>
     obj.Attributes.GetUserString(RoleKey) == BorderRole ||
     obj.Attributes.Name == LegacyBorderName && IsDecoration(doc, obj);
+  internal static bool IsTableStructure(RhinoDoc doc,RhinoObject obj)=>IsTableBorder(doc,obj)||obj.Attributes.GetUserString(RoleKey)==LabelDividerRole;
   internal static bool IsCleanupDecoration(RhinoDoc doc, RhinoObject obj) =>
     Marker(obj.Attributes) || IsDecoration(doc, obj);
   private static bool Legacy(string? name)=>name?.StartsWith(LegacyGroupPrefix,StringComparison.Ordinal)==true&&name.Contains(LegacyTableToken,StringComparison.Ordinal);

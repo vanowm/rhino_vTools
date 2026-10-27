@@ -20,10 +20,15 @@ internal static class PlanarPartSelection
   internal sealed record Item(Guid Id, GeometryBase Geometry, ObjectAttributes Attributes, Color Color);
   internal sealed class Part(Curve outline, Plane plane, ObjectAttributes attributes, List<Item> items) : IDisposable
   {
-    internal Curve Outline { get; } = outline;
+    internal Curve Outline { get; private set; } = outline;
     internal Plane Plane { get; } = plane;
     internal ObjectAttributes Attributes { get; } = attributes;
     internal List<Item> Items { get; } = items;
+    internal void ReplaceOutline(Curve replacement)
+    {
+      if(ReferenceEquals(Outline,replacement)) return;
+      Outline.Dispose(); Outline=replacement;
+    }
     public void Dispose()
     {
       Outline.Dispose(); Attributes.Dispose();

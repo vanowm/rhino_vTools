@@ -6,7 +6,6 @@ namespace vTools.Commands
   using System.Globalization;
   using System.Linq;
   using System.Text.Json;
-  using System.Text.RegularExpressions;
   using Rhino;
   using Rhino.Commands;
   using Rhino.DocObjects;
@@ -30,6 +29,8 @@ namespace vTools.Commands
     private const double DefaultChamfer = 1.0; // Perpendicular chamfer width in model units; zero or greater.
     private const double DefaultReinforcement = 6.0; // Arc radius in model units; zero disables reinforcement arcs.
     private const bool DefaultScallop = false; // true replaces perimeter connector lines with inward arcs; false keeps straight connectors.
+    private const bool DefaultUseCurve = true; // true trims nonlinear source sides in place and extends caps to meet them; false generates straight/scalloped connectors. Linear sources always use Scallop.
+    private const double SourceCapExtensionFactor = 2.0; // Positive multiplier on source bounding-box distance when intersecting the infinite corner-cap line.
     private const double DefaultScallopSize = 5.0; // Positive midpoint bulge: model units, or percent of connector span when DefaultScallopPercent is true.
     private const bool DefaultScallopPercent = true; // true interprets scallop size as percent of each connector span; false uses model units.
     private const double DefaultCutOffset = 1.5; // Outward cut distance in model units; zero omits the cut curve.
@@ -45,6 +46,7 @@ namespace vTools.Commands
     private const double DefaultLabelDimensionScale = 1.0; // Positive annotation display scale for fixed-height labels.
     private const double LabelRadialPosition = 0.5; // Fraction from cap midpoint toward reinforcement arc midpoint; zero to one.
     private const string DefaultLabel = "1"; // Document-local next label; numeric or alphabetic suffix advances after each corner, empty disables labels.
+    private const string DefaultLabelPrefix = ""; // Literal text prepended to new corner labels; empty leaves the incrementing value unprefixed.
     private const bool DefaultConnect = true; // true grows non-crossing boundaries between consecutive perpendiculars; false leaves perpendiculars separate.
     private const bool DefaultJoin = true; // true outputs each connected boundary as one curve; false keeps its segments separate.
     private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
@@ -95,6 +97,7 @@ namespace vTools.Commands
     private const string LegacyLengthKey = "length";
     private const string ReinforcementKey = "reinforcement";
     private const string ScallopKey = "scallop";
+    private const string UseCurveKey = "useCurve";
     private const string ScallopSizeKey = "scallopSize";
     private const string ScallopPercentKey = "scallopPercent";
     private const string TuneScallopSizeKey = "tuneScallopSize";
@@ -107,12 +110,15 @@ namespace vTools.Commands
     private const string FinishedLayerKey = "finishedLayer";
     private const string CreateReinfKey = "createReinf";
     private const string LabelKey = "label";
+    private const string LabelPrefixKey = "labelPrefix";
     private const string SplitWidthKey = "splitWidth";
 
     private static double _offset = DefaultOffset;
     private static double _chamfer = DefaultChamfer;
     private static double _reinforcement = DefaultReinforcement;
     private static bool _scallop = DefaultScallop;
+    private static bool _useCurve = DefaultUseCurve;
+    private static string _labelPrefix = DefaultLabelPrefix;
     private static double _scallopSize = DefaultScallopSize;
     private static bool _scallopPercent = DefaultScallopPercent;
     private static double _cutOffset = DefaultCutOffset;
@@ -147,11 +153,13 @@ namespace vTools.Commands
       OptionDouble Reinforcement,
       OptionToggle CreateReinf,
       OptionToggle Scallop,
+      OptionToggle UseCurve,
       int ScallopSizeOptionIndex,
       OptionToggle Connect,
       OptionToggle Join,
       int LayerOptionIndex,
       int LabelOptionIndex,
+      int LabelPrefixOptionIndex,
       OptionDouble CutOffset,
       int CutLayerOptionIndex,
       int ScallopTuneOptionIndex,
@@ -167,7 +175,10 @@ namespace vTools.Commands
       bool Connect,
       double Reinforcement,
       string LabelText,
-      string NextLabel);
+      string NextLabel)
+    {
+      public string LabelPrefix { get; init; } = DefaultLabelPrefix;
+    }
 
     private sealed record ShadeHistoryState(
       List<ShadePlacement> Placements,
@@ -189,6 +200,8 @@ namespace vTools.Commands
       public List<PlacementSnapshot> Placements { get; set; } = [];
       public List<ScallopSnapshot> Scallops { get; set; } = [];
       public bool Scallop { get; set; }
+      public bool UseCurve { get; set; } = DefaultUseCurve;
+      public string LabelPrefix { get; set; } = DefaultLabelPrefix;
       public double ScallopSize { get; set; }
       public bool ScallopPercent { get; set; }
       public bool Join { get; set; }
@@ -216,6 +229,7 @@ namespace vTools.Commands
       public bool Connect { get; set; }
       public double Reinforcement { get; set; }
       public string LabelText { get; set; } = string.Empty;
+      public string LabelPrefix { get; set; } = DefaultLabelPrefix;
       public string NextLabel { get; set; } = string.Empty;
     }
 
@@ -585,7 +599,8 @@ namespace vTools.Commands
             previousCorner?.NextLabel ??
               (string.IsNullOrWhiteSpace(labelValue)
                 ? labelValue
-                : IncrementLabelValue(labelValue)));
+                : IncrementLabelValue(labelValue)))
+          { LabelPrefix = previousCorner?.LabelPrefix ?? _labelPrefix };
           var previousPlacements = placements.ToList();
           if (existingCornerIndex >= 0)
             placements[existingCornerIndex] = placement;
@@ -714,6 +729,7 @@ namespace vTools.Commands
           }
           var previousJoin = _join;
           var previousScallop = _scallop;
+          var previousUseCurve = _useCurve;
           var previousScallopSize = _scallopSize;
           var previousScallopPercent = _scallopPercent;
           var previousCutOffset = _cutOffset;
@@ -724,6 +740,7 @@ namespace vTools.Commands
             applyOutputLayer(layerSession.CreateAttributes(doc).LayerIndex);
           if ((previousJoin != _join ||
                previousScallop != _scallop ||
+               previousUseCurve != _useCurve ||
                previousScallopSize != _scallopSize ||
                previousScallopPercent != _scallopPercent ||
                previousCutOffset != _cutOffset ||
@@ -732,6 +749,7 @@ namespace vTools.Commands
           {
             _join = previousJoin;
             _scallop = previousScallop;
+            _useCurve = previousUseCurve;
             _scallopSize = previousScallopSize;
             _scallopPercent = previousScallopPercent;
             _cutOffset = previousCutOffset;
@@ -995,15 +1013,17 @@ namespace vTools.Commands
       var connectionGeometry = new List<ShadeConnectionGeometry>();
       var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+      var originalPlacements = placements;
 
       try
       {
+        placements = PrepareSourceCaps(doc, placements, scallopSizes, tolerance);
         var connections = BuildConnections(cplane, placements, tolerance);
         chainCount = CountConnectedChains(connections);
         foreach (var connection in connections)
           connectionGeometry.Add(new ShadeConnectionGeometry(
             connection,
-            CreateConnectionCurve(cplane, connection, placements, scallopSizes, tolerance)));
+            CreateConnectionCurve(doc, cplane, connection, placements, scallopSizes, tolerance)));
         if (connectionGeometry.Any(item => item.Curve is not LineCurve))
           ValidateScallopPerimeter(placements, connectionGeometry, tolerance);
 
@@ -1208,7 +1228,7 @@ namespace vTools.Commands
             throw new InvalidOperationException("could not group shade output");
         }
 
-        SaveShadeState(doc, sessionId, placements, scallopSizes);
+        SaveShadeState(doc, sessionId, originalPlacements, scallopSizes);
         foreach (var id in existingOutputIds)
           doc.Objects.Delete(id, quiet: true);
         existingOutputIds.Clear();
@@ -1425,6 +1445,8 @@ namespace vTools.Commands
       var snapshot = new ShadeSnapshot
       {
         Scallop = _scallop,
+        UseCurve = _useCurve,
+        LabelPrefix = _labelPrefix,
         ScallopSize = _scallopSize,
         ScallopPercent = _scallopPercent,
         Join = _join,
@@ -1450,6 +1472,7 @@ namespace vTools.Commands
           Connect = placement.Connect,
           Reinforcement = placement.Reinforcement,
           LabelText = placement.LabelText,
+          LabelPrefix = placement.LabelPrefix,
           NextLabel = placement.NextLabel
         }).ToList(),
         Scallops = scallopSizes.Select(item => new ScallopSnapshot
@@ -1512,12 +1535,14 @@ namespace vTools.Commands
             saved.Connect,
             saved.Reinforcement,
             saved.LabelText,
-            saved.NextLabel));
+            saved.NextLabel) { LabelPrefix = saved.LabelPrefix });
         }
         foreach (var saved in snapshot.Scallops)
           scallopSizes[(saved.FromSequence, saved.ToSequence)] =
             new ScallopSize(saved.Value, saved.Percent);
         _scallop = snapshot.Scallop;
+        _useCurve = snapshot.UseCurve;
+        _labelPrefix = snapshot.LabelPrefix;
         _scallopSize = snapshot.ScallopSize;
         _scallopPercent = snapshot.ScallopPercent;
         _join = snapshot.Join;
@@ -1562,10 +1587,11 @@ namespace vTools.Commands
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
       while (true)
       {
-        var connectors = BuildConnections(cplane, placements, tolerance)
+        var effectivePlacements = PrepareSourceCaps(doc, placements, scallopSizes, tolerance);
+        var connectors = BuildConnections(cplane, effectivePlacements, tolerance)
           .Select(connection => new ShadeConnectionGeometry(
             connection,
-            CreateConnectionCurve(cplane, connection, placements, scallopSizes, tolerance)))
+            CreateConnectionCurve(doc, cplane, connection, effectivePlacements, scallopSizes, tolerance)))
           .ToArray();
         if (connectors.Length == 0)
         {
@@ -1957,6 +1983,7 @@ namespace vTools.Commands
     }
 
     private static Curve CreateConnectionCurve(
+      RhinoDoc doc,
       Plane cplane,
       ShadeConnection connection,
       IReadOnlyList<ShadePlacement> placements,
@@ -1964,11 +1991,18 @@ namespace vTools.Commands
       double tolerance)
     {
       var hasOverride = scallopSizes.TryGetValue(ConnectionKey(connection), out var overrideSize);
+      var from = placements[connection.FromSequence - 1];
+      var to = placements[connection.ToSequence - 1];
+      if (_useCurve && !hasOverride)
+      {
+        var shared = new[] { from.FirstSourceId, from.SecondSourceId }
+          .Where(id => id != Guid.Empty && (id == to.FirstSourceId || id == to.SecondSourceId)).Distinct().ToArray();
+        if (shared.Length == 1 && doc.Objects.FindId(shared[0])?.Geometry is Curve source && !source.IsLinear(tolerance))
+          return TrimScallopCurve(source, connection.Line, tolerance);
+      }
       if ((hasOverride && overrideSize.Value <= 0.0) || (!hasOverride && !_scallop))
         return new LineCurve(connection.Line);
 
-      var from = placements[connection.FromSequence - 1];
-      var to = placements[connection.ToSequence - 1];
       var side = Vector3d.CrossProduct(cplane.Normal, connection.Line.Direction);
       if (!side.Unitize())
         throw new InvalidOperationException("scallop connector has no perpendicular direction");
@@ -1998,6 +2032,54 @@ namespace vTools.Commands
       if (!arc.IsValid)
         throw new InvalidOperationException("could not construct an inward scallop arc");
       return new ArcCurve(arc);
+    }
+
+    private static IReadOnlyList<ShadePlacement> PrepareSourceCaps(RhinoDoc doc, IReadOnlyList<ShadePlacement> placements,
+      IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes, double tolerance)
+    {
+      if (!_useCurve) return placements;
+      return placements.Select(placement =>
+      {
+        if (!placement.Connect || placement.Geometry.PerpendicularLine is not { } cap) return placement;
+        var geometry = placement.Geometry;
+        Point3d End(int end)
+        {
+          var id = SourceId(placement, end);
+          bool used = placements.Any(other => other.Sequence != placement.Sequence && other.Connect &&
+            other.Geometry.PerpendicularLine.HasValue && (id == other.FirstSourceId || id == other.SecondSourceId) &&
+            !scallopSizes.ContainsKey((Math.Min(placement.Sequence, other.Sequence), Math.Max(placement.Sequence, other.Sequence))));
+          if (!used || id == Guid.Empty || doc.Objects.FindId(id)?.Geometry is not Curve source || source.IsLinear(tolerance))
+            return CapEnd(placement, end);
+          var center = cap.PointAt(0.5); var direction = cap.Direction;
+          if (!direction.Unitize()) throw new InvalidOperationException("corner cap has no direction");
+          double extent = source.GetBoundingBox(true).GetCorners().Max(point => point.DistanceTo(center)) * SourceCapExtensionFactor + tolerance;
+          using var extended = new LineCurve(center - direction * extent, center + direction * extent);
+          using var intersections = Intersection.CurveCurve(source, extended, tolerance, tolerance);
+          var hits = intersections?.Where(hit => hit.IsPoint).Select(hit => hit.PointA)
+            .OrderBy(point => point.DistanceToSquared(geometry.Corner)).ToArray() ?? [];
+          if (hits.Length == 0) throw new InvalidOperationException("corner cap does not intersect the selected curved side; adjust Offset");
+          return hits[0];
+        }
+        var first = End(0); var second = End(1);
+        if (first.DistanceTo(geometry.FirstCapEnd) <= tolerance && second.DistanceTo(geometry.SecondCapEnd) <= tolerance) return placement;
+        if (first.DistanceTo(second) <= tolerance) throw new InvalidOperationException("Offset leaves no corner cap between the selected sides");
+        return placement with { Geometry = geometry with { FirstCapEnd = first, SecondCapEnd = second, PerpendicularLine = new Line(first, second) } };
+      }).ToArray();
+    }
+
+    private static Curve TrimScallopCurve(Curve source, Line target, double tolerance)
+    {
+      if (!source.ClosestPoint(target.From, out double from) || !source.ClosestPoint(target.To, out double to) ||
+          source.PointAt(from).DistanceTo(target.From) > tolerance || source.PointAt(to).DistanceTo(target.To) > tolerance)
+        throw new InvalidOperationException("corner caps do not meet the selected curved side");
+      var curve = source.Trim(Math.Min(from, to), Math.Max(from, to));
+      if (curve == null) throw new InvalidOperationException("could not trim the selected curved side between its caps");
+      if (from > to && !curve.Reverse())
+      {
+        curve.Dispose();
+        throw new InvalidOperationException("could not orient the trimmed curved side");
+      }
+      return curve;
     }
 
     private static void ValidateScallopPerimeter(
@@ -2177,7 +2259,7 @@ namespace vTools.Commands
       using var text = new TextEntity
       {
         Plane = new Plane(origin, xAxis, yAxis),
-        PlainText = FormatDisplayLabel(placement.LabelText),
+        PlainText = FormatCornerLabel(placement.LabelPrefix, placement.LabelText),
         TextHeight = DefaultLabelHeight,
         Justification = TextJustification.MiddleCenter,
         DimensionStyleId = doc.DimStyles.Current.Id,
@@ -2251,6 +2333,7 @@ namespace vTools.Commands
       var connectOption = new OptionToggle(_connect, "No", "Yes");
       var joinOption = new OptionToggle(_join, "No", "Yes");
       var scallopOption = new OptionToggle(_scallop, "No", "Yes");
+      var useCurveOption = new OptionToggle(_useCurve, "No", "Yes");
       getter.AddOptionDouble("Offset", ref offsetOption);
       getter.AddOptionDouble("Chamfer", ref chamferOption);
       getter.AddOptionDouble("Reinforcement", ref reinforcementOption);
@@ -2260,7 +2343,9 @@ namespace vTools.Commands
       var labelOptionIndex = getter.AddOption(
         "Label",
         string.IsNullOrEmpty(labelValue) ? "None" : labelValue);
+      var labelPrefixOptionIndex = getter.AddOption("LabelPrefix", string.IsNullOrEmpty(_labelPrefix) ? "None" : _labelPrefix);
       getter.AddOptionToggle("Scallop", ref scallopOption);
+      getter.AddOptionToggle("UseCurve", ref useCurveOption);
       var scallopSizeOptionIndex = getter.AddOption("ScallopSize", FormatScallopSize());
       var cutOffsetOption = new OptionDouble(_cutOffset, 0.0, double.MaxValue);
       getter.AddOptionDouble("CutOffset", ref cutOffsetOption);
@@ -2275,11 +2360,13 @@ namespace vTools.Commands
         reinforcementOption,
         createReinfOption,
         scallopOption,
+        useCurveOption,
         scallopSizeOptionIndex,
         connectOption,
         joinOption,
         layerOptionIndex,
         labelOptionIndex,
+        labelPrefixOptionIndex,
         cutOffsetOption,
         cutLayerOptionIndex,
         scallopTuneOptionIndex,
@@ -2300,6 +2387,7 @@ namespace vTools.Commands
       _reinforcement = options.Reinforcement.CurrentValue;
       _createReinf = options.CreateReinf.CurrentValue;
       _scallop = options.Scallop.CurrentValue;
+      _useCurve = options.UseCurve.CurrentValue;
       _connect = options.Connect.CurrentValue;
       _join = options.Join.CurrentValue;
       _cutOffset = options.CutOffset.CurrentValue;
@@ -2329,10 +2417,18 @@ namespace vTools.Commands
           labelValue = result == GetResult.String
             ? textGetter.StringResult().Trim()
             : string.Empty;
-          if (Regex.IsMatch(labelValue, @"^[0-9]+\.$"))
-            labelValue = labelValue[..^1];
+          labelValue = LabelSequences.NormalizeValue(labelValue);
           doc.Strings.SetString(OptionsSectionName, LabelKey, labelValue);
         }
+      }
+      else if (getter.Option()?.Index == options.LabelPrefixOptionIndex)
+      {
+        using var textGetter = new GetString();
+        textGetter.SetCommandPrompt("Label prefix (Enter to clear)");
+        textGetter.AcceptNothing(true);
+        var result = textGetter.Get();
+        if (result == GetResult.String || result == GetResult.Nothing)
+          _labelPrefix = result == GetResult.String ? textGetter.StringResult().Trim() : DefaultLabelPrefix;
       }
       SaveOptions();
     }
@@ -2400,59 +2496,10 @@ namespace vTools.Commands
       return true;
     }
 
-    private static string IncrementLabelValue(string text)
-    {
-      var match = Regex.Match(text, @"([A-Za-z]+|\d+)$");
-      if (!match.Success)
-        return text + "1";
+    private static string IncrementLabelValue(string text) => LabelSequences.Increment(text, DefaultLabel);
 
-      var prefix = text[..match.Index];
-      var suffix = match.Value;
-      if (suffix.All(char.IsDigit) &&
-          System.Numerics.BigInteger.TryParse(
-            suffix,
-            CultureInfo.InvariantCulture,
-            out var number))
-        return prefix + (number + 1).ToString(CultureInfo.InvariantCulture)
-          .PadLeft(suffix.Length, '0');
-
-      var letters = suffix.ToUpperInvariant().ToCharArray();
-      for (var index = letters.Length - 1; index >= 0; index--)
-      {
-        if (letters[index] == 'Z')
-        {
-          letters[index] = 'A';
-          continue;
-        }
-        letters[index]++;
-        return prefix + new string(letters);
-      }
-      return prefix + "A" + new string(letters);
-    }
-
-    private static string FormatDisplayLabel(string text)
-    {
-      if (text.Length == 0 || !text.All(char.IsDigit))
-        return text;
-
-      var rotated = new char[text.Length];
-      for (var index = 0; index < text.Length; index++)
-      {
-        rotated[index] = text[text.Length - index - 1] switch
-        {
-          '0' => '0',
-          '1' => '1',
-          '6' => '9',
-          '8' => '8',
-          '9' => '6',
-          _ => '\0'
-        };
-        if (rotated[index] == '\0')
-          return text;
-      }
-
-      return new string(rotated) == text ? text : text + ".";
-    }
+    private static string FormatCornerLabel(string prefix, string value) => string.IsNullOrWhiteSpace(value)
+      ? string.Empty : LabelSequences.FormatDisplayLabel(prefix + value);
 
     private static void PromptForLayer(
       RhinoDoc doc,
@@ -2486,6 +2533,8 @@ namespace vTools.Commands
           var reinforcement = _reinforcement;
           var createReinf = DefaultCreateReinf;
           var scallop = _scallop;
+          var useCurve = DefaultUseCurve;
+          var labelPrefix = DefaultLabelPrefix;
           var scallopSize = _scallopSize;
           var scallopPercent = _scallopPercent;
           var tuneScallopSize = _tuneScallopSize.Value;
@@ -2513,6 +2562,10 @@ namespace vTools.Commands
             connect = savedConnect;
           if (ToolsOptionStore.TryGetBool(section, ScallopKey, out var savedScallop))
             scallop = savedScallop;
+          if (ToolsOptionStore.TryGetBool(section, UseCurveKey, out var savedUseCurve))
+            useCurve = savedUseCurve;
+          if (ToolsOptionStore.TryGetString(section, LabelPrefixKey, out var savedLabelPrefix))
+            labelPrefix = savedLabelPrefix.Trim();
           if (ToolsOptionStore.TryGetDouble(section, ScallopSizeKey, out var savedScallopSize) &&
               double.IsFinite(savedScallopSize) && savedScallopSize > 0.0)
             scallopSize = savedScallopSize;
@@ -2539,7 +2592,7 @@ namespace vTools.Commands
 
           return (offset, chamfer, reinforcement, scallop, scallopSize, scallopPercent,
             tuneScallopSize, tuneScallopPercent,
-            cutOffset, cutLayer, connect, join, layer, splitWidth, createReinf);
+            cutOffset, cutLayer, connect, join, layer, splitWidth, createReinf, useCurve, labelPrefix);
         });
 
       _offset = values.offset;
@@ -2547,6 +2600,8 @@ namespace vTools.Commands
       _reinforcement = values.reinforcement;
       _createReinf = values.createReinf;
       _scallop = values.scallop;
+      _useCurve = values.useCurve;
+      _labelPrefix = values.labelPrefix;
       _scallopSize = values.scallopSize;
       _scallopPercent = values.scallopPercent;
       _tuneScallopSize = new ScallopSize(values.tuneScallopSize, values.tuneScallopPercent);
@@ -2566,6 +2621,8 @@ namespace vTools.Commands
         section[ReinforcementKey] = _reinforcement;
         section[CreateReinfKey] = _createReinf;
         section[ScallopKey] = _scallop;
+        section[UseCurveKey] = _useCurve;
+        section[LabelPrefixKey] = _labelPrefix;
         section[ScallopSizeKey] = _scallopSize;
         section[ScallopPercentKey] = _scallopPercent;
         section[TuneScallopSizeKey] = _tuneScallopSize.Value;
@@ -3385,7 +3442,7 @@ namespace vTools.Commands
         DimensionScale = DefaultLabelDimensionScale,
         TextOrientation = TextOrientation.InPlane,
         DrawForward = false,
-        PlainText = seamNumber.ToString(CultureInfo.InvariantCulture)
+        PlainText = LabelSequences.FormatDisplayLabel(seamNumber.ToString(CultureInfo.InvariantCulture))
       };
       if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
         doc, text, doc.Views.ActiveView?.ActiveViewport,
@@ -3694,8 +3751,11 @@ namespace vTools.Commands
       try
       {
         if(_createReinf&&placements.Count>0)
+        {
+          double tolerance=Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance);
           AddReinforcementParts(doc,doc.Views.ActiveView?.ActiveViewport.ConstructionPlane()??Plane.WorldXY,
-            placements,Array.Empty<ShadeConnectionGeometry>(),sessionId,Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance),retained);
+            PrepareSourceCaps(doc,placements,scallopSizes,tolerance),Array.Empty<ShadeConnectionGeometry>(),sessionId,tolerance,retained);
+        }
         SaveShadeState(doc,sessionId,placements,scallopSizes);
         foreach(var id in oldParts) doc.Objects.Delete(id,true);
         outputIds.Clear(); outputIds.AddRange(retained);

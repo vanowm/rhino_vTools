@@ -32,6 +32,9 @@ namespace vTools.Commands
     private const double ExportSplitParameterTolerance = 1e-10; // Relative domain tolerance for progressing past a reported curve discontinuity.
     private const bool DefaultNotchJoin = true; // true joins matching V/U notches into line/polyline export curves; false exports notch components separately.
     private const bool DefaultTextBreak = true; // true exports each multiline text row separately; false keeps multiline text objects intact.
+    private const bool DefaultRemoveGrain = true; // true omits open GRAIN-named/layered curves from export; false includes them without changing source geometry.
+    private const bool DefaultMoveOrigin = true; // true moves export copies to the world origin; false preserves source drawing coordinates.
+    private const string GrainIdentifier = "GRAIN"; // Case-insensitive object name or leaf layer name identifying an open grain guide.
     private const bool DefaultOptimize = true; // true runs vCleanup before export; false leaves the source document untouched.
     private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.
     private static readonly string[] CleanupActionNames = ["Ask", "Delete", "Ignore"]; // Saved export-only cleanup behavior; independent of vCleanup's own deletion setting.
@@ -51,6 +54,8 @@ namespace vTools.Commands
     private const string ExplodeEntry = "vExportDXF.Explode"; // Document setting key for temporary curve decomposition.
     private const string NotchJoinEntry = "vExportDXF.NotchJoin"; // Document setting key for joining split/trimmed notch geometry in exported copies.
     private const string TextBreakEntry = "vExportDXF.TextBreak"; // Document setting key for splitting multiline export text.
+    private const string RemoveGrainEntry = "vExportDXF.RemoveGrain"; // Document setting key for export-only grain-guide removal.
+    private const string MoveOriginEntry = "vExportDXF.MoveOrigin"; // Document setting key for export-only translation to the world origin.
     private const string OptimizeEntry = "vExportDXF.Optimize"; // Document setting key for export cleanup.
     private const string LegacyNotchTrimEntry = "vExportOptions.NotchTrim"; // Previous document key read for migration.
     private const string LegacyNotchTrimLayerEntry = "vExportOptions.NotchTrimLayer"; // Previous document key read for migration.
@@ -67,6 +72,10 @@ namespace vTools.Commands
     private const int MaximumBlockNameLength = 48; // Maximum ASCII characters retained from a source group name.
     private const double TableLabelFramePaddingFraction = 0.1; // Fallback frame padding as a fraction of annotation height when only table text is selected.
     private const double TableAnnotationPaddingFraction = 0.2; // Export-label inset as a fraction of measured glyph height; matches the nest label area's padding.
+    private const double TableExportTextScale = 1.0; // Fixed visible annotation scale for fresh title-style table text; independent of model-space annotation scaling.
+    private const double TableExportLineHeightFactor = 1.25; // Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.
+    private const double TableLabelExportGapInches = 10.0; // Export-only outward displacement of the label block from its table, in inches converted to document units.
+    private const int DxfMiddleCenterAttachment = 5; // DXF MTEXT attachment code: middle-centre, matching working notch/title insertion anchors.
     private const int BlockNamePrefixLength = 39; // Maximum retained stem before an eight-character collision suffix.
     private static readonly Guid AcadExportPluginId =
       new("39a88493-9e97-4f15-bd62-ad25896a2632"); // Rhino's ACAD export plug-in settings ID.
@@ -75,7 +84,7 @@ namespace vTools.Commands
 
     private readonly record struct ExportSettings(
       NotchTrimMode NotchTrim, string NotchSplitLayer, bool NotchJoin, bool TextBreak, bool Optimize, ExportExplodeMode Explode,
-      vCleanup.ExportCleanupAction CleanupAction = DefaultCleanupAction);
+      vCleanup.ExportCleanupAction CleanupAction = DefaultCleanupAction, bool RemoveGrain = DefaultRemoveGrain, bool MoveOrigin = DefaultMoveOrigin);
     private enum ExportExplodeMode { No, SplitAtCorners, Full }
 
     protected override Result RunCommand(RhinoDoc doc, RunMode mode)
@@ -100,6 +109,7 @@ namespace vTools.Commands
           IncludeGrips = false,
           IncludePhantoms = false,
         }).Where(obj => obj != null).ToArray();
+      targets = FilterExportGrain(doc, targets, settings.RemoveGrain);
       if (targets.Length == 0)
       {
         RhinoApp.WriteLine("vExportDXF: no objects to export.");
@@ -139,8 +149,8 @@ namespace vTools.Commands
           doc, targets, settings.NotchTrim, settings.NotchSplitLayer, settings.NotchJoin);
         ApplyExportExplode(targets,notchTrimOverrides,settings.Explode);
         textBreakOverrides = BuildTextBreakOverrides(doc, targets, settings.TextBreak);
-        var translation = selection.Length > 0
-          ? OriginTranslation(targets.Where(obj => !NestTableMetadata.IsTableBorder(doc, obj)).ToArray())
+        var translation = settings.MoveOrigin
+          ? OriginTranslation(targets.Where(obj => !NestTableMetadata.IsTableStructure(doc, obj)).ToArray())
           : Transform.Identity;
         var exportIds = PrepareExportObjects(
           doc, targets, translation, notchTrimOverrides, textBreakOverrides,
@@ -164,11 +174,13 @@ namespace vTools.Commands
         }
         if (!WaitForFile(tempPath))
           throw new IOException("Rhino did not create a nonempty DXF file.");
+        if (targets.Any(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.LabelRole))
+          NormalizeTableDxfAttachments(tempPath);
         CopyExportFile(tempPath, path);
         doc.Strings.SetString(LastPathKey, path);
         RhinoApp.WriteLine($"vExportDXF: exported {targets.Length} object(s) to {path}.");
         Log.Write("vExportDXF", $"exported source={targets.Length} prepared={selectedCount} " +
-          $"groups={temporaryDefinitions.Count} explode={settings.Explode} textBreak={settings.TextBreak} " +
+          $"groups={temporaryDefinitions.Count} explode={settings.Explode} textBreak={settings.TextBreak} removeGrain={settings.RemoveGrain} moveOrigin={settings.MoveOrigin} " +
           $"textObjectsSplit={textBreakOverrides.Count} textLines={textBreakOverrides.Values.Sum(lines => lines.Count)} " +
           $"selectedOnly={selection.Length > 0} path={path}");
         return Result.Success;
@@ -201,6 +213,18 @@ namespace vTools.Commands
       }
     }
 
+    private static RhinoObject[] FilterExportGrain(RhinoDoc doc, IReadOnlyList<RhinoObject> targets, bool removeGrain)
+    {
+      if (!removeGrain) return targets.ToArray();
+      return targets.Where(obj =>
+      {
+        if (obj.Geometry is not Curve curve || curve.IsClosed) return true;
+        var layer = doc.Layers.FindIndex(obj.Attributes.LayerIndex)?.Name;
+        return !string.Equals(obj.Attributes.Name?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase) &&
+          !string.Equals(layer?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase);
+      }).ToArray();
+    }
+
     private static ExportSettings LoadSettings(RhinoDoc doc)
     {
       var legacy = ToolsOptionStore.Read(LegacySettingsSection, section =>
@@ -217,7 +241,9 @@ namespace vTools.Commands
           ReadJoin(section, legacy.NotchJoin),
           ReadTextBreak(section, legacy.TextBreak),
           ReadOptimize(section, legacy.Optimize),ReadExplode(section,legacy.Explode),
-          ReadCleanupAction(section, DefaultCleanupAction)));
+          ReadCleanupAction(section, DefaultCleanupAction),
+          ToolsOptionStore.TryGetBool(section, "remove_grain", out bool removeGrain) ? removeGrain : DefaultRemoveGrain,
+          ToolsOptionStore.TryGetBool(section, "move_origin", out bool moveOrigin) ? moveOrigin : DefaultMoveOrigin));
       try
       {
         var trim = doc.Strings.GetValue(DocumentSection, NotchTrimEntry)
@@ -228,6 +254,8 @@ namespace vTools.Commands
         var explode = doc.Strings.GetValue(DocumentSection, ExplodeEntry);
         var join = doc.Strings.GetValue(DocumentSection, NotchJoinEntry);
         var textBreak = doc.Strings.GetValue(DocumentSection, TextBreakEntry);
+        var removeGrain = doc.Strings.GetValue(DocumentSection, RemoveGrainEntry);
+        var moveOrigin = doc.Strings.GetValue(DocumentSection, MoveOriginEntry);
         var optimize = doc.Strings.GetValue(DocumentSection, OptimizeEntry)
           ?? doc.Strings.GetValue(DocumentSection, LegacyOptimizeEntry);
         return new ExportSettings(
@@ -241,7 +269,9 @@ namespace vTools.Commands
           bool.TryParse(optimize, out bool parsedOptimize)
             ? parsedOptimize : current.Optimize,
           Enum.TryParse(explode,true,out ExportExplodeMode parsedExplode)&&Enum.IsDefined(parsedExplode)?parsedExplode:current.Explode,
-          current.CleanupAction);
+          current.CleanupAction,
+          bool.TryParse(removeGrain, out bool parsedRemoveGrain) ? parsedRemoveGrain : current.RemoveGrain,
+          bool.TryParse(moveOrigin, out bool parsedMoveOrigin) ? parsedMoveOrigin : current.MoveOrigin);
       }
       catch (Exception ex)
       {
@@ -301,10 +331,14 @@ namespace vTools.Commands
         int explodeIndex = getter.AddOptionList("Explode",ExplodeNames,(int)settings.Explode);
         var join = new OptionToggle(settings.NotchJoin, "No", "Yes");
         var textBreak = new OptionToggle(settings.TextBreak, "No", "Yes");
+        var removeGrain = new OptionToggle(settings.RemoveGrain, "No", "Yes");
+        var moveOrigin = new OptionToggle(settings.MoveOrigin, "No", "Yes");
         var optimize = new OptionToggle(settings.Optimize, "No", "Yes");
         var save = new OptionToggle(saveDefaults, "No", "Yes");
         getter.AddOptionToggle("NotchJoin", ref join);
         getter.AddOptionToggle("TextBreak", ref textBreak);
+        getter.AddOptionToggle("RemoveGrain", ref removeGrain);
+        getter.AddOptionToggle("MoveOrigin", ref moveOrigin);
         getter.AddOptionToggle("Optimize", ref optimize);
         int cleanupIndex = getter.AddOptionList("CleanupAction", CleanupActionNames, (int)settings.CleanupAction);
         getter.AddOptionToggle("SaveDefaults", ref save);
@@ -323,6 +357,8 @@ namespace vTools.Commands
         {
           NotchJoin = join.CurrentValue,
           TextBreak = textBreak.CurrentValue,
+          RemoveGrain = removeGrain.CurrentValue,
+          MoveOrigin = moveOrigin.CurrentValue,
           Optimize = optimize.CurrentValue
         };
         saveDefaults = save.CurrentValue;
@@ -352,6 +388,8 @@ namespace vTools.Commands
         section["explode"] = settings.Explode.ToString();
         section["notch_join"] = settings.NotchJoin;
         section["text_break"] = settings.TextBreak;
+        section["remove_grain"] = settings.RemoveGrain;
+        section["move_origin"] = settings.MoveOrigin;
         section["optimize"] = settings.Optimize;
         section["cleanup_action"] = settings.CleanupAction.ToString();
       });
@@ -362,6 +400,8 @@ namespace vTools.Commands
         doc.Strings.SetString(DocumentSection, ExplodeEntry, settings.Explode.ToString());
         doc.Strings.SetString(DocumentSection, NotchJoinEntry, settings.NotchJoin.ToString());
         doc.Strings.SetString(DocumentSection, TextBreakEntry, settings.TextBreak.ToString());
+        doc.Strings.SetString(DocumentSection, RemoveGrainEntry, settings.RemoveGrain.ToString());
+        doc.Strings.SetString(DocumentSection, MoveOriginEntry, settings.MoveOrigin.ToString());
         doc.Strings.SetString(DocumentSection, OptimizeEntry, settings.Optimize.ToString());
         return globalSaved;
       }
@@ -462,17 +502,17 @@ namespace vTools.Commands
       List<Guid> temporaryObjects, List<int> temporaryDefinitions)
     {
       var targetById = targets.ToDictionary(obj => obj.Id);
-      var assigned = targets.Where(obj => NestTableMetadata.IsTableBorder(doc, obj)).Select(obj => obj.Id).ToHashSet();
+      var assigned = targets.Where(obj => NestTableMetadata.IsTableStructure(doc, obj)).Select(obj => obj.Id).ToHashSet();
       var exportIds = new List<Guid>();
       var nestTables=NestTableMetadata.TableGroups(doc);
       var tableAnnotations = targets.Where(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey)
-        is NestTableMetadata.LabelRole or NestTableMetadata.LabelFrameRole or NestTableMetadata.BorderRole)
+        is NestTableMetadata.LabelRole or NestTableMetadata.LabelFrameRole or NestTableMetadata.BorderRole or NestTableMetadata.LabelDividerRole)
         .GroupBy(obj => (obj.Attributes.GetUserString(NestTableMetadata.GroupIdKey),
           obj.Attributes.GetUserString("vNest.session"), obj.Attributes.GetUserString("vNest.table")));
       foreach (var annotations in tableAnnotations)
       {
         var layoutMembers = annotations.ToList();
-        var members = layoutMembers.Where(obj => !NestTableMetadata.IsTableBorder(doc, obj)).ToList();
+        var members = layoutMembers.Where(obj => !NestTableMetadata.IsTableStructure(doc, obj)).ToList();
         if (members.Count == 0) continue;
         if (!members.Any(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.LabelFrameRole))
         {
@@ -483,8 +523,7 @@ namespace vTools.Commands
           {
             if (member.Geometry is TextEntity text)
             {
-              using var copy = (TextEntity)text.Duplicate();
-              NormalizeTableLabelAlignment(doc, copy);
+              using var copy = CreateTableExportText(doc, text);
               var glyphs = ExportTableTextBounds(doc, copy, Plane.WorldXY);
               bounds.Union(glyphs);
               height = Math.Max(height, glyphs.Diagonal.Y);
@@ -515,7 +554,7 @@ namespace vTools.Commands
         Guid labelInstance;
         try
         {
-          if (!TryCreateGroupBlock(doc, name, members, translation, notchTrimOverrides, tableText,
+          if (!TryCreateGroupBlock(doc, name, members, TableLabelExportTranslation(doc, members, translation), notchTrimOverrides, tableText,
               temporaryObjects, temporaryDefinitions, out labelInstance))
             throw new InvalidOperationException("Could not prepare the table-label block.");
         }
@@ -564,6 +603,14 @@ namespace vTools.Commands
         }
       }
       return exportIds;
+    }
+
+    private static Transform TableLabelExportTranslation(RhinoDoc doc, IReadOnlyList<RhinoObject> members, Transform translation)
+    {
+      var text = members.Select(obj => obj.Geometry).OfType<TextEntity>().FirstOrDefault();
+      if (text == null) return translation;
+      double gap = TableLabelExportGapInches * RhinoMath.UnitScale(UnitSystem.Inches, doc.ModelUnitSystem);
+      return translation * Transform.Translation(-text.Plane.XAxis * gap);
     }
 
     private static bool TryCreateGroupBlock(RhinoDoc doc, string groupName,
@@ -741,7 +788,7 @@ namespace vTools.Commands
       Func<string, int> getInteger, Func<string, double> getDouble,
       Func<string, bool> getBool)
     {
-      private readonly Dictionary<string, string> _keys = keys.ToDictionary(
+      private readonly Dictionary<string, string> _keys = keys.Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(
         key => key, key => key, StringComparer.OrdinalIgnoreCase);
       public string Name { get; } = name;
       public string? FindKey(params string?[] names)
@@ -821,8 +868,9 @@ namespace vTools.Commands
     private static Dictionary<string, string> XmlEntries(XElement node) =>
       node.Elements("entry")
         .Where(entry => entry.Attribute("key") != null)
-        .ToDictionary(entry => entry.Attribute("key")!.Value,
-          entry => entry.Value, StringComparer.OrdinalIgnoreCase);
+        .GroupBy(entry => entry.Attribute("key")!.Value,StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(entries => entries.Last().Attribute("key")!.Value,
+          entries => entries.Last().Value, StringComparer.OrdinalIgnoreCase);
   }
 }
 
@@ -1366,6 +1414,7 @@ namespace vTools.Commands
 {
   using System;
   using System.Collections.Generic;
+  using System.Globalization;
   using System.Windows.Forms;
   using Rhino;
   using Rhino.DocObjects;
@@ -1393,11 +1442,8 @@ namespace vTools.Commands
           bool split = enabled && text.PlainText.IndexOfAny(['\r', '\n']) >= 0;
           if (!split && !tableLabel)
             continue;
-          var lines = split ? SplitExportText(doc, text) : new List<TextEntity> { (TextEntity)text.Duplicate() };
+          var lines = split ? SplitExportText(doc, text) : new List<TextEntity> { tableLabel ? CreateTableExportText(doc, text) : (TextEntity)text.Duplicate() };
           overrides.Add(source.Id, lines);
-          if (tableLabel)
-            foreach (var line in lines)
-              NormalizeTableLabelAlignment(doc, line);
         }
         return overrides;
       }
@@ -1408,30 +1454,70 @@ namespace vTools.Commands
       }
     }
 
-    private static void NormalizeTableLabelAlignment(RhinoDoc doc, TextEntity text)
+    private static TextEntity CreateTableExportText(RhinoDoc doc, TextEntity source)
     {
-      var frame = text.Plane;
-      var before = ExportTableTextBounds(doc, text, frame);
-      var parent = doc.DimStyles.FindId(text.DimensionStyleId) ?? doc.DimStyles.Current;
-      text.ParentDimensionStyle = parent;
-      using var style = text.GetDimensionStyle(parent) ?? parent.Duplicate();
-      style.Id = Guid.Empty;
-      style.Index = -1;
-      style.ParentId = parent.Id;
-      style.TextHorizontalAlignment = TextHorizontalAlignment.Left;
-      style.TextVerticalAlignment = TextVerticalAlignment.Bottom;
-      style.SetFieldOverride(DimensionStyle.Field.TextHorizontalAlignment);
-      style.SetFieldOverride(DimensionStyle.Field.TextVerticalAlignment);
-      if (!text.SetOverrideDimStyle(style))
-        throw new InvalidOperationException("Could not normalize table-label alignment for export.");
-      text.TextHorizontalAlignment = TextHorizontalAlignment.Left;
-      text.TextVerticalAlignment = TextVerticalAlignment.Bottom;
-      var after = ExportTableTextBounds(doc, text, frame);
-      if (!before.IsValid || !after.IsValid)
-        throw new InvalidOperationException("Could not measure table-label alignment for export.");
-      // Replace centre attachment without changing the glyphs' physical placement.
-      text.Transform(Transform.Translation(frame.XAxis * (before.Min.X - after.Min.X) +
-        frame.YAxis * (before.Min.Y - after.Min.Y)));
+      double height = source.TextHeight * AnnotationTextTransform.ResolveDisplayDimensionScale(doc, source, doc.Views.ActiveView?.ActiveViewport);
+      var text = new TextEntity { Plane = source.Plane, PlainText = source.PlainText, TextHeight = height,
+        Justification = TextJustification.MiddleCenter, DimensionStyleId = source.DimensionStyleId,
+        DimensionScale = TableExportTextScale, DrawForward = source.DrawForward, TextOrientation = source.TextOrientation };
+      if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(doc, text, doc.Views.ActiveView?.ActiveViewport, height, TableExportTextScale))
+      { text.Dispose(); throw new InvalidOperationException("Could not create title-style table text for export."); }
+      text.ParentDimensionStyle = doc.DimStyles.FindId(source.DimensionStyleId) ?? doc.DimStyles.Current;
+      text.TextHorizontalAlignment = TextHorizontalAlignment.Center;
+      text.TextVerticalAlignment = TextVerticalAlignment.Middle;
+      text.Justification = TextJustification.MiddleCenter;
+      // vTitle inserts text before retrieving its resolved annotation layout; block definitions need the same step.
+      Guid id = doc.Objects.AddText(text, new ObjectAttributes());
+      text.Dispose();
+      if (id == Guid.Empty) throw new InvalidOperationException("Could not resolve table text in the document.");
+      try
+      {
+        return doc.Objects.FindId(id)?.Geometry.Duplicate() as TextEntity
+          ?? throw new InvalidOperationException("Could not retrieve resolved title-style table text.");
+      }
+      finally { doc.Objects.Delete(id, quiet: true); }
+    }
+
+    private static void NormalizeTableDxfAttachments(string path)
+    {
+      var bytes = File.ReadAllBytes(path);
+      var lines = new List<(int Start, int Length)>();
+      for (int start = 0, index = 0; index <= bytes.Length; index++)
+      {
+        if (index < bytes.Length && bytes[index] != '\n') continue;
+        int end = index > start && bytes[index - 1] == '\r' ? index - 1 : index;
+        if (end > start || index < bytes.Length) lines.Add((start, end - start));
+        start = index + 1;
+      }
+      bool mtext = false, tableLabel = false, roleKey = false;
+      int attachment = -1, changed = 0;
+      string Value((int Start, int Length) line) => System.Text.Encoding.ASCII.GetString(bytes, line.Start, line.Length).Trim();
+      void FinishRecord()
+      {
+        if (!mtext || !tableLabel) return;
+        if (attachment < 0) throw new InvalidOperationException("A table label has no DXF attachment field.");
+        if (bytes[attachment] != '0' + DxfMiddleCenterAttachment)
+        { bytes[attachment] = (byte)('0' + DxfMiddleCenterAttachment); changed++; }
+      }
+      for (int index = 0; index + 1 < lines.Count; index += 2)
+      {
+        if (!int.TryParse(Value(lines[index]), NumberStyles.Integer, CultureInfo.InvariantCulture, out int code))
+          throw new InvalidOperationException("Table label centring requires an ASCII DXF export scheme.");
+        string value = Value(lines[index + 1]);
+        if (code == 0)
+        { FinishRecord(); mtext = value == "MTEXT"; tableLabel = false; roleKey = false; attachment = -1; }
+        else if (code == 1000)
+        { if (roleKey && value == NestTableMetadata.LabelRole) tableLabel = true; roleKey = value == NestTableMetadata.RoleKey; }
+        else if (mtext && code == 71)
+        {
+          var line = lines[index + 1];
+          for (int offset = line.Start; offset < line.Start + line.Length; offset++)
+            if (bytes[offset] >= '1' && bytes[offset] <= '9') { attachment = offset; break; }
+        }
+      }
+      FinishRecord();
+      if (changed > 0) File.WriteAllBytes(path, bytes);
+      Log.Write("vExportDXF", $"corrected middle-centre table text attachments={changed}");
     }
 
     private static Dictionary<Guid, List<TextEntity>> PrepareTableAnnotations(RhinoDoc doc,
@@ -1444,29 +1530,47 @@ namespace vTools.Commands
         {
           if (member.Geometry is not TextEntity source) continue;
           var lines = overrides.TryGetValue(member.Id, out var existing)
-            ? existing.Select(line => (TextEntity)line.Duplicate()).ToList()
-            : new List<TextEntity> { (TextEntity)source.Duplicate() };
+            ? existing.Select(line => CreateTableExportText(doc, line)).ToList()
+            : new List<TextEntity> { CreateTableExportText(doc, source) };
           result.Add(member.Id, lines);
-          foreach (var line in lines) NormalizeTableLabelAlignment(doc, line);
         }
         var texts = result.Values.SelectMany(lines => lines).ToArray();
         if (texts.Length == 0) return result;
         if (!TryGetTableAnnotationArea(members, texts[0].Plane, out var frame, out var area)) return result;
+        // DXF middle-centre anchors belong to the row cells, not the source text's cached baseline bounds.
+        texts = texts.OrderByDescending(text =>
+        {
+          frame.ClosestParameter(text.Plane.Origin, out _, out double y);
+          return y;
+        }).ToArray();
         var bounds = texts.Select(text => ExportTableTextBounds(doc, text, frame)).ToArray();
-        double padding = Math.Min(area.Diagonal.X / 4, Math.Max(doc.ModelAbsoluteTolerance,
-          bounds.Max(box => box.Diagonal.Y) * TableAnnotationPaddingFraction));
+        if (bounds.Any(box => !box.IsValid))
+          throw new InvalidOperationException("Could not measure table annotations for export.");
+        var heights = texts.Select((text, index) => Math.Max(bounds[index].Diagonal.Y,
+          text.TextHeight * TableExportLineHeightFactor)).ToArray();
+        double padding = Math.Max(doc.ModelAbsoluteTolerance, heights.Max() * TableAnnotationPaddingFraction);
         double available = area.Diagonal.X - 2 * padding;
-        double scale = Math.Min(1, available / Math.Max(RhinoMath.ZeroTolerance, bounds.Max(box => box.Diagonal.X)));
+        double availableHeight = area.Diagonal.Y - 2 * padding;
+        if (available <= RhinoMath.ZeroTolerance || availableHeight <= RhinoMath.ZeroTolerance)
+          throw new InvalidOperationException("The table annotation box is too small for its padding.");
+        double stackHeight = heights.Sum() + padding * (texts.Length - 1);
+        double scale = Math.Min(1, Math.Min(available / Math.Max(RhinoMath.ZeroTolerance, bounds.Max(box => box.Diagonal.X)),
+          availableHeight / stackHeight));
+        double top = area.Center.Y + stackHeight * scale / 2;
         for (int index = 0; index < texts.Length; index++)
         {
           var text = texts[index];
           if (scale < 1) text.TextHeight *= scale;
+          double height = heights[index] * scale;
+          var plane = text.Plane;
+          double centerY = top - height / 2;
+          plane.Origin = frame.PointAt(area.Center.X, centerY);
+          text.Plane = plane;
+          top -= height + padding * scale;
           var box = ExportTableTextBounds(doc, text, frame);
-          text.Transform(Transform.Translation(frame.XAxis * (area.Center.X - box.Center.X) +
-            frame.YAxis * (bounds[index].Min.Y - box.Min.Y)));
-          box = ExportTableTextBounds(doc, text, frame);
-          if (!box.IsValid || box.Min.X < area.Min.X + padding - doc.ModelAbsoluteTolerance ||
-              box.Max.X > area.Max.X - padding + doc.ModelAbsoluteTolerance)
+          if (!box.IsValid || box.Diagonal.X > available + doc.ModelAbsoluteTolerance ||
+              centerY - height / 2 < area.Min.Y + padding - doc.ModelAbsoluteTolerance ||
+              centerY + height / 2 > area.Max.Y - padding + doc.ModelAbsoluteTolerance)
             throw new InvalidOperationException("Could not fit table annotations inside their outline.");
         }
         return result;
@@ -1480,10 +1584,10 @@ namespace vTools.Commands
       frame = fallback;
       area = BoundingBox.Empty;
       var border = members.FirstOrDefault(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.BorderRole);
-      if (border?.Geometry is Curve outline && outline.TryGetPolyline(out var points) && points.Count == 9)
+      if (border?.Geometry is Curve outline && outline.TryGetPolyline(out var points) && points.Count is 8 or 9)
       {
         frame = new Plane(points[0], points[1] - points[0], points[3] - points[0]);
-        foreach (int index in new[] { 4, 5, 6, 7 })
+        foreach (int index in points.Count == 8 ? new[] { 3, 4, 5, 6 } : new[] { 4, 5, 6, 7 })
         {
           frame.ClosestParameter(points[index], out double x, out double y);
           area.Union(new Point3d(x, y, 0));

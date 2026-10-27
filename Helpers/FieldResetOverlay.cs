@@ -16,6 +16,7 @@ internal sealed class FieldResetOverlay : IDisposable
   private const double IconSize = 12.0; // Reset icon canvas size in device-independent pixels; smaller than its button.
   private const double IconStroke = 1.3; // Icon stroke width in device-independent pixels; positive value.
   private const double EdgeGap = 2.0; // Space between the reset control and input edge or arrow buttons in device-independent pixels.
+  private const double MinimumDropDownArrowWidth = 22.0; // Minimum dropdown arrow hit area in device-independent pixels when its toggle spans the whole field; positive.
   private const double HoverOpacity = 0.12; // Foreground-colored hover tint opacity, zero through one, matching light and dark input themes.
   private const double PressedOpacity = 0.22; // Foreground-colored pressed tint opacity, zero through one.
   private const string IconPath = "M2,4 A4.25,4.25 0 1 1 2,8 M2,1 L2,4 L5,4"; // Balanced counterclockwise circular reset arrow on the 12-by-12 icon canvas.
@@ -60,13 +61,17 @@ internal sealed class FieldResetOverlay : IDisposable
       if (_layer == null) return;
       _paddingTarget = _editor as System.Windows.Controls.Control;
       if (_paddingTarget != null) _padding = _paddingTarget.Padding;
-      _adorner = new ResetAdorner(_editor, _toolTip, () => { _reset(); Refresh(); });
+      _adorner = new ResetAdorner(_editor, _toolTip, () =>
+      {
+        if (!_control.Enabled || _host?.IsEnabled != true) return;
+        _reset(); Refresh();
+      });
       _layer.Add(_adorner);
       host.IsVisibleChanged += OnVisibilityChanged;
       host.IsEnabledChanged += OnVisibilityChanged;
     }
     if (_adorner == null || _host == null) return;
-    bool visible = _host.IsVisible && _changed();
+    bool visible = _host.IsVisible && _host.IsEnabled && _control.Enabled && _changed();
     _adorner.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
     _adorner.IsEnabled = _host.IsEnabled;
     if (_paddingTarget != null)
@@ -163,7 +168,8 @@ internal sealed class FieldResetOverlay : IDisposable
 
     private static double ReservedArrowWidth(UIElement host)
     {
-      double reserved = 0.0;
+      // Non-editable ComboBoxes often use a full-width toggle, not a separate arrow button.
+      double reserved = host is ComboBox ? Math.Max(MinimumDropDownArrowWidth, SystemParameters.VerticalScrollBarWidth) : 0.0;
       void Visit(DependencyObject element)
       {
         for (int index = 0; index < VisualTreeHelper.GetChildrenCount(element); index++)
@@ -173,6 +179,13 @@ internal sealed class FieldResetOverlay : IDisposable
           {
             var position = button.TranslatePoint(new Point(), host);
             if (position.X >= host.RenderSize.Width * 0.5)
+              reserved = Math.Max(reserved, host.RenderSize.Width - position.X);
+          }
+          if (host is ComboBox && child is Grid grid && grid.IsVisible && grid.ColumnDefinitions.Count > 1)
+          {
+            double arrowWidth = grid.ColumnDefinitions[^1].ActualWidth;
+            var position = grid.TranslatePoint(new Point(grid.ActualWidth - arrowWidth, 0), host);
+            if (arrowWidth > 0 && position.X >= host.RenderSize.Width * 0.5)
               reserved = Math.Max(reserved, host.RenderSize.Width - position.X);
           }
           Visit(child);

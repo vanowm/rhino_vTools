@@ -29,6 +29,12 @@ public sealed class vTrim : vToolsCommand
   private const double HoverCurveFallbackSpanDivisor = 192.0; // Domain divisor used when neighbouring screen-pick samples collapse; greater than zero.
   private const double MinApproximateCrossingAngleDegrees = 5.0; // Minimum tangent angle, in degrees, for accepting a world or projected near-contact outside the strict tolerance.
   private const int FailedAutoTrimDiagnosticCount = 3; // Number of nearest 3-D curve gaps recorded when a clicked AutoClosest trim has no preview.
+  private const int BoxDragThresholdPixels = 4; // Minimum screen-pixel drag before selecting trim sections instead of accepting a hover click.
+  private const int BoxLineThicknessPixels = 1; // Screen-pixel selection rectangle stroke; positive.
+  private const int BoxMinimumSidePixels = 1; // Minimum rectangle side in screen pixels; prevents singular pick transforms for straight horizontal/vertical drags.
+  private const int BoxPreviewIntervalMilliseconds = 80; // Minimum milliseconds between box-plan previews; release always evaluates the final rectangle.
+  private const float BoxBoundsPaddingPixels = 2.0f; // Screen-pixel padding for conservative target/cutter bounding-box rejection during box preview.
+  private static readonly Color BoxColor = Color.DodgerBlue; // RGB box-preview color; removed sections retain the shared removal-preview style.
 
   private const string OptionsSectionName = "vTrim";
   private const string ExtendAsLineKey = "extendAsLine";
@@ -110,6 +116,16 @@ public sealed class vTrim : vToolsCommand
       _extendAsLine = pick.ExtendAsLine;
       _joinAfterTrim = pick.JoinAfterTrim;
       SavePersistedOptions();
+
+      if(pick.BoxSelection is {} box)
+      {
+        using(box)
+        {
+          if(ApplyBoxTrimSelection(doc,box,out var boxRecord)&&boxRecord!=null)history.Push(boxRecord);
+          else RhinoApp.WriteLine("vTrim: box edit could not be applied; previous curves restored.");
+        }
+        doc.Objects.UnselectAll();doc.Views.Redraw();continue;
+      }
 
       if (pick.TargetObject == null || pick.TargetCurve == null || !pick.PickPoint.IsValid)
         continue;
@@ -322,6 +338,7 @@ public sealed class vTrim : vToolsCommand
     public TrimPlan? PreviewTrimPlan { get; set; }
     public ExtendPlan? PreviewExtendPlan { get; set; }
     public string PreviewFailure { get; set; } = string.Empty;
+    public BoxTrimSelection? BoxSelection { get; set; }
   }
 
   private static double PreviewCurveLength(TargetPick pick)
@@ -411,12 +428,151 @@ public sealed class vTrim : vToolsCommand
     public required CurveSnapshot AfterTarget { get; init; }
     public List<CurveSnapshot> AddedCurves { get; } = new();
     public List<Guid> ActiveAddedIds { get; } = new();
+    public List<ActionRecord> BatchRecords { get; } = new();
   }
 
   private sealed class TrimPlan
   {
     public required Curve RemovedPiece { get; init; }
     public required List<Curve> Output { get; init; }
+  }
+  private sealed record BoxTrimAction(Guid ObjectId,TrimPlan Plan,Curve[] Removed);
+  private sealed class BoxTrimSelection(List<BoxTrimAction> actions) : IDisposable
+  {
+    public List<BoxTrimAction> Actions {get;}=actions;
+    public bool ExtendMode {get;init;}
+    public void Dispose()
+    {
+      var curves=new HashSet<Curve>(ReferenceEqualityComparer.Instance);
+      foreach(var action in Actions){curves.UnionWith(action.Removed);curves.UnionWith(action.Plan.Output);}
+      foreach(var curve in curves)curve.Dispose();Actions.Clear();
+    }
+  }
+  private static Rectangle TrimBoxRectangle(System.Drawing.Point start,System.Drawing.Point end)=>
+    new(Math.Min(start.X,end.X),Math.Min(start.Y,end.Y),Math.Max(BoxMinimumSidePixels,Math.Abs(end.X-start.X)),Math.Max(BoxMinimumSidePixels,Math.Abs(end.Y-start.Y)));
+  private static RectangleF? BoxCurveBounds(Curve curve,Rhino.Display.RhinoViewport viewport)
+  {
+    var points=curve.GetBoundingBox(false).GetCorners().Select(viewport.WorldToClient).ToArray();
+    if(points.Length==0||points.Any(point=>!point.IsValid))return null;
+    var bounds=RectangleF.FromLTRB((float)points.Min(point=>point.X),(float)points.Min(point=>point.Y),
+      (float)points.Max(point=>point.X),(float)points.Max(point=>point.Y));
+    bounds.Inflate(BoxBoundsPaddingPixels,BoxBoundsPaddingPixels);return bounds;
+  }
+  private sealed class BoxSelectionCache : IDisposable
+  {
+    private readonly RhinoDoc _doc;
+    private readonly Rhino.Display.RhinoViewport _viewport;
+    private readonly bool _extendAsLine;
+    private readonly (RhinoObject Obj,Curve Curve)[] _curves;
+    private readonly Dictionary<Curve,RectangleF?> _bounds=new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Curve,NurbsCurve> _pickCurves=new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<Guid,Curve[]> _pieces=[];
+    private readonly Dictionary<(Guid Id,bool Start,bool End),BoxTrimAction?> _extensions=[];
+    private readonly RTree _index=new();
+    private readonly List<int> _unbounded=[];
+    public BoxSelectionCache(RhinoDoc doc,Rhino.Display.RhinoViewport viewport,bool extendAsLine)
+    {
+      _doc=doc;_viewport=viewport;_extendAsLine=extendAsLine;_curves=EnumerateDocCurves(doc).ToArray();
+      for(int i=0;i<_curves.Length;i++)
+      {
+        if(Bounds(_curves[i].Curve) is {} box)_index.Insert(ScreenBox(box),i);else _unbounded.Add(i);
+      }
+    }
+    private static BoundingBox ScreenBox(RectangleF box)=>new(new Point3d(box.Left,box.Top,0),new Point3d(box.Right,box.Bottom,0));
+    private RectangleF? Bounds(Curve curve)
+    {if(!_bounds.TryGetValue(curve,out var box))_bounds[curve]=box=BoxCurveBounds(curve,_viewport);return box;}
+    private IEnumerable<int> Candidates(RectangleF box)
+    {
+      var ids=new List<int>(_unbounded);_index.Search(ScreenBox(box),(_,e)=>ids.Add(e.Id));return ids;
+    }
+    private bool Hit(Curve curve,PickContext context,Rectangle rectangle)
+    {
+      if(Bounds(curve) is {} box&&!box.IntersectsWith(rectangle))return false;
+      if(!_pickCurves.TryGetValue(curve,out var nurbs))_pickCurves[curve]=nurbs=curve.ToNurbsCurve();
+      return nurbs!=null&&context.PickFrustumTest(nurbs,out _,out _,out _);
+    }
+    private Curve[] Pieces(RhinoObject obj,Curve curve)
+    {
+      if(_pieces.TryGetValue(obj.Id,out var pieces))return pieces;
+      // The gesture owns these fragments; rectangle updates only repeat native pick tests.
+      var candidates=Bounds(curve) is {} box?Candidates(box):Enumerable.Range(0,_curves.Length);
+      var cutters=candidates.Where(i=>_curves[i].Obj.Id!=obj.Id).Select(i=>_curves[i].Curve).ToArray();
+      var split=CollectPreparedSplitParameters(_doc,curve,cutters,curve.PointAtNormalizedLength(0.5),AllowViewProjection(_doc,true),out var working);
+      try{return _pieces[obj.Id]=split.Count==0?[]:SplitTargetCurve(_doc,working,split)??[];}
+      finally{if(!ReferenceEquals(working,curve))working.Dispose();}
+    }
+    private BoxTrimAction? Extension(RhinoObject obj,Curve curve,bool start,bool end)
+    {
+      var key=(obj.Id,start,end);if(_extensions.TryGetValue(key,out var action))return action;
+      Curve? output=null;var added=new List<Curve>();
+      foreach(bool atStart in new[]{true,false})
+      {
+        if(atStart?!start:!end)continue;
+        var current=output??curve;
+        if(!TryBuildExtendPlan(_doc,obj,current,atStart?current.PointAtStart:current.PointAtEnd,_extendAsLine,true,[],out var plan,out _)||plan==null)continue;
+        output?.Dispose();output=plan.ExtendedCurve;added.Add(plan.AddedPiece);
+      }
+      action=output==null?null:new(obj.Id,new TrimPlan{RemovedPiece=added[0],Output=[output]},added.ToArray());
+      _extensions[key]=action;return action;
+    }
+    public BoxTrimSelection Build(Rectangle rectangle,bool crossing,bool join,bool extend)
+    {
+      var actions=new List<BoxTrimAction>();
+      if(_viewport.ParentView is not {} view)return new(actions){ExtendMode=extend};
+      using var context=new PickContext{View=view,PickStyle=crossing?PickStyle.CrossingPick:PickStyle.WindowPick,PickMode=PickMode.Wireframe,PickGroupsEnabled=false};
+      context.SetPickTransform(_viewport.GetPickTransform(rectangle));context.UpdateClippingPlanes();
+      using var crossingContext=new PickContext{View=view,PickStyle=PickStyle.CrossingPick,PickMode=PickMode.Wireframe,PickGroupsEnabled=false};
+      crossingContext.SetPickTransform(_viewport.GetPickTransform(rectangle));crossingContext.UpdateClippingPlanes();
+      foreach(int i in Candidates(rectangle))
+      {
+        var (obj,curve)=_curves[i];
+        if(obj.IsReference||!obj.IsSelectable(true,false,false,false))continue;
+        if(extend)
+        {
+          if(curve.IsClosed)continue;
+          bool Inside(Point3d point){var pixel=_viewport.WorldToClient(point);return pixel.IsValid&&rectangle.Contains((int)Math.Round(pixel.X),(int)Math.Round(pixel.Y));}
+          bool start=Inside(curve.PointAtStart),end=Inside(curve.PointAtEnd);
+          if((start||end)&&Extension(obj,curve,start,end) is {} extension)
+          {
+            var added=extension.Removed.Select(piece=>piece.DuplicateCurve()).ToArray();
+            actions.Add(new(obj.Id,new TrimPlan{RemovedPiece=added[0],Output=extension.Plan.Output.Select(piece=>piece.DuplicateCurve()).ToList()},added));
+          }
+          continue;
+        }
+        if(!Hit(curve,crossingContext,rectangle))continue;
+        var pieces=Pieces(obj,curve);var removed=new List<Curve>();var kept=new List<Curve>();
+        foreach(var piece in pieces)if(Hit(piece,context,rectangle))removed.Add(piece);else kept.Add(piece);
+        if(removed.Count==0||kept.Count==0)continue;
+        removed=removed.Select(piece=>piece.DuplicateCurve()).ToList();kept=kept.Select(piece=>piece.DuplicateCurve()).ToList();
+        if(join&&kept.Count>1)
+        {var joined=Curve.JoinCurves(kept,_doc.ModelAbsoluteTolerance);if(joined is {Length:>0}){foreach(var piece in kept)piece.Dispose();kept=joined.ToList();}}
+        actions.Add(new(obj.Id,new TrimPlan {RemovedPiece=removed[0],Output=kept},removed.ToArray()));
+      }
+      return new(actions){ExtendMode=extend};
+    }
+    public void Dispose()
+    {
+      foreach(var curve in _pickCurves.Values)curve?.Dispose();
+      foreach(var curve in _pieces.Values.SelectMany(pieces=>pieces))curve.Dispose();
+      foreach(var action in _extensions.Values.OfType<BoxTrimAction>())
+      {foreach(var curve in action.Removed)curve.Dispose();foreach(var curve in action.Plan.Output)curve.Dispose();}
+      _index.Dispose();
+    }
+  }
+  private static bool ApplyBoxTrimSelection(RhinoDoc doc,BoxTrimSelection selection,out ActionRecord? actionRecord)
+  {
+    actionRecord=null;var records=new List<ActionRecord>();bool success=true;
+    foreach(var action in selection.Actions)
+    {
+      if(doc.Objects.FindId(action.ObjectId) is not {IsLocked:false,IsReference:false,Geometry:Curve} target||
+        !TrimCurveObject(doc,target,action.Plan,out var record)||record==null){success=false;break;}
+      records.Add(record);
+      if(record.AddedCurves.Count!=action.Plan.Output.Count-1){success=false;break;}
+    }
+    if(success&&records.Count>0){records[0].BatchRecords.AddRange(records.Skip(1));actionRecord=records[0];}
+    else foreach(var record in records.AsEnumerable().Reverse())ApplyRecordState(doc,record,false);
+    Log.Write("vTrim","box {0} actions={1} applied={2}",selection.ExtendMode?"extend":"trim",selection.Actions.Count,success);
+    return success&&actionRecord!=null;
   }
 
   private sealed class ExtendPlan
@@ -502,6 +658,22 @@ public sealed class vTrim : vToolsCommand
   }
 
   private static bool ApplyRecordState(RhinoDoc doc, ActionRecord record, bool redo)
+  {
+    if(record.BatchRecords.Count>0)
+    {
+      var actions=new[]{record}.Concat(record.BatchRecords).ToArray();
+      var applied=new List<ActionRecord>();
+      foreach(var action in redo?actions:actions.AsEnumerable().Reverse())
+      {
+        if(!ApplySingleRecordState(doc,action,redo))
+        {foreach(var previous in applied.AsEnumerable().Reverse())ApplySingleRecordState(doc,previous,!redo);return false;}
+        applied.Add(action);
+      }
+      return true;
+    }
+    return ApplySingleRecordState(doc,record,redo);
+  }
+  private static bool ApplySingleRecordState(RhinoDoc doc,ActionRecord record,bool redo)
   {
     if (redo)
     {
@@ -677,7 +849,7 @@ public sealed class vTrim : vToolsCommand
 
         var prompt = modeLocked
           ? $"Select curve to trim; mode locked: {modeLabel}; Enter when done"
-          : $"Select curve to trim (hold Shift to extend; current: {modeLabel}); Enter when done";
+          : $"Click a curve or drag a box (hold Shift to extend curve ends; current: {modeLabel}); Enter when done";
 
         if (string.Equals(prompt, lastPrompt, StringComparison.Ordinal))
           return;
@@ -800,6 +972,7 @@ public sealed class vTrim : vToolsCommand
         RhinoApp.Idle -= OnIdleShiftRefresh;
         doc.Objects.UnselectAll();
         hover.Enabled = false;
+        preview.ClearBox();
         preview.Enabled = false;
         doc.Views.Redraw();
       }
@@ -858,6 +1031,11 @@ public sealed class vTrim : vToolsCommand
 
       if (result == GetResult.CustomMessage)
       {
+        if(go.CustomMessage() is BoxTrimSelection box)
+        {
+          pick.State=PickerState.Ok;pick.BoxSelection=box;pick.ExtendAsLine=extendAsLine;pick.JoinAfterTrim=joinAfterTrim;
+          return pick;
+        }
         if (go.CustomMessage() is HoverClickCapture click && click.CanAccept &&
             doc.Objects.FindId(click.ObjectId!.Value) is { Geometry: Curve curve } target)
         {
@@ -998,6 +1176,22 @@ public sealed class vTrim : vToolsCommand
     private readonly RhinoDoc _doc;
     private readonly bool _autoMode;
     private readonly IReadOnlyList<Guid> _cutterIds;
+    private Rectangle? _box;
+    private Guid _boxViewport;
+    private BoxTrimSelection? _boxSelection;
+    private BoxSelectionCache? _boxCache;
+    private Transform _boxView;
+    private bool _boxExtendAsLine;
+    public void ClearBox(){_boxSelection?.Dispose();_boxSelection=null;_boxCache?.Dispose();_boxCache=null;_box=null;}
+    public void SetBox(Rhino.Display.RhinoViewport viewport,Rectangle rectangle,bool crossing,bool extend=false)
+    {
+      var view=viewport.GetTransform(Rhino.DocObjects.CoordinateSystem.World,Rhino.DocObjects.CoordinateSystem.Screen);
+      if(_boxCache==null||_boxViewport!=viewport.Id||_boxView!=view||_boxExtendAsLine!=ExtendAsLine)
+      {_boxCache?.Dispose();_boxCache=new(_doc,viewport,ExtendAsLine);_boxView=view;_boxExtendAsLine=ExtendAsLine;}
+      _boxSelection?.Dispose();_box=rectangle;_boxViewport=viewport.Id;
+      _boxSelection=_boxCache.Build(rectangle,crossing,JoinAfterTrim,extend);
+    }
+    public BoxTrimSelection? TakeBoxSelection(){var result=_boxSelection;_boxSelection=null;_box=null;return result;}
 
     public TrimPreviewConduit(RhinoDoc doc, bool autoMode, IReadOnlyList<Guid> cutterIds, bool extendAsLine, bool joinAfterTrim)
     {
@@ -1170,6 +1364,17 @@ public sealed class vTrim : vToolsCommand
 
     protected override void DrawOverlay(Rhino.Display.DrawEventArgs e)
     {
+      if(_box is {} rectangle)
+      {
+        if(e.Viewport.Id==_boxViewport)
+        {
+          e.Display.Draw2dRectangle(rectangle,BoxColor,BoxLineThicknessPixels,Color.Transparent);
+          foreach(var action in _boxSelection?.Actions??[])
+            foreach(var piece in action.Removed)
+              if(_boxSelection!.ExtendMode)PreviewDisplay.DrawAddedCurve(e.Display,piece);else PreviewDisplay.DrawRemovedCurve(e.Display,piece);
+        }
+        return;
+      }
       // Draw explicit cutter curves highlighted so the user can see them
       // even after they are deselected.
       if (!_autoMode && _cutterIds.Count > 0)
@@ -1265,6 +1470,11 @@ public sealed class vTrim : vToolsCommand
     private RhinoObject? _lastHoverObject;
     private Curve? _lastHoverCurve;
     private Guid? _lastHoverObjectId;
+    private System.Drawing.Point? _dragStart;
+    private Guid _dragViewport;
+    private bool _dragging;
+    private long _boxPreviewTick;
+    private HoverClickCapture _pendingClick;
 
     public TrimHoverMouseCallback(RhinoDoc doc, TrimPreviewConduit preview)
     {
@@ -1278,6 +1488,7 @@ public sealed class vTrim : vToolsCommand
     {
       // Only capture left-click; middle/right are pan/zoom and must not trigger modeLocked.
       try { if (e.MouseButton != Rhino.UI.MouseButton.Left) { base.OnMouseDown(e); return; } } catch { }
+      if(e.View is {} view)_doc.Views.ActiveView=view;
 
       var shiftDown = ShiftPressed();
       try
@@ -1293,7 +1504,7 @@ public sealed class vTrim : vToolsCommand
       var trimPlan = shiftDown ? null : _preview.CurrentTrimPlan;
       var extendPlan = shiftDown ? _preview.CurrentExtendPlan : null;
 
-      LastClick = new HoverClickCapture
+      _pendingClick = new HoverClickCapture
       {
         HasCapture = true,
         ObjectId = _preview.HoverObjectId,
@@ -1304,12 +1515,27 @@ public sealed class vTrim : vToolsCommand
         ExtendPlan = extendPlan,
         PreviewFailure = _preview.CurrentPreviewFailure
       };
-      if (LastClick.CanAccept)
-      {
-        e.Cancel = true;
-        GetBaseClass.PostCustomMessage(LastClick);
-      }
+      _dragStart=e.ViewportPoint;_dragViewport=e.View?.ActiveViewport.Id??Guid.Empty;_dragging=false;_boxPreviewTick=0;
+      e.Cancel=true;
       base.OnMouseDown(e);
+    }
+    protected override void OnMouseUp(MouseCallbackEventArgs e)
+    {
+      if(e.MouseButton!=Rhino.UI.MouseButton.Left||_dragStart is not {} start){base.OnMouseUp(e);return;}
+      e.Cancel=true;_dragStart=null;
+      if(_dragging)
+      {
+        if(e.View?.ActiveViewport is {} viewport&&viewport.Id==_dragViewport)
+        {
+          _preview.SetBox(viewport,TrimBoxRectangle(start,e.ViewportPoint),e.ViewportPoint.X<start.X,_pendingClick.ExtendMode);
+          if(_preview.TakeBoxSelection() is {} selection)
+          {if(selection.Actions.Count>0)GetBaseClass.PostCustomMessage(selection);else selection.Dispose();}
+        }
+        _preview.ClearBox();_doc.Views.Redraw();
+      }
+      else
+      {LastClick=_pendingClick;if(LastClick.CanAccept)GetBaseClass.PostCustomMessage(LastClick);}
+      base.OnMouseUp(e);
     }
 
     protected override void OnMouseMove(MouseCallbackEventArgs e)
@@ -1321,6 +1547,17 @@ public sealed class vTrim : vToolsCommand
       {
         base.OnMouseMove(e);
         return;
+      }
+      if(_dragStart is {} start&&viewport.Id==_dragViewport)
+      {
+        _dragging|=Math.Abs(vpClient.X-start.X)>=BoxDragThresholdPixels||Math.Abs(vpClient.Y-start.Y)>=BoxDragThresholdPixels;
+        if(_dragging)
+        {
+          e.Cancel=true;
+          if(System.Environment.TickCount64-_boxPreviewTick>=BoxPreviewIntervalMilliseconds)
+          {_preview.SetBox(viewport,TrimBoxRectangle(start,vpClient),vpClient.X<start.X,_pendingClick.ExtendMode);_boxPreviewTick=System.Environment.TickCount64;_doc.Views.Redraw();}
+          base.OnMouseMove(e);return;
+        }
       }
 
       var screenPoint = new System.Drawing.Point(

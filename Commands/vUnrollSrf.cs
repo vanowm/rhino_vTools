@@ -75,7 +75,6 @@ namespace vTools.Commands
     private const double MinimumTextLiftToleranceFactor = 2.0; // Document-tolerance multiplier used as minimum lift when the selected ratio is positive.
     private const double TextUpStepRatio = 2.5; // Label up-direction probe distance as a fraction of text height.
     private const int TextBoundarySamples = 7; // Samples per boundary curve used for label fitting; two or greater.
-    private const bool TextMarkSixNine = true; // true underlines all-6/9 labels for orientation; false leaves them plain.
 
     private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
     private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
@@ -2046,24 +2045,11 @@ namespace vTools.Commands
 
     private static string BaseNumber(object? text)
     {
-      var s = text?.ToString()?.Trim() ?? string.Empty;
-      if (s.EndsWith(".", StringComparison.Ordinal))
-        s = s.Substring(0, s.Length - 1).Trim();
-      return s;
+      return LabelSequences.NormalizeValue(text?.ToString() ?? string.Empty);
     }
 
-    private static string LabelText(int number)
-    {
-      var text = number.ToString();
-      if (TextMarkSixNine && text.Length > 0 && text.All(ch => ch == '6' || ch == '9'))
-      {
-        var chars = text.Reverse().Select(ch => ch == '6' ? '9' : '6').ToArray();
-        var rotated = new string(chars);
-        if (rotated != text)
-          return text + ".";
-      }
-      return text;
-    }
+    private static string LabelText(int number) =>
+      LabelSequences.FormatDisplayLabel(number.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
     private static int SurfaceOutputLayerIndex(RhinoDoc doc)
     {
@@ -4768,7 +4754,7 @@ namespace vTools.Commands
     private static Guid AddEdgeMateDot(
       RhinoDoc doc, EdgeMateRecord rec, Point3d position, int partNumber, int layerIdx)
     {
-      var dot  = new TextDot(rec.MateId, position) { FontHeight = EdgeMateDotSize };
+      var dot  = new TextDot(LabelSequences.FormatDisplayLabel(rec.MateId), position) { FontHeight = EdgeMateDotSize };
       var attr = new ObjectAttributes();
       attr.Name = EdgeMateName;
       if (layerIdx >= 0) attr.LayerIndex = layerIdx;

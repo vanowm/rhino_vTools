@@ -44,6 +44,7 @@ namespace vTools.Commands
     private const double DefaultAngle = 0.0; // Angle in degrees.
     private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
     private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+    private const double AcceptedConstraintDistanceFactor = 4.0; // Positive multiplier of document absolute tolerance for validating final curve contact.
     private static readonly (string Name, OsnapModes Mode)[] OneShotSnapOptions =
     [
       ("NearSnap", OsnapModes.Near),
@@ -1227,6 +1228,9 @@ namespace vTools.Commands
       var fallbackPairLine = Line.Unset;
       var lastPreviewResolvedStart = Point3d.Unset;
       var lastPreviewResolvedEnd   = Point3d.Unset;
+      var lastPreviewSnapType = OsnapModes.None;
+      OsnapModes? acceptedSnapOverride = null;
+      Curve? acceptedCurveOverride = null;
 
       var sourceFeedbackGeometry = startConstraint.HasValue
         ? startConstraint.Value.Curve
@@ -1376,6 +1380,7 @@ namespace vTools.Commands
 
         var activeDirection = startDirection ??
                               (mode is "parallel" or "extension_direction" ? parallelDir : null);
+
         if (!activeDirection.HasValue)
           return;
 
@@ -1693,9 +1698,8 @@ namespace vTools.Commands
           return null;
         }
 
-        if (curve == null || !curve.ClosestPoint(solvedEnd, out var seed))
-          return null;
-        return new EndpointConstraint(curve, seed, cursorPoint, kind);
+        var hint = modeName is "perp" or "tangent" ? HoveredConstraintPoint(cursorPoint) : cursorPoint;
+        return curve == null ? null : ResolveEndReference(curve, solvedEnd, hint, kind, doc.ModelAbsoluteTolerance);
       }
 
       bool TryResolveSegment(
@@ -1711,6 +1715,24 @@ namespace vTools.Commands
 
         var activeDirection = startDirection ??
                               (mode is "parallel" or "extension_direction" ? parallelDir : null);
+
+        var nativeSnap = acceptedSnapOverride ?? getPoint.OsnapEventType;
+        if (startConstraint.HasValue && endAnchor == null && string.IsNullOrWhiteSpace(mode) &&
+            NativeSnapConstraintKind(nativeSnap).HasValue)
+        {
+          var snappedCurve = acceptedCurveOverride ?? getPoint.PointOnObject()?.Curve();
+          if (snappedCurve == null || !TryResolveSnappedConstraintPair(
+                startConstraint.Value, snappedCurve, cursorPoint, nativeSnap,
+                fromFirstPoint, preview, out var snappedLine, out var snappedConstraint))
+          {
+            lastResolveFailure = $"no joint solution for native {nativeSnap} snap";
+            return false;
+          }
+          resolvedStart = snappedLine.From;
+          resolvedEnd = snappedLine.To;
+          activeEndConstraint = snappedConstraint;
+          return !activeDirection.HasValue || DirectionsAreParallel(snappedLine.Direction, activeDirection.Value, 0.02);
+        }
 
         if (endAnchor.HasValue)
         {
@@ -2027,9 +2049,11 @@ namespace vTools.Commands
         if (activeDirection.HasValue &&
             !DirectionsAreParallel(resolvedEnd - resolvedStart, activeDirection.Value, 0.02))
           return false;
+        if (!endCurve.ClosestPoint(resolvedEnd, out var resolvedEndSeed))
+          return false;
         activeEndConstraint = new EndpointConstraint(
           endCurve,
-          endSeed,
+          resolvedEndSeed,
           cursorPoint,
           selectedEndKind);
         return resolvedStart.IsValid && resolvedEnd.IsValid;
@@ -2075,6 +2099,7 @@ namespace vTools.Commands
           }
           lastPreviewResolvedStart = previewStart;
           lastPreviewResolvedEnd   = ep;
+          lastPreviewSnapType = getPoint.OsnapEventType;
           if (bothSides.CurrentValue)
           {
             var vec = ep - previewStart;
@@ -2208,6 +2233,8 @@ namespace vTools.Commands
             _debugMode = false;
           }
 
+          acceptedSnapOverride = null;
+          acceptedCurveOverride = null;
           var result = getPoint.Get();
           layerSession.ObserveCurrentLayer(doc);
 
@@ -2229,8 +2256,12 @@ namespace vTools.Commands
 
           if (result == GetResult.Point)
           {
+            var acceptedSnapType = getPoint.OsnapEventType;
+            acceptedSnapOverride = acceptedSnapType;
+            acceptedCurveOverride = NativeSnapConstraintKind(acceptedSnapType).HasValue ? getPoint.PointOnObject()?.Curve() : null;
             oneShotSnap.Reset();
             var clickedRaw = getPoint.Point();
+            Log.Write("vLine.Accept", $"mode={mode ?? "free"} snap={acceptedSnapType} click={clickedRaw}");
             if (mode is "perp" or "tangent")
             {
               var pointObject = getPoint.PointOnObject();
@@ -2263,7 +2294,9 @@ namespace vTools.Commands
             DebugLog($"Click: cursor=({clickedRaw.X:F3},{clickedRaw.Y:F3},{clickedRaw.Z:F3}) mode={mode ?? "free"}");
             Point3d resolvedStart;
             Point3d endPoint;
-            if (lastPreviewResolvedEnd.IsValid)
+            bool resolveNativeConstraint = startConstraint.HasValue && string.IsNullOrWhiteSpace(mode) &&
+                                           NativeSnapConstraintKind(acceptedSnapType).HasValue;
+            if (lastPreviewResolvedEnd.IsValid && !resolveNativeConstraint && lastPreviewSnapType == acceptedSnapType)
             {
               resolvedStart = lastPreviewResolvedStart;
               endPoint      = lastPreviewResolvedEnd;
@@ -2290,7 +2323,16 @@ namespace vTools.Commands
               }
             }
 
-            Log.Write("vLine", $"accept mode={mode ?? "free"} start={resolvedStart} end={endPoint}");
+            var acceptedLine = new Line(resolvedStart, endPoint);
+            if ((startConstraint.HasValue && !SegmentMatchesConstraint(acceptedLine, startConstraint.Value, true, doc.ModelAbsoluteTolerance)) ||
+                (activeEndConstraint.HasValue && !SegmentMatchesEndReference(acceptedLine, activeEndConstraint.Value)))
+            {
+              lastPreviewResolvedEnd = Point3d.Unset;
+              Log.Write("vLine.Accept", $"rejected final constraint mismatch snap={acceptedSnapType} start={resolvedStart} end={endPoint}");
+              RhinoApp.WriteLine("vLine: the line does not satisfy the selected curve constraints. Choose another endpoint.");
+              continue;
+            }
+            Log.Write("vLine", $"accept mode={mode ?? "free"} snap={acceptedSnapType} start={resolvedStart} end={endPoint}");
             if (activeEndConstraint.HasValue)
             {
               var acceptedConstraint = activeEndConstraint.Value;
@@ -4367,6 +4409,72 @@ namespace vTools.Commands
         : dot <= Math.Max(Math.Sin(angleTolerance), 1e-6);
     }
 
+    private static EndpointConstraintKind? NativeSnapConstraintKind(OsnapModes snap)
+      => (snap & OsnapModes.Perpendicular) != 0 ? EndpointConstraintKind.Perpendicular
+        : (snap & OsnapModes.Tangent) != 0 ? EndpointConstraintKind.Tangent : null;
+
+    private static bool SegmentMatchesConstraint(Line line, EndpointConstraint constraint, bool atStart, double tolerance)
+    {
+      var contact = atStart ? line.From : line.To;
+      return line.IsValid && constraint.Curve.ClosestPoint(contact, out var parameter) &&
+             contact.DistanceTo(constraint.Curve.PointAt(parameter)) <= Math.Max(tolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
+             DirectionMatchesConstraintAtParameter(constraint, parameter, line.Direction);
+    }
+
+    private static EndpointConstraint? ResolveEndReference(
+      Curve curve, Point3d solvedEnd, Point3d hint, EndpointConstraintKind kind, double tolerance)
+    {
+      if (!curve.ClosestPoint(solvedEnd, out var parameter))
+        return null;
+      // An extended segment's foot can be nearer a different edge of the joined curve.
+      if (solvedEnd.DistanceTo(curve.PointAt(parameter)) > Math.Max(tolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
+          !curve.ClosestPoint(hint, out parameter))
+        return null;
+      return new EndpointConstraint(curve, parameter, hint, kind);
+    }
+
+    private static bool SegmentMatchesEndReference(Line line, EndpointConstraint constraint)
+      => line.IsValid && DirectionMatchesConstraintAtSeed(constraint, line.Direction);
+
+    private static bool TryResolveSnappedConstraintPair(
+      EndpointConstraint start, Curve endCurve, Point3d snapPoint, OsnapModes snap,
+      bool fixedStart, bool preview, out Line line, out EndpointConstraint end)
+    {
+      line = Line.Unset;
+      end = default;
+      var kind = NativeSnapConstraintKind(snap);
+      if (!kind.HasValue || !endCurve.ClosestPoint(snapPoint, out var parameter))
+        return false;
+      end = new EndpointConstraint(endCurve, parameter, snapPoint, kind.Value);
+      var tolerance = RhinoDoc.ActiveDoc?.ModelAbsoluteTolerance ?? RhinoMath.SqrtEpsilon;
+      if (fixedStart)
+      {
+        var snapped = new Line(start.Curve.PointAt(start.SeedParameter), endCurve.PointAt(parameter));
+        if (SegmentMatchesConstraint(snapped, start, true, tolerance) && SegmentMatchesConstraint(snapped, end, false, tolerance))
+        {line = snapped; return true;}
+      }
+      if (!fixedStart && kind == EndpointConstraintKind.Perpendicular && endCurve.IsLinear(tolerance) &&
+          start.Curve.TryGetPlane(out var plane, tolerance) &&
+          Math.Abs(plane.DistanceTo(endCurve.PointAtStart)) <= tolerance && Math.Abs(plane.DistanceTo(endCurve.PointAtEnd)) <= tolerance)
+      {
+        var direction = Vector3d.CrossProduct(endCurve.TangentAtStart, plane.Normal);
+        if (TryResolveConstraintToDirection(start, direction, preview, out var from) && endCurve.ClosestPoint(from, out var foot))
+        {
+          var normal = new Line(from, endCurve.PointAt(foot));
+          var normalEnd = end with {SeedParameter = foot};
+          if (SegmentMatchesConstraint(normal, start, true, tolerance) && SegmentMatchesConstraint(normal, normalEnd, false, tolerance))
+          {line = normal; end = normalEnd; return true;}
+        }
+      }
+      bool solved = fixedStart
+        ? TryResolveFixedStartConstraintPair(start, end, preview, out line)
+        : TryResolveConstraintPair(start, end, preview, out line);
+      if (!solved || !endCurve.ClosestPoint(line.To, out parameter))
+        return false;
+      end = end with {SeedParameter = parameter};
+      return SegmentMatchesConstraint(line, start, true, tolerance) && SegmentMatchesConstraint(line, end, false, tolerance);
+    }
+
     private static double ConstraintAngleToleranceRadians()
     {
       var maximum = RhinoMath.ToRadians(0.1);
@@ -4411,7 +4519,8 @@ namespace vTools.Commands
       EndpointConstraint constraint,
       Point3d point)
     {
-      if (!constraint.Curve.ClosestPoint(point, out var parameter))
+      if (!constraint.Curve.ClosestPoint(point, out var parameter) ||
+          point.DistanceTo(constraint.Curve.PointAt(parameter)) > Math.Max(doc.ModelAbsoluteTolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon))
         parameter = constraint.SeedParameter;
 
       var tangent = constraint.Curve.TangentAt(parameter);

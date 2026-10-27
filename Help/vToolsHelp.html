@@ -350,6 +350,10 @@ a:active { text-decoration: none; }
 <p>Orients objects from a source three-point frame to a target three-point frame; intermediate points are optional (Enter at src2 = 1-point translate, Enter at src3 = 2-point orient).</p>
 </li>
 <li class="command-option" type="number">
+<h5><a href="#voutline">vOutline</a></h5>
+<p>Creates native silhouettes, grouped per source part with source-based names and configurable output layers.</p>
+</li>
+<li class="command-option" type="number">
 <h5><a href="#voverlaps">vOverlaps</a></h5>
 <p>Selects covered or partially overlapping curves and highlights coincident edge intervals belonging to overlapping surface or polysurface faces.</p>
 </li>
@@ -392,6 +396,14 @@ a:active { text-decoration: none; }
 <li class="command-option" type="number">
 <h5><a href="#vscallop">vScallop</a></h5>
 <p>Creates an arc scallop between two points or along a selected line.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vselgroup">vSelGroup</a></h5>
+<p>Transparently selects, adds or deselects an innermost group within a parent group, with hover highlighting.</p>
+</li>
+<li class="command-option" type="number">
+<h5><a href="#vselsame">vSelSame</a></h5>
+<p>Selects objects by relevant geometry, attributes, part names and nesting properties, with checked-criteria previews.</p>
 </li>
 <li class="command-option" type="number">
 <h5><a href="#vsetpt">vSetPt</a></h5>
@@ -692,9 +704,9 @@ a:active { text-decoration: none; }
 <h4>Steps</h4>
 <ol>
 <li>Select objects before starting, or leave nothing selected to export all normal visible, unlocked objects.</li>
-<li><code>vExportDXF</code> prepares the export using its saved choices before asking for a filename. Use <code>-vExportDXF</code> to change <code>NotchTrim</code>, <code>NotchSplitLayer</code>, <code>NotchJoin</code>, <code>Explode</code>, <code>TextBreak</code>, <code>Optimize</code>, or <code>CleanupAction</code> for one run; <code>SaveDefaults=Yes</code> keeps those choices for later exports. Optimization processes part geometry only, excluding nest table borders, labels, and label frames without excluding them from the DXF.</li>
+<li><code>vExportDXF</code> prepares the export using its saved choices before asking for a filename. Use <code>-vExportDXF</code> to change <code>NotchTrim</code>, <code>NotchSplitLayer</code>, <code>NotchJoin</code>, <code>Explode</code>, <code>TextBreak</code>, <code>RemoveGrain</code>, <code>Optimize</code>, or <code>CleanupAction</code> for one run; <code>SaveDefaults=Yes</code> keeps those choices for later exports. Optimization processes part geometry only, excluding nest table borders, labels, and label frames without excluding them from the DXF.</li>
 <li>Choose the DXF path. Selected geometry is moved to the origin in the DXF only; document objects stay in place. Groups become DXF blocks, Rhino&#39;s current DXF scheme is used, and the previous selection is restored.</li>
-<li>Nest table wrapper groups and material-table outlines are omitted from the DXF, preserving individual part groups instead of bundling an entire table into one block. Renamed tables are identified by stable metadata; older generated nest tables are also recognized. Table labels export in their own label-sized framed block, without the material rectangle or combined table outline. The rows are centered using measured glyph bounds, with explicit left attachment for compatible import positioning. Unnamed groups receive block names; failed block creation reports an error instead of exporting group members loose. Source groups and document membership are unchanged.</li>
+<li>Nest table wrapper groups and material-table outlines are omitted from the DXF, preserving individual part groups instead of bundling an entire table into one block. Renamed tables are identified by stable metadata; older generated nest tables are also recognized. Table labels export in their own label-sized framed block, without the material rectangle or combined table outline. The label block moves outward to the left by 5 inches, converted to document units, in the DXF only; parts retain their positions. The rows use fresh vTitle-style text and centre insertion anchors; tagged table MTEXT attachment codes are corrected to middle-centre without changing other DXF bytes or other text. Unnamed groups receive block names; failed block creation reports an error instead of exporting group members loose. Source groups and document membership are unchanged.</li>
 </ol>
 <p>The DXF is written to a temporary file first, then copied over the chosen destination in place without renaming or replacing an existing file. Native temporary-path save messages and extra blank lines are suppressed; warnings, errors and the final destination summary remain visible.</p>
 
@@ -731,6 +743,14 @@ a:active { text-decoration: none; }
 <div class="command-option">
 <h5>SaveDefaults</h5>
 <p><code>No</code> uses these choices only for the current export; <code>Yes</code> saves them for this document and future documents.</p>
+</div>
+<div class="command-option">
+<h5>RemoveGrain</h5>
+<p><code>Yes</code> by default omits open curves named GRAIN or on a GRAIN leaf layer, case-insensitively and ignoring surrounding spaces, before export cleanup and block preparation. <code>No</code> includes the guides. Original geometry and groups stay unchanged.</p>
+</div>
+<div class="command-option">
+<h5>MoveOrigin</h5>
+<p><code>Yes</code> by default translates export copies to the world origin for selected-object and whole-document exports. <code>No</code> preserves drawing coordinates. Like other scripted export options, the change is temporary unless <code>SaveDefaults=Yes</code>.</p>
 </div>
 <p><a href="#vnotches">vNotches</a> has its own independent notch-contact settings for changes made while placing notches.</p>
 
@@ -1189,6 +1209,7 @@ a:active { text-decoration: none; }
 <ul>
 <li><code>Extension</code> continues outward when the selected curve already ends at the current chained start; otherwise it uses the selected curve end as the target anchor.</li>
 <li>When a constraint pair has multiple valid positions, the branch nearest the first curve click remains stable; the endpoint click chooses among solutions on that branch.</li>
+<li>Native Perp and Tangent object snaps are solved jointly with a tangent/perpendicular curve start, rather than moving the start after snapping the end. Straight planar targets use an exact perpendicular projection. Joint native-snap solutions retain their curve contacts and 3D-angle checks; incompatible fixed starts are rejected. Explicit endpoint Perpendicular/Tangent modes validate the reference direction without requiring the endpoint to touch the reference, allowing extended-segment solutions and length-limited lines shown in the preview.</li>
 <li>Curve-constrained previews show a short white tangent bar and center point at each solved endpoint.</li>
 </ul>
 <div class="command-option">
@@ -1279,6 +1300,7 @@ a:active { text-decoration: none; }
 <h4>Steps</h4>
 <ol>
 <li>Click an open curve near the end you want to drive.</li>
+<li>Drag a box around open-curve endpoints to preview and resize several ends at once; release to apply. Only ends inside the box are affected, not curves that merely cross it. If both ends of a curve are inside, the end closest to the box center moves. Box-selected ends move directly in Total, Add and Subtract modes; single-click Total shortening retains its existing opposite-end behavior. Hidden, locked and closed curves are excluded. One local undo reverses the entire box edit.</li>
 </ol>
 
 </div>
@@ -1445,11 +1467,11 @@ a:active { text-decoration: none; }
 <div class="tutorialblock">
 <h4>Steps</h4>
 <ol>
-<li>Preselected planar curve-based parts are added as soon as the window opens, including when command-line settings are supplied first; running vNest again adds the current preselection to an existing window without replacing its members. Click parts in the drawing, including edges, canonical interiors or preview copies, to add them without holding Shift; plain clicks retain the existing list and Ctrl-click removes the clicked part. Each added or clicked part becomes the active row and scrolls into view. Blank clicks retain the current selection; ordinary window/crossing selection also adds to existing membership, while Ctrl-drag retains native deselection behavior. An incomplete boundary pick does not clear valid nest members. There is no command-line selection stage or Enter confirmation, and the full-width list follows document selection. Included originals stay highlighted to identify nest membership. Grouped parts remain separate; disjoint ungrouped boundaries are recognized as separate parts. Large Reference-layer text supplies part names where available.</li>
-<li>Review the material tables and part list in the modeless window. Selected valid rows identify both originals and preview copies in magenta, distinct from cyan nest membership and Rhino&#39;s native selection. Oversized or invalid parts keep their orange warning highlight even when their row is selected. Adding or removing parts retains surviving preview placements and table positions; new parts remain Pending until Nest runs again. Delete removes selected list rows from the nest without deleting source objects. The list follows current queued, trial, placed and skipped states and trial table/rotation values. Include or exclude parts, and edit each part&#39;s grain reference, rotation preset or custom increment, actual angle, table, and X/Y position. Edited positions become Fixed; manually edited angles override automatic presets and are retained by Nest.</li>
+<li>Preselected planar curve-based parts are added as soon as the window opens, including when command-line settings are supplied first; running vNest again adds the current preselection to an existing window without replacing its members. Click parts in the drawing, including edges, canonical interiors or preview copies, to add them without holding Shift; plain clicks retain the existing list and Ctrl-click removes the clicked part. Each added or clicked part becomes the active row and scrolls into view. Blank clicks retain the current selection; ordinary window/crossing selection also adds to existing membership, while Ctrl-drag retains native deselection behavior. An incomplete boundary pick does not clear valid nest members. There is no command-line selection stage or Enter confirmation, and the full-width list follows document selection. Only active parts receive perimeter feedback; inactive originals retain their native colors. Grouped parts remain separate; disjoint ungrouped boundaries are recognized as separate parts. Large Reference-layer text supplies part names where available.</li>
+<li>Review the material tables and part list in the modeless window. Selected valid rows identify both originals and preview copies with magenta perimeters, distinct from Rhino&#39;s native selection; internal curves and labels retain their original colors. Oversized or invalid parts receive orange perimeter feedback only when active. Adding or removing parts retains surviving preview placements and table positions; new parts remain Pending until Nest runs again. Delete removes selected list rows from the nest without deleting source objects. The list follows current queued, trial, placed and skipped states and trial table/rotation values. Include or exclude parts, and edit each part&#39;s grain reference, rotation preset or custom increment, actual angle, table, and X/Y position. Edited positions become Fixed; manually edited angles override automatic presets and are retained by Nest.</li>
 <li>Copies requests individually nested copies while retaining one source-settings row; each preview and output copy is independently positioned and grouped. Fixed anchors the first copy only, with further copies packed automatically. Select multiple rows to edit common settings together: unequal numbers and presets show <code>&lt;varies&gt;</code>, and mixed checkboxes are indeterminate. Table and X/Y remain single-part controls. Per-field reset overlays restore defaults, and Reset restores selected parts to one copy, automatic placement, detected grain and global options without changing originals.</li>
-<li>Selection updates capture only newly added or incomplete parts, retaining unchanged rows and their settings. Group membership and outline bounds limit containment checks when resolving new parts; diagnostic selection timings report retained/captured counts separately from nesting time.</li>
-<li>The Tables tab lists editable table names, width x occupied length, and occupied material in yards. Length and yardage use one decimal place. Matching three centered annotation rows occupy a tab at the middle of the table&#39;s left edge. The label box and table perimeter form one closed polyline without internal dividing edges; the outline and three separate annotations belong to the table group, with no separate label group. Each nested part retains its own child group. DXF export omits the table outline and exports only a label-sized framed block alongside the separate part blocks. Changing a name updates its label without restarting nesting. Settings changes during nesting automatically restart the search using the new values, retaining the current preview until new placements arrive, even with Auto off; Stop still stops without restarting. The accepted group uses the chosen name with a uniqueness suffix if needed. Table decorations are ignored when adding existing nested parts back to the list.</li>
+<li>Selection updates capture only newly added or incomplete parts, retaining unchanged rows, settings and preview copies. Plain clicks are handled before Rhino clears the accumulated selection, so adding a part does not deselect and restore every earlier object. Window/crossing drags retain native picking. Highlight changes and clicked-row focus are batched into one scene redraw; diagnostic click timings separate selection restoration, synchronization, focus and redraw work from nesting time.</li>
+<li>The Tables tab lists editable table names, material, part-copy count, occupied length x occupied width, and occupied material in yards. Occupied width is the span between the outermost part edges across the roll, excluding empty side margins; material width still controls capacity and label sizing. Length and yardage use one decimal place. Centered label rows show material name first, then table name, number of part copies, occupied length x occupied width and yardage, in a tab at the table&#39;s top-left corner. Counts include every nested copy, not table decorations. The tab and table perimeter form one closed polyline without internal dividing edges; the outline and annotations belong to the table group. Each nested part retains its own child group. DXF export omits the table outline and exports a label-sized framed block alongside the separate part blocks. Changing a table name updates its label without restarting nesting. Settings changes during nesting restart the search while retaining the previous preview; Stop stops without restarting. Table decorations are ignored when adding existing nested parts back to the list.</li>
 <li>Table labels use a visible glyph height of 8% of material width, independent of model-space annotation scaling, reducing only when needed to fit long text within table length. Border clearance, row gaps and box padding scale with the labels. Horizontal table display spacing accommodates each following label box; vertical labels stay within their table&#39;s height. Preview and placed parts use the same display offsets without changing local nest geometry or material calculations.</li>
 <li>Nesting reuses bounded geometry caches between runs, skips rotations only when their best possible placement cannot improve the score, and retains exact outline/clearance collision checks. Diagnostic profiles report pair calculations, anchor operations, collision work and cache reuse. Focus/rounding events that leave displayed settings unchanged do not invalidate a run; actual changes retain the prior preview until re-nesting, with Place disabled for a stale layout.</li>
 <li>Press Nest to pack the included parts. The same button changes to Stop while searching; Stop retains the best valid layout, including already packed parts during the first pass. The status bar shows a percentage overlay without a remaining-time estimate, then shows elapsed time after completion or Stop, including part preparation. Throttled viewport previews show real trial placements; the best complete collision-free layout is restored when searching finishes. The status tooltip reports placement tests, completed layouts and accepted improvements. Nesting is manual by default; Auto optionally re-nests after relevant edits. The minus button deselects highlighted rows&#39; originals without deleting them. Clear stops the search, clears the list and preview, and deselects originals without deleting geometry. Additional material tables are created automatically. Placed-part count and total consumed material take priority over table count; equal-yield placements favor skinny parts at the left end, then prefer the bottom edge of each horizontal table.</li>
@@ -1466,9 +1488,17 @@ a:active { text-decoration: none; }
 <h5>Length</h5>
 <p>each material table&#39;s length in document units; default <code>315</code>.</p>
 </div>
+<ul>
+<li>Saved materials and unsaved material drafts share one per-user database at <code>%APPDATA%\vTools\materials.json</code>, across drawings, Rhino versions and plug-in installations. Existing installation-local presets migrate automatically without overwriting materials already in the shared library; part assignments remain in the drawing.</li>
+<li>The table label has a closing divider along its right edge. Existing tables acquire it when opened for editing. DXF export omits this divider and the table perimeter, exporting the label in its own separate closed box.</li>
+</ul>
 <div class="command-option">
 <h5>Gap</h5>
 <p>minimum distance between part outlines in document units; default <code>0</code> allows touching. Remembered between runs and available in the window and command-line settings. Applied to initial packing, refinement and fixed placements; does not add a table-edge margin or change source/copy outlines.</p>
+</div>
+<div class="command-option">
+<h5>Material</h5>
+<p>top dropdown of globally saved named presets containing Width and Gap in document units, Grain mode, Obey grain, Grain deviation in degrees and Grain turn/reversal. Older presets retain their previously inherited saved grain settings on migration; presets without deviation use zero. <code>Save As...</code> creates a new preset; <code>Save</code> overwrites the selected preset. Modified presets show <code>* (unsaved)</code> and retain their separate working values when switching presets, closing the window or restarting Rhino, without overwriting saved presets or asking to save/discard them. Reopening preserves the last preset name and its unsaved edits rather than showing Custom. Material-field reset icons appear only when different from that preset and restore its saved values. Place uses the current values without overwriting material presets. Per-part Material supports batch edits and a Default choice that follows the top material. Each material is packed independently into its own tables using its width, spacing and grain rules; explicit per-part overrides take precedence, regardless of the currently selected top material. Free rotation settings remain separate from material grain rules.</p>
 </div>
 <div class="command-option">
 <h5>Grain</h5>
@@ -1480,12 +1510,19 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>Rotation</h5>
-<p>free-rotation presets for parts not obeying a specified grain: <code>NoRotation</code> preserves source angle, <code>AnyRotation</code> searches any angle, <code>45</code> offers eight source-relative orientations, <code>90</code> four, <code>180</code> two (the default), and <code>Custom</code> uses <code>RotationStep</code>. These are increments, not maximum deviations. For grain-constrained parts the selected-part Rotation dropdown instead offers <code>No reversal</code> or <code>Allow 180 reversal</code>, plus Default to inherit the global Grain turn. No reversal still aligns grain initially and permits its deviation allowance; it does not preserve an arbitrary source angle.</p>
+<p>free-rotation presets for parts not obeying a specified grain: <code>NoRotation</code> preserves source angle, <code>AnyRotation</code> searches any angle, <code>45</code> offers eight source-relative orientations, <code>90</code> four, <code>180</code> two (the default), and <code>Custom</code> uses <code>RotationStep</code>. These are increments, not maximum deviations. For grain-constrained parts the selected-part Rotation dropdown instead offers <code>No reversal</code> or <code>Allow 180 reversal</code>, plus Default to inherit its material&#39;s Grain turn. No reversal still aligns grain initially and permits its deviation allowance; it does not preserve an arbitrary source angle.</p>
 </div>
 <div class="command-option">
 <h5>RotationStep</h5>
 <p>custom increment in degrees, <code>0.1</code> through <code>360</code>, enabled when Custom is selected; default <code>45</code>. Only discrete custom orientations are searched. Use Any rotation for continuous-angle refinement.</p>
 </div>
+<ul>
+<li>Small material jobs with up to eight copies retain a broader set of free-rotation alternatives, limited by outline complexity, so useful interlocking angles are not discarded solely for having a larger individual bounding box. Larger jobs retain the normal bounded search; fixed/manual angles and grain constraints remain unchanged.</li>
+<li>Refinement reconsiders entire small jobs of up to ten movable copies or neighborhoods of three to six parts, including cross-table partners. It keeps distinct table/rotation/contact alternatives and tests compact strips before relaxing the length. Only complete, collision-checked improvements to total occupied material plus each used table&#39;s allowance replace the best result; Stop retains that result. Fixed table indices and positions remain anchored.</li>
+<li>Sparse, similarly shaped profiles also get a staggered-stack trial. It compares actual long-axis outline sections, builds size-balanced stacks in allowed orientations, and fits their exact member outlines together rather than packing each stack&#39;s bounding box. It never invents a mirrored pose: handedness, grain and flip permissions still apply. The best existing layout is retained unless a complete stack arrangement saves material.</li>
+<li>Repeating Nest also tries a shuffled processing order without changing the list, fixed anchors or skinny-part priority. The current best valid layout is retained when the new trial is worse.</li>
+<li>Shift-click preview copies or use window/crossing boxes to select a manual-edit group. Shift-box adds and Ctrl-box removes copies; empty clicks retain selection. Dragging, Alt-drag rotation and arrow keys transform the selection rigidly around one shared pivot, including copies of the same source. Alt+Shift rotation moves the entire group clear of obstacles without rearranging its members. Each completed gesture is one undo/redo action. Tables with differing orientations cannot be combined into one manual-edit group.</li>
+</ul>
 <div class="command-option">
 <h5>GrainDeviation</h5>
 <p>global allowance in degrees either side of permitted grain-aligned directions, <code>0</code> through <code>90</code>, default <code>0</code>; remembered between runs. Each part&#39;s Deviation uses this value when Default is checked, or its own allowance otherwise. Grain-constrained parts cannot exceed it even if the free-rotation preset is Any. Unconstrained parts ignore this allowance.</p>
@@ -1494,14 +1531,21 @@ a:active { text-decoration: none; }
 <h5>Allow180Turn</h5>
 <p><code>Yes</code> by default offers both grain-aligned directions; <code>No</code> permits only the forward direction. Both obey GrainDeviation. The window calls these <code>Allow 180 reversal</code> and <code>No reversal</code>. Each part can override this through its constrained Rotation dropdown. This setting does not restrict unconstrained rotation presets. Mirroring is controlled separately by Flip and must also satisfy enabled grain constraints.</p>
 </div>
-<div class="command-option">
-<h5>Stack</h5>
-<p><code>Horizontal</code> places tables side by side; <code>Vertical</code> stacks them downward. Each table stays horizontal in either arrangement. Remembered between runs. Changing Stack retains all part rotations and local placements.</p>
-</div>
+<ul>
+<li>Tables always stack vertically. There is no Stack option; tables retain their horizontal orientation and use their individual material widths.</li>
+</ul>
 <div class="command-option">
 <h5>Flip</h5>
 <p>allow mirrored parts during nesting; default <code>No</code>. Allow Flip enables automatic mirrored alternatives. The selected-part Flipped control fixes its handedness; Auto Rotation restores automatic rotation and flip choices. Mirroring is across material grain, so grain alignment is preserved, and copied annotation text remains readable.</p>
 </div>
+<div class="command-option">
+<h5>Show Gap</h5>
+<p>optionally display a one-pixel clearance outline around active parts using their material&#39;s full Gap distance; default off, remembered between runs. Convex corners use circular clearance arcs rather than extended miters, and collisions use exact minimum edge/corner distances. Existing short clearances can improve or slide without weakening another side&#39;s gap. The guide follows manual movement/rotation and gap edits without changing document or exported geometry. With drawing focus the selected perimeter is magenta; with manager focus it is muted blue and the rotation pivot is hidden. While editing placed tables, corresponding original parts are highlighted separately in cyan. Internal contents retain their original colors, and table frames draw behind parts.</p>
+</div>
+<ul>
+<li>Table labels reserve a stable minimum frame for <code>888.888 x 888.888</code> dimensions, expanding for long material/table names rather than resizing with usage. Opening placed tables for editing refreshes outdated text alignment, size and row placement together with the frame, with Undo/Redo. Renaming a placed table updates its drawing label, combined frame, group and persistent name together, with Undo/Redo. Current tables use amber frame feedback, other working tables green, and focused parts magenta, including when several placed tables are edited together. Alt+arrow rotation also works while the parts list or manager background has focus; input fields retain their normal editing keys, and the viewport pivot stays hidden with manager focus.</li>
+<li>While editing placed tables, all part contents stay in the cached drawing path even when focus changes or no row is selected. Focus controls the temporary overlays, not part visibility; closing table editing returns the existing objects to native drawing.</li>
+</ul>
 <div class="command-option">
 <h5>SearchTime</h5>
 <p>refinement budget in seconds after the initial layout; default <code>30</code>, range <code>0</code> through <code>3600</code>. Zero skips refinement. Larger values allow more joint layout and pair searches. Native polygon operations may slightly overrun the budget; cancellation is checked between operations. Remembered between runs.</p>
@@ -1509,13 +1553,31 @@ a:active { text-decoration: none; }
 <h3>Notes</h3>
 <ul>
 <li>Tables run horizontally, with Length along CPlane X and Width along CPlane Y. Rotation values remain relative to the original parts, so changing table orientation does not silently turn grain-locked parts.</li>
-<li>Pick Grain accepts any curve belonging to the part, regardless of layer; its tangent at the clicked point defines grain. Choose Draw to enter two snapped points instead. The guide is temporary: it adds no document objects and preserves the existing selection.</li>
-<li>Packing uses cutting outlines for material fit, polygon contact candidates and overlap checks, so labels and other reference details do not make an otherwise fitting part too large. Concave parts can share space inside overlapping bounding boxes without overlapping their outlines. Fixed placements are reserved first. After the initial layout, full-layout search retains multiple combinations of rotations and contact positions across different part orders, then refines part pairs. Only better complete valid layouts replace the saved best result. Free rotations are refined beyond coarse angle samples. Curves are sampled to polygons; this is a bounded heuristic search, not a guarantee of global optimality. Search statistics and timing are recorded in the plug-in log.</li>
-<li>Material yield uses the full allocated stock: every table before the last consumes its entire configured length, including unused tail space; only the last table is trimmed to its used length. Opening another table therefore charges the unused remainder of the preceding table, not just the new part&#39;s length. Existing tables are filled before allocating another. Skinny grain-guided parts favor the left end of a horizontal table when total material consumption is equivalent.</li>
-<li>Free-rotation alternatives retain their exact 180-degree counterparts. A dedicated refinement pass turns concave parts in their current footprint and refits partner pieces into the resulting space, using only allowed poses and accepting improved material yield. The status tooltip and diagnostics report actual half-turn tests.</li>
-<li>Narrow parts with enabled detected or user-specified grain are placed first in the initial pass (at least a 3:1 fitting-pose aspect ratio). With SearchTime greater than zero, a dedicated gap-filling pass relocates them between already placed parts only when total used material length strictly decreases, without moving fixed or larger parts, exceeding any table&#39;s existing used length, or adding tables. Filling a gap alone is not an improvement; equal-yield leftward alignment is allowed during other refinement. Grain and overlap constraints remain enforced.</li>
-<li>Oversized parts, conflicting fixed placements, or parts with no permitted rotation are highlighted on their original geometry and skipped. Place creates only successfully nested parts; the status lists the skipped count. The automatic table safety limit is 128.</li>
-<li>Geometry is preview-only until Place. Original objects and their groups are not changed. Nest copies preserve source layers and belong to individual part groups and their table group; table outlines use Reference.</li>
+<li>Pick Grain accepts any curve belonging to the part, regardless of layer; its tangent at the clicked point defines grain. Choose Draw to enter two snapped points instead. Drawn guides remain visible on originals and nested preview copies, without adding source document objects. Place adds the drawn guide on GRAIN to each part copy, replacing older grain markers in copies only; source geometry and selection remain unchanged. Resetting detected grain clears the drawn guide. Customized per-part settings are highlighted in the list and marked with a star, including after nesting; automatic placement coordinates/angles alone are not marked customized.</li>
+<li>Packing uses cutting outlines for material fit, polygon contact candidates and overlap checks, so labels and other reference details do not make an otherwise fitting part too large. Concave parts can share space inside overlapping bounding boxes without overlapping their outlines. Fixed placements are reserved first. After the initial layout, compaction and joint pair refinement compare cross-table matches; full-layout search retains multiple combinations of rotations and contact positions across different part orders. Only better complete valid layouts replace the saved best result. Free rotations are refined beyond coarse angle samples. Curves are sampled to polygons; this is a bounded heuristic search, not a guarantee of global optimality. Search statistics and timing are recorded in the plug-in log.</li>
+<li>Material usage is the sum of every table&#39;s occupied length, including any gaps before its last part but not unused tail space. Refinement compares placements across all tables and may leave space on one table when a better match elsewhere reduces the overall sum. A compact constructive seed is retained unless a complete candidate uses less material; equal-material ties favor fewer tables and bottom-edge alignment. Movable tables compact toward the roll start without moving fixed parts. Skinny grain-guided parts favor the left end when total consumption is equivalent.</li>
+<li>Material consumption is the sum of occupied lengths plus two inches of allowance per used table, converted to document units. Footer, material totals and table-label yardage include this allowance and round only after summing; dimensions still show occupied part length. Empty tables and unused tails are excluded. Placement reports aligned material-result columns. Unknown/custom document units show n/a. A bounded consolidation pass reserves small-table parts first and combines same-material tables only without increasing total consumption, respecting grain, gap, allowed rotations, fixed placements and table size. It also runs with SearchTime zero; partial or speculative moves are not accepted.</li>
+<li>Fine-tune a completed nest before Place: drag a preview part, edit Angle/X/Y, or hold Alt plus the primary mouse button to rotate it. Alt immediately shows fixed pivot cues; moving the mouse with Alt alone does not rotate. Alt+Shift rotation moves parts to the nearest permitted position when an obstacle would block the angle, returning toward the original pivot when space becomes available. Ctrl bypasses both part collisions and table boundaries during movement/rotation; Ctrl+arrow moves one document unit freely. Enabled grain/deviation rules still apply. Ordinary arrow keys move to first full-outline contact or a table edge, keeping the configured gap and checking the complete swept perimeter. Dragging stops at contact without sliding/reversing while the cursor remains outside. Ctrl+Z undoes a completed manual edit; Ctrl+Y or Ctrl+Shift+Z redoes it in the window or drawing. Each drag/rotation is one edit; changed inputs/settings or a new Nest clears local preview history. Empty-space drags still window-select; Ctrl-click on originals still removes membership. Manual placements remain fixed during the next Nest. Pick individual preview copies independently. Esc or right-click cancels an active gesture. Preview edits do not move the source originals.</li>
+<li>Preselecting table frames resolves and adds their original source parts automatically. New tables store persistent source-object/group references. Older tables use a unique label/outline-length/area match; ambiguous or deleted originals are reported rather than guessed.</li>
+<li>Use Edit Tables, or begin dragging inside an existing placed part, to fine-tune already placed tables. The list switches to their physical copies; Angle/X/Y, dragging, pivot rotation and arrow movement immediately replace the existing drawing geometry without duplicating objects or changing their IDs. Each completed edit is a Rhino undo record; local and native Undo/Redo stay synchronized. Table usage metadata and dimension/yardage labels refresh when edits finish. Original Parts restores the original nesting inventory. Nest, Location, Place and material-size settings are disabled while editing existing tables; closing keeps the immediate edits.</li>
+<li>Total and per-material yardage are available before Place: the Materials tab and total-yardage tooltip update with the preview, and completing Nest or pressing Stop prints an aligned material breakdown in command history for the retained layout.</li>
+<li>The Grain guide column shows Detected, Set, None or Source axis. Drag column headers to rearrange the Parts, Tables and Materials lists; sorting remains attached to the moved column. Blank-space clicks retain the list without starting Rhino&#39;s window picker; deliberate drags perform window/crossing selection and Ctrl-drags remove parts.</li>
+<li>Click column headers in the Parts, Tables or Materials list to sort ascending; click again for descending. Numeric fields sort numerically, and missing values remain last. Selection, edits, highlights and table identity survive sorting. Sorting is display-only and does not change packing input order.</li>
+<li>Free-rotation alternatives retain their exact 180-degree counterparts. Refinement jointly repositions pairs at alternative table/contact locations, alternating highly concave pair priorities with parts contributing most to occupied length. It uses only allowed poses and preserves grain, gap and fixed-position constraints. The status tooltip and diagnostics report actual half-turn tests. Live previews retain the best valid layout rather than temporarily displaying worse or overlapping trial branches.</li>
+<li>Narrow parts with enabled detected or user-specified grain retain first priority in every packing, compaction, pair-refinement and consolidation pass (at least a 3:1 fitting-pose aspect ratio). Merging a lone skinny into another movable table places it at the left/start instead of appending it at the end. With SearchTime greater than zero, a dedicated gap-filling pass relocates them between already placed parts only when total used material length strictly decreases, without moving fixed or larger parts, exceeding any table&#39;s existing used length, or adding tables. Filling a gap alone is not an improvement; equal-yield leftward alignment is allowed during other refinement. Grain and overlap constraints remain enforced.</li>
+<li>Oversized parts, conflicting fixed placements, or parts with no permitted rotation are skipped and highlighted only when active. Place creates only successfully nested parts; the status lists the skipped count. The automatic table safety limit is 128.</li>
+<li>With drawing focus, Alt+Left/Up rotates active parts forward by 45 degrees; Alt+Right/Down rotates back by 45 degrees. A blocked rotation leaves the angle unchanged rather than taking a partial step. Intermediate angles obey full-outline collisions and table edges; Alt+Shift+arrow may reposition to clear obstacles, while Ctrl+Alt+arrow bypasses collisions and table limits. Grain rules still apply. Each completed step supports hidden undo/redo. Plain arrows retain movement to first contact. If an existing gap is too small and an arrow would reduce it further, that keypress instead backs the part up to the required gap when a safe reverse move fits.</li>
+<li>Held arrow keys do not buffer repeated moves; releasing the arrow or changing its modifiers discards pending auto-repeat movement. Ctrl+arrow retains its one-unit free-movement step.</li>
+<li>Blocked mouse drags can align to an exact nearby part contact within two screen pixels, allowing a correctly oriented part to re-enter a zero-clearance slot after rotation or re-grabbing. Both the small alignment correction and the continued move use full-outline swept collision checks; this does not allow overlap or relax the configured Gap.</li>
+<li>New nesting layouts are preview-only until Place. Their original objects and groups are not changed. Existing-table edit mode instead updates placed copies immediately with Rhino undo. Nest copies preserve source layers and belong to individual part groups and their table group; table outlines use Reference.</li>
+<li>Table label tabs align with each material table&#39;s top-left corner in preview and placed output. The tab and material frame remain one closed outline; all four rows remain centered within the tab. Clear Nest removes the layout and its manual placement overrides while retaining the input parts and reusable settings; Remove Parts removes selected input rows. Manual placement angles belong to the nest copies, not their reusable source parts. The Angle reset updates the visible copy to its automatic grain-compatible reference and clears the manual-angle override. The close action reads Cancel when tables are previewed but not placed. Pick Grain, Auto Rotation and Reset Part are disabled without selected parts. Per-part Rotation is separate from Angle and Step; Step is available only for Custom rotation on unconstrained parts.</li>
+<li>New table names continue after the highest existing <code>tableN</code> name in the drawing, across command runs and saved-document sessions. Editing existing tables retains their names; custom names are not renumbered.</li>
+<li>Location attaches the top-left corner of the first label box to the cursor, with snapping, both for an existing nest and the empty-table preview. Enter keeps the preview position; Escape restores the previous location. Two stacked progress tracks retain the original combined status-bar height: the top shows the current stage and its percentage; the bottom shows total progress across materials, weighted by part-copy count. These are work percentages, not a time estimate. Part-list columns show effective material, angle, copies, grain mode/angle, obey-grain state, deviation, rotation mode/step, flipping and coordinates; scroll horizontally for the extra settings.</li>
+<li>Selecting a row in Materials highlights all of that material&#39;s preview tables. Customized part rows retain their amber tint only when unselected; selected rows use distinct active or inactive selection fills even when the window loses focus. Preview label glyph measurements are cached within the window, and diagnostics report part/pose counts and geometry timings separately for every material batch.</li>
+<li>Closing an unplaced nest asks whether to discard the preview; Cancel keeps the window, parts and preview intact. Material drafts are retained automatically without a save/discard prompt. Place commits directly without close confirmation.</li>
+<li>Re-nesting unchanged parts and settings retains the previous accepted layout unless a new result places more parts, uses less total occupied material, or uses fewer tables at equal usage. Location and grain pickers restore vNest as Rhino&#39;s repeat-command target.</li>
+<li>Per-part custom settings are saved in the document: copies, inclusion, material, grain guide and overrides, rotation, flipping and fixed placement. Grouped parts use the part group&#39;s persistent identity; ungrouped parts use their boundary object. Moving a detail into another group does not carry conflicting settings onto that group. Drawn grain guides follow rigid movement of their part. Reset Part removes its saved customizations. Save the Rhino document to retain these settings after reopening; named material recipes are included as a fallback when the global preset is missing. Placed copies retain their material and rule overrides, with one copy and automatic placement rather than inheriting the source&#39;s entire copy count or old table coordinates.</li>
+<li>Properties+ can edit saved nesting settings, independent custom fields and display-only part names. Renaming leaves drawing labels and group names unchanged. An open nest reloads external edits; placed copies retain custom fields and display names, and failed placement removes newly created part records. Placed table borders record exact occupied length and nested-copy count for Properties+ table and material summaries.</li>
 <li>The cutting outline must be planar. Lifted or other off-plane detail curves are retained in their original geometry and moved with the part; they do not invalidate the whole list. Reference-layer decoration is not used as the cutting outline when a closed non-reference perimeter exists.</li>
 <li>The <a href="https://github.com/AngusJohnson/Clipper2">Clipper2</a> polygon engine and <a href="https://github.com/ThomasMiz/RectpackSharp">RectpackSharp</a> rectangle helper, with their license notices, are embedded in the plug-in; no separate geometry DLL needs to be installed.</li>
 </ul>
@@ -1564,7 +1626,7 @@ a:active { text-decoration: none; }
 </ul>
 <div class="command-option">
 <h5>AutoAdv</h5>
-<p>when enabled, increments a trailing numeric or alphabetic suffix after each placement.</p>
+<p>when enabled, increments a trailing numeric or alphabetic suffix after each placement. Numeric labels that read as a different number upside-down receive a trailing dot in previews and output; the dot does not affect numbering or next-unused scans.</p>
 </div>
 <div class="command-option">
 <h5>Side</h5>
@@ -1750,6 +1812,25 @@ a:active { text-decoration: none; }
 <p>creates an oriented copy when enabled; otherwise transforms the selected originals.</p>
 </div>
 
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="voutline">
+<h1>vOutline</h1>
+<p class="command-description">The vOutline command creates native silhouettes, grouped per source part with source-based names and configurable output layers.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Select surfaces, polysurfaces, extrusions or meshes; preselection is supported. Press Enter to create native Silhouette curves from the active view.</li>
+<li><code>Parts=Yes</code> (default) creates one output group per source object, keeping its outer and inner silhouettes together. <code>Parts=No</code> groups all output together.</li>
+<li>Group names use the source object&#39;s name when available, otherwise <code>Outline</code>. Existing group names receive a numbered suffix.</li>
+<li><code>Layer=Current</code> (default) uses the current layer; <code>Inherit</code> uses each source&#39;s layer. The layer picker also accepts a specific document layer. Sources are never modified.</li>
+<li><code>InternalEdges=No</code> (default) excludes interior edges; <code>Yes</code> requests them from native Silhouette. Options persist between runs.</li>
+<li><code>Flatten=Yes</code> projects the output onto the active construction plane. <code>Cleanup=Yes</code> simplifies curves and removes covered or partially overlapping segments at document tolerance. <code>Join=Yes</code> joins touching output curves within each source part. These three options default to <code>No</code>; processing runs in that order before grouping, without modifying sources.</li>
+<li>Silhouettes are computed directly without native command chatter or rewriting command history. One progress prompt shows the completed source count, percentage and current source name; errors and the final result remain in history. Single output curves are left ungrouped, including when joining produces one curve.</li>
+</ol>
+
+</div>
 <h2>See also</h2>
 <p><a href="#vhelp">vHelp</a></p>
 </article>
@@ -2062,6 +2143,57 @@ a:active { text-decoration: none; }
 <h2>See also</h2>
 <p><a href="#vhelp">vHelp</a></p>
 </article>
+<article class="help-topic" data-topic="vselgroup">
+<h1>vSelGroup</h1>
+<p class="command-description">The vSelGroup command transparently selects, adds or deselects an innermost group within a parent group, with hover highlighting.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Run <code>vSelGroup</code>, including during another command without a leading <code>!</code>.</li>
+<li>Hover an object to highlight its innermost group, without selecting its parent or sibling groups. Standalone groups can also be picked.</li>
+<li>Click to apply the selection immediately and continue picking groups. Mode stays active between clicks. An empty click leaves selection unchanged and continues picking.</li>
+<li>Press Enter or Esc to finish and return to the previous command. Selections already applied are retained; exiting before a valid pick leaves selection unchanged.</li>
+</ol>
+
+</div>
+<p class="Dialog_Box_Title">Command-line options</p>
+<div class="command-option">
+<h5>Mode=Select</h5>
+<p>replace the current selection with the clicked group (default).</p>
+</div>
+<div class="command-option">
+<h5>Mode=Add</h5>
+<p>add the clicked group without clearing other selections. Shift-click also adds.</p>
+</div>
+<div class="command-option">
+<h5>Mode=Deselect</h5>
+<p>remove only the clicked group&#39;s members from selection. Ctrl-click also removes.</p>
+</div>
+<ul>
+<li>Hidden and locked members remain untouched. Group memberships and geometry are never changed.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
+<article class="help-topic" data-topic="vselsame">
+<h1>vSelSame</h1>
+<p class="command-description">The vSelSame command selects objects by relevant geometry, attributes, part names and nesting properties, with checked-criteria previews.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Run <code>vSelSame</code> with or without preselection. Preselected objects supply reference values; Pick Reference changes the reference objects without losing edited filters. Properties+ offers the same command through its SelSame icon when vTools is available.</li>
+<li>Check relevant geometry, layer, object name, display color, individual attributes, part name, vNest settings and custom fields. Add Filter offers supported properties even when they are absent from the reference, plus arbitrary Attribute User Text, Geometry User Text and Part Custom Field keys.</li>
+<li>Each value field offers a checklist with Select All and Clear. Edit Values or the row&#39;s ellipsis button lets you add, remove or type values; custom-field keys are editable too. The minus button removes a condition. These changes edit search filters only, never object data.</li>
+<li>Checked criteria combine in a single live preview. Pan and zoom remain available in the Rhino viewport while the filter window is open. Unchanged criteria must match the same reference object; explicitly edited criteria match any of their enabled values independently of the old reference. Unchecked and hovered rows do not affect highlighting.</li>
+<li>Select replaces the selection with visible, unlocked matches. Add to Selection retains existing selections. Cancel leaves the selection unchanged.</li>
+</ol>
+<p>Part names use saved display-name overrides or drawing labels, preferring Reference-layer labels and excluding notch labels and table decorations. A group with one unambiguous part label remains identifiable even when its outline is segmented or slightly nonplanar. Part name remains available for typed input without a recognized reference; missing names do not match it. Group membership and derived names are cached per command run without rebuilding Boolean part regions for each candidate. Matching does not modify geometry, groups, labels, or saved part settings.</p>
+
+</div>
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
 <article class="help-topic" data-topic="vsetpt">
 <h1>vSetPt</h1>
 <p class="command-description">The vSetPt command previews and aligns preselected edit-point or control-point grips, or cursor-nearest endpoints, using Rhino&#39;s <a href="https://docs.mcneel.com/rhino/8/help/en-us/commands/setpt.htm">SetPt</a> command.</p>
@@ -2131,6 +2263,10 @@ a:active { text-decoration: none; }
 <p>sets the next reinforcement label; Enter at its text prompt disables labels. A nonempty numeric or alphabetic suffix advances after each placed corner (for example, <code>1</code> to <code>2</code> or <code>A</code> to <code>B</code>). The next value is stored in the document and starts at <code>1</code> in each new document. Labels are 0.5 model units high, centered between a reinforcement arc and its perpendicular line, with the perpendicular line as the text&#39;s bottom direction. Numeric labels that could read as a different number upside-down receive a trailing orientation dot (for example, <code>6.</code> and <code>9.</code>). A corner without a valid reinforcement arc has no visible label.</p>
 </div>
 <div class="command-option">
+<h5>LabelPrefix</h5>
+<p>literal text prepended to new corner labels; empty by default and Enter clears it. The prefix is saved separately from the incrementing Label value, so prefix <code>A</code> and Label <code>1</code> produce <code>A1</code>, <code>A2</code>, and so on. Existing corners retain their labels and prefixes when edited or continued. An empty Label still disables labels even when a prefix is set.</p>
+</div>
+<div class="command-option">
 <h5>Connect</h5>
 <p>when <code>Yes</code>, rebuilds non-crossing perimeter connections among all placed corners, regardless of selection order. Ends belonging to the same source curve are matched first; remaining free ends are paired by proximity. With three or more corners, it closes the loop when valid connections exist, without requiring the first and last picks to share a source curve.</p>
 </div>
@@ -2143,8 +2279,12 @@ a:active { text-decoration: none; }
 <p>chooses the layer for perpendicular, connection, reinforcement-arc, label and joined-boundary geometry; <code>*Current*</code>, <code>.</code> or <code>*</code> follows Rhino&#39;s current layer. Shown immediately before <code>CutLayer</code>. Previous <code>Layer</code> settings are read automatically. Changing the current layer in Rhino&#39;s Layers panel also moves the finished shade output already placed during the active command. Bisectors always use <code>Reference</code>; cut outlines and detached reinforcement outlines keep their separate <code>CutLayer</code>.</p>
 </div>
 <div class="command-option">
+<h5>UseCurve</h5>
+<p><code>Yes</code> by default; retains each shared nonlinear source side at its exact original position and shape, trimming it only at the corner-cap intersections and extending the caps to meet it. Only CutOffset offsets that finished side. Straight source lines still follow Scallop/ScallopSize; explicit ScallopTune choices also override UseCurve. <code>No</code>, or a connection without a shared curved source, uses the generated Scallop setting. The choice is remembered when continuing a shade.</p>
+</div>
+<div class="command-option">
 <h5>Scallop</h5>
-<p>when <code>Yes</code>, replaces each straight perimeter connector with an arc bulging toward the shade interior; <code>No</code> keeps straight connectors.</p>
+<p>when <code>Yes</code>, generates an arc bulging toward the shade interior; <code>No</code> generates straight connectors. Applies to sides without a source-curve profile or when UseCurve is off.</p>
 </div>
 <div class="command-option">
 <h5>ScallopSize</h5>
@@ -2341,9 +2481,14 @@ a:active { text-decoration: none; }
 <h5>BothSides</h5>
 <p>previews and creates a mirrored text pair with both visible text bounds centered at the same curve position and offset equally from the curve.</p>
 </div>
+<div class="command-option">
+<h5>AutoIncrement=Yes</h5>
+<p>advances newly placed labels using the notch-label rules, including numbers, letters and mixed suffixes (<code>9</code> to <code>10</code>, <code>Z</code> to <code>AA</code>, <code>A009</code> to <code>A010</code>). Defaults to <code>No</code>. BothSides uses one value for the pair and advances once; moving existing text or cancelling a placement does not consume a value. The option and next value persist between runs.</p>
+</div>
 <ul>
 <li>Newly created text inherits every group membership from the locked curve; local redo preserves those groups.</li>
 </ul>
+<p>Auto-incremented numeric labels use the same trailing-dot convention as vNotches, vShade corner/seam labels and vUnrollSrf part labels: <code>6</code> displays as <code>6.</code>, <code>9</code> as <code>9.</code>, and <code>68</code> as <code>68.</code>. Only <code>0</code>, <code>6</code>, <code>8</code>, and <code>9</code> are considered rotatable; numbers containing <code>1</code>, such as <code>16</code> and <code>18</code>, stay plain. Multi-digit numbers never start with zero, so <code>60</code> and <code>90</code> need no dot: their upside-down readings have a leading zero. Numbers unchanged by a half-turn, such as <code>69</code>, and labels with non-rotatable characters, such as <code>A6</code>, are also left unchanged. The marker affects preview/output text and its measured bounds, not the stored sequence value; <code>6.</code> still advances to <code>7</code>.</p>
 
 <h2>See also</h2>
 <p><a href="#vhelp">vHelp</a></p>
@@ -2539,6 +2684,7 @@ a:active { text-decoration: none; }
 <li>Press Enter without selecting cutting curves.</li>
 <li>Hover a target curve. <code>vTrim</code> finds the nearest valid contact on each side along the curve and previews the exact portion that will be removed. Between two cutters, only the intervening section is removed; both outer sections remain.</li>
 <li>Click to apply the displayed trim. Hold Shift before clicking to preview and apply an extension from the hovered end instead.</li>
+<li>Drag a box to preview multiple trim sections, then release to apply them together. A left-to-right box selects enclosed sections; right-to-left selects touched sections. Trimming uses existing cutter intersections and retains at least one section of each curve. Hold Shift when starting the box to extend open-curve ends inside it to their nearest forward cutters; a box containing both ends extends both. Intersections and extension plans are reused throughout the drag. One hidden local undo/redo step restores the entire box edit. Enter or Esc during a drag applies no box edit.</li>
 <li>Continue hovering and clicking targets, or press Enter when finished.</li>
 </ol>
 <p>In parallel plan views, AutoClosest also uses apparent intersections in the view direction, including curves at different depths. Angled and perspective views use 3D contacts only. Trimmed and extended curves keep their original 3D geometry rather than being flattened.</p>
@@ -2598,7 +2744,7 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>Labels</h5>
-<p>creates <code>Text</code>, numbered <code>Dots</code>, or <code>None</code> for part identification.</p>
+<p>creates <code>Text</code>, numbered <code>Dots</code>, or <code>None</code> for part identification. Reversible numeric labels receive the shared trailing-dot orientation mark without changing part numbers, rerun matching or edge-mate identities.</p>
 </div>
 <div class="command-option">
 <h5>RotateFlatParts</h5>

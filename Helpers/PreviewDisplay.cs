@@ -11,6 +11,9 @@ internal static class PreviewDisplay
 {
   // Thickness values are pixel increments above Rhino's current default curve thickness.
   private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
+  private const bool DefaultHighlightRedrawOnChange = true; // true redraws after each highlight update; false lets the caller batch updates and redraw once.
+  private const bool DefaultHighlightDrawOnTop = false; // true draws highlighted curves and annotations over scene depth; false retains normal depth testing.
+  private const bool DefaultAutomaticForegroundDrawing = true; // true draws through this conduit; false lets a caller coordinate several highlight layers explicitly.
 
   // Generic object highlighting is deliberately cyan with a dark outline so it cannot be
   // confused with Rhino's yellow selected-object display.
@@ -78,7 +81,11 @@ internal static class PreviewDisplay
     Color BodyColor,
     Color OutlineColor,
     Color DotBackground,
-    double Transparency);
+    double Transparency)
+  {
+    internal int StrokeEmphasis { get; init; } = ObjectHighlightStrokeEmphasis; // Pixels added to Rhino's curve width; zero keeps normal-width highlighted curves.
+    internal int OutlineEmphasis { get; init; } = ObjectHighlightOutlineEmphasis; // Total outline emphasis in pixels; at or below StrokeEmphasis omits the outline.
+  }
 
   public static int Thickness(DisplayPipeline display, int emphasis = 0) =>
     Math.Max(MinimumCurveThickness, display.DefaultCurveThickness + emphasis);
@@ -154,26 +161,22 @@ internal static class PreviewDisplay
 
   private static void DrawObjectHighlightCurve(DisplayPipeline display, Curve curve, ObjectHighlightStyle style)
   {
-    display.DrawCurve(
-      curve,
-      style.OutlineColor,
-      Thickness(display, ObjectHighlightOutlineEmphasis));
+    if (style.OutlineEmphasis > style.StrokeEmphasis)
+      display.DrawCurve(curve, style.OutlineColor, Thickness(display, style.OutlineEmphasis));
     display.DrawCurve(
       curve,
       style.BodyColor,
-      Thickness(display, ObjectHighlightStrokeEmphasis));
+      Thickness(display, style.StrokeEmphasis));
   }
 
   private static void DrawObjectHighlightBrep(DisplayPipeline display, Brep brep, ObjectHighlightStyle style)
   {
-    display.DrawBrepWires(
-      brep,
-      style.OutlineColor,
-      Thickness(display, ObjectHighlightOutlineEmphasis));
+    if (style.OutlineEmphasis > style.StrokeEmphasis)
+      display.DrawBrepWires(brep, style.OutlineColor, Thickness(display, style.OutlineEmphasis));
     display.DrawBrepWires(
       brep,
       style.BodyColor,
-      Thickness(display, ObjectHighlightStrokeEmphasis));
+      Thickness(display, style.StrokeEmphasis));
   }
 
   private static void DrawHighlightCurve(
@@ -246,6 +249,9 @@ internal static class PreviewDisplay
   /// </summary>
   internal sealed class ObjectHighlighter : DisplayConduit, IDisposable
   {
+    internal bool RedrawOnChange { get; set; } = DefaultHighlightRedrawOnChange;
+    internal bool DrawOnTop { get; set; } = DefaultHighlightDrawOnTop;
+    internal bool AutomaticForegroundDrawing { get; set; } = DefaultAutomaticForegroundDrawing;
     private readonly RhinoDoc _doc;
     private readonly HashSet<Guid> _objectIds = [];
     private readonly Dictionary<Guid, GeometryBase> _fallbackGeometry = [];
@@ -284,7 +290,7 @@ internal static class PreviewDisplay
       foreach (var entry in nextFallback)
         _fallbackGeometry.Add(entry.Key, entry.Value);
       Enabled = _objectIds.Count > 0;
-      _doc.Views.Redraw();
+      if (RedrawOnChange) _doc.Views.Redraw();
     }
 
     private GeometryBase? GetGeometry(Guid objectId) =>
@@ -332,9 +338,18 @@ internal static class PreviewDisplay
 
     protected override void DrawForeground(DrawEventArgs e)
     {
+      if (AutomaticForegroundDrawing) DrawForegroundHighlights(e);
+    }
+
+    internal void DrawForegroundHighlights(DrawEventArgs e)
+    {
       if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
         return;
 
+      bool onTop = DrawOnTop;
+      if (onTop) { e.Display.PushDepthTesting(false); e.Display.PushDepthWriting(false); }
+      try
+      {
       foreach (var objectId in _objectIds)
       {
         var geometry = GetGeometry(objectId);
@@ -429,6 +444,11 @@ internal static class PreviewDisplay
             break;
         }
       }
+      }
+      finally
+      {
+        if (onTop) { e.Display.PopDepthWriting(); e.Display.PopDepthTesting(); }
+      }
     }
 
     public void Dispose()
@@ -436,7 +456,7 @@ internal static class PreviewDisplay
       Enabled = false;
       _objectIds.Clear();
       _fallbackGeometry.Clear();
-      _doc.Views.Redraw();
+      if (RedrawOnChange) _doc.Views.Redraw();
     }
   }
 }

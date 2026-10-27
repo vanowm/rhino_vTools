@@ -16,25 +16,28 @@ namespace vTools.Commands;
 /// </summary>
 public sealed class vTextAligned : vToolsCommand
 {
+  // Defaults and customizable constants
+  private const string DefaultText = "Text"; // Plain text content.
+  private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
+  private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
+  private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
+  private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
+  private const bool DefaultAutoIncrement = false; // true advances the label after new placements; false repeats the same text.
+
   private const string OptionsSectionName = "vTextAligned";
   private const string TextKey = "text";
   private const string HeightKey = "height";
   private const string OffsetKey = "offset";
   private const string Rotate90Key = "rotate90";
   private const string BothSidesKey = "bothSides";
-
-  // Option defaults
-  private const string DefaultText = "Text"; // Plain text content.
-  private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
-  private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
-  private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
-  private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
+  private const string AutoIncrementKey = "autoIncrement";
 
   private static string _text = DefaultText;
   private static double _height = DefaultHeight;
   private static double _offset = DefaultOffset;
   private static int _rotate90 = DefaultRotate90;
   private static bool _bothSides = DefaultBothSides;
+  private static bool _autoIncrement = DefaultAutoIncrement;
 
   /// <summary>
   /// Rhino command name.
@@ -48,7 +51,7 @@ public sealed class vTextAligned : vToolsCommand
   {
     LoadPersistedOptions();
     Log.Write("vTextAligned",
-      $"BEGIN textLength={_text.Length} height={_height:G9} offset={_offset:G9} rotate={NormalizeRotate(_rotate90) * 90} bothSides={_bothSides}");
+      $"BEGIN textLength={_text.Length} height={_height:G9} offset={_offset:G9} rotate={NormalizeRotate(_rotate90) * 90} bothSides={_bothSides} autoIncrement={_autoIncrement}");
 
     Guid? activeCurveId = null;
     Guid? activeTextId = null;
@@ -69,6 +72,7 @@ public sealed class vTextAligned : vToolsCommand
     var optHeight = new OptionDouble(_height, RhinoMath.ZeroTolerance, 1e9);
     var optOffset = new OptionDouble(_offset);
     var optBothSides = new OptionToggle(_bothSides, "No", "Yes");
+    var optAutoIncrement = new OptionToggle(_autoIncrement, "No", "Yes");
 
     while (true)
     {
@@ -94,6 +98,7 @@ public sealed class vTextAligned : vToolsCommand
       var idxOffset = getter.AddOptionDouble("Offset", ref optOffset);
       var idxRotate = getter.AddOption("Rotate");
       var idxBothSides = getter.AddOptionToggle("BothSides", ref optBothSides);
+      getter.AddOptionToggle("AutoIncrement", ref optAutoIncrement);
 
       var activeTextCull = activeTextId.HasValue
         ? new ActiveTextCullConduit(activeTextId.Value)
@@ -157,6 +162,7 @@ public sealed class vTextAligned : vToolsCommand
           heightUserChanged = true;
         _offset = optOffset.CurrentValue;
         _bothSides = optBothSides.CurrentValue;
+        _autoIncrement = optAutoIncrement.CurrentValue;
 
         SavePersistedOptions();
         continue;
@@ -455,7 +461,7 @@ public sealed class vTextAligned : vToolsCommand
       var addedGeo = DupTextGeometry(doc, newId);
       if (addedGeo != null)
       {
-        undoStack.Push(TextAction.CreateAdd(newId, addedGeo, newAttributes));
+        undoStack.Push(CreatePlacementAction(newId, addedGeo, newAttributes, effTextPlace));
         redoStack.Clear();
       }
 
@@ -489,8 +495,10 @@ public sealed class vTextAligned : vToolsCommand
         var bothSides = _bothSides;
         if (ToolsOptionStore.TryGetBool(section, BothSidesKey, out var persistedBothSides))
           bothSides = persistedBothSides;
+        var autoIncrement = ToolsOptionStore.TryGetBool(section, AutoIncrementKey, out var persistedIncrement)
+          ? persistedIncrement : DefaultAutoIncrement;
 
-        return (text, height, offset, rotate90, bothSides);
+        return (text, height, offset, rotate90, bothSides, autoIncrement);
       });
 
     _text = values.text;
@@ -498,6 +506,7 @@ public sealed class vTextAligned : vToolsCommand
     _offset = values.offset;
     _rotate90 = NormalizeRotate(values.rotate90);
     _bothSides = values.bothSides;
+    _autoIncrement = values.autoIncrement;
   }
 
   private static void SavePersistedOptions()
@@ -511,6 +520,7 @@ public sealed class vTextAligned : vToolsCommand
         section[OffsetKey] = _offset;
         section[Rotate90Key] = _rotate90;
         section[BothSidesKey] = _bothSides ? 1.0 : 0.0;
+        section[AutoIncrementKey] = _autoIncrement;
       });
   }
 
@@ -899,7 +909,7 @@ public sealed class vTextAligned : vToolsCommand
   {
     try
     {
-      textEntity.PlainText = value;
+      textEntity.PlainText = _autoIncrement ? LabelSequences.FormatDisplayLabel(value) : value;
       return true;
     }
     catch
@@ -1135,7 +1145,11 @@ public sealed class vTextAligned : vToolsCommand
   private static bool ApplyUndoAction(RhinoDoc doc, TextAction action, double currentHeight)
   {
     if (action.Kind == TextActionKind.Add)
-      return doc.Objects.Delete(action.ObjectId, true);
+    {
+      if (!doc.Objects.Delete(action.ObjectId, true)) return false;
+      RestoreSequence(action.SequenceAfter, action.SequenceBefore);
+      return true;
+    }
 
     if (action.Kind == TextActionKind.Move && action.Before != null)
     {
@@ -1167,6 +1181,7 @@ public sealed class vTextAligned : vToolsCommand
         return false;
 
       action.ObjectId = newId;
+      RestoreSequence(action.SequenceBefore, action.SequenceAfter);
       return true;
     }
 
@@ -1189,6 +1204,21 @@ public sealed class vTextAligned : vToolsCommand
     var h = textObj.TextHeight;
     if (h > RhinoMath.ZeroTolerance)
       heightValue = h;
+  }
+
+  private static void RestoreSequence(string? expected, string? replacement)
+  {
+    if (expected == null || replacement == null || !string.Equals(_text, expected, StringComparison.Ordinal)) return;
+    _text = replacement;
+    SavePersistedOptions();
+  }
+
+  private static TextAction CreatePlacementAction(Guid id, TextEntity geometry, ObjectAttributes attributes, string placedText)
+  {
+    var next = _autoIncrement ? LabelSequences.Increment(placedText, DefaultText) : null;
+    var action = TextAction.CreateAdd(id, geometry, attributes, next == null ? null : _text, next);
+    if (next != null) _text = next;
+    return action;
   }
 
   private static string TextEntityValue(TextEntity textEntity, string fallback)
@@ -1243,15 +1273,19 @@ public sealed class vTextAligned : vToolsCommand
     public TextEntity? Before { get; private init; }
     public TextEntity? After { get; private init; }
     public ObjectAttributes? Attributes { get; private init; }
+    public string? SequenceBefore { get; private init; }
+    public string? SequenceAfter { get; private init; }
 
-    public static TextAction CreateAdd(Guid id, TextEntity geo, ObjectAttributes attributes)
+    public static TextAction CreateAdd(Guid id, TextEntity geo, ObjectAttributes attributes, string? sequenceBefore = null, string? sequenceAfter = null)
     {
       return new TextAction
       {
         Kind = TextActionKind.Add,
         ObjectId = id,
         Geo = geo.Duplicate() as TextEntity,
-        Attributes = attributes.Duplicate()
+        Attributes = attributes.Duplicate(),
+        SequenceBefore = sequenceBefore,
+        SequenceAfter = sequenceAfter
       };
     }
 

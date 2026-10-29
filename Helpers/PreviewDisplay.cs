@@ -14,6 +14,7 @@ internal static class PreviewDisplay
   private const bool DefaultHighlightRedrawOnChange = true; // true redraws after each highlight update; false lets the caller batch updates and redraw once.
   private const bool DefaultHighlightDrawOnTop = false; // true draws highlighted curves and annotations over scene depth; false retains normal depth testing.
   private const bool DefaultAutomaticForegroundDrawing = true; // true draws through this conduit; false lets a caller coordinate several highlight layers explicitly.
+  private const bool DefaultAutomaticShadedDrawing = true; // true draws shaded bodies in this conduit; false lets a caller draw fills before its own wires.
 
   // Generic object highlighting is deliberately cyan with a dark outline so it cannot be
   // confused with Rhino's yellow selected-object display.
@@ -252,6 +253,7 @@ internal static class PreviewDisplay
     internal bool RedrawOnChange { get; set; } = DefaultHighlightRedrawOnChange;
     internal bool DrawOnTop { get; set; } = DefaultHighlightDrawOnTop;
     internal bool AutomaticForegroundDrawing { get; set; } = DefaultAutomaticForegroundDrawing;
+    internal bool AutomaticShadedDrawing { get; set; } = DefaultAutomaticShadedDrawing;
     private readonly RhinoDoc _doc;
     private readonly HashSet<Guid> _objectIds = [];
     private readonly Dictionary<Guid, GeometryBase> _fallbackGeometry = [];
@@ -297,6 +299,11 @@ internal static class PreviewDisplay
       _doc.Objects.FindId(objectId)?.Geometry ?? _fallbackGeometry.GetValueOrDefault(objectId);
 
     protected override void PostDrawObjects(DrawEventArgs e)
+    {
+      if (AutomaticShadedDrawing) DrawShadedHighlights(e);
+    }
+
+    internal void DrawShadedHighlights(DrawEventArgs e)
     {
       if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
         return;

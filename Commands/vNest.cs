@@ -35,6 +35,9 @@ namespace vTools.Commands
     private const double ManualContactSnapPixels = 2.0; // Maximum screen-pixel correction aligning a blocked drag with a nearby exact part contact; never relaxes collisions.
     private const double ManualRotationPixelStep = 0.5; // Degrees per horizontal screen pixel when Alt rotation starts exactly at the part's pivot.
     private const double ManualKeyboardRotationStep = 45.0; // Degrees per Alt+arrow press; Left/Up turn forward, Right/Down reverse around the part center.
+    private const double ManualArrowAxisSnapDegrees = 0.05; // Maximum camera/table misalignment in degrees snapped to a cardinal arrow direction; removes tangential snags while preserving deliberate rotated-view diagonals.
+    private const double ManualGrainRotationStep = 180.0; // Discrete degree reversal for grain-constrained pieces; enabled only when their grain rules permit the final orientation.
+    private const int ManualActionMilliseconds = 200; // Soft millisecond budget for one swept keyboard rotation; checked between exact pose/collision tests.
     private const int PreviewKeyboardHook = 3; // Windows thread-local WH_GETMESSAGE hook; never changes Rhino's global shortcuts.
     private const int PreviewRemovedMessage = 1; // PM_REMOVE value identifying keyboard messages about to be dispatched.
     private const uint PreviewWmKeyDown = 0x0100,PreviewWmKeyUp = 0x0101,PreviewWmSysKeyDown = 0x0104,PreviewWmSysKeyUp = 0x0105; // Win32 normal/Alt key-down and key-up messages.
@@ -61,7 +64,6 @@ namespace vTools.Commands
     internal const bool DefaultIncluded = true; // true includes new parts in nesting; false initially excludes them.
     internal const bool DefaultFixed = false; // true keeps new parts at their entered table coordinates; false packs them automatically.
     internal const bool DefaultManualRotation = false; // true initially fixes the specified rotation; false chooses among allowed rotations.
-    internal const bool DefaultAutoNest = false; // true re-nests after relevant edits/additions; false waits for the Nest button.
     internal const bool DefaultAllowFlip = false; // true offers mirrored cutting outlines; false preserves each part's handedness.
     private const bool GrainObjectSnaps = true; // true enables native snaps while drawing a grain guide; false uses unsnapped points.
     internal const double DefaultRotation = 0.0; // Source-relative rotation in degrees before the first layout; -180 through 180.
@@ -73,7 +75,22 @@ namespace vTools.Commands
     internal const double MaterialBasisAngle = -90.0; // Degrees from CPlane X to the material-width axis; length runs horizontally along CPlane X.
     internal const int PreviewAlpha = 200; // Preview stroke alpha from zero invisible through 255 opaque.
     internal const int PreviewPointSize = 3; // Preview point diameter in display pixels; positive.
-    internal const bool DefaultShowGap = false; // true shows active parts' full outward collision gap; false hides the clearance guide.
+    internal const bool DefaultShowGap = false; // false hides guides; true shows all parts' guides; nullable runtime state selects current parts only.
+    private const bool DefaultShowTableGrid = false; // true draws preview-only cross-roll lines every three feet; false hides the grid while retaining rulers.
+    private const double TableGridInches = 36.0; // Three-foot spacing of preview grid lines, in physical inches.
+    private const int RulerFootInches = 12; // Physical inches between major ruler ticks and numeric inch labels.
+    private const int MaximumRulerTicks = 4096; // Maximum cached marks per axis; very large tables use whole-foot multiples instead of unbounded inch ticks.
+    private const int RulerStrokeWidth = 1; // Screen-pixel width of ruler ticks and the optional three-foot grid; never adds document geometry.
+    private const double RulerMinorPixels = 4.0,RulerMajorPixels = 9.0; // Screen-pixel lengths of inch and foot ticks outside the material frame.
+    private const double RulerMinimumTickPixels = 3.0,RulerMinimumLabelPixels = 36.0; // Minimum on-screen tick/label separation; suppress subpixel clutter while zoomed out.
+    private const int RulerTextSize = 10; // Ruler-label height in screen pixels; labels report inches, not feet.
+    private const double RulerTextPaddingPixels = 9.0; // Screen-pixel gap beyond major tick tips to their label centers.
+    private const double RulerCursorPixels = 8.0; // Length of the cursor arrow shaft in screen pixels.
+    private const int TableCursorInterval = 30; // Minimum milliseconds between hover-coordinate redraws; manual gestures share their normal redraw.
+    private const double RulerCoordinateTolerance = 1e-6; // Model-unit roundoff snapped at ruler origins/limits; prevents negative zero and edge-arrow flicker on rotated frames.
+    private const string EmptyCursorStatus = "X: -    Y: -"; // Stable UI status-bar placeholder when the cursor is not aligned with the focused table.
+    private static readonly Color RulerColor = Color.FromArgb(50,55,60); // Dark neutral ruler/label strokes; independent of selection colors.
+    private static readonly Color TableGridColor = Color.FromArgb(115,120,125); // Subdued one-pixel cross-roll grid strokes drawn behind part content.
     private const int GapOutlineWidth = 1; // Clearance-guide stroke width in screen pixels; one is a hairline independent of object thickness.
     private static readonly Color GapOutlineColor = Color.DimGray; // Neutral clearance-guide color with contrast on Rhino's gray viewport, distinct from active perimeter feedback.
     internal static readonly Color TableColor = Color.Gray; // RGB color of material-table preview outlines.
@@ -87,6 +104,10 @@ namespace vTools.Commands
     private const double LinearEdgeTolerance = 1e-6; // Model-unit tolerance for exact straight boundary directions added to rotation candidates.
     private const double OutlineTolerance = 0.001; // Model-unit deviation used for curved outline polygon sampling; positive.
     private const double OutlineAngleTolerance = 0.05; // Radian turning tolerance for native curve-to-polyline sampling; positive.
+    private const double OutlineSamplingToleranceFactor = 4.0; // Model-unit sampling validation allowance as a positive multiple of OutlineTolerance.
+    private const double OutlineDegenerateLength = 1e-8; // Model-unit length below which numerical zero-length polycurve segments contribute no outline.
+    private const double FootprintRepairToleranceFactor = 8.0; // Maximum document-tolerance multiplier for repairing small cutting-boundary gaps or protrusions; larger defects retain the conservative fallback.
+    private static readonly double[] FootprintJoinToleranceFactors = [1,2,4,FootprintRepairToleranceFactor]; // Increasing document-tolerance multipliers for joining temporary cut-boundary copies; source geometry is never modified.
     private const string CutLayerPrefix = "CUT"; // Case-insensitive leaf-layer prefix identifying cutting geometry for nesting footprints.
     private const double PoseDimensionTolerance = 1e-6; // Model-unit threshold for coalescing equivalent rotated bounds; positive.
     private const double PoseAngleSeparation = FreeAngleStep/2; // Minimum degree separation between polygon rotation alternatives; preserves half-turn concavity choices.
@@ -148,8 +169,14 @@ namespace vTools.Commands
     private const string SourceObjectsKey = "vNest.sourceObjects"; // JSON array of source object GUIDs; identifies originals without depending on part numbers or group names.
     private const string SourceSettingsKey = "vNest.sourceSettings"; // Persistent source part identity: group-<GUID> or boundary-<GUID>.
     private const string TableFrameKey = "vNest.tableFrame"; // JSON array of material-plane origin, X axis and Y axis; nine world-coordinate numbers.
+    internal const string NestingAlgorithmVersion = "5"; // Independent nesting revision; increment when packing/search behavior changes, not for unrelated UI changes.
+    private const string TableAlgorithmVersionKey = "vNest.algorithmVersion"; // Primary table-frame user text identifying the independent nesting revision; absent means unknown legacy provenance.
+    private const string TableAlgorithmBuildKey = "vNest.algorithmBuild"; // Plug-in assembly build that ran the recorded algorithm; retained across manual edits.
+    private const string UnknownAlgorithmBuild = ""; // Empty string means a recorded algorithm revision has no available producing-build identifier.
+    internal static readonly AlgorithmStamp CurrentAlgorithm = new(NestingAlgorithmVersion,typeof(NestWorkflow).Assembly.GetName().Version?.ToString()??UnknownAlgorithmBuild); // Current algorithm/build provenance attached only to solver-produced layouts.
     private const string TableFrameSamplesKey = "vNest.tableFrameSamples"; // Three reference points on the table outline used to follow rigid movement of placed tables.
     private const string TableGapSection = "vNest.TableGaps"; // Document-local collision-gap overrides in model units, keyed by the persistent table-group GUID.
+    private const string TableSettingsKey = "vNest.tableSettings"; // JSON table-local dimensions, gap, grain and rotation policy on the placed frame; absent inherits window defaults.
     private static readonly double[] TableFrameSampleFractions = [0,1.0/3,2.0/3]; // Normalized arc-length positions identifying a table's reference frame; three distinct samples.
     private const double LegacySourceMatchTolerance = 16.0; // Model-tolerance multiplier for unique legacy source length/area matching.
     private const double LegacySourceMatchRelativeTolerance = 1e-5; // Relative tolerance for legacy source length/area comparisons; ambiguous originals are never guessed.
@@ -159,6 +186,9 @@ namespace vTools.Commands
     internal static readonly string[] RotationLabels = ["No rotation","Any rotation","45","90","180","Custom"]; // Human-readable GUI rotation-step presets in RotationMode enum order.
     internal static readonly string[] ReversalLabels = ["No reversal","Allow 180 reversal"]; // Grain-constrained orientations; index zero forbids reversal, one permits it.
     internal static readonly string[] StackNames = ["Horizontal","Vertical"]; // Table-arrangement direction; does not rotate any table or part.
+    private static readonly string[] GapDisplayNames = ["No","Current","All"]; // Persisted clearance-display modes: hidden, current selection, or all included placed copies.
+    private static readonly string[] GapDisplayLabels = ["Off","Selected part","All"]; // Visible clearance-display choices in their requested order; no ambiguous indeterminate checkbox.
+    private static readonly string[] GapDisplayOptionNames = ["Off","Selected","All"]; // Command-line clearance values; whitespace-free names share the UI's mode order.
     internal static double Width=DefaultWidth,Length=DefaultLength,RotationStep=DefaultRotationStep;
     internal static double SearchTime=DefaultSearchTime;
     internal static double PartGap=DefaultPartGap;
@@ -169,7 +199,8 @@ namespace vTools.Commands
     internal static RotationMode RotationChoice=DefaultRotationMode;
     internal static bool AllowReverse=DefaultAllowReverse;
     internal static bool ObeyGrain=DefaultObeyGrain;
-    internal static bool ShowGap=DefaultShowGap;
+    internal static bool? ShowGap=DefaultShowGap;
+    private static bool ShowTableGrid=DefaultShowTableGrid;
     internal static NestWindow? ActiveWindow;
     private static string? _selectedMaterialName;
     private static bool _registeringRepeat;
@@ -221,6 +252,7 @@ namespace vTools.Commands
       private PoseKey? _poseKey;
       private List<NestPackingEngine.Pose>? _poses;
       private Point3d[]? _outlinePoints;
+      private (Point3d Point,double Clearance)? _mirrorCue; // null until the source-space interior anchor and its model-unit clearance are cached.
       private BoundingBox _previewBounds=BoundingBox.Unset; // Unset until the source content bounds are cached; includes lifted curves and annotations.
       internal BoundingBox PreviewBounds
       {
@@ -246,14 +278,34 @@ namespace vTools.Commands
       internal IReadOnlyList<Point3d> OutlinePoints()
       {
         if(_outlinePoints!=null) return _outlinePoints;
-        if(Part.Outline.TryGetPolyline(out var polyline)) _outlinePoints=polyline.ToArray();
-        else
-        {
-          using var approximation=Part.Outline.ToPolyline(OutlineTolerance,OutlineAngleTolerance,0,0);
-          _outlinePoints=approximation!=null&&approximation.TryGetPolyline(out polyline)?polyline.ToArray():[];
-        }
+        _outlinePoints=SampleBoundaryPoints(Part.Outline);
         if(_outlinePoints.Length>1&&_outlinePoints[0].DistanceTo(_outlinePoints[^1])<=OutlineTolerance) _outlinePoints=_outlinePoints[..^1];
         return _outlinePoints;
+      }
+      internal (Point3d Point,double Clearance) MirrorCue()
+      {
+        if(_mirrorCue is {} cached)return cached;
+        var best=Point3d.Unset;double clearance=0;
+        void Consider(Point3d candidate)
+        {
+          if(Part.Outline.Contains(candidate,Part.Plane,RhinoMath.ZeroTolerance)!=PointContainment.Inside||
+            !Part.Outline.ClosestPoint(candidate,out var parameter))return;
+          double distance=candidate.DistanceTo(Part.Outline.PointAt(parameter));
+          if(distance>clearance){best=candidate;clearance=distance;}
+        }
+        var bounds=Part.Outline.GetBoundingBox(Part.Plane);
+        if(bounds.IsValid)
+        {
+          Consider(Part.Plane.PointAt(bounds.Min.X+(bounds.Max.X-bounds.Min.X)*MirrorCueAnchorFraction,
+            bounds.Max.Y-(bounds.Max.Y-bounds.Min.Y)*MirrorCueAnchorFraction));
+          if(!best.IsValid)Consider(Part.Plane.PointAt(bounds.Center.X,bounds.Center.Y));
+        }
+        if(!best.IsValid)
+        {
+          using var mesh=Mesh.CreateFromPlanarBoundary(Part.Outline,MeshingParameters.FastRenderMesh,OutlineTolerance);
+          if(mesh!=null)for(int index=0;index<mesh.Faces.Count;index++)Consider(mesh.Faces.GetFaceCenter(index));
+        }
+        _mirrorCue=(best,clearance);return _mirrorCue.Value;
       }
       internal List<NestPackingEngine.Pose> CachedPoses(double? guide,Func<List<NestPackingEngine.Pose>> create)
         =>CachedMaterialPoses(guide,Width,GrainDeviation,create);
@@ -267,7 +319,7 @@ namespace vTools.Commands
       }
       public void Dispose()=>Part.Dispose();
     }
-    private sealed record Options(OptionDouble Width,OptionDouble Length,int GrainIndex,OptionDouble RotationStep,int WidthIndex,int LengthIndex,int RotationIndex,int StepIndex,OptionToggle Reverse,int ReverseIndex,int StackIndex,OptionToggle Flip,int FlipIndex,OptionDouble Search,int SearchIndex,OptionDouble Deviation,int DeviationIndex,OptionToggle Obey,int ObeyIndex,OptionDouble Gap,int GapIndex,OptionToggle ShowGap,int ShowGapIndex);
+    private sealed record Options(OptionDouble Width,OptionDouble Length,int GrainIndex,OptionDouble RotationStep,int WidthIndex,int LengthIndex,int RotationIndex,int StepIndex,OptionToggle Reverse,int ReverseIndex,int StackIndex,OptionToggle Flip,int FlipIndex,OptionDouble Search,int SearchIndex,OptionDouble Deviation,int DeviationIndex,OptionToggle Obey,int ObeyIndex,OptionDouble Gap,int GapIndex,int ShowGapIndex);
 
     internal static Result Run(RhinoDoc doc,RunMode mode)
     {
@@ -336,9 +388,9 @@ namespace vTools.Commands
       var flip=new OptionToggle(AllowFlip,"No","Yes"); int flipIndex=getter.AddOptionToggle("Flip",ref flip);
       var search=new OptionDouble(SearchTime,0,MaximumSearchTime); int searchIndex=getter.AddOptionDouble("SearchTime",ref search);
       var gap=new OptionDouble(PartGap,DefaultPartGap,double.MaxValue); int gapIndex=getter.AddOptionDouble("Gap",ref gap);
-      var showGap=new OptionToggle(ShowGap,"No","Yes");int showGapIndex=getter.AddOptionToggle("ShowGap",ref showGap);
+      int showGapIndex=getter.AddOptionList("ShowGap",GapDisplayOptionNames,GapDisplayIndex(ShowGap));
       getter.AcceptNumber(true,false);
-      return new Options(width,length,grain,step,widthIndex,lengthIndex,rotationIndex,stepIndex,reverse,reverseIndex,stackIndex,flip,flipIndex,search,searchIndex,deviation,deviationIndex,obey,obeyIndex,gap,gapIndex,showGap,showGapIndex);
+      return new Options(width,length,grain,step,widthIndex,lengthIndex,rotationIndex,stepIndex,reverse,reverseIndex,stackIndex,flip,flipIndex,search,searchIndex,deviation,deviationIndex,obey,obeyIndex,gap,gapIndex,showGapIndex);
     }
 
     private static bool ReadOptions(GetBaseClass getter,GetResult result,Options options)
@@ -357,7 +409,7 @@ namespace vTools.Commands
       if(index==options.FlipIndex) AllowFlip=options.Flip.CurrentValue;
       if(index==options.SearchIndex) SearchTime=options.Search.CurrentValue;
       if(index==options.GapIndex) PartGap=options.Gap.CurrentValue;
-      if(index==options.ShowGapIndex)ShowGap=options.ShowGap.CurrentValue;
+      if(result==GetResult.Option&&index==options.ShowGapIndex)ShowGap=GapDisplayState(getter.Option().CurrentListOptionIndex);
       return true;
     }
 
@@ -366,7 +418,8 @@ namespace vTools.Commands
       Width=ToolsOptionStore.TryGetDouble(section,"width",out var width)&&double.IsFinite(width)&&width>0?width:DefaultWidth;
       Length=ToolsOptionStore.TryGetDouble(section,"length",out var length)&&double.IsFinite(length)&&length>0?length:DefaultLength;
       PartGap=ToolsOptionStore.TryGetDouble(section,"gap",out var gap)&&double.IsFinite(gap)&&gap>=DefaultPartGap?gap:DefaultPartGap;
-      ShowGap=ToolsOptionStore.TryGetBool(section,"showGap",out var showGap)?showGap:DefaultShowGap;
+      ShowGap=ReadGapDisplay(section);
+      ShowTableGrid=ToolsOptionStore.TryGetBool(section,"tableGrid",out var tableGrid)?tableGrid:DefaultShowTableGrid;
       RotationChoice=ToolsOptionStore.TryGetString(section,"rotationMode",out var rotation)&&Enum.TryParse<RotationMode>(rotation,true,out var choice)&&Enum.IsDefined(choice)?choice:DefaultRotationMode;
       RotationStep=ToolsOptionStore.TryGetDouble(section,"rotationStep",out var step)&&double.IsFinite(step)&&step>=MinimumRotationStep&&step<=MaximumRotationStep?step:DefaultRotationStep;
       AllowReverse=ToolsOptionStore.TryGetBool(section,"allowReverse",out var reverse)?reverse:DefaultAllowReverse;
@@ -385,8 +438,21 @@ namespace vTools.Commands
       if(section[MaterialPresetsKey] is System.Text.Json.Nodes.JsonArray)
         section[MaterialPresetsKey]=MaterialPresetsJson(ReadMaterialPresets(section));
       section["width"]=Width; section["length"]=Length; section["gap"]=PartGap; section["grain"]=Grain.ToString(); section["rotationMode"]=RotationChoice.ToString(); section["rotationStep"]=RotationStep; section["allowReverse"]=AllowReverse; section["obeyGrain"]=ObeyGrain; section["grainDeviation"]=GrainDeviation; section["stack"]=Stack.ToString(); section["flip"]=AllowFlip; section["searchTime"]=SearchTime; section[SelectedMaterialKey]=_selectedMaterialName??string.Empty;
-      section["showGap"]=ShowGap;
+      section["showGap"]=ShowGap!=false;
+      section["showGapMode"]=GapDisplayNames[GapDisplayIndex(ShowGap)];
+      section["tableGrid"]=ShowTableGrid;
     });
+    private static int GapDisplayIndex(bool? value)=>value.HasValue?value.Value?2:0:1;
+    private static bool? GapDisplayState(int index)=>index==1?(bool?)null:index==2;
+    private static bool? ReadGapDisplay(System.Text.Json.Nodes.JsonObject? section)
+    {
+      if(ToolsOptionStore.TryGetString(section,"showGapMode",out var mode))
+      {
+        int index=Array.FindIndex(GapDisplayNames,value=>value.Equals(mode,StringComparison.OrdinalIgnoreCase));
+        if(index>=0)return index==1?(bool?)null:index==2;
+      }
+      return ToolsOptionStore.TryGetBool(section,"showGap",out var legacy)?legacy?(bool?)null:false:DefaultShowGap;
+    }
 
     internal sealed record MaterialPreset(string Name,double Width,double Gap,double GrainDeviation=DefaultGrainDeviation)
     {
@@ -429,7 +495,7 @@ namespace vTools.Commands
       }
       return result.OrderBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase).ToList();
     }
-    private static List<MaterialPreset> LoadMaterialPresets()=>MaterialDatabase.Read(ReadMaterialPresets);
+    private static List<MaterialPreset> LoadMaterialPresets(IEnumerable<MaterialPreset>? recovered=null)=>MaterialDatabase.Read(ReadMaterialPresets,recovered);
     private static List<MaterialPreset> LoadMaterialDrafts()=>MaterialDatabase.Read(section=>ReadMaterialRecords(section,MaterialDraftsKey));
     private static bool SaveMaterialDrafts(IEnumerable<MaterialPreset> drafts,IEnumerable<MaterialPreset> baseline)
     {
@@ -483,9 +549,9 @@ namespace vTools.Commands
       private static string DatabasePath=>System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
         MaterialDatabaseFolder,MaterialDatabaseFileName);
 
-      internal static T Read<T>(Func<System.Text.Json.Nodes.JsonObject?,T> reader)
+      internal static T Read<T>(Func<System.Text.Json.Nodes.JsonObject?,T> reader,IEnumerable<MaterialPreset>? recovered=null)
       {
-        try {return Access(DatabasePath,reader,false);}
+        try {return Access(DatabasePath,reader,false,recovered);}
         catch(Exception ex)
         {
           Log.Write("vNest","global material library read failed: {0}",ex.Message);
@@ -497,7 +563,7 @@ namespace vTools.Commands
         try {Access(DatabasePath,section=>{updater(section!);return true;},true);error=string.Empty;return true;}
         catch(Exception ex) {error=ex.Message;return false;}
       }
-      private static T Access<T>(string path,Func<System.Text.Json.Nodes.JsonObject?,T> action,bool write)
+      private static T Access<T>(string path,Func<System.Text.Json.Nodes.JsonObject?,T> action,bool write,IEnumerable<MaterialPreset>? recovered=null)
       {
         using var mutex=new Mutex(false,MaterialDatabaseMutexName);bool held=false;
         try
@@ -520,8 +586,18 @@ namespace vTools.Commands
                 .DistinctBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase));
             root["version"]=MaterialDatabaseVersion;
           }
+          int recoveredCount=0;
+          if(recovered!=null)
+          {
+            var presets=ReadMaterialPresets(root);var names=presets.Select(preset=>preset.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var records=new System.Text.Json.Nodes.JsonObject {[MaterialPresetsKey]=MaterialPresetsJson(recovered)};
+            var missing=ReadMaterialPresets(records).Where(preset=>names.Add(preset.Name)).ToArray();
+            recoveredCount=missing.Length;
+            if(recoveredCount>0)root[MaterialPresetsKey]=MaterialPresetsJson(presets.Concat(missing));
+          }
           T result=action(root);
-          if(write||!exists||migrate)Save(path,root);
+          if(write||!exists||migrate||recoveredCount>0)Save(path,root);
+          if(recoveredCount>0)Log.Write("vNest","recovered {0} drawing material preset(s) into the global library",recoveredCount);
           // Mark only after a durable import; retain the legacy arrays as a recovery copy.
           if(migrate&&!ToolsOptionStore.Update(Section,section=>section[MaterialDatabaseMigratedKey]=true))
             Log.Write("vNest","material library migrated, but the legacy import marker could not be saved: {0}",ToolsOptionStore.LastError);
@@ -548,6 +624,10 @@ namespace vTools.Commands
     internal static Row CreateRow(RhinoDoc doc,Part part)
     {
       EnsureCutFootprint(doc,part);
+      return CreatePreparedRow(doc,part);
+    }
+    private static Row CreatePreparedRow(RhinoDoc doc,Part part)
+    {
       Vector3d? guide=null;
       Guid guideId=Guid.Empty;
       foreach(var item in part.Items.Where(item=>item.Geometry is Curve curve&&!curve.IsClosed&&IsGrainMarker(doc,item.Attributes))
@@ -652,6 +732,52 @@ namespace vTools.Commands
     internal static double TableAllowanceForUnits(UnitSystem units)=>units is UnitSystem.None or UnitSystem.CustomUnits
       ?NestPackingEngine.DefaultTableAllowance:TableAllowanceInches*RhinoMath.UnitScale(UnitSystem.Inches,units);
 
+    private static Point3d[] SampleBoundaryPoints(Curve curve)
+    {
+      Point3d[] Native(Curve source)
+      {
+        if(source.TryGetPolyline(out var polyline))return polyline.ToArray();
+        using var approximation=source.ToPolyline(OutlineTolerance,OutlineAngleTolerance,0,0);
+        return approximation!=null&&approximation.TryGetPolyline(out polyline)?polyline.ToArray():[];
+      }
+      bool Complete(Point3d[] points)
+      {
+        if(points.Length<2||points.Any(point=>!point.IsValid))return false;
+        double tolerance=OutlineTolerance*OutlineSamplingToleranceFactor;
+        if(points[0].DistanceTo(curve.PointAtStart)>tolerance||points[^1].DistanceTo(curve.PointAtEnd)>tolerance)return false;
+        var expected=curve.GetBoundingBox(true);var actual=new BoundingBox(points);
+        if(!expected.IsValid||!actual.IsValid||expected.Min.DistanceTo(actual.Min)>tolerance||expected.Max.DistanceTo(actual.Max)>tolerance)return false;
+        if(!curve.IsClosed)return true;
+        using var mass=AreaMassProperties.Compute(curve);
+        if(mass==null||!double.IsFinite(mass.Area))return false;
+        var cross=Vector3d.Zero;var origin=points[0];
+        for(int index=1;index<points.Length;index++)cross+=Vector3d.CrossProduct(points[index-1]-origin,points[index]-origin);
+        return Math.Abs(cross.Length/2-mass.Area)<=tolerance*Math.Max(curve.GetLength(),tolerance);
+      }
+      if(curve.GetLength()<=OutlineDegenerateLength)return [];
+      var samples=Native(curve);
+      if(curve.IsValid&&Complete(samples))return samples;
+      var segments=curve.DuplicateSegments();
+      try
+      {
+        if(segments.Length<2)throw new InvalidOperationException("Could not sample the complete cutting boundary.");
+        var points=new List<Point3d>();
+        foreach(var segment in segments)
+        {
+          if(segment.GetLength()<=OutlineDegenerateLength)continue;
+          var section=segment is PolyCurve?SampleBoundaryPoints(segment):Native(segment);
+          if(section.Length<2)throw new InvalidOperationException("Could not sample a cutting-boundary segment.");
+          foreach(var point in section)
+            if(points.Count==0||points[^1].DistanceTo(point)>OutlineDegenerateLength)points.Add(point);
+        }
+        samples=points.ToArray();
+        if(!Complete(samples))throw new InvalidOperationException("The sampled cutting boundary does not cover the complete part.");
+        Log.Write("vNest","cutting boundary sampled by segments validSource={0} segments={1} points={2}",curve.IsValid,segments.Length,samples.Length);
+        return samples;
+      }
+      finally{foreach(var segment in segments)segment.Dispose();}
+    }
+
     internal static void EnsureCutFootprint(RhinoDoc doc,Part part)
     {
       string Layer(ObjectAttributes attributes)=>attributes.LayerIndex>=0&&attributes.LayerIndex<doc.Layers.Count
@@ -662,28 +788,72 @@ namespace vTools.Commands
         .Select(item=>(Curve)item.Geometry).ToArray();
       if(curves.Length==0) return;
       double tolerance=doc.ModelAbsoluteTolerance;
-      Point3d[] Samples(Curve curve)
-      {
-        if(curve.TryGetPolyline(out var points)) return points.ToArray();
-        using var approximation=curve.ToPolyline(OutlineTolerance,OutlineAngleTolerance,0,0);
-        return approximation!=null&&approximation.TryGetPolyline(out points)?points.ToArray():[];
-      }
-      var samples=curves.Append(part.Outline).SelectMany(Samples).Select(part.Plane.ClosestPoint).ToArray();
+      var originalItem=part.Items.FirstOrDefault(item=>item.Id==part.Attributes.ObjectId&&item.Geometry is Curve);
+      var original=originalItem?.Geometry as Curve??part.Outline;
+      var sources=curves.Append(original).Distinct().ToArray();var cache=new Dictionary<Curve,Point3d[]>();
+      Point3d[] Samples(Curve source)
+      {if(!cache.TryGetValue(source,out var points))cache[source]=points=SampleBoundaryPoints(source).Select(part.Plane.ClosestPoint).ToArray();return points;}
+      uint outlineCrc=part.Outline.DataCRC(0);
+      var samples=sources.Where(curve=>curve.DataCRC(0)!=outlineCrc).SelectMany(Samples).ToArray();
+      double OutsideDistance(Curve boundary,Point3d point)=>boundary.Contains(point,part.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident?0:
+        boundary.ClosestPoint(point,out double parameter)?boundary.PointAt(parameter).DistanceTo(point):double.PositiveInfinity;
+      bool Covers(Curve boundary)=>samples.All(point=>OutsideDistance(boundary,point)<=tolerance);
+      if(part.Outline.IsValid&&part.Outline.IsClosed&&(originalItem==null||outlineCrc==original.DataCRC(0))&&Covers(part.Outline))return;
+      samples=sources.SelectMany(Samples).ToArray();
       if(samples.Length<3) throw new InvalidOperationException("Could not determine the part's cutting footprint.");
-      bool Covers(Curve boundary)=>samples.All(point=>boundary.Contains(point,part.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident);
-      if(Covers(part.Outline)) return;
-      var joined=Curve.JoinCurves(curves,tolerance);
+      double Area(Curve curve) { using var mass=AreaMassProperties.Compute(curve); return mass?.Area??double.PositiveInfinity; }
+      bool TryBoundary(Curve candidate,double joinTolerance)
+      {
+        if(!candidate.IsClosed)return false;
+        using var boundary=Curve.ProjectToPlane(candidate,part.Plane);
+        if(boundary==null||!boundary.IsValid||!boundary.IsClosed)return false;
+        double area=Area(boundary);
+        if(!double.IsFinite(area)||area<=tolerance*tolerance)return false;
+        double outside=samples.Select(point=>OutsideDistance(boundary,point)).Max();
+        if(outside<=tolerance)
+        {
+          part.ReplaceOutline(boundary.DuplicateCurve());return true;
+        }
+        if(outside>tolerance*FootprintRepairToleranceFactor)return false;
+        // Preserve the concave boundary and enclose tiny protrusions instead of bridging the entire part with a convex hull.
+        double padding=outside+Math.Max(tolerance,OutlineTolerance);
+        foreach(double sign in new[]{1.0,-1.0})
+        {
+          var offsets=boundary.Offset(part.Plane,sign*padding,Math.Min(tolerance,OutlineTolerance),CurveOffsetCornerStyle.Round)??[];
+          try
+          {
+            var repaired=offsets.Where(offset=>offset.IsClosed&&Area(offset)>area&&Covers(offset)).OrderBy(Area).FirstOrDefault();
+            if(repaired==null)continue;
+            part.ReplaceOutline(repaired.DuplicateCurve());
+            Log.Write("vNest","cut footprint kept concave boundary source={0} joinTolerance={1:G6} enclosure={2:G6}",part.Attributes.ObjectId,joinTolerance,padding);
+            return true;
+          }
+          finally {foreach(var offset in offsets)offset.Dispose();}
+        }
+        return false;
+      }
+      var joined=new List<Curve>();
       try
       {
-        double Area(Curve curve) { using var mass=AreaMassProperties.Compute(curve); return mass?.Area??double.PositiveInfinity; }
-        var boundary=joined.Where(curve=>curve.IsClosed&&Covers(curve)).OrderBy(Area).FirstOrDefault();
-        if(boundary!=null)
+        if(!part.Outline.IsValid)
         {
-          double previous=Area(part.Outline),updated=Area(boundary);
-          part.ReplaceOutline(boundary.DuplicateCurve());
-          Log.Write("vNest","cut footprint rebuilt from joined members: area={0:G17} -> {1:G17}",previous,updated);
-          return;
+          using var sampled=new PolylineCurve(SampleBoundaryPoints(part.Outline));
+          if(TryBoundary(sampled,tolerance))return;
         }
+        foreach(var boundary in curves.Append(original).Distinct().Where(curve=>curve.IsClosed).OrderBy(Area))
+          if(TryBoundary(boundary,tolerance))return;
+        foreach(double factor in FootprintJoinToleranceFactors)
+        {
+          var batch=Curve.JoinCurves(curves,tolerance*factor);joined.AddRange(batch);
+          foreach(var boundary in batch.Where(curve=>curve.IsClosed).OrderBy(Area))
+            if(TryBoundary(boundary,tolerance*factor))return;
+          foreach(var boundary in batch.Where(curve=>!curve.IsClosed&&curve.PointAtStart.DistanceTo(curve.PointAtEnd)<=tolerance*factor))
+          {
+            using var closed=boundary.DuplicateCurve();
+            if(closed.MakeClosed(tolerance*factor)&&TryBoundary(closed,tolerance*factor))return;
+          }
+        }
+        if(Covers(part.Outline))return;
         // Broken/open cutting perimeters must not leave exterior geometry outside the collision footprint.
         var points=samples.Select(point=> {part.Plane.ClosestParameter(point,out double x,out double y);return new Point2d(x,y);})
           .Distinct().OrderBy(point=>point.X).ThenBy(point=>point.Y).ToArray();
@@ -935,15 +1105,17 @@ namespace vTools.Commands
     private static List<NestPackingEngine.Pose> FindPoses(Row row,double? guide)
       =>FindMaterialPoses(row,guide,Width,GrainDeviation,Grain,ObeyGrain,AllowReverse);
     private static List<NestPackingEngine.Pose> FindMaterialPoses(Row row,double? guide,double materialWidth,double materialDeviation,
-      GrainMode materialGrain=DefaultGrain,bool materialObey=DefaultObeyGrain,bool materialReverse=DefaultAllowReverse)
+      GrainMode materialGrain=DefaultGrain,bool materialObey=DefaultObeyGrain,bool materialReverse=DefaultAllowReverse,
+      TableSettings? tableSettings=null)
     {
       var mode=row.GrainOverride??materialGrain;
-      var choice=row.RotationOverride??RotationChoice; double step=row.RotationStepOverride??RotationStep;
+      var choice=row.RotationOverride??tableSettings?.Rotation??RotationChoice; double step=row.RotationStepOverride??tableSettings?.Step??RotationStep;
+      double tableLength=tableSettings?.Length??Length;
       bool obey=row.ObeyGrainOverride??materialObey,reverse=row.AllowReverseOverride??materialReverse;
       double deviation=row.GrainDeviationOverride??materialDeviation;
       bool constrained=GrainConstrained(mode,guide,obey),manual=row.ManualRotation||row.Fixed;
       bool? flip=row.Fixed?row.Flipped:row.FlipOverride;
-      bool offerBase=flip!=true,offerFlip=flip==true||flip==null&&AllowFlip;
+      bool offerBase=flip!=true,offerFlip=flip==true||flip==null&&(tableSettings?.AllowFlip??AllowFlip);
       // Mirroring across material width reverses a grain vector; validate its final direction too.
       double MirrorRotation(double angle)=>NormalizeRotation(-angle-2*EffectiveGuide(mode,guide)!.Value);
       bool Allowed(double angle,bool mirrored)=>!constrained&&manual||PartRotationAllowed(
@@ -966,7 +1138,7 @@ namespace vTools.Commands
         var pose=new NestPackingEngine.Pose(width,length,angle) {Contour=contour}; candidates.Add(angle,pose); return pose;
       }
       foreach(var angle in angles.Select(NormalizeRotation).Distinct().OrderBy(Math.Abs)) Evaluate(angle);
-      double FitScore(NestPackingEngine.Pose pose)=>Math.Max(pose.Width/materialWidth,pose.Length/Length);
+      double FitScore(NestPackingEngine.Pose pose)=>Math.Max(pose.Width/materialWidth,pose.Length/tableLength);
       bool free=!manual&&!constrained&&choice==RotationMode.Any;
       bool refine=free||!manual&&constrained&&deviation>0;
       if(refine)
@@ -994,7 +1166,7 @@ namespace vTools.Commands
         }
       }
       var poses=new List<NestPackingEngine.Pose>();
-      foreach(var candidate in candidates.Values.OrderByDescending(pose=>pose.Width<=materialWidth&&pose.Length<=Length).ThenBy(pose=>pose.Width*pose.Length).ThenBy(pose=>Math.Abs(pose.Rotation)))
+      foreach(var candidate in candidates.Values.OrderByDescending(pose=>pose.Width<=materialWidth&&pose.Length<=tableLength).ThenBy(pose=>pose.Width*pose.Length).ThenBy(pose=>Math.Abs(pose.Rotation)))
       {
         if(poses.Any(pose=>Math.Abs(NormalizeRotation(pose.Rotation-candidate.Rotation))<(free?PoseAngleSeparation:GrainAngularTolerance))) continue;
         poses.Add(candidate);
@@ -1037,9 +1209,36 @@ namespace vTools.Commands
 
     internal static Vector3d TableOffset(Plane plane,int table)=>-plane.YAxis*(table*(Width+TableGap));
 
+    internal static NestPackingEngine.Placement TransferPlacement(NestPackingEngine.Placement part,Plane source,Plane target,int table,Vector3d delta)
+    {
+      target.ClosestParameter(source.PointAt(part.X,part.Y)+delta,out double x,out double y);
+      return part with {Table=table,X=x,Y=y};
+    }
+
+    internal static bool TransferTableContains(Plane source,Plane target,double width,double length,Point3d cursor)
+    {
+      if(!target.XAxis.EpsilonEquals(source.XAxis,PoseDimensionTolerance)||!target.YAxis.EpsilonEquals(source.YAxis,PoseDimensionTolerance))return false;
+      return target.ClosestParameter(cursor,out double x,out double y)&&x>=-PoseDimensionTolerance&&x<=width+PoseDimensionTolerance&&
+        y>=-PoseDimensionTolerance&&y<=length+PoseDimensionTolerance;
+    }
+
     internal static int PreviewTableCount(int tables,bool locating)=>tables==0&&locating?1:tables;
 
-    internal sealed record MaterialBatch(MaterialPreset Material,List<NestPackingEngine.Input> Inputs);
+    internal sealed record TableSettings(MaterialPreset Material,double Length,RotationMode Rotation,double Step,bool AllowFlip);
+    internal sealed record AlgorithmStamp(string Version,string Build);
+    private static AlgorithmStamp? ReadAlgorithmStamp(ObjectAttributes attributes)
+    {
+      string? version=attributes.GetUserString(TableAlgorithmVersionKey);
+      return string.IsNullOrWhiteSpace(version)?null:new(version.Trim(),attributes.GetUserString(TableAlgorithmBuildKey)??UnknownAlgorithmBuild);
+    }
+    private static void WriteAlgorithmStamp(ObjectAttributes attributes,AlgorithmStamp? stamp)
+    {
+      attributes.SetUserString(TableAlgorithmVersionKey,stamp?.Version);attributes.SetUserString(TableAlgorithmBuildKey,stamp?.Build);
+    }
+    internal sealed record MaterialBatch(MaterialPreset Material,List<NestPackingEngine.Input> Inputs)
+    {internal NestPackingEngine.Result? InitialLayout {get;init;} // Valid unchanged material-local incumbent; null requests a fresh constructive seed.
+      internal TableSettings? Settings {get;init;} // Optional table-local recipe and length for a selected-table material pool; null inherits the run length.
+    }
     internal static List<NestPackingEngine.Input> ShuffleInputs(IReadOnlyList<NestPackingEngine.Input> inputs,System.Random random)
     {
       var movable=inputs.Where(input=>!input.Fixed).ToArray();
@@ -1058,13 +1257,13 @@ namespace vTools.Commands
       Action<int>? progress,Action<NestPackingEngine.Result>? preview,CancellationToken token,Action<NestPackingEngine.Result>? accepted,Action<string>? activity,
       Action<string,string,int,int>? stageProgress)
     {
-      var completed=new List<(MaterialPreset Material,NestPackingEngine.Result Result)>();
-      NestPackingEngine.Result Merge(MaterialPreset? material=null,NestPackingEngine.Result? current=null)
+      var completed=new List<(MaterialBatch Batch,NestPackingEngine.Result Result)>();
+      NestPackingEngine.Result Merge(MaterialBatch? batch=null,NestPackingEngine.Result? current=null)
       {
-        var entries=new List<(MaterialPreset Material,NestPackingEngine.Result Result)>(completed);
-        if(current!=null) entries.Add((material!,current));
+        var entries=new List<(MaterialBatch Batch,NestPackingEngine.Result Result)>(completed);
+        if(current!=null) entries.Add((batch!,current));
         var placements=new List<NestPackingEngine.Placement>(); var errors=new Dictionary<int,string>();
-        var tables=new Dictionary<int,MaterialPreset>(); int offset=0;
+        var tables=new Dictionary<int,MaterialPreset>();var settings=new Dictionary<int,TableSettings>();var algorithms=new Dictionary<int,AlgorithmStamp>(); int offset=0;
         foreach(var entry in entries)
         {
           if(offset+entry.Result.Tables>NestPackingEngine.MaximumTables)
@@ -1075,13 +1274,15 @@ namespace vTools.Commands
           }
           placements.AddRange(entry.Result.Placements.Select(part=>part with {Table=part.Table+offset}));
           foreach(var error in entry.Result.Errors) errors[error.Key]=error.Value;
-          for(int table=0;table<entry.Result.Tables;table++) tables[offset+table]=entry.Material;
+          for(int table=0;table<entry.Result.Tables;table++)
+          {tables[offset+table]=entry.Batch.Material;if(entry.Batch.Settings is {} recipe)settings[offset+table]=recipe;}
+          foreach(var pair in entry.Result.TableAlgorithms)algorithms[offset+pair.Key]=pair.Value;
           offset+=entry.Result.Tables;
         }
         var stats=entries.Select(entry=>entry.Result.Search).OfType<NestPackingEngine.SearchStatistics>().ToArray();
         var profiles=entries.Select(entry=>entry.Result.Profile).OfType<NestPackingEngine.ProfileStatistics>().ToArray();
         double allowance=entries.Select(entry=>entry.Result.TableAllowance).DefaultIfEmpty(NestPackingEngine.DefaultTableAllowance).Max();
-        return new NestPackingEngine.Result(placements,offset,errors) {TableMaterials=tables,TableAllowance=allowance,Stopped=entries.Any(entry=>entry.Result.Stopped),
+        return new NestPackingEngine.Result(placements,offset,errors) {TableMaterials=tables,TableSettings=settings,TableAlgorithms=algorithms,TableAllowance=allowance,Stopped=entries.Any(entry=>entry.Result.Stopped),
           Search=stats.Length==0?null:new NestPackingEngine.SearchStatistics(stats.Sum(s=>s.PlacementTests),stats.Sum(s=>s.Layouts),stats.Sum(s=>s.Improvements),
             stats.Sum(s=>s.InitialSeconds),stats.Sum(s=>s.SearchSeconds),stats.Any(s=>s.BudgetExpired))
             {HalfTurnTests=stats.Sum(s=>s.HalfTurnTests),ConsumedLength=placements.GroupBy(part=>part.Table).Sum(group=>group.Max(part=>part.Y+part.Pose.Length)+allowance)},
@@ -1097,18 +1298,18 @@ namespace vTools.Commands
         double budget=searchSeconds*batch.Inputs.Count/Math.Max(1,total);
         Log.Write("vNest","material started name={0} parts={1} poses={2} width={3} searchSeconds={4:G6}",
           batch.Material.Name,batch.Inputs.Count,batch.Inputs.Sum(input=>input.Poses.Count),batch.Material.Width,budget);
-        var result=NestContourPackingEngine.SolveUntilStoppedWithStages(batch.Inputs,batch.Material.Width,length,
+        var result=NestContourPackingEngine.SolveFromLayoutWithStages(batch.Inputs,batch.Material.Width,batch.Settings?.Length??length,
           value=>progress?.Invoke((finished*100+batch.Inputs.Count*value)/Math.Max(1,total)),
-          value=>preview?.Invoke(Merge(batch.Material,value)),token,searchSeconds*batch.Inputs.Count/Math.Max(1,total),
-          value=>accepted?.Invoke(Merge(batch.Material,value)),activity,
-          (stage,percent,overall)=>stageProgress?.Invoke(batch.Material.Name,stage,percent,(finished*100+batch.Inputs.Count*overall)/Math.Max(1,total)));
+          value=>preview?.Invoke(Merge(batch,value)),token,searchSeconds*batch.Inputs.Count/Math.Max(1,total),
+          value=>accepted?.Invoke(Merge(batch,value)),activity,
+          (stage,percent,overall)=>stageProgress?.Invoke(batch.Material.Name,stage,percent,(finished*100+batch.Inputs.Count*overall)/Math.Max(1,total)),batch.InitialLayout);
         Log.Write("vNest","material finished name={0} parts={1} tables={2} elapsedSeconds={3:G6} initialSeconds={4:G6} searchSeconds={5:G6} pairSeconds={6:G6} anchorSeconds={7:G6} collisionSeconds={8:G6} stopped={9}",
           batch.Material.Name,batch.Inputs.Count,result.Tables,timer.Elapsed.TotalSeconds,result.Search?.InitialSeconds??0,result.Search?.SearchSeconds??0,
           result.Profile?.PairSeconds??0,result.Profile?.AnchorSeconds??0,result.Profile?.CollisionSeconds??0,result.Stopped);
         processed+=batch.Inputs.Count;
         if(completed.Sum(entry=>entry.Result.Tables)+result.Tables>NestPackingEngine.MaximumTables)
           result=new NestPackingEngine.Result([],0,batch.Inputs.ToDictionary(input=>input.Id,_=>"Material table limit exceeded"));
-        completed.Add((batch.Material,result));
+        completed.Add((batch,result));
       }
       var final=Merge();
       if(token.IsCancellationRequested)
@@ -1146,13 +1347,18 @@ namespace vTools.Commands
     private const int MinimumWindowWidth = 840; // Minimum client width in device-independent pixels; keeps all three editor columns readable.
     private const int MinimumWindowHeight = 400; // Minimum client height in device-independent pixels.
     private const int WindowPadding = 8; // Uniform client padding in device-independent pixels.
+    private const string WindowPlacementKey = "windowPlacement"; // Command-config JSON containing normal outer bounds in logical screen pixels and maximized state; absent uses the initial window size.
+    private const double WindowPlacementSaveInterval = 0.5; // Seconds between coalesced position/size saves; accepted closing also flushes immediately.
+    private const int MaximumWindowPlacementCharacters = 1024; // Maximum persisted placement JSON length; larger or malformed values use normal startup placement.
     private const int ControlGap = 6; // Inter-control gap in device-independent pixels.
+    private const int GapDisplayWidth = 120; // Clearance-display dropdown width in device-independent pixels; fits Selected part without truncation.
     private const int GridRowHeight = 24; // Stable part-row height in device-independent pixels.
     private const int FieldLabelWidth = 88; // Uniform right-aligned label width in device-independent pixels; fits Grain deviation.
     private const int FieldWidth = 165; // Uniform input width in device-independent pixels; fits numeric values and grain-reversal choices.
     private const int PartNameWidth = 160; // Initial part-name column width in device-independent pixels.
     private const int MaterialColumnWidth = 120; // Initial material-name column width in device-independent pixels; leaves room for status at the minimum window width.
     private const int SettingColumnWidth = 85; // Read-only per-part setting column width in device-independent pixels; additional settings remain horizontally scrollable.
+    private const int TableValuePickerWidth = 24; // Width in device-independent pixels of the mixed-table numeric-value dropdown.
     private const int TotalYardageWidth = 130; // Fixed footer width in device-independent pixels for the total occupied yardage, independent of status/progress text.
     private const int MaterialUsageTableCountWidth = 100; // Used-table count column width in device-independent pixels.
     private const int TablePartCountWidth = 90; // Physical part-copy count column width in device-independent pixels.
@@ -1165,13 +1371,32 @@ namespace vTools.Commands
     private const string CustomizedRowForegroundKey = "vNest.CustomizedForeground"; // Scoped WPF resource key for readable customized-row text.
     private static readonly SDColor DrawnGuideColor = SDColor.ForestGreen; // Fallback stroke color for drawn guide previews when no GRAIN layer exists.
     private const int StatusColumnMinimumWidth = 210; // Minimum status width in device-independent pixels; leaves enough room for copy counts and state text.
-    private const int IconButtonSize = 26; // Stable add/remove button width in device-independent pixels.
+    private const int IconButtonSize = 26; // Stable manual-action button dimensions in device-independent pixels.
+    private const int ManualIconSize = 16; // Native rotate/mirror glyph dimensions in device-independent pixels.
+    private const double ManualIconStroke = 1.4; // Native rotate/mirror glyph stroke width in device-independent pixels.
+    private const int MirrorCueSize = 18; // Screen-pixel height of the mirror indicator on flipped preview instances.
+    private const int MirrorCuePadding = 2; // Screen-pixel safety margin between the fitted mirror glyph and its interior clearance circle.
+    private const int MinimumMirrorCueSize = 8; // Minimum readable mirror glyph height in screen pixels; hide at smaller scales instead of drawing outside the part.
+    private const double MirrorCueAnchorFraction = 0.25; // Source-bounds inset fraction from left/top, zero through one half; keeps the cue away from centered part labels when possible.
+    private const float MirrorCueStroke = 1.0f; // Screen-pixel foreground stroke of the preview-only mirror watermark.
+    private const float MirrorCueHalo = 3.0f; // Screen-pixel white under-stroke keeps the watermark visible over fills and internal curves.
+    private const string FlippedColumnTitle = "Flipped"; // Editable parity-column title; its header also shows the preview mirror symbol.
+    private static readonly (Point2d From,Point2d To)[] MirrorCueSegments =
+    [ // Normalized screen coordinates centered on zero: reflected asymmetric profiles and a dashed mirror axis.
+      (new(-.45,-.22),new(-.14,-.42)),(new(-.14,-.42),new(-.14,.42)),
+      (new(-.14,.42),new(-.45,.22)),(new(-.45,.22),new(-.45,-.22)),
+      (new(.45,-.22),new(.14,-.42)),(new(.14,-.42),new(.14,.42)),
+      (new(.14,.42),new(.45,.22)),(new(.45,.22),new(.45,-.22)),
+      (new(0,-.48),new(0,-.32)),(new(0,-.16),new(0,0)),
+      (new(0,.16),new(0,.32)),(new(0,.44),new(0,.48))
+    ];
     private const int MaterialPresetActionWidth = (FieldWidth-ControlGap)/2; // Two preset-save command buttons fit one uniform field column, in device-independent pixels.
     private const int NumberDecimals = 3; // Decimal places displayed for model-unit coordinates and angles; nonnegative integer.
     private const string MixedValue = "<varies>"; // Non-actionable dropdown placeholder for unequal selected settings.
     private const double NumberIncrement = 0.1; // Model-unit/degree increment for numeric editor arrows; positive.
     private const double AutoNestDelay = 0.2; // Seconds to debounce automatic re-nesting after edits; positive.
     private const string WindowTitle = "vNest"; // Modeless manager window title.
+    private const int HostCloseMessage = 0x0010; // Windows WM_CLOSE, intercepted before Rhino's native frame begins document teardown.
     private const string InitialPackingActivity = "Preparing"; // Initial progress-bar stage text before worker feedback arrives.
     private const int LabelMeasurementCacheLimit = 512; // Maximum cached glyph bounds per window; bounds-only entries avoid retaining native curves.
     private const double ManualRotationCheckStep = 1.0; // Maximum degrees between collision checks during ordinary cursor rotation; positive and much smaller than a half-turn.
@@ -1187,27 +1412,160 @@ namespace vTools.Commands
     private const float ProgressTrackGap = 1f; // Device-independent pixels separating step and total tracks within the unchanged status-bar height.
     private const string ElapsedShortFormat = @"m\:ss\.f"; // Completed durations below one hour: minutes, seconds and tenths; not a remaining-time estimate.
     private const string ElapsedHourTailFormat = @"mm\:ss\.f"; // Minutes/seconds/tenths appended to total elapsed hours for longer operations.
+    private const int ElapsedTimeWidth = 110; // Footer elapsed-time field width in device-independent pixels; independent of replaceable status messages.
+    private const double PartHighlightOpacity = 0.40; // Focused temporary part-fill opacity, zero through one; stronger contrast while curves retain original colors.
+    private const double InactivePartHighlightOpacity = 0.36; // Selected-but-unfocused fill opacity, zero through one; distinct blue/violet focus states.
+    private const double MirroredPartHighlightOpacity = 0.30; // Unselected mirrored-copy fill opacity, zero through one; distinguish flipped parts even without a visible icon.
+    private const double SourcePartHighlightOpacity = 0.28; // Original-source fill opacity, zero through one; distinct from the table's active copies.
     private static readonly PreviewDisplay.ObjectHighlightStyle SkippedStyle = new(
-      SDColor.OrangeRed,SDColor.Maroon,SDColor.Maroon,0.25)
-      {StrokeEmphasis=0,OutlineEmphasis=0}; // Normal-width orange-red curves for skipped parts; zero emphasis omits the heavy outline.
+      SDColor.OrangeRed,SDColor.Maroon,SDColor.Maroon,1-ConflictFillOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Orange-red skipped-part fill, without perimeter recoloring.
     private static readonly PreviewDisplay.ObjectHighlightStyle MembershipStyle = new(
-      SDColor.FromArgb(0,145,165),SDColor.FromArgb(0,55,72),SDColor.FromArgb(0,120,145),0.6)
-      {StrokeEmphasis=0,OutlineEmphasis=0}; // Normal-width muted cyan membership curves; zero emphasis omits the heavy outline.
+      SDColor.FromArgb(0,170,220),SDColor.FromArgb(0,55,72),SDColor.FromArgb(0,120,145),1-SourcePartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Muted cyan original-source fill, without perimeter recoloring.
     private static readonly PreviewDisplay.ObjectHighlightStyle SelectedPartStyle = new(
-      SDColor.Magenta,SDColor.FromArgb(85,0,65),SDColor.FromArgb(150,0,110),0.25)
-      {StrokeEmphasis=0,OutlineEmphasis=0}; // Normal-width magenta curves for selected sources and previews at rest or moving; zero emphasis omits the heavy outline.
+      SDColor.Yellow,SDColor.Goldenrod,SDColor.Goldenrod,1-PartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Yellow active-part fill, preserving original curves and labels at rest and while moving.
     private static readonly PreviewDisplay.ObjectHighlightStyle InactivePartStyle = new(
-      SDColor.SteelBlue,SDColor.DarkSlateGray,SDColor.SteelBlue,0.25)
-      {StrokeEmphasis=0,OutlineEmphasis=0}; // Muted blue selected perimeter while the viewport lacks keyboard focus; internals retain original colors.
+      SDColor.FromArgb(0,88,255),SDColor.Navy,SDColor.Blue,1-InactivePartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Muted blue selected-part fill while the viewport lacks keyboard focus.
+    private static readonly PreviewDisplay.ObjectHighlightStyle MirroredPartStyle = new(
+      SDColor.FromArgb(0,210,145),SDColor.DarkGreen,SDColor.FromArgb(0,210,145),1-MirroredPartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Mint fill identifies unselected flipped copies at every zoom; selection and conflict fills take priority, and original curves keep their colors.
+    private static readonly PreviewDisplay.ObjectHighlightStyle SelectedMirroredPartStyle = new(
+      SDColor.FromArgb(255,0,210),SDColor.DarkMagenta,SDColor.Magenta,1-PartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Focused mirrored parts use fuchsia rather than the unflipped selection's yellow.
+    private static readonly PreviewDisplay.ObjectHighlightStyle InactiveMirroredPartStyle = new(
+      SDColor.FromArgb(145,60,255),SDColor.Indigo,SDColor.BlueViolet,1-InactivePartHighlightOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Unfocused selected mirrored parts use violet rather than unflipped blue or unselected mint.
     private static readonly PreviewDisplay.ObjectHighlightStyle WorkingTableStyle = new(
-      SDColor.LimeGreen,SDColor.DarkGreen,SDColor.DarkGreen,0.25); // Green table-frame feedback distinguishes editable placed tables from cyan members and magenta active parts.
+      SDColor.LimeGreen,SDColor.DarkGreen,SDColor.DarkGreen,0.25)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Normal-width green working frames; never add a bold outline to table boxes.
     private static readonly PreviewDisplay.ObjectHighlightStyle SelectedTableStyle = new(
       SDColor.Gold,SDColor.DarkGoldenrod,SDColor.Goldenrod,0.25)
       {StrokeEmphasis=0,OutlineEmphasis=0}; // Thin amber current-table frame; distinct from magenta focused parts and green other working tables.
+    private const double ConflictFillOpacity = 0.46; // Conflict-fill opacity, zero through one; conspicuous red/orange feedback overrides selection and mirror colors.
+    private static readonly PreviewDisplay.ObjectHighlightStyle ConflictStyle = new(
+      SDColor.Red,SDColor.DarkRed,SDColor.Firebrick,1-ConflictFillOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Shading-only conflict feedback; no colored perimeter or mesh-wire overlay.
+    private static readonly PreviewDisplay.ObjectHighlightStyle InactiveConflictStyle = new(
+      SDColor.FromArgb(255,132,0),SDColor.DarkOrange,SDColor.Orange,1-ConflictFillOpacity)
+      {StrokeEmphasis=0,OutlineEmphasis=0}; // Orange bad-part fill when it is not the focused/current viewport part.
+    private const double ConflictRefreshSeconds = 0.15; // Minimum seconds between full contour-conflict checks during a manual gesture; zero checks every mouse event.
+
+    internal sealed record WindowPlacement(int X,int Y,int Width,int Height,bool Maximized);
+    internal static WindowPlacement? ReadWindowPlacement(string? json)
+    {
+      if(string.IsNullOrWhiteSpace(json)||json.Length>MaximumWindowPlacementCharacters)return null;
+      try
+      {
+        var placement=System.Text.Json.JsonSerializer.Deserialize<WindowPlacement>(json);
+        return placement is {Width:>0,Height:>0}?placement:null;
+      }
+      catch(System.Text.Json.JsonException ex){Log.Write("vNest","window placement ignored: {0}",ex.Message);return null;}
+    }
+    internal static WindowPlacement FitWindowPlacement(WindowPlacement placement,IReadOnlyList<Rectangle> workAreas)
+    {
+      var areas=workAreas.Where(area=>area.Width>0&&area.Height>0).ToArray();if(areas.Length==0)return placement;
+      double Overlap(Rectangle area)=>Math.Max(0,Math.Min((double)placement.X+placement.Width,area.Right)-Math.Max(placement.X,area.Left))*
+        Math.Max(0,Math.Min((double)placement.Y+placement.Height,area.Bottom)-Math.Max(placement.Y,area.Top));
+      double Distance(Rectangle area)
+      {
+        double x=placement.X+placement.Width/2.0,y=placement.Y+placement.Height/2.0;
+        double dx=x-Math.Clamp(x,area.Left,area.Right),dy=y-Math.Clamp(y,area.Top,area.Bottom);return dx*dx+dy*dy;
+      }
+      var screen=areas.OrderByDescending(Overlap).ThenBy(Distance).First();
+      int width=Math.Min(screen.Width,Math.Max(MinimumWindowWidth,placement.Width));
+      int height=Math.Min(screen.Height,Math.Max(MinimumWindowHeight,placement.Height));
+      return placement with {X=Math.Clamp(placement.X,screen.Left,screen.Right-width),Y=Math.Clamp(placement.Y,screen.Top,screen.Bottom-height),Width=width,Height=height};
+    }
+    private sealed class WindowPlacementSession : IDisposable
+    {
+      private readonly Form _form;
+      private readonly Func<WindowPlacement,bool> _save;
+      private readonly UITimer _timer=new() {Interval=WindowPlacementSaveInterval};
+      private WindowPlacement? _last;
+      private bool _ready,_restoring,_dirty,_disposed;
+      internal WindowPlacementSession(Form form,WindowPlacement? saved,Func<WindowPlacement,bool> save)
+      {
+        _form=form;_save=save;_last=saved;
+        if(saved!=null)ApplyBounds(saved);
+        form.Shown+=Shown;form.SizeChanged+=Changed;form.LocationChanged+=Changed;form.WindowStateChanged+=Changed;form.Closing+=Closing;
+        _timer.Elapsed+=(_,_)=>Flush();
+      }
+      private static WindowPlacement VisiblePlacement(WindowPlacement placement)=>FitWindowPlacement(placement,
+        Screen.Screens.Select(screen=>screen.WorkingArea).Select(area=>new Rectangle((int)area.X,(int)area.Y,(int)area.Width,(int)area.Height)).ToArray());
+      private void ApplyBounds(WindowPlacement placement)
+      {
+        var visible=VisiblePlacement(placement);
+        _form.Bounds=new Rectangle(visible.X,visible.Y,visible.Width,visible.Height);
+      }
+      private void Shown(object? sender,EventArgs e)
+      {
+        _restoring=true;
+        Application.Instance.AsyncInvoke(()=>
+        {
+          if(_disposed||_form.IsDisposed||!_form.Visible){_restoring=false;return;}
+          try
+          {
+            // Owner startup placement and picker re-shows must not replace the user's saved bounds.
+            if(_last is {} saved){_form.WindowState=WindowState.Normal;ApplyBounds(saved);if(saved.Maximized)_form.WindowState=WindowState.Maximized;}
+          }
+          finally{_restoring=false;_ready=true;}
+          Capture();Flush();_timer.Start();
+        });
+      }
+      private void Changed(object? sender,EventArgs e)=>Capture();
+      private void Capture()
+      {
+        if(_disposed||!_ready||_restoring||!_form.Visible||_form.WindowState==WindowState.Minimized)return;
+        var bounds=_form.RestoreBounds;if(bounds.Width<=0||bounds.Height<=0)return;
+        var value=new WindowPlacement(bounds.X,bounds.Y,bounds.Width,bounds.Height,_form.WindowState==WindowState.Maximized);
+        if(value==_last)return;_last=value;_dirty=true;
+      }
+      private void Closing(object? sender,System.ComponentModel.CancelEventArgs e)
+      {if(!e.Cancel){Capture();Flush();}}
+      private void Flush()
+      {if(_dirty&&_last is {} value&&_save(value))_dirty=false;}
+      public void Dispose()
+      {
+        if(_disposed)return;Capture();Flush();_disposed=true;_timer.Stop();_timer.Dispose();
+        _form.Shown-=Shown;_form.SizeChanged-=Changed;_form.LocationChanged-=Changed;_form.WindowStateChanged-=Changed;_form.Closing-=Closing;
+      }
+    }
+
+    private sealed class HostCloseGuard : System.Windows.Forms.NativeWindow,IDisposable
+    {
+      private readonly Func<bool> _confirm;
+      private readonly Action<bool> _forwarding;
+      private bool _handlingClose,_disposed;
+      internal HostCloseGuard(IntPtr handle,Func<bool> confirm,Action<bool> forwarding)
+      { _confirm=confirm;_forwarding=forwarding;if(handle!=IntPtr.Zero)AssignHandle(handle); }
+      protected override void WndProc(ref System.Windows.Forms.Message message)
+      {
+        if(message.Msg!=HostCloseMessage||_disposed){base.WndProc(ref message);return;}
+        message.Result=IntPtr.Zero;
+        if(_handlingClose)return;
+        _handlingClose=true;
+        try
+        {
+          bool approved;
+          try{approved=_confirm();}
+          catch(Exception ex){Log.Write("vNest","host close confirmation failed; close cancelled: {0}",ex);return;}
+          if(!approved)return;
+          _forwarding(true);
+          try{base.WndProc(ref message);}
+          finally{_forwarding(false);}
+        }
+        finally{_handlingClose=false;}
+      }
+      public void Dispose(){if(_disposed)return;_disposed=true;if(Handle!=IntPtr.Zero)ReleaseHandle();}
+    }
 
     internal sealed partial class NestWindow : Form
     {
       private readonly RhinoDoc _doc;
+      private readonly WindowPlacementSession? _windowPlacement;
       private readonly List<Row> _rows;
       private List<Row> _visibleRows=[];
       private int _partSortColumn=NoSortColumn,_tableSortColumn=NoSortColumn,_materialSortColumn=NoSortColumn;
@@ -1233,9 +1591,10 @@ namespace vTools.Commands
       private bool _writingPartSettings;
       private readonly HashSet<string> _externalPartSettings=[];
       private readonly DropDown _grain=new() {DataStore=GrainNames};
-      private readonly CheckBox _auto=new() {Text="Auto",Checked=DefaultAutoNest};
       private readonly CheckBox _allowFlip=new() {Text="Allow Flip",Checked=AllowFlip};
-      private readonly CheckBox _showGap=new() {Text="Show Gap",Checked=ShowGap,ToolTip="Show a one-pixel outline at the full collision gap outside active parts; preview only, never exported"};
+      private readonly DropDown _showGap=new() {DataStore=GapDisplayLabels,SelectedIndex=GapDisplayIndex(ShowGap),Width=GapDisplayWidth,ToolTip="Off, selected part(s), or all included pieces. Preview only, never exported."};
+      private readonly CheckBox _showTableGrid=new() {Text="3 ft grid",Checked=ShowTableGrid,ToolTip="Preview-only cross-roll lines every 36 inches; rulers and grid are never exported"};
+      private readonly Label _cursorReadout=new() {Text=EmptyCursorStatus,Height=GridRowHeight,VerticalAlignment=VerticalAlignment.Center,ToolTip="Focused-table coordinates in inches from its bottom-left corner; X runs right and Y runs up"};
       private readonly CheckBox _flipped=new() {Text="Flipped",Checked=DefaultAllowFlip};
       private readonly CheckBox _included=new() {Text="Included"},_fixed=new() {Text="Fixed"};
       private readonly NumericStepper _x=Number(),_y=Number(),_angle=Number(),_table=Number(),_limit=Number();
@@ -1250,13 +1609,18 @@ namespace vTools.Commands
       private readonly Button _grainPick=new() {Text="Pick Grain",Enabled=false,ToolTip="Pick a curve or draw a grain guide for selected parts"};
       private readonly Button _autoRotation=new() {Text="Auto Rotation",Enabled=false,ToolTip="Allow the packer to choose rotation for selected parts"};
       private readonly Button _resetPart=new() {Text="Reset Part",Enabled=false,ToolTip="Reset selected parts to material/global defaults"};
+      private readonly Button _rotateLeft=ManualButton("\u21BA","Rotate counterclockwise"),_rotateRight=ManualButton("\u21BB","Rotate clockwise");
+      private readonly Button _flipHorizontal=ManualButton("\u2194","Mirror horizontally; Shift+Left/Right"),_flipVertical=ManualButton("\u2195","Mirror vertically; Shift+Up/Down");
       private readonly Button _close=new() {Text="Close",ToolTip="Close without placing preview geometry"};
       private readonly PackingStatus _status=new();
+      private readonly Label _elapsedTime=new() {Width=ElapsedTimeWidth,Visible=false,TextAlignment=TextAlignment.Right,VerticalAlignment=VerticalAlignment.Center,
+        ToolTip="Elapsed time for the latest nesting run, including preparation; retained until the next run or Clear Nest"};
       private readonly Label _totalYardage=new() {Width=TotalYardageWidth,Text="Total: 0.0 yds",ToolTip="Sum of occupied lengths across all material tables; excludes unused tails"};
       private readonly Button _place=new() {Text="Place",Enabled=false};
       private readonly Button _nest=new() {Text="Nest",ToolTip="Pack included parts; retain fixed positions, manual angles and grain settings"};
       private readonly Button _editTables=new() {Text="Edit Tables",ToolTip="Edit existing table parts immediately; return to Original Parts for a new nest"};
       private Control? _settingsPanel;
+      private readonly Label _settingsScope=new() {Text="Material Defaults",Height=GridRowHeight};
       private Button? _locationAction;
       private readonly List<LiveTable> _liveTables=[];
       private readonly HashSet<int> _pendingPlacedTables=[];
@@ -1265,13 +1629,23 @@ namespace vTools.Commands
       private readonly HashSet<uint> _gestureObjectSerials=[];
       private OriginalLayout? _originalLayout;
       private uint _liveUndoRecord;
+      private HostCloseGuard? _hostCloseGuard;
+      private bool _documentClosing,_hostCloseForwarded;
       private bool _applyingLive;
       private bool _replayingLiveHistory;
       private uint _liveHistoryInverseRecord;
       private sealed record OriginalLayout(List<Row> Rows,NestPackingEngine.Result Result,Point3d Anchor,bool Anchored,
-        int Revision,int PackedRevision,Dictionary<int,NestPackingEngine.Placement> Instances);
-      private sealed record LiveTable(int Group,Guid Border,Curve Outline,Plane Frame,double Length,MaterialPreset Material,string Name,TextEntity[] Labels,Guid[] LabelIds,Guid Divider=default) : IDisposable
-      {public void Dispose(){Outline.Dispose();foreach(var text in Labels)text.Dispose();}}
+        int Revision,int PackedRevision,Dictionary<int,NestPackingEngine.Placement> Instances)
+      {
+        internal Dictionary<int,Vector3d> Offsets {get;init;}=[]; // Preview frame offsets retained while temporarily editing placed tables.
+        internal Dictionary<int,string> Names {get;init;}=[]; // Custom source-preview table names retained independently of placed edits.
+        internal Dictionary<int,string> DefaultNames {get;init;}=[]; // Sequential source-preview names retained independently of placed edits.
+      }
+      private sealed record LiveTable(int Group,Guid Border,Curve Outline,Plane Frame,double Length,MaterialPreset Material,string Name,TextEntity[] Labels,Guid[] LabelIds,Guid Divider=default,TableSettings? Settings=null) : IDisposable
+      {
+        internal AlgorithmStamp? Algorithm {get;init;}
+        public void Dispose(){Outline.Dispose();foreach(var text in Labels)text.Dispose();}
+      }
       private sealed record TableGroupRename(Guid Id,string Before,string After);
       private static void UndoTableGroupRename(object? sender,CustomUndoEventArgs e)
       {
@@ -1285,6 +1659,8 @@ namespace vTools.Commands
       private readonly Preview _preview;
       private readonly PreviewDisplay.ObjectHighlighter _highlight;
       private readonly PreviewDisplay.ObjectHighlighter _inactiveHighlight;
+      private readonly PreviewDisplay.ObjectHighlighter _mirroredParts;
+      private readonly PreviewDisplay.ObjectHighlighter _selectedMirroredParts,_inactiveMirroredParts;
       private readonly PreviewDisplay.ObjectHighlighter _sources;
       private readonly PreviewDisplay.ObjectHighlighter _selectedSources;
       private readonly PreviewDisplay.ObjectHighlighter _workingTables;
@@ -1293,13 +1669,25 @@ namespace vTools.Commands
       private readonly PreviewKeyboard _previewKeyboard;
       private readonly Dictionary<int,NestPackingEngine.Placement> _manualInstances=[];
       private readonly List<ManualState> _manualUndo=[],_manualRedo=[];
+      private readonly HashSet<Row> _retiredHistoryRows=[];
       private sealed record ManualPartState(bool Fixed,bool ManualRotation,bool Flipped,int Table,double X,double Y,double Rotation);
       private sealed record ManualState(NestPackingEngine.Result Layout,Dictionary<int,ManualPartState> Parts,
-        Dictionary<int,NestPackingEngine.Placement> Instances,int? ActiveInstance,uint DocumentRecord=0,int[]? Selection=null);
+        Dictionary<int,NestPackingEngine.Placement> Instances,int? ActiveInstance,uint DocumentRecord=0,int[]? Selection=null)
+      {
+        internal LiveTableIdentity[]? Tables {get;init;} // Placed-table identities for topology-changing Undo; null is a source-part preview.
+        internal Dictionary<int,string> Names {get;init;}=[]; // Preview names by layout index, restored together with the layout.
+        internal Dictionary<int,string> DefaultNames {get;init;}=[]; // Assigned sequential preview names, independent of visible sorting.
+        internal Dictionary<int,Vector3d> Offsets {get;init;}=[]; // Table-anchor offsets preserved when selected preview tables merge or split.
+        internal Row[]? Sources {get;init;} // Source rows retained only for the lifetime of preview Undo/Redo.
+        internal bool Packed {get;init;} // true restores an accepted layout; false retains a preview that still needs nesting.
+      }
+      private sealed record LiveTableIdentity(int Group,Guid Border,Plane Frame,double Length,MaterialPreset Material,string Name,Guid[] Labels,Guid Divider,TableSettings? Settings);
       private int? _activePreviewInstance;
+      private int? _activeTable;
       private readonly HashSet<int> _manualSelectedInstances=[];
       private sealed record PreviewBox(System.Drawing.Point Start,Guid Viewport,int? Hit,bool Add,bool Remove);
       private PreviewBox? _previewBox;
+      private bool _previewSelectionClick;
       private ManualGesture? _manualGesture;
       private long _manualPreviewTick;
       private bool _pivotVisible;
@@ -1308,6 +1696,17 @@ namespace vTools.Commands
         Guid Viewport,int StartPixelX,bool Rotation,bool Dragging,NestContourPackingEngine.ManualLayout Scene)
       {internal double ContactAlignment {get;set;}=NestContourPackingEngine.DefaultManualContactAlignment;}
       private readonly PreviewDisplay.ObjectHighlighter _skipped;
+      private readonly PreviewDisplay.ObjectHighlighter _conflicts;
+      private readonly PreviewDisplay.ObjectHighlighter _inactiveConflicts;
+      private NestPackingEngine.Result? _conflictLayout;
+      private readonly HashSet<int> _conflictIds=[];
+      private readonly Dictionary<int,string> _conflictReasons=[];
+      private readonly Dictionary<int,(Transform Transform,BoundingBox Bounds)> _physicalBounds=[];
+      private long _conflictTick;
+      private sealed record PartFill(Guid Id,Transform Transform,Mesh Mesh);
+      private readonly Dictionary<(int Id,bool Original),PartFill> _partFills=[];
+      private sealed record SourcePartFills(string Signature,PartFill[] Fills);
+      private readonly Dictionary<int,SourcePartFills> _sourcePartFills=[];
       private readonly Dictionary<int,(Transform Transform,List<PlanarPartSelection.Item> Items,Line? DrawnGuide)> _previewCopies=[];
       private readonly Dictionary<int,(Transform Transform,Curve Outline)> _previewOutlines=[];
       private readonly Dictionary<int,(Transform Transform,double Gap,Polyline[] Contours)> _previewClearance=[];
@@ -1381,6 +1780,8 @@ namespace vTools.Commands
 
       internal NestWindow(RhinoDoc doc,List<Row> rows)
       {
+        // The first Shown refresh creates collision layouts whose field types require Clipper before their constructors run.
+        NestPackingDependency.EnsurePolygonsLoaded();
         _persistedMaterialDrafts=new(_materialDrafts,StringComparer.OrdinalIgnoreCase);
         _doc=doc; _rows=rows;
         _result=_result with {TableAllowance=TableAllowanceForUnits(doc.ModelUnitSystem)};
@@ -1396,19 +1797,25 @@ namespace vTools.Commands
         _workingTables=new PreviewDisplay.ObjectHighlighter(doc,WorkingTableStyle) {RedrawOnChange=HighlightRedrawOnChange};
         _selectedWorkingTables=new PreviewDisplay.ObjectHighlighter(doc,SelectedTableStyle) {RedrawOnChange=HighlightRedrawOnChange};
         _skipped=new PreviewDisplay.ObjectHighlighter(doc,SkippedStyle) {RedrawOnChange=HighlightRedrawOnChange};
+        _conflicts=new PreviewDisplay.ObjectHighlighter(doc,ConflictStyle) {RedrawOnChange=HighlightRedrawOnChange,AutomaticShadedDrawing=false};
+        _inactiveConflicts=new PreviewDisplay.ObjectHighlighter(doc,InactiveConflictStyle) {RedrawOnChange=HighlightRedrawOnChange,AutomaticShadedDrawing=false};
         _highlight=new PreviewDisplay.ObjectHighlighter(doc,SelectedPartStyle) {RedrawOnChange=HighlightRedrawOnChange};
         _inactiveHighlight=new PreviewDisplay.ObjectHighlighter(doc,InactivePartStyle) {RedrawOnChange=HighlightRedrawOnChange};
-        foreach(var layer in new[]{_sources,_selectedSources,_workingTables,_selectedWorkingTables,_skipped,_highlight,_inactiveHighlight})layer.AutomaticForegroundDrawing=false;
+        _mirroredParts=new PreviewDisplay.ObjectHighlighter(doc,MirroredPartStyle) {RedrawOnChange=HighlightRedrawOnChange};
+        _selectedMirroredParts=new PreviewDisplay.ObjectHighlighter(doc,SelectedMirroredPartStyle) {RedrawOnChange=HighlightRedrawOnChange};
+        _inactiveMirroredParts=new PreviewDisplay.ObjectHighlighter(doc,InactiveMirroredPartStyle) {RedrawOnChange=HighlightRedrawOnChange};
+        foreach(var layer in new[]{_sources,_selectedSources,_workingTables,_selectedWorkingTables,_skipped,_conflicts,_inactiveConflicts,_highlight,_inactiveHighlight,_mirroredParts,_selectedMirroredParts,_inactiveMirroredParts})layer.AutomaticForegroundDrawing=false;
+        foreach(var layer in new[]{_sources,_selectedSources,_skipped,_conflicts,_inactiveConflicts,_highlight,_inactiveHighlight,_mirroredParts,_selectedMirroredParts,_inactiveMirroredParts})layer.AutomaticShadedDrawing=false;
         _picking=new NestDocumentPicking(doc,()=>!_closed&&!_placing&&!_locationPicking&&!PackingBlocked(),SyncSelection,
           id=>_rows.FirstOrDefault(row=>row.Part.Items.Any(item=>item.Id==id))?.Part.Items.Select(item=>item.Id).ToArray(),KnownInteriorMembers);
         _picking.RetainedSelection=()=>_rows.SelectMany(row=>row.Part.Items).Select(item=>item.Id);
         _picking.PartClicked+=FocusClickedPart;
         _picking.PreviewMouseDown=PreviewMouseDown;_picking.PreviewMouseMove=PreviewMouseMove;_picking.PreviewMouseUp=PreviewMouseUp;
         _picking.PreviewWindowSelection=SelectManualBox;
-        _picking.PreviewGestureActive=()=>_manualGesture!=null||_previewBox!=null;
+        _picking.PreviewGestureActive=()=>_manualGesture!=null||_previewBox!=null||_previewSelectionClick;
         _picking.PreviewCancelled=()=>EndManualGesture(false);
         _picking.SelectionSuppressed=()=>_liveTables.Count>0;
-        _previewKeyboard=new PreviewKeyboard(doc,()=>CanFineTune,PreviewKeyWithModifiers,ManualHistory,
+        _previewKeyboard=new PreviewKeyboard(doc,()=>!_closed&&!_placing&&!_locationPicking&&!PackingBlocked(),PreviewKeyWithModifiers,ManualHistory,
           ()=>ControlObject is System.Windows.Window window?new System.Windows.Interop.WindowInteropHelper(window).Handle:IntPtr.Zero,
           ()=>_manualGesture!=null||ManualSelection().Length>0,down=>{_pivotVisible=down;_doc.Views.Redraw();});
         _width.Value=NestWorkflow.Width; _length.Value=Length; _rotationStep.Value=RotationStep; _rotationStep.MinValue=MinimumRotationStep; _rotationStep.MaxValue=MaximumRotationStep;
@@ -1427,7 +1834,7 @@ namespace vTools.Commands
         _grid.Columns.Add(new GridColumn {HeaderText="",Width=32,DataCell=new CheckBoxCell(0),Editable=true});
         _grid.Columns.Add(new GridColumn {HeaderText="Part",Width=PartNameWidth,DataCell=new TextBoxCell(1)});
         _grid.Columns.Add(new GridColumn {HeaderText="Material",Width=MaterialColumnWidth,DataCell=new TextBoxCell(7)});
-        _grid.Columns.Add(new GridColumn {HeaderText="Table",Width=65,DataCell=new TextBoxCell(2)});
+        _grid.Columns.Add(new GridColumn {HeaderText="Table",Width=FieldWidth,DataCell=new TextBoxCell(2)});
         _grid.Columns.Add(new GridColumn {HeaderText="Angle",Width=SettingColumnWidth,DataCell=new TextBoxCell(3)});
         _grid.Columns.Add(new GridColumn {HeaderText="Fixed",Width=55,DataCell=new CheckBoxCell(4)});
         _grid.Columns.Add(new GridColumn {HeaderText="Copies",Width=60,DataCell=new TextBoxCell(6)});
@@ -1438,10 +1845,11 @@ namespace vTools.Commands
         _grid.Columns.Add(new GridColumn {HeaderText="Deviation",Width=SettingColumnWidth,DataCell=new TextBoxCell(11)});
         _grid.Columns.Add(new GridColumn {HeaderText="Rotation",Width=FieldWidth,DataCell=new TextBoxCell(12)});
         _grid.Columns.Add(new GridColumn {HeaderText="Step",Width=SettingColumnWidth,DataCell=new TextBoxCell(13)});
-        _grid.Columns.Add(new GridColumn {HeaderText="Flipped",Width=SettingColumnWidth,DataCell=new CheckBoxCell(14)});
+        _grid.Columns.Add(new GridColumn {HeaderText=FlippedColumnTitle,Width=SettingColumnWidth,DataCell=new CheckBoxCell(14),HeaderToolTip="Mirrored part orientation; the same symbol marks flipped parts in the preview"});
         _grid.Columns.Add(new GridColumn {HeaderText="X",Width=SettingColumnWidth,DataCell=new TextBoxCell(15)});
         _grid.Columns.Add(new GridColumn {HeaderText="Y",Width=SettingColumnWidth,DataCell=new TextBoxCell(16)});
         _grid.Columns.Add(new GridColumn {HeaderText="Status",Width=StatusColumnMinimumWidth,DataCell=new TextBoxCell(5),Expand=true});
+        foreach(var column in _grid.Columns.Where((_,index)=>index!=8&&index!=17))column.Editable=true;
         EnableSorting(_grid,SortPartColumn);
         _grid.Load+=(_,_)=>
         {
@@ -1451,6 +1859,7 @@ namespace vTools.Commands
           if(_grid.Columns.Last().ControlObject is System.Windows.Controls.DataGridColumn statusColumn)
           { statusColumn.MinWidth=StatusColumnMinimumWidth; statusColumn.Width=new System.Windows.Controls.DataGridLength(1,System.Windows.Controls.DataGridLengthUnitType.Star); }
           InstallRowSelectionStyles();
+          InstallMirrorColumnHeader();
         };
         _copies.DecimalPlaces=0; _copies.Increment=1; _copies.MinValue=DefaultCopies; _copies.MaxValue=MaximumCopies;
         _copies.ToolTip="Number of separately grouped copies to nest. Fixed position applies to the first copy; extra copies pack automatically.";
@@ -1464,6 +1873,14 @@ namespace vTools.Commands
         _locationAction=location;
         var close=_close;
         var reset=_resetPart;
+        InstallManualIcon(_rotateLeft,"M3 5 A5.5 5.5 0 1 1 3 11 M3 1 L3 5 L7 5");
+        InstallManualIcon(_rotateRight,"M13 5 A5.5 5.5 0 1 0 13 11 M13 1 L13 5 L9 5");
+        InstallManualIcon(_flipHorizontal,"M8 1 L8 15 M1 4 L5 2 L5 14 L1 12 Z M15 4 L11 2 L11 14 L15 12 Z");
+        InstallManualIcon(_flipVertical,"M1 8 L15 8 M4 1 L2 5 L14 5 L12 1 Z M4 15 L2 11 L14 11 L12 15 Z");
+        _rotateLeft.Click+=(_,_)=>RotateManual(1,ShiftPressed,ControlPressed);
+        _rotateRight.Click+=(_,_)=>RotateManual(-1,ShiftPressed,ControlPressed);
+        _flipHorizontal.Click+=(_,_)=>FlipManual(true,ControlPressed);
+        _flipVertical.Click+=(_,_)=>FlipManual(false,ControlPressed);
         _place.ToolTip="Create separately grouped part copies and material table outlines at the preview location";
         _width.ToolTip="Material width in document units"; _length.ToolTip="Material length of each table in document units";
         _partGap.ToolTip="Minimum distance between part outlines in document units; zero permits touching. Does not add a table-edge margin.";
@@ -1484,37 +1901,40 @@ namespace vTools.Commands
         _fixed.ToolTip="Keep this part at its entered table and coordinates during re-nesting";
         _limit.ToolTip="Custom per-part rotation increment in degrees; 0.1 through 360"; _partGrain.ToolTip="Override this part's material grain mode";
         _partRotation.ToolTip="For grain-constrained parts choose No reversal or Allow 180 reversal; otherwise choose a free-rotation preset. Default uses global settings.";
-        _included.ToolTip="Include this part in the current nest"; _auto.ToolTip="Automatically re-nest after changes";
+        _included.ToolTip="Include this part in the current nest";
         _searchTime.ToolTip="Seconds to search alternative full layouts after the initial layout; zero keeps only the first pass";
         _allowFlip.ToolTip="Allow the packer to mirror parts across material grain; off preserves their handedness";
         _flipped.ToolTip="Set this part's mirrored orientation explicitly; Auto Rotation restores automatic choices";
+        CreateTableEditor();
         var settings=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
           FieldRow(("Material",_material),("",new StackLayout {Orientation=Orientation.Horizontal,Spacing=ControlGap,Items={_saveMaterialAs,_saveMaterial}}),("Search (s)",_searchTime)),
-          FieldRow(("Width",_width),("Length",_length),("Grain",_grain)),
-          FieldRow(("Gap",_partGap),("Grain deviation",_grainDeviation),("",_obeyDefault)),
-          FieldRow(("Grain turn",_allowReverse),("Free rotation",_rotationPreset),("Step",_rotationStep))}};
+          FieldRow(("Width",_tableNumberViews[_width]),("Length",_tableNumberViews[_length]),("Grain",_grain)),
+          FieldRow(("Gap",_tableNumberViews[_partGap]),("Grain deviation",_tableNumberViews[_grainDeviation]),("",_obeyDefault)),
+          FieldRow(("Grain turn",_allowReverse),("Free rotation",_rotationPreset),("Step",_tableNumberViews[_rotationStep]))}};
         _settingsPanel=settings;
         var toolbar=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
-          new TableRow(_auto,_allowFlip,_showGap,new TableCell(null,true),_editTables,add,remove,clear)}};
+          new TableRow(_allowFlip,new StackLayout {Orientation=Orientation.Horizontal,Spacing=ControlGap,Items={new Label {Text="Show gap",VerticalAlignment=VerticalAlignment.Center},_showGap}},new TableCell(null,true),_editTables,add,remove,clear)}};
         var editor=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
           FieldRow(("Material",_partMaterial),("Rotation",_partRotation),("Copies",MixedEditor(_copies))),
           FieldRow(("Table",_table),("Angle",MixedEditor(_angle)),("Grain",_partGrain)),
           FieldRow(("X",_x),("Y",_y),("Step",MixedEditor(_limit))),
           FieldRow(("Grain angle",MixedEditor(_guideAngle)),("Deviation",MixedEditor(_partDeviation)),("",_defaultDeviation))}};
         var partActions=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
-          new TableRow(_included,_fixed,_flipped,_obey,grainPick,resetRotation,reset,new TableCell(null,true))}};
+          new TableRow(_included,_fixed,_flipped,_obey,_rotateLeft,_rotateRight,_flipHorizontal,_flipVertical,grainPick,resetRotation,reset,new TableCell(null,true))}};
         var footer=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
-          new TableRow(new TableCell(_status,true),_totalYardage,_nest,location,_place,close)}};
+          new TableRow(new TableCell(_status,true),_elapsedTime,_totalYardage,_nest,location,_place,close)}};
+        var cursorStatus=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={new TableRow(new TableCell(_cursorReadout,true),_showTableGrid)}};
         var editorCaption=new Label {Text="Selected part"};
         var lists=CreateListsView(editor,partActions,editorCaption);
         Content=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
+          new TableRow(_settingsScope),
           new TableRow(new TableCell(settings,true)),
           new TableRow(new TableCell(toolbar,true)),
           new TableRow(new TableCell(lists,true)) {ScaleHeight=true},
           new TableRow(editorCaption),
           new TableRow(new TableCell(editor,true)),
           new TableRow(new TableCell(partActions,true)),
-          new TableRow(new TableCell(footer,true))}};
+          new TableRow(new TableCell(footer,true)),new TableRow(new TableCell(cursorStatus,true))}};
         _timer.Elapsed+=(_,_)=>
         {
           if(_closed||_locationPicking||_pendingPlacedTables.Count>0||Busy()) return;
@@ -1522,26 +1942,28 @@ namespace vTools.Commands
           if(_needsNest&&!_packing&&!PackingBlocked()) ReNest();
         };
         foreach(var field in new[]{_width,_length,_rotationStep,_searchTime,_grainDeviation})
-        { _displayedNumbers[field]=field.Value; field.ValueChanged+=(_,_)=>NumberChanged(field,GlobalChanged); }
+        { _displayedNumbers[field]=field.Value; field.ValueChanged+=(_,_)=>NumberChanged(field,()=>GlobalChanged(field)); }
         _displayedNumbers[_partGap]=_partGap.Value;
-        _partGap.ValueChanged+=(_,_)=>NumberChanged(_partGap,()=>{if(_liveTables.Count>0)ChangeLiveGap();else GlobalChanged();});
-        _rotationPreset.SelectedIndexChanged+=(_,_)=>GlobalChanged(); _allowReverse.SelectedIndexChanged+=(_,_)=>GlobalChanged();
-        _obeyDefault.CheckedChanged+=(_,_)=>GlobalChanged();
-        _grain.SelectedIndexChanged+=(_,_)=>GlobalChanged();
-        _allowFlip.CheckedChanged+=(_,_)=>GlobalChanged();
-        _showGap.CheckedChanged+=(_,_)=>{ShowGap=_showGap.Checked==true;Save();_doc.Views.Redraw();};
+        _partGap.ValueChanged+=(_,_)=>NumberChanged(_partGap,()=>GlobalChanged(_partGap));
+        _rotationPreset.SelectedIndexChanged+=(_,_)=>GlobalChanged(_rotationPreset); _allowReverse.SelectedIndexChanged+=(_,_)=>GlobalChanged(_allowReverse);
+        _obeyDefault.CheckedChanged+=(_,_)=>GlobalChanged(_obeyDefault);
+        _grain.SelectedIndexChanged+=(_,_)=>GlobalChanged(_grain);
+        _allowFlip.CheckedChanged+=(_,_)=>GlobalChanged(_allowFlip);
+        _showGap.SelectedIndexChanged+=(_,_)=>{if(_updating||_showGap.SelectedIndex<0)return;ShowGap=GapDisplayState(_showGap.SelectedIndex);Save();_doc.Views.Redraw();};
+        _showTableGrid.CheckedChanged+=(_,_)=>{if(_updating)return;ShowTableGrid=_showTableGrid.Checked==true;Save();_doc.Views.Redraw();};
         _material.SelectedIndexChanged+=(_,_)=>SelectMaterialPreset();
         _saveMaterialAs.Click+=(_,_)=>SaveMaterialAs(CurrentMaterialValues(),true);
         _saveMaterial.Click+=(_,_)=>SaveSelectedMaterial();
         _partMaterial.SelectedIndexChanged+=(_,_)=>ChoiceChanged(_partMaterial,()=>Edit(row=>
           { row.MaterialName=_partMaterial.SelectedIndex<=0?null:_materialPresets[_partMaterial.SelectedIndex-1].Name; row.Fixed=false; }));
-        _auto.CheckedChanged+=(_,_)=> { if(_auto.Checked==true) Queue(); };
         _grid.SelectionChanged+=(_,_)=> { if(_updating||_displayedSelection.SetEquals(SelectedParts.Select(row=>row.Id))) return; _activePreviewInstance=null;_manualSelectedInstances.Clear(); UpdateEditor(); RefreshHighlights(); _doc.Views.Redraw(); };
         _grid.KeyDown+=(_,e)=> { if(e.Key==Keys.Delete) { RemoveSelected(); e.Handled=true; } };
-        _grid.CellEdited+=(_,e)=> { if(!_updating&&e.Item is GridItem item&&item.Tag is Row row&&row.Included!=Convert.ToBoolean(item.Values[0])) { row.Included=Convert.ToBoolean(item.Values[0]); Queue(); RefreshGrid(); RefreshHighlights(); _doc.Views.Redraw(); } };
+        _grid.CellEditing+=(_,_)=>_partEditing=true;
+        _grid.CellEdited+=(_,e)=>{_partEditing=false;if(!_updating&&e.Item is GridItem {Tag:Row row} item)EditPartCell(row,e.Column,item.Values[PartColumnValueIndices[e.Column]]);};
+        _grid.KeyDown+=(_,e)=>{if(e.Key==Keys.Escape){_partEditing=false;Application.Instance.AsyncInvoke(()=>RefreshGrid());}};
         _included.CheckedChanged+=(_,_)=>CheckChanged(_included,()=>Edit(row=>row.Included=_included.Checked!.Value));
         _fixed.CheckedChanged+=(_,_)=>CheckChanged(_fixed,()=>Edit(row=> {row.Fixed=_fixed.Checked!.Value;if(!row.Fixed)foreach(int id in row.InstanceIds())_manualInstances.Remove(id);}));
-        _flipped.CheckedChanged+=(_,_)=>CheckChanged(_flipped,()=>Edit(row=> { row.Flipped=_flipped.Checked!.Value; row.FlipOverride=row.Flipped; }));
+        _flipped.CheckedChanged+=(_,_)=>CheckChanged(_flipped,()=>ChangeFlipped(_flipped.Checked!.Value));
         _angle.ValueChanged+=(_,_)=>NumberChanged(_angle,()=> {if(!ManualNumber(_angle,_angle.Value))Edit(row=> { row.Rotation=_angle.Value; row.ManualRotation=true; });});
         _copies.ValueChanged+=(_,_)=>NumberChanged(_copies,()=>Edit(row=>row.Copies=(int)_copies.Value));
         _partRotation.SelectedIndexChanged+=(_,_)=>ChoiceChanged(_partRotation,()=>Edit(row=>
@@ -1559,30 +1981,29 @@ namespace vTools.Commands
         _x.ValueChanged+=(_,_)=>NumberChanged(_x,()=> { if(SelectedParts.Length==1&&!ManualNumber(_x,_x.Value)) Edit(row=> { row.X=_x.Value; row.Fixed=true; }); });
         _y.ValueChanged+=(_,_)=>NumberChanged(_y,()=> { if(SelectedParts.Length==1&&!ManualNumber(_y,_y.Value)) Edit(row=> { row.Y=_y.Value; row.Fixed=true; }); });
         _table.ValueChanged+=(_,_)=>NumberChanged(_table,()=> { if(SelectedParts.Length==1&&!ManualNumber(_table,_table.Value)) Edit(row=> { row.Table=(int)_table.Value-1; row.Fixed=true; }); });
-        add.Click+=(_,_)=>AddSelected(); remove.Click+=(_,_)=>RemoveSelected(); _nest.Click+=(_,_)=> { if(_packing) StopPacking(); else ReNest(); };
+        add.Click+=(_,_)=>AddSelected(); remove.Click+=(_,_)=>RemoveSelected(); _nest.Click+=(_,_)=>NestAction();
         grainPick.Click+=(_,_)=> { if(Selected is {} row) RequestGrain(row); };
         resetRotation.Click+=(_,_)=>Edit(row=> { row.ManualRotation=false; row.FlipOverride=null; });
         reset.Click+=(_,_)=>Edit(ResetPart);
         InstallResets();
         location.Click+=(_,_)=>PickLocation(); _place.Click+=(_,_)=>Place(); close.Click+=(_,_)=>Close();
         clear.Click+=(_,_)=>ClearNest();
-        _editTables.Click+=(_,_)=>{if(_liveTables.Count>0)ExitPlacedTables();else EnterPlacedTables();};
-        Closing+=(_,e)=>
-        {
-          if(_placing||_closed) return;
-          if(_confirmingClose) {e.Cancel=true;return;}
-          _confirmingClose=true;
-          try
-          {
-            if(_liveTables.Count==0&&VisibleResult.Tables>0&&!ConfirmDiscardNest()) {e.Cancel=true;return;}
-          }
-          finally {_confirmingClose=false;}
-        };
+        _editTables.Click+=(_,_)=>{if(_liveTables.Count>0)ExitPlacedTables();else ChoosePlacedTables();};
+        Closing+=(_,e)=> {if(!PermitClose())e.Cancel=true;};
         Closed+=(_,_)=>DisposeState();
         RhinoDoc.CloseDocument+=DocumentClosed;
+        RhinoApp.Closing+=ApplicationClosing;
         RhinoDoc.UserStringChanged+=PartSettingsChanged;
         Rhino.Commands.Command.UndoRedo+=LiveUndoRedo;
         RhinoApp.Idle+=PackingIdle;
+        var placement=ToolsOptionStore.Read(Section,section=>ReadWindowPlacement(ToolsOptionStore.TryGetString(section,WindowPlacementKey,out var json)?json:null));
+        _windowPlacement=new WindowPlacementSession(this,placement,value=>
+        {
+          bool saved=ToolsOptionStore.Update(Section,section=>section[WindowPlacementKey]=System.Text.Json.JsonSerializer.Serialize(value));
+          if(!saved)Log.Write("vNest","could not save window placement: {0}",ToolsOptionStore.LastError);return saved;
+        });
+        try{_hostCloseGuard=new(RhinoApp.MainWindowHandle(),PermitHostClose,value=>_hostCloseForwarded=value);}
+        catch(Exception ex){Log.Write("vNest","could not attach host close confirmation: {0}",ex);}
         Shown+=(_,_)=> { if(_shown||_closed||IsDisposed) return; _shown=true; RefreshGrid(); RefreshHighlights(); _doc.Views.Redraw(); if(!_closed&&!IsDisposed)_timer.Start(); };
       }
 
@@ -1713,6 +2134,16 @@ namespace vTools.Commands
       internal void AddPreselectedParts(IReadOnlyCollection<Guid> preselection)
       {
         if(_closed||_placing||_liveTables.Count>0||preselection.Count==0) return;
+        var tableGroups=NestTableMetadata.TableGroups(_doc);
+        var selectedTables=preselection.Select(_doc.Objects.FindId).Where(obj=>obj!=null)
+          .SelectMany(obj=>obj.Attributes.GetGroupList()??[]).Where(tableGroups.Contains).ToHashSet();
+        if(selectedTables.Count>0)
+        {
+          _pendingPlacedTables.UnionWith(selectedTables);_needsNest=false;
+          foreach(var id in preselection)_doc.Objects.FindId(id)?.Select(false);
+          Log.Write("vNest","preselected tables queued directly count={0}; original capture deferred",selectedTables.Count);
+          OpenPreselectedTables();return;
+        }
         var original=OriginalTableSelection(_doc,preselection);
         if(original.Tables.Length>0)
         {
@@ -1744,7 +2175,14 @@ namespace vTools.Commands
         if(_closed||_placing||_liveTables.Count>0||_pendingPlacedTables.Count>0||_picking.DefersSelectionSync) return;
         var ids=_doc.Objects.GetSelectedObjects(false,false).Select(obj=>obj.Id).ToHashSet();
         if(_selection.SetEquals(ids)) return;
-        try { ReplaceSelection(ids.ToArray()); Queue(); }
+        try
+        {
+          EndManualGesture(true);
+          var before=CaptureManualState(_result);
+          ReplaceSelection(ids.ToArray());
+          RecordManualState(before);
+          Queue(preserveHistory:true);
+        }
         catch(Exception ex) { RestoreMemberSelection(); _status.Text="Selection has incomplete parts"; Log.Write("vNest","selection update skipped: {0}",ex); }
       }
       private void RestoreMemberSelection()
@@ -1763,6 +2201,8 @@ namespace vTools.Commands
         _partGap.Value=PartGap;
         _grainDeviation.Value=GrainDeviation;
         _allowFlip.Checked=AllowFlip;
+        _showGap.SelectedIndex=GapDisplayIndex(ShowGap);
+        _showTableGrid.Checked=ShowTableGrid;
         RememberGlobalNumbers();
         _updating=false; MaterialValuesChanged(); Queue(); RefreshGrid();
       }
@@ -1812,7 +2252,7 @@ namespace vTools.Commands
         _packingCancellation?.Cancel();
         ClearHighlights();
         RetainPreviewCopies(next);
-        foreach(var row in _rows.Except(next)) row.Dispose();
+        foreach(var row in _rows.Except(next)) _retiredHistoryRows.Add(row);
         _rows.Clear(); _rows.AddRange(next); _selection=ids.ToHashSet();
         if(_rows.Any(row=>row.StoredMaterial is {} material&&!_materialPresets.Any(preset=>preset.Name.Equals(material.Name,StringComparison.OrdinalIgnoreCase))))
           RefreshMaterialPresets();
@@ -1885,9 +2325,22 @@ namespace vTools.Commands
         RefreshMaterialPresets();Queue();RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
         Log.Write("vNest","reloaded externally edited part settings records={0}",keys.Count);
       }
-      private void GlobalChanged()
+      private void GlobalChanged(Control? source=null)
       {
         if(_updating||_closed) return;
+        if(SettingsTables.Length>0)
+        {
+          if(source==_searchTime){SearchTime=_searchTime.Value;Save();return;}
+          ChangeSelectedTableSettings(settings=>source==_width?settings with {Material=settings.Material with {Width=_width.Value}}:
+            source==_length?settings with {Length=_length.Value}:source==_partGap?settings with {Material=settings.Material with {Gap=_partGap.Value}}:
+            source==_grainDeviation?settings with {Material=settings.Material with {GrainDeviation=_grainDeviation.Value}}:
+            source==_rotationStep?settings with {Step=_rotationStep.Value}:source==_rotationPreset&&_rotationPreset.SelectedIndex>=0&&_rotationPreset.SelectedIndex<RotationLabels.Length?settings with {Rotation=(RotationMode)_rotationPreset.SelectedIndex}:
+            source==_grain&&_grain.SelectedIndex>=0&&_grain.SelectedIndex<GrainNames.Length?settings with {Material=settings.Material with {Grain=(GrainMode)_grain.SelectedIndex}}:
+            source==_allowReverse&&_allowReverse.SelectedIndex is 0 or 1?settings with {Material=settings.Material with {AllowReverse=_allowReverse.SelectedIndex==1}}:
+            source==_obeyDefault&&_obeyDefault.Checked.HasValue?settings with {Material=settings.Material with {ObeyGrain=_obeyDefault.Checked==true}}:
+            source==_allowFlip&&_allowFlip.Checked.HasValue?settings with {AllowFlip=_allowFlip.Checked==true}:settings);
+          return;
+        }
         if(_width.Value<=0||_length.Value<=0) return;
         var before=(NestWorkflow.Width,Length,RotationStep,RotationChoice,Grain,AllowReverse,ObeyGrain,AllowFlip,SearchTime,PartGap,GrainDeviation);
         NestWorkflow.Width=_width.Value; Length=_length.Value; RotationStep=_rotationStep.Value; RotationChoice=(RotationMode)Math.Max(0,_rotationPreset.SelectedIndex); Grain=(GrainMode)Math.Max(0,_grain.SelectedIndex);
@@ -1910,8 +2363,7 @@ namespace vTools.Commands
       private void RefreshMaterialPresets(string? selected=null)
       {
         bool opening=_materialPresets.Count==0&&_activeMaterialName==null;
-        _materialPresets=LoadMaterialPresets().Concat(_rows.Select(row=>row.StoredMaterial).OfType<MaterialPreset>())
-          .DistinctBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase).OrderBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase).ToList();
+        _materialPresets=LoadMaterialPresets(_rows.Select(row=>row.StoredMaterial).OfType<MaterialPreset>());
         foreach(var name in _materialDrafts.Keys.ToArray())
           if(_materialPresets.FirstOrDefault(preset=>preset.Name.Equals(name,StringComparison.OrdinalIgnoreCase)) is not {} original||
             SameMaterialValues(original,_materialDrafts[name])) _materialDrafts.Remove(name);
@@ -1949,12 +2401,20 @@ namespace vTools.Commands
         if(SaveMaterialDrafts(_materialDrafts.Values,_persistedMaterialDrafts.Values))
           _persistedMaterialDrafts=new(_materialDrafts,StringComparer.OrdinalIgnoreCase);
       }
-      private MaterialPreset RowMaterial(Row row)=>_liveParts.ContainsKey(row.Id)&&row.Table>=0&&row.Table<_liveTables.Count?_liveTables[row.Table].Material:row.MaterialName==null?CurrentMaterialValues():
+      private MaterialPreset AssignedMaterial(Row row)=>row.MaterialName==null?CurrentMaterialValues():
         _materialDrafts.GetValueOrDefault(row.MaterialName)??_materialPresets.FirstOrDefault(preset=>preset.Name.Equals(row.MaterialName,StringComparison.OrdinalIgnoreCase))??row.StoredMaterial??CurrentMaterialValues();
+      private MaterialPreset RowMaterial(Row row)
+      {
+        if(_liveParts.ContainsKey(row.Id)&&row.Table>=0&&row.Table<_liveTables.Count)return _liveTables[row.Table].Material;
+        var assigned=AssignedMaterial(row);
+        var settings=_result.TableSettings.GetValueOrDefault(_result.Placements.FirstOrDefault(part=>part.Id==row.Id)?.Table??-1);
+        return settings!=null&&settings.Material.Name.Equals(assigned.Name,StringComparison.OrdinalIgnoreCase)?settings.Material:assigned;
+      }
       private GrainMode EffectiveGrainMode(Row row)=>row.GrainOverride??RowMaterial(row).Grain;
       private bool EffectiveObeyGrain(Row row)=>row.ObeyGrainOverride??RowMaterial(row).ObeyGrain;
       private bool EffectiveReverse(Row row)=>row.AllowReverseOverride??RowMaterial(row).AllowReverse;
-      private MaterialPreset MaterialBaseline()=>_materialPresets.FirstOrDefault(preset=>preset.Name.Equals(_activeMaterialName,StringComparison.OrdinalIgnoreCase))??
+      private MaterialPreset MaterialBaseline()=>_materialPresets.FirstOrDefault(preset=>preset.Name.Equals(
+        SettingsTables.FirstOrDefault(-1) is int table&&table>=0?TableMaterial(table).Name:_activeMaterialName,StringComparison.OrdinalIgnoreCase))??
         new MaterialPreset(CustomMaterialName,DefaultWidth,DefaultPartGap,DefaultGrainDeviation);
       private void ApplyMaterialValues(MaterialPreset values)
       {
@@ -1964,10 +2424,13 @@ namespace vTools.Commands
           _grain.SelectedIndex=(int)values.Grain;_obeyDefault.Checked=values.ObeyGrain;_allowReverse.SelectedIndex=values.AllowReverse?1:0;RememberGlobalNumbers();}
         finally {_updating=before;}
       }
-      private MaterialPreset TableMaterial(int table)=>VisibleResult.TableMaterials.GetValueOrDefault(table)??CurrentMaterialValues();
+      private MaterialPreset TableMaterial(int table)=>VisibleResult.TableSettings.GetValueOrDefault(table)?.Material??VisibleResult.TableMaterials.GetValueOrDefault(table)??CurrentMaterialValues();
+      private TableSettings SettingsForTable(int table)=>VisibleResult.TableSettings.GetValueOrDefault(table)??
+        new(TableMaterial(table),TableLength(table),RotationChoice,RotationStep,AllowFlip);
       private Plane DisplayTablePlane(int table)=>table>=0&&table<_liveTables.Count?_liveTables[table].Frame:
         new(_anchor+DisplayOffset(table)+_plane.YAxis*TableMaterial(table).Width,-_plane.YAxis,_plane.XAxis);
-      private double TableLength(int table)=>table>=0&&table<_liveTables.Count?_liveTables[table].Length:Length;
+      private double TableLength(int table)=>VisibleResult.TableSettings.TryGetValue(table,out var settings)?settings.Length:
+        table>=0&&table<_liveTables.Count?_liveTables[table].Length:Length;
       private void MaterialValuesChanged()
       {
         var current=CurrentMaterialValues();
@@ -1983,6 +2446,8 @@ namespace vTools.Commands
       private void SelectMaterialPreset()
       {
         if(_updating||_closed||_material.SelectedIndex<0) return;
+        if(SettingsTables.Length>0)
+        {if(_material.SelectedIndex<_tableMaterialChoices.Length)ChangeSelectedTableSettings(settings=>settings with {Material=_tableMaterialChoices[_material.SelectedIndex]});return;}
         int index=_material.SelectedIndex-1;
         var original=index>=0&&index<_materialPresets.Count?_materialPresets[index]:null;
         if(string.Equals(original?.Name,_activeMaterialName,StringComparison.OrdinalIgnoreCase)) return;
@@ -2041,6 +2506,22 @@ namespace vTools.Commands
         discard.Click+=(_,_)=>dialog.Close(true);cancel.Click+=(_,_)=>dialog.Close(false);
         return dialog.ShowModal(this);
       }
+      private bool HostIsClosing=>_documentClosing||_hostCloseForwarded||RhinoApp.IsClosing;
+      private bool PermitClose()
+      {
+        if(_placing||_closed||HostIsClosing)return true;
+        if(_confirmingClose)return false;
+        if(_liveTables.Count>0||VisibleResult.Tables==0)return true;
+        _confirmingClose=true;
+        try{return ConfirmDiscardNest();}
+        finally{_confirmingClose=false;}
+      }
+      private bool PermitHostClose()
+      {
+        if(!PermitClose())return false;
+        if(!_closed)EndManualGesture(true);
+        return true;
+      }
       private void Edit(Action<Row> change)
       {
         if(_updating||_closed) return;
@@ -2052,6 +2533,68 @@ namespace vTools.Commands
         {if(!row.Fixed&&!row.ManualRotation)foreach(int id in row.InstanceIds())_manualInstances.Remove(id);SavePartSettings(row);}
         Queue(); RefreshGrid(); RefreshHighlights(); _doc.Views.Redraw();
       }
+      private void EditPartCell(Row row,int column,object? raw)
+      {
+        if(_packing||_closed||column<0||column>=PartColumnValueIndices.Length)return;
+        int key=PartColumnValueIndices[column];string text=Convert.ToString(raw,System.Globalization.CultureInfo.CurrentCulture)?.Trim()??string.Empty;
+        if(!SelectedParts.Contains(row))
+        {
+          bool previous=_updating;_updating=true;
+          try{_grid.UnselectAll();int index=_visibleRows.IndexOf(row);if(index>=0)_grid.SelectRow(index);}
+          finally{_updating=previous;}
+          _activePreviewInstance=null;_manualSelectedInstances.Clear();UpdateEditor();
+        }
+        bool number=double.TryParse(text,System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.CurrentCulture,out double value)&&double.IsFinite(value);
+        bool boolean=raw is bool flag?flag:bool.TryParse(text,out bool parsed)&&parsed;
+        bool defaults=text.Equals("Default",StringComparison.OrdinalIgnoreCase);
+        void Invalid(string reason){_status.Text=reason;RefreshGrid();}
+        switch(key)
+        {
+          case 0:Edit(part=>part.Included=boolean);break;
+          case 1:
+            text=text.TrimEnd(' ','*');
+            if(text.Length==0||text.Length>PartDisplayNameLimit){Invalid("Enter a part name");break;}
+            row.Name=text;if(PartSettingsKey(_doc,row) is {} nameKey)_doc.Strings.SetString(PartNamesSection,nameKey,text);RefreshGrid();break;
+          case 7:
+            if(_liveTables.Count>0){Invalid("Change the material in table settings, or transfer this part to a table of the desired material");break;}
+            var material=_materialPresets.FirstOrDefault(preset=>preset.Name.Equals(text,StringComparison.OrdinalIgnoreCase));
+            if(!defaults&&material==null){Invalid("Enter an existing material name or Default");break;}
+            Edit(part=>{part.MaterialName=material?.Name;part.Fixed=false;});break;
+          case 2:
+            int table=Enumerable.Range(0,VisibleResult.Tables).FirstOrDefault(index=>TableDisplayName(index).Equals(text,StringComparison.OrdinalIgnoreCase),-1);
+            if(table<0){Invalid("Enter an existing table name");break;}
+            ManualNumber(_table,table+1);break;
+          case 3:case 15:case 16:
+            if(!number){Invalid("Enter a finite number");break;}
+            var field=key==3?_angle:key==15?_x:_y;
+            if(!ManualNumber(field,value))Edit(part=>{if(key==3){part.Rotation=NormalizeRotation(value);part.ManualRotation=true;}else{if(key==15)part.X=value;else part.Y=value;part.Fixed=true;}});
+            break;
+          case 4:Edit(part=>{part.Fixed=boolean;if(!boolean)foreach(int id in part.InstanceIds())_manualInstances.Remove(id);});break;
+          case 6:
+            if(_liveTables.Count>0||!number||value!=Math.Truncate(value)||value<DefaultCopies||value>MaximumCopies){Invalid("Copies must be a whole number on source parts");break;}
+            Edit(part=>part.Copies=(int)value);break;
+          case 8:
+            if(!defaults&&(!Enum.TryParse<GrainMode>(text,true,out var mode)||!Enum.IsDefined(mode))){Invalid("Grain: Default, Auto, Force, On or Off");break;}
+            Edit(part=>part.GrainOverride=defaults?null:Enum.Parse<GrainMode>(text,true));break;
+          case 9:
+            if(!number||value< -180||value>180){Invalid("Grain angle must be between -180 and 180 degrees");break;}
+            Edit(part=>SetGuide(part,value));break;
+          case 10:Edit(part=>part.ObeyGrainOverride=boolean);break;
+          case 11:
+            if(!defaults&&(!number||value<0||value>MaximumGrainDeviation)){Invalid("Deviation must be Default or 0 to 90 degrees");break;}
+            Edit(part=>part.GrainDeviationOverride=defaults?null:value);break;
+          case 12:
+            int rotation=Array.FindIndex(RotationLabels,label=>label.Equals(text,StringComparison.OrdinalIgnoreCase));
+            int reversal=Array.FindIndex(ReversalLabels,label=>label.Equals(text,StringComparison.OrdinalIgnoreCase));
+            if(!defaults&&(SelectedParts.Any(UsesGrain)?reversal<0:rotation<0)){Invalid("Enter a listed rotation mode or Default");break;}
+            Edit(part=>{if(UsesGrain(part))part.AllowReverseOverride=defaults?null:reversal==1;else part.RotationOverride=defaults?null:
+              rotation>=0?(RotationMode)rotation:reversal==1?RotationMode.Step180:RotationMode.None;});break;
+          case 13:
+            if(!defaults&&(!number||value<MinimumRotationStep||value>MaximumRotationStep)){Invalid("Step must be Default or 0.1 to 360 degrees");break;}
+            Edit(part=>{part.RotationStepOverride=defaults?null:value;part.RotationOverride=defaults?null:RotationMode.Custom;});break;
+          case 14:ChangeFlipped(boolean);break;
+        }
+      }
       private void SavePartSettings(Row row)
       {
         bool wasWriting=_writingPartSettings;_writingPartSettings=true;
@@ -2060,16 +2603,16 @@ namespace vTools.Commands
           if(PartSettingsKey(_doc,row) is {} key)
           {
             bool placed=IsPlacedPart(_doc,row);
-            var data=HasReusableSettings(row)||placed&&IsCustomized(row)?CapturePartSettings(row,row.MaterialName==null?null:RowMaterial(row)):null;
+            var data=HasReusableSettings(row)||placed&&IsCustomized(row)?CapturePartSettings(row,row.MaterialName==null?null:placed?RowMaterial(row):AssignedMaterial(row)):null;
             WritePartSettings(_doc,key,data==null||placed?data:ReusablePartSettings(data));
           }
         }
         catch(Exception ex) {Log.Write("vNest","could not remember part settings name={0}: {1}",row.Name,ex.Message);}
         finally {_writingPartSettings=wasWriting;}
       }
-      private void Queue([System.Runtime.CompilerServices.CallerMemberName]string reason="")
+      private void Queue([System.Runtime.CompilerServices.CallerMemberName]string reason="",bool preserveHistory=false)
       {
-        if(_closed) return; EndManualGesture(true); _manualUndo.Clear();_manualRedo.Clear(); _layoutRevision++; _place.Enabled=false;
+        if(_closed) return; EndManualGesture(true); if(!preserveHistory)ClearManualHistory(); _layoutRevision++; _place.Enabled=false;
         if(_liveTables.Count>0){_packedRevision=_layoutRevision;_needsNest=false;RefreshGrid();return;}
         Log.Write("vNest","nest invalidated revision={0} reason={1}",_layoutRevision,reason);
         if(_packing&&!_stopping)
@@ -2079,12 +2622,12 @@ namespace vTools.Commands
           _packingCancellation?.Cancel();
           _status.Text="Settings changed; re-nest queued";
         }
-        else if(!_stopping&&_auto.Checked==true) _needsNest=true;
       }
 
       private void ReNest()
       {
         if(_closed||_locationPicking||_liveTables.Count>0) return;
+        if(_result.TableSettings.Count>0){ReNestTables(Enumerable.Range(0,_result.Tables).ToArray(),true);return;}
         EndManualGesture(true);
         if(PackingBlocked()||_packing)
         {
@@ -2096,6 +2639,7 @@ namespace vTools.Commands
         if(RequestMissingGrain()) { _needsNest=true; return; }
         _needsNest=false;
         var clock=System.Diagnostics.Stopwatch.StartNew();
+        ClearNestElapsed();
         try
         {
           var batches=_rows.Where(row=>row.Included).GroupBy(row=>RowMaterial(row).Name,StringComparer.OrdinalIgnoreCase).Select(group=>
@@ -2116,7 +2660,12 @@ namespace vTools.Commands
             })).ToList();
             var shuffled=ShuffleInputs(parts,_nestRandom);
             Log.Write("vNest","trial order material={0} ids={1}",material.Name,string.Join(",",shuffled.Where(input=>!input.Fixed).OrderBy(input=>input.ShuffleRank).Select(input=>input.Id)));
-            return new MaterialBatch(material,shuffled);
+            var ids=parts.Select(input=>input.Id).ToHashSet();
+            var initial=_packedRevision==_layoutRevision&&previous.Count>0?new NestPackingEngine.Result(
+              _result.Placements.Where(part=>ids.Contains(part.Id)).Select(part=>part with {Table=previous.IndexOf(part.Table)}).ToList(),previous.Count,
+              _result.Errors.Where(pair=>ids.Contains(pair.Key)).ToDictionary(pair=>pair.Key,pair=>pair.Value))
+              {TableAllowance=_result.TableAllowance,Stopped=_result.Stopped,IsTrial=_result.IsTrial}:null;
+            return new MaterialBatch(material,shuffled){InitialLayout=initial};
           }).ToList();
           var inputs=batches.SelectMany(batch=>batch.Inputs).ToList();
           Log.Write("vNest","nest started parts={0} preselectedObjects={1} grain={2} width={3} length={4}",inputs.Count,_selection.Count,Grain,NestWorkflow.Width,Length);
@@ -2130,7 +2679,7 @@ namespace vTools.Commands
           var incumbent=_packedRevision==revision?_result:null;
           _stopping=false; Interlocked.Exchange(ref _bestInProgress,incumbent);
           _workingResult=incumbent;
-          _manualUndo.Clear();_manualRedo.Clear();_packing=true; _place.Enabled=false; _status.Text="Nesting...";
+          ClearManualHistory();_packing=true; _place.Enabled=false; _status.Text="Nesting...";
           RefreshGrid();
           _status.SetProgress(0,clock.Elapsed); UpdateNestButton();
           Action<string,string,int,int> stages=(material,stage,percent,total)=>Application.Instance.AsyncInvoke(()=>
@@ -2180,13 +2729,13 @@ namespace vTools.Commands
               if(task.IsCanceled)
               {
                 if(currentBest!=null) ApplyPackingResult(currentBest with {Stopped=true},revision,width,length);
-                _status.Text="Nesting stopped; "+ElapsedText(clock.Elapsed);
+                _status.Text="Nesting stopped";ShowNestElapsed(clock.Elapsed);
                 _place.Enabled=_packedRevision==_layoutRevision&&_result.Placements.Count>0;
                 RefreshHighlights(); _doc.Views.Redraw();
                 return;
               }
               if(task.IsFaulted)
-              { _status.Text="Nesting failed; "+ElapsedText(clock.Elapsed); RefreshHighlights(); _doc.Views.Redraw(); Log.Write("vNest","packing failed: {0}",task.Exception!); return; }
+              { _status.Text="Nesting failed";ShowNestElapsed(clock.Elapsed); RefreshHighlights(); _doc.Views.Redraw(); Log.Write("vNest","packing failed: {0}",task.Exception!); return; }
               var chosen=PreferLayout(task.Result,currentBest);
               if(!ReferenceEquals(chosen,task.Result))
               {
@@ -2195,11 +2744,18 @@ namespace vTools.Commands
               }
               ApplyPackingResult(chosen,revision,width,length);
               if(stopped||task.Result.Stopped) _status.Text=$"Stopped; {_result.Tables} tables; {_result.Placements.Count} parts";
-              _status.Text+="; "+ElapsedText(clock.Elapsed);
+              ShowNestElapsed(clock.Elapsed);
             });
           });
         }
-        catch(Exception ex) { clock.Stop(); _packing=false; UpdateNestButton(); _place.Enabled=false; _status.Text="Nesting failed; "+ElapsedText(clock.Elapsed); Log.Write("vNest","packing preparation failed: {0}",ex); }
+        catch(Exception ex) { clock.Stop(); _packing=false; UpdateNestButton(); _place.Enabled=false; _status.Text="Nesting failed";ShowNestElapsed(clock.Elapsed); Log.Write("vNest","packing preparation failed: {0}",ex); }
+      }
+
+      private void ClearNestElapsed() { _elapsedTime.Text=string.Empty;_elapsedTime.Visible=false; }
+      private void ShowNestElapsed(TimeSpan elapsed)
+      {
+        _elapsedTime.Text=ElapsedText(elapsed);_elapsedTime.Visible=true;
+        RhinoApp.WriteLine("vNest: {0}.",_elapsedTime.Text);
       }
 
       private static double UsedLength(NestPackingEngine.Result result)=>NestPackingEngine.MaterialConsumption(result);
@@ -2215,15 +2771,28 @@ namespace vTools.Commands
           Math.Max(part.Pose.Width,part.Pose.Length)>=NestContourPackingEngine.MinimumSkinnyAspect*Math.Min(part.Pose.Width,part.Pose.Length)).Sum(part=>part.Y);
         double left=Left(candidate),savedLeft=Left(previous);
         if(Math.Abs(left-savedLeft)>PoseDimensionTolerance)return left<savedLeft?candidate:previous;
+        double starts=candidate.Placements.Sum(part=>part.Y),savedStarts=previous.Placements.Sum(part=>part.Y);
+        if(Math.Abs(starts-savedStarts)>PoseDimensionTolerance)return starts<savedStarts?candidate:previous;
         return candidate.Placements.Sum(part=>part.X+part.Pose.Width)>previous.Placements.Sum(part=>part.X+part.Pose.Width)+PoseDimensionTolerance?candidate:previous;
       }
 
       private void UpdateNestButton()
       {
-        _nest.Text=_packing?"Stop":"Nest";
+        int count=SelectedNestTables.Length;bool table=count>0;
+        UpdateTableEditor();
+        _chooseTablesAction.Enabled=!_packing;
+        for(int column=0;column<_tableGrid.Columns.Count;column++)_tableGrid.Columns[column].Editable=!_packing&&(column is 0 or 3||column>=5);
+        for(int column=0;column<_grid.Columns.Count;column++)_grid.Columns[column].Editable=!_packing&&column!=8&&column!=17;
+        _nest.Text=_packing?"Stop":count>1?"Nest Tables":table?"Nest Table":"Nest";
         _nest.Enabled=!_stopping;
-        _nest.ToolTip=_packing?"Stop searching and retain the best valid nest reached so far":"Pack included parts; retain fixed positions, manual angles and grain settings";
+        _editTables.Enabled=!_packing;
+        _nest.ToolTip=_packing?"Stop searching and retain the best valid nest reached so far":table||_liveTables.Count>0?
+          "Fresh nest of working tables pooled by material; release old positions and angles while keeping grain and rotation rules":
+          "Pack included parts; retain fixed positions, manual angles and grain settings";
       }
+      private void NestAction()
+      {if(_packing)StopPacking();else if(SelectedNestTables is {Length:>0} tables)ReNestSelectedTables(tables);
+        else if(_liveTables.Count>0)ReNestSelectedTables(Enumerable.Range(0,_result.Tables).ToArray());else ReNest();}
 
       private void StopPacking()
       {
@@ -2239,7 +2808,7 @@ namespace vTools.Commands
         _pendingPlacedTables.Clear();
         if(_liveTables.Count>0)ExitPlacedTables();
         if(Busy()) { RhinoApp.WriteLine("vNest: finish the current command before clearing."); return; }
-        EndManualGesture(false);ClearLayoutState();
+        EndManualGesture(false);ClearLayoutState();ClearNestElapsed();
         _needsNest=false; _layoutRevision++; _packedRevision=UnpackedRevision;
         _packingCancellation?.Cancel(); _stopping=false; Interlocked.Exchange(ref _bestInProgress,null);
         ClearPreviewCopies();ClearTableLabels();_place.Enabled=false;
@@ -2253,7 +2822,8 @@ namespace vTools.Commands
 
       private void ClearLayoutState()
       {
-        _manualInstances.Clear();_manualUndo.Clear();_manualRedo.Clear();_activePreviewInstance=null;_manualSelectedInstances.Clear();
+        _previewTableOffsets.Clear();
+        _manualInstances.Clear();ClearManualHistory();_activePreviewInstance=null;_manualSelectedInstances.Clear();
         _workingResult=null;_result=new([],0,[]){TableAllowance=TableAllowanceForUnits(_doc.ModelUnitSystem)};
         foreach(var row in _rows)
         {
@@ -2280,6 +2850,7 @@ namespace vTools.Commands
       {
         try
         {
+          _previewTableOffsets.Clear();
           _result=result; _packedRevision=revision;
           _manualSelectedInstances.IntersectWith(result.Placements.Select(part=>part.Id));
           foreach(var row in _rows)
@@ -2316,6 +2887,8 @@ namespace vTools.Commands
 
       private void RefreshGrid(int? selected=null)
       {
+        if(_partEditing)return;
+        RefreshConflictDiagnostics();
         _customizedRowColors=null;
         UpdateRowPalette();
         var selectedIds=selected.HasValue?new HashSet<int> {selected.Value}:SelectedParts.Select(row=>row.Id).ToHashSet();
@@ -2332,9 +2905,12 @@ namespace vTools.Commands
           var placement=placements.GetValueOrDefault(row.Id);
           bool live=_packing&&_workingResult!=null;
           row.Status=PlacementStatus(row.Id,row.Included,result,_packing,_packing?live:_packedRevision==_layoutRevision);
-          int count=result.Placements.Count(part=>row.OwnsInstance(part.Id));
+          var warnings=row.InstanceIds().Where(_conflictReasons.ContainsKey).Select(id=>_conflictReasons[id]).Distinct().ToArray();
+          if(warnings.Length>0)row.Status=string.Join("; ",warnings);
+          var copies=result.Placements.Where(part=>row.OwnsInstance(part.Id)).ToArray();
+          int count=copies.Length;
           if(row.Copies>DefaultCopies&&row.Included) row.Status=$"{count}/{row.Copies} placed; "+row.Status;
-          return new GridItem {Tag=row,Values=[row.Included,row.Name+(IsCustomized(row)?" *":string.Empty),placement==null?"-":((live?placement.Table:row.Table)+1).ToString(),
+          return new GridItem {Tag=row,Values=[row.Included,row.Name+(IsCustomized(row)?" *":string.Empty),PartTableNames(copies),
             (live?placement?.Pose.Rotation??row.Rotation:row.Rotation).ToString("G6"),row.Fixed,row.Status,row.Copies,RowMaterial(row).Name,
             EffectiveGrainMode(row).ToString(),EffectiveGuide(EffectiveGrainMode(row),GuideAngle(row))?.ToString("G6")??"-",
             EffectiveObeyGrain(row),(row.GrainDeviationOverride??RowMaterial(row).GrainDeviation).ToString("G6"),
@@ -2368,7 +2944,8 @@ namespace vTools.Commands
         {
           var placement=VisibleResult.Placements.FirstOrDefault(part=>part.Id==(_activePreviewInstance.HasValue&&rows.Length==1?_activePreviewInstance.Value:row.Id));
           ShowCheck(_included,rows.Select(part=>part.Included)); ShowCheck(_fixed,rows.Select(part=>part.Fixed));
-          ShowCheck(_flipped,rows.Select(part=>part.Flipped));
+          var selectedPreview=CanFineTune?ManualSelection():[];
+          ShowCheck(_flipped,selectedPreview.Length>0?selectedPreview.Select(part=>part.Pose.Flipped):rows.Select(part=>part.Flipped));
           _table.Value=(placement?.Table??row.Table)+1; _x.Value=placement?.X??row.X; _y.Value=placement?.Y??row.Y;
           ShowNumber(_angle,rows.Select(part=>NormalizeRotation(rows.Length==1&&placement!=null?placement.Pose.Rotation:
             VisibleResult.Placements.FirstOrDefault(copy=>copy.Id==part.Id)?.Pose.Rotation??part.Rotation)));
@@ -2390,7 +2967,36 @@ namespace vTools.Commands
         }
         _updating=false;
         if(_liveTables.Count>0)SetPlacedControls(true);
+        foreach(var button in new[]{_rotateLeft,_rotateRight,_flipHorizontal,_flipVertical})
+          if(button!=null)button.Enabled=row!=null&&CanFineTune;
+        if(_rotateLeft!=null&&_rotateRight!=null)
+        {
+          double step=rows.Any(UsesGrain)?ManualGrainRotationStep:ManualKeyboardRotationStep;
+          _rotateLeft.ToolTip=$"Rotate counterclockwise {step:G} degrees; Alt+Left/Up. Shift recovers around obstacles; Ctrl bypasses collisions.";
+          _rotateRight.ToolTip=$"Rotate clockwise {step:G} degrees; Alt+Right/Down. Shift recovers around obstacles; Ctrl bypasses collisions.";
+        }
         foreach(var reset in _resets) reset.Refresh();
+      }
+      private static Button ManualButton(string glyph,string tooltip)=>new() {Text=glyph,ToolTip=tooltip,Width=IconButtonSize,Height=IconButtonSize,Enabled=false};
+      private static void InstallManualIcon(Button button,string path)
+      {
+        if(button.ControlObject is not System.Windows.Controls.Button native)return;
+        var canvas=new System.Windows.Controls.Canvas {Width=ManualIconSize,Height=ManualIconSize};
+        var stroke=new System.Windows.Shapes.Path {Data=System.Windows.Media.Geometry.Parse(path),StrokeThickness=ManualIconStroke,
+          StrokeStartLineCap=System.Windows.Media.PenLineCap.Round,StrokeEndLineCap=System.Windows.Media.PenLineCap.Round,StrokeLineJoin=System.Windows.Media.PenLineJoin.Round};
+        stroke.SetBinding(System.Windows.Shapes.Shape.StrokeProperty,new System.Windows.Data.Binding("Foreground") {Source=native});
+        canvas.Children.Add(stroke);native.Content=canvas;native.Padding=new System.Windows.Thickness(0);
+      }
+      private void InstallMirrorColumnHeader()
+      {
+        if(_grid.Columns.FirstOrDefault(column=>column.HeaderText==FlippedColumnTitle)?.ControlObject is not System.Windows.Controls.DataGridColumn native)return;
+        var icon=new System.Windows.Controls.Canvas {Width=ManualIconSize,Height=ManualIconSize,VerticalAlignment=System.Windows.VerticalAlignment.Center};
+        foreach(var segment in MirrorCueSegments)
+          icon.Children.Add(new System.Windows.Shapes.Line {X1=(segment.From.X+.5)*ManualIconSize,Y1=(segment.From.Y+.5)*ManualIconSize,
+            X2=(segment.To.X+.5)*ManualIconSize,Y2=(segment.To.Y+.5)*ManualIconSize,Stroke=System.Windows.SystemColors.ControlTextBrush,StrokeThickness=MirrorCueStroke});
+        var header=new System.Windows.Controls.StackPanel {Orientation=System.Windows.Controls.Orientation.Horizontal};
+        header.Children.Add(icon);header.Children.Add(new System.Windows.Controls.TextBlock {Text=FlippedColumnTitle,Margin=new System.Windows.Thickness(ControlGap,0,0,0)});
+        native.Header=header;
       }
       private bool UsesGrain(Row row)=>GrainConstrained(EffectiveGrainMode(row),GuideAngle(row),EffectiveObeyGrain(row));
       private void AddSelected()
@@ -2484,7 +3090,7 @@ namespace vTools.Commands
           getter.PermitObjectSnap(LocationObjectSnaps); getter.EnableObjectSnapCursors(LocationObjectSnaps);
           var labelOffset=LocationLabelOffset();
           getter.SetBasePoint(previous+labelOffset,false); getter.AcceptNothing(true);
-          getter.DynamicDraw+=(_,e)=> { _anchor=AnchorFromLabelLocation(e.CurrentPoint); _preview.DrawTables(e.Display,true); _preview.Draw(e.Display,true); _preview.DrawPartHighlights(e); };
+          getter.DynamicDraw+=(_,e)=> { _anchor=AnchorFromLabelLocation(e.CurrentPoint);RefreshMirroredHighlights(new HashSet<int>());_mirroredParts.DrawShadedHighlights(e); _preview.DrawTables(e.Display,true); _preview.Draw(e.Display,true); _preview.DrawPartHighlights(e); };
           var result=getter.Get();
           if(result==GetResult.Point) { _anchor=AnchorFromLabelLocation(getter.Point()); _anchored=true; return Result.Success; }
           if(result==GetResult.Nothing) { _anchored=true; return Result.Success; }
@@ -2495,7 +3101,7 @@ namespace vTools.Commands
       }
 
       private void ClearHighlights()
-      { _highlight.SetObjects([]);_inactiveHighlight.SetObjects([]); }
+      { _highlight.SetObjects([]);_inactiveHighlight.SetObjects([]);_conflicts.SetObjects([]);_inactiveConflicts.SetObjects([]);_mirroredParts.SetObjects([]);_selectedMirroredParts.SetObjects([]);_inactiveMirroredParts.SetObjects([]); }
       private static double MetadataNumber(ObjectAttributes attributes,string key,double fallback)=>
         double.TryParse(attributes.GetUserString(key),System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var value)&&double.IsFinite(value)?value:fallback;
       private List<LiveTable> ReadPlacedTables(IReadOnlyCollection<int>? selectedGroups=null)
@@ -2551,16 +3157,21 @@ namespace vTools.Commands
           var material=(recipe??_materialPresets.FirstOrDefault(value=>value.Name.Equals(materialName,StringComparison.OrdinalIgnoreCase))??CurrentMaterialValues()) with {Name=materialName,Width=width};
           if(double.TryParse(_doc.Strings.GetValue(TableGapSection,_doc.Groups[group].Id.ToString("N")),System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture,out var gap)&&double.IsFinite(gap)&&gap>=DefaultPartGap)material=material with {Gap=gap};
+          var settings=ReadTableSettings(border.Attributes);
+          if(settings!=null){material=settings.Material with {Name=materialName,Width=width};settings=settings with {Material=material,Length=length};}
           var ordered=labels.OrderBy(obj=>obj.Geometry.GetBoundingBox(frame).Center.X).ToArray();
           var divider=members.FirstOrDefault(obj=>obj.Attributes.GetUserString(NestTableMetadata.RoleKey)==NestTableMetadata.LabelDividerRole);
-          result.Add(new(group,border.Id,curve.DuplicateCurve(),frame,length,material,name,ordered.Select(obj=>(TextEntity)obj.Geometry.Duplicate()).ToArray(),ordered.Select(obj=>obj.Id).ToArray(),divider?.Id??Guid.Empty));
+          result.Add(new(group,border.Id,curve.DuplicateCurve(),frame,length,material,name,ordered.Select(obj=>(TextEntity)obj.Geometry.Duplicate()).ToArray(),ordered.Select(obj=>obj.Id).ToArray(),divider?.Id??Guid.Empty,settings)
+            {Algorithm=ReadAlgorithmStamp(border.Attributes)});
         }
         return result;
       }
+      private bool CanAutoEditPlacedTables=>_liveTables.Count==0&&VisibleResult.Tables==0&&VisibleResult.Placements.Count==0;
       private Guid? PlacedPartAt(MouseCallbackEventArgs e)
       {
+        if(!CanAutoEditPlacedTables)return null;
         if(e.View?.ActiveViewport is not {} view||!view.GetFrustumLine(e.ViewportPoint.X,e.ViewportPoint.Y,out var ray))return null;
-        if(CanFineTune&&PreviewHit(ray)!=null)return null;
+        if(PreviewHit(ray)!=null)return null;
         foreach(var obj in _doc.Objects.GetObjectList(ObjectType.Curve).Where(obj=>!obj.IsDeleted&&!obj.IsHidden&&
           !string.IsNullOrEmpty(obj.Attributes.GetUserString(MetadataPrefix+"part"))&&obj.Geometry is Curve curve&&curve.IsClosed))
         {
@@ -2572,41 +3183,37 @@ namespace vTools.Commands
       private void SetPlacedControls(bool editing)
       {
         if(_settingsPanel!=null)_settingsPanel.Enabled=true;
-        foreach(var control in new Control[]{_material,_saveMaterialAs,_width,_length,_searchTime,_grain,_grainDeviation,_obeyDefault,_allowReverse,_rotationPreset})control.Enabled=!editing;
+        foreach(var control in new Control[]{_material,_width,_length,_searchTime,_grain,_grainDeviation,_obeyDefault,_allowReverse,_rotationPreset})control.Enabled=!_packing;
+        _saveMaterialAs.Enabled=!editing&&SettingsTables.Length==0;
         _saveMaterial.Enabled=!editing&&_activeMaterialName!=null&&_materialDrafts.ContainsKey(_activeMaterialName);
-        _rotationStep.Enabled=!editing&&RotationChoice==RotationMode.Custom;
+        _rotationStep.Enabled=!_packing&&(SettingsTables.Length>0?SettingsTables.Any(table=>SettingsForTable(table).Rotation==RotationMode.Custom):RotationChoice==RotationMode.Custom);
         bool updating=_updating;_updating=true;
         try
         {
           int? table=GapTables().Cast<int?>().FirstOrDefault();
-          _partGap.Value=editing&&table.HasValue?_liveTables[table.Value].Material.Gap:PartGap;
-          _displayedNumbers[_partGap]=_partGap.Value;
           _partGap.ToolTip=editing?"Collision gap for selected placed tables, in document units. Changing it does not reposition parts; saved with the document.":
             "Minimum distance between part outlines in document units; zero permits touching. Does not add a table-edge margin.";
         }
         finally{_updating=updating;}
         _partGap.Enabled=true;
         if(_locationAction!=null)_locationAction.Enabled=!editing;
-        _nest.Enabled=!editing;_auto.Enabled=!editing;_partMaterial.Enabled=!editing;_copies.Enabled=!editing;
+        UpdateNestButton();_partMaterial.Enabled=!editing;_copies.Enabled=!editing;
         _included.Enabled=!editing;_place.Enabled=!editing&&_result.Placements.Count>0;
         _editTables.Text=editing?"Finish Table Editing":"Edit Placed Tables";
         _editTables.ToolTip=editing?"Finish editing placed tables and return to source parts; keeps all placed geometry in the drawing":
           "Open placed nest tables for immediate movement and rotation of their existing parts";
       }
-      private int[] GapTables()=>_liveTables.Count==0?[]:_lists.SelectedIndex==1&&_tableGrid.SelectedItem is GridItem {Tag:int table}?[table]:
+      private int[] GapTables()=>_liveTables.Count==0?[]:SelectedNestTables is {Length:>0} tables?tables:
         SelectedParts.Select(row=>row.Table).Where(index=>index>=0&&index<_liveTables.Count).Distinct().ToArray();
       private void ChangeLiveGap()
       {
         double gap=_partGap.Value;EndManualGesture(true);
         var tables=GapTables();if(tables.Length==0)return;
-        var materials=new Dictionary<int,MaterialPreset>(_result.TableMaterials);
         foreach(int table in tables)
         {
-          var info=_liveTables[table];var material=info.Material with {Gap=gap};
-          _liveTables[table]=info with {Material=material};materials[table]=material;
-          _doc.Strings.SetString(TableGapSection,_doc.Groups[info.Group].Id.ToString("N"),gap.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+          var settings=SettingsForTable(table);
+          ApplyTableSettings(table,settings with {Material=settings.Material with {Gap=gap}});
         }
-        _doc.Modified=true;_result=_result with {TableMaterials=materials};
         RefreshGrid();_status.Text=$"Collision gap updated for {tables.Length} working table(s)";
         Log.Write("vNest","live collision gap={0} tables={1}",gap,string.Join(",",tables));
       }
@@ -2616,21 +3223,62 @@ namespace vTools.Commands
         var groups=_pendingPlacedTables.ToArray();_pendingPlacedTables.Clear();
         EnterPlacedTables(null,groups);
       }
+      private void ChoosePlacedTables()
+      {
+        if(_closed||_packing||_locationPicking||PackingBlocked())return;
+        var tables=ReadPlacedTables();if(tables.Count==0){_status.Text="No placed nest tables found";return;}
+        try
+        {
+          var selectedObjects=_doc.Objects.GetSelectedObjects(false,false).Select(obj=>obj.Id).ToHashSet();
+          var checkedGroups=_liveTables.Select(table=>table.Group).Concat(tables.Where(table=>
+            _doc.Groups.GroupMembers(table.Group).Any(obj=>selectedObjects.Contains(obj.Id))).Select(table=>table.Group)).ToHashSet();
+          using var dialog=new Dialog<int[]?> {Title="Edit Placed Tables",Padding=new Padding(WindowPadding),Resizable=true,
+            ClientSize=new Size(FieldWidth*3,GridRowHeight*12)};
+          var rows=tables.Select(table=>new GridItem {Tag=table.Group,Values=new object[]{checkedGroups.Contains(table.Group),table.Name,table.Material.Name}}).ToArray();
+          var grid=new GridView {DataStore=rows,AllowMultipleSelection=true,RowHeight=GridRowHeight};
+          grid.Columns.Add(new GridColumn {HeaderText="Edit",DataCell=new CheckBoxCell(0),Editable=true,Width=TablePartCountWidth});
+          grid.Columns.Add(new GridColumn {HeaderText="Table",DataCell=new TextBoxCell(1),Expand=true,Width=PartNameWidth});
+          grid.Columns.Add(new GridColumn {HeaderText="Material",DataCell=new TextBoxCell(2),Width=FieldWidth});
+          using var highlight=new PreviewDisplay.ObjectHighlighter(_doc,SelectedTableStyle){RedrawOnChange=HighlightRedrawOnChange};
+          void Highlight()
+          {var chosen=rows.Where(row=>row.Values[0] is true).Select(row=>(int)row.Tag!).ToHashSet();highlight.SetObjects(tables.Where(table=>chosen.Contains(table.Group)).Select(table=>table.Border));_doc.Views.Redraw();}
+          grid.CellEdited+=(_,_)=>Highlight();
+          var all=new Button {Text="All"};var none=new Button {Text="None"};var edit=new Button {Text="Edit"};var cancel=new Button {Text="Cancel"};
+          void CheckAll(bool value){foreach(var row in rows)row.Values[0]=value;grid.DataStore=null;grid.DataStore=rows;Highlight();}
+          all.Click+=(_,_)=>CheckAll(true);none.Click+=(_,_)=>CheckAll(false);
+          edit.Click+=(_,_)=>dialog.Close(rows.Where(row=>row.Values[0] is true).Select(row=>(int)row.Tag!).ToArray());cancel.Click+=(_,_)=>dialog.Close(null);
+          dialog.DefaultButton=edit;dialog.AbortButton=cancel;
+          dialog.Content=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={new TableRow(grid){ScaleHeight=true},
+            new TableRow(all,none,new TableCell(null,true),edit,cancel)}};
+          Highlight();var chosen=dialog.ShowModal(this);highlight.SetObjects([]);
+          if(chosen!=null)
+          {if(_liveTables.Count>0)ExitPlacedTables();if(chosen.Length>0)EnterPlacedTables(null,chosen);}
+        }
+        finally{foreach(var table in tables)table.Dispose();_doc.Views.Redraw();}
+      }
       private void EnterPlacedTables(Guid? clicked=null,IReadOnlyCollection<int>? selectedGroups=null)
       {
         if(_closed||_liveTables.Count>0||_packing||PackingBlocked())return;
+        if(clicked.HasValue&&selectedGroups==null&&_doc.Objects.FindId(clicked.Value) is {} clickedObject)
+        {var groups=NestTableMetadata.TableGroups(_doc);selectedGroups=(clickedObject.Attributes.GetGroupList()??[]).Where(groups.Contains).ToArray();}
         EndManualGesture(true);NestPackingDependency.EnsurePolygonsLoaded();
+        var startup=System.Diagnostics.Stopwatch.StartNew();double captureSeconds=0,footprintSeconds=0,rowSeconds=0;
         var tables=ReadPlacedTables(selectedGroups);if(tables.Count==0){_status.Text="No placed nest tables found";Log.Write("vNest","placed-table edit found no readable frames requested={0}",selectedGroups?.Count??0);return;}
+        double frameSeconds=startup.Elapsed.TotalSeconds;
         var rows=new List<Row>();var placements=new List<NestPackingEngine.Placement>();var ids=new Dictionary<int,Guid[]>();
         try
         {
           for(int table=0;table<tables.Count;table++)
           {
             var info=tables[table];
+            double phase=startup.Elapsed.TotalSeconds;
             var parts=PlanarPartSelection.Capture(_doc,_doc.Groups.GroupMembers(info.Group).Where(obj=>!NestTableMetadata.IsDecoration(_doc,obj)).Select(obj=>obj.Id).ToArray(),_doc.ModelAbsoluteTolerance,requirePlanarDetails:false);
+            captureSeconds+=startup.Elapsed.TotalSeconds-phase;
             foreach(var part in parts)
             {
+              phase=startup.Elapsed.TotalSeconds;
               EnsureCutFootprint(_doc,part);
+              footprintSeconds+=startup.Elapsed.TotalSeconds-phase;phase=startup.Elapsed.TotalSeconds;
               var attributes=part.Items.First().Attributes;
               double angle=NormalizeRotation(MetadataNumber(attributes,MetadataPrefix+"rotation",DefaultRotation));
               bool flipped=bool.TryParse(attributes.GetUserString(MetadataPrefix+"flipped"),out var mirror)&&mirror;
@@ -2643,7 +3291,7 @@ namespace vTools.Commands
                 part.Outline.Transform(reflection);foreach(var item in part.Items)item.Geometry.Transform(reflection);
               }
               var canonical=new PlanarPartSelection.Part(part.Outline.DuplicateCurve(),sourcePlane,part.Attributes.Duplicate(),part.Items.Select(item=>item with {Geometry=item.Geometry.Duplicate(),Attributes=item.Attributes.Duplicate()}).ToList());
-              part.Dispose();var row=CreateRow(_doc,canonical);
+              part.Dispose();var row=CreatePreparedRow(_doc,canonical);
               row.Copies=DefaultCopies;row.Table=table;row.X=box.Min.X;row.Y=box.Min.Y;row.Rotation=angle;row.Flipped=flipped;
               row.MaterialName=info.Material.Name==CustomMaterialName?null:info.Material.Name;row.StoredMaterial=info.Material;
               var flags=(row.Fixed,row.ManualRotation,row.ObeyGrainOverride);
@@ -2652,21 +3300,28 @@ namespace vTools.Commands
               (row.Fixed,row.ManualRotation,row.ObeyGrainOverride)=flags;
               if(pose==null){row.Dispose();continue;}
               rows.Add(row);ids[row.Id]=row.Part.Items.Select(item=>item.Id).ToArray();placements.Add(new(row.Id,table,box.Min.X,box.Min.Y,pose));
+              rowSeconds+=startup.Elapsed.TotalSeconds-phase;
             }
           }
           if(rows.Count==0){foreach(var table in tables)table.Dispose();_status.Text="Placed tables have no editable parts";return;}
-          _originalLayout=new(_rows.ToList(),_result,_anchor,_anchored,_layoutRevision,_packedRevision,new(_manualInstances));
+          _originalLayout=new(_rows.ToList(),_result,_anchor,_anchored,_layoutRevision,_packedRevision,new(_manualInstances))
+            {Offsets=new(_previewTableOffsets),Names=new(_tableNames),DefaultNames=new(_defaultTableNames)};
           ClearHighlights();ClearPreviewCopies();ClearTableLabels();_rows.Clear();_rows.AddRange(rows);
           _liveTables.AddRange(tables);foreach(var pair in ids)_liveParts[pair.Key]=pair.Value;
-          _result=new(placements,tables.Count,[]){TableAllowance=TableAllowanceForUnits(_doc.ModelUnitSystem),TableMaterials=tables.Select((table,index)=>(index,table.Material)).ToDictionary(pair=>pair.index,pair=>pair.Material)};
-          _workingResult=null;_manualInstances.Clear();_manualUndo.Clear();_manualRedo.Clear();_needsNest=false;
+          _result=new(placements,tables.Count,[]){TableAllowance=TableAllowanceForUnits(_doc.ModelUnitSystem),TableMaterials=tables.Select((table,index)=>(index,table.Material)).ToDictionary(pair=>pair.index,pair=>pair.Material),
+            TableAlgorithms=tables.Select((table,index)=>(index,table.Algorithm)).Where(pair=>pair.Algorithm!=null).ToDictionary(pair=>pair.index,pair=>pair.Algorithm!),
+            TableSettings=tables.Select((table,index)=>(index,table.Settings)).Where(pair=>pair.Settings!=null).ToDictionary(pair=>pair.index,pair=>pair.Settings!)};
+          _workingResult=null;_manualInstances.Clear();ClearManualHistory();_needsNest=false;
           _packedRevision=++_layoutRevision;_selection=rows.SelectMany(row=>row.Part.Items).Select(item=>item.Id).ToHashSet();
           _doc.Objects.UnselectAll();
           var active=rows.FirstOrDefault(row=>clicked.HasValue&&row.Part.Items.Any(item=>item.Id==clicked))??rows[0];
-          _activePreviewInstance=active.Id;_manualSelectedInstances.Clear();RefreshMaterialPresets();RefreshGrid(active.Id);SetPlacedControls(true);RefreshHighlights();
-          RefreshLiveLabelFormatting();
+          double displayStart=startup.Elapsed.TotalSeconds;
+          _activePreviewInstance=active.Id;_manualSelectedInstances.Clear();RefreshMaterialPresets();RefreshGrid(active.Id);SetPlacedControls(true);
+          RefreshLiveLabelFormatting();RefreshHighlights();
           _status.Text=$"Editing {tables.Count} placed tables; changes are immediate";_doc.Views.Redraw();
           Log.Write("vNest","placed-table editing started tables={0} parts={1}",tables.Count,rows.Count);
+          Log.Write("vNest","startup profile tables={0} parts={1} totalSeconds={2:F3} frameSeconds={3:F3} captureSeconds={4:F3} footprintSeconds={5:F3} rowSeconds={6:F3} displaySeconds={7:F3}",
+            tables.Count,rows.Count,startup.Elapsed.TotalSeconds,frameSeconds,captureSeconds,footprintSeconds,rowSeconds,startup.Elapsed.TotalSeconds-displayStart);
         }
         catch(Exception ex)
         {
@@ -2678,6 +3333,7 @@ namespace vTools.Commands
       private void ExitPlacedTables()
       {
         if(_originalLayout is not {} original)return;EndManualGesture(true);
+        var deferredSources=original.Rows.Count==0?OriginalTableSelection(_doc,_liveTables.Select(table=>table.Border).ToArray()).Objects:[];
         bool enabled=_preview.Enabled;_preview.Enabled=false;
         try
         {
@@ -2685,7 +3341,15 @@ namespace vTools.Commands
         _liveTables.Clear();_liveParts.Clear();_rows.Clear();_rows.AddRange(original.Rows);_result=original.Result;
         _anchor=original.Anchor;_anchored=original.Anchored;_layoutRevision=original.Revision;_packedRevision=original.PackedRevision;
         _originalLayout=null;_manualInstances.Clear();foreach(var pair in original.Instances)_manualInstances[pair.Key]=pair.Value;
-        _manualUndo.Clear();_manualRedo.Clear();_activePreviewInstance=null;_manualSelectedInstances.Clear();
+        _previewTableOffsets.Clear();foreach(var pair in original.Offsets)_previewTableOffsets[pair.Key]=pair.Value;
+        _tableNames.Clear();foreach(var pair in original.Names)_tableNames[pair.Key]=pair.Value;
+        _defaultTableNames.Clear();foreach(var pair in original.DefaultNames)_defaultTableNames[pair.Key]=pair.Value;
+        if(deferredSources.Length>0)
+        {
+          var parts=PlanarPartSelection.Capture(_doc,deferredSources,_doc.ModelAbsoluteTolerance,requirePlanarDetails:false);
+          _rows.AddRange(parts.Select(part=>CreateRow(_doc,part)));
+        }
+        ClearManualHistory();_activePreviewInstance=null;_manualSelectedInstances.Clear();
         _selection=_rows.SelectMany(row=>row.Part.Items).Select(item=>item.Id).ToHashSet();_doc.Objects.UnselectAll();foreach(var id in _selection)_doc.Objects.FindId(id)?.Select(true);
         SetPlacedControls(false);RefreshGrid();RefreshHighlights();
         _status.Text="Table editing finished; showing source parts. Placed tables retained.";
@@ -2723,6 +3387,7 @@ namespace vTools.Commands
               else
               {
                 using var attributes=_doc.Objects.FindId(info.Border)!.Attributes.Duplicate();attributes.ObjectId=Guid.Empty;attributes.Name=string.Empty;
+                WriteAlgorithmStamp(attributes,null);
                 attributes.SetUserString(NestTableMetadata.RoleKey,NestTableMetadata.LabelDividerRole);
                 dividerId=_doc.Objects.AddCurve(curve,attributes);
                 if(dividerId==Guid.Empty)throw new InvalidOperationException("Could not add table label divider.");
@@ -2745,9 +3410,22 @@ namespace vTools.Commands
                 {var point=labels.Outline.PointAtNormalizedLength(fraction);return new[]{point.X,point.Y,point.Z};}).ToArray()));
               attributes.SetUserString(MetadataPrefix+"tableLength",info.Length.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
               attributes.SetUserString(MetadataPrefix+"tableWidth",info.Material.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
-              _doc.Objects.ModifyAttributes(border.Id,attributes,true);
+              if(info.Settings!=null)attributes.SetUserString(TableSettingsKey,System.Text.Json.JsonSerializer.Serialize(info.Settings));
+              WriteAlgorithmStamp(attributes,_result.TableAlgorithms.GetValueOrDefault(table));
+              if(!_doc.Objects.ModifyAttributes(border.Id,attributes,true))throw new InvalidOperationException("Could not update table frame metadata.");
             }
-            _liveTables[table]=info with {Outline=labels.Outline.DuplicateCurve(),Labels=labels.Text.Select(text=>(TextEntity)text.Duplicate()).ToArray(),Divider=dividerId};
+            foreach(var obj in _doc.Groups.GroupMembers(info.Group))
+            {
+              string number=(table+1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+              bool decoration=NestTableMetadata.HasDecorationRole(obj.Attributes);
+              if(obj.Attributes.GetUserString(MetadataPrefix+"material")==info.Material.Name&&
+                obj.Attributes.GetUserString(MetadataPrefix+"table")==number&&(!decoration||obj.Attributes.GetUserString(MetadataPrefix+"tableName")==info.Name))continue;
+              using var attributes=obj.Attributes.Duplicate();attributes.SetUserString(MetadataPrefix+"material",info.Material.Name);
+              attributes.SetUserString(MetadataPrefix+"table",number);if(decoration)attributes.SetUserString(MetadataPrefix+"tableName",info.Name);
+              if(!_doc.Objects.ModifyAttributes(obj.Id,attributes,true))throw new InvalidOperationException("Could not update table membership metadata.");
+            }
+            _liveTables[table]=info with {Outline=labels.Outline.DuplicateCurve(),Labels=labels.Text.Select(text=>(TextEntity)text.Duplicate()).ToArray(),Divider=dividerId,
+              Algorithm=ReadAlgorithmStamp(_doc.Objects.FindId(info.Border)!.Attributes)};
             info.Dispose();
           }
           finally{labels.Frame.Dispose();labels.Outline.Dispose();foreach(var text in labels.Text)text.Dispose();}
@@ -2810,15 +3488,24 @@ namespace vTools.Commands
           var labels=info.LabelIds.Select(id=>_doc.Objects.FindId(id)?.Geometry).OfType<TextEntity>().Select(text=>(TextEntity)text.Duplicate()).ToArray();
           string name=_doc.Objects.FindId(info.Border)!.Attributes.GetUserString(MetadataPrefix+"tableName")??info.Name;
           var divider=_doc.Groups.GroupMembers(info.Group).FirstOrDefault(obj=>obj.Attributes.GetUserString(NestTableMetadata.RoleKey)==NestTableMetadata.LabelDividerRole);
-          _liveTables[table]=info with {Name=name,Outline=outline.DuplicateCurve(),Labels=labels,Divider=divider?.Id??Guid.Empty};
+          var settings=ReadTableSettings(_doc.Objects.FindId(info.Border)!.Attributes);
+          var material=settings?.Material??(_result.TableMaterials.GetValueOrDefault(table)??info.Material) with
+            {Width=MetadataNumber(_doc.Objects.FindId(info.Border)!.Attributes,MetadataPrefix+"tableWidth",info.Material.Width)};
+          double length=settings?.Length??MetadataNumber(_doc.Objects.FindId(info.Border)!.Attributes,MetadataPrefix+"tableLength",info.Length);
+          _liveTables[table]=info with {Name=name,Outline=outline.DuplicateCurve(),Labels=labels,Divider=divider?.Id??Guid.Empty,Material=material,Length=length,Settings=settings,
+            Algorithm=ReadAlgorithmStamp(_doc.Objects.FindId(info.Border)!.Attributes)};
           info.Dispose();
         }
+        _result=_result with {TableMaterials=_liveTables.Select((table,index)=>(index,table.Material)).ToDictionary(pair=>pair.index,pair=>pair.Material),
+          TableAlgorithms=_liveTables.Select((table,index)=>(index,table.Algorithm)).Where(pair=>pair.Algorithm!=null).ToDictionary(pair=>pair.index,pair=>pair.Algorithm!),
+          TableSettings=_liveTables.Select((table,index)=>(index,table.Settings)).Where(pair=>pair.Settings!=null).ToDictionary(pair=>pair.index,pair=>pair.Settings!)};
       }
-      private bool ApplyLiveParts(NestPackingEngine.Result before,NestPackingEngine.Result after)
+      private bool ApplyLiveParts(NestPackingEngine.Result before,NestPackingEngine.Result after,IReadOnlyDictionary<int,(Transform Transform,int Group)>? previous=null)
       {
         var changes=after.Placements.Where(part=>before.Placements.FirstOrDefault(old=>old.Id==part.Id) is {} old&&
           (old.Table!=part.Table||Math.Abs(old.X-part.X)>PoseDimensionTolerance||Math.Abs(old.Y-part.Y)>PoseDimensionTolerance||
-           Math.Abs(old.Pose.Rotation-part.Pose.Rotation)>PoseDimensionTolerance||old.Pose.Flipped!=part.Pose.Flipped)).ToArray();
+           Math.Abs(old.Pose.Rotation-part.Pose.Rotation)>PoseDimensionTolerance||old.Pose.Flipped!=part.Pose.Flipped||
+           previous!=null&&(previous[part.Id].Group!=_liveTables[part.Table].Group||previous[part.Id].Transform!=InstanceTransform(PlacementOwner(part.Id)!,part)))).ToArray();
         if(changes.Length==0)return true;
         if(changes.SelectMany(part=>_liveParts[part.Id]).Any(id=>_doc.Objects.FindId(id) is not {IsDeleted:false} obj||obj.IsLocked||obj.IsReference||_doc.Layers[obj.Attributes.LayerIndex].IsLocked))
         {_status.Text="A placed-part object is missing or locked";return false;}
@@ -2834,18 +3521,25 @@ namespace vTools.Commands
           foreach(var part in changes)
           {
             var old=before.Placements.Single(value=>value.Id==part.Id);var row=PlacementOwner(part.Id)!;
-            if(!InstanceTransform(row,old).TryGetInverse(out var inverse))throw new InvalidOperationException("Placed-part transform is not invertible.");
+            var oldTransform=previous?.GetValueOrDefault(part.Id).Transform??InstanceTransform(row,old);
+            if(!oldTransform.TryGetInverse(out var inverse))throw new InvalidOperationException("Placed-part transform is not invertible.");
             var transform=InstanceTransform(row,part)*inverse;
+            bool sameGeometry=previous!=null&&previous[part.Id].Group==_liveTables[part.Table].Group&&old.X==part.X&&old.Y==part.Y&&
+              old.Pose.Rotation==part.Pose.Rotation&&old.Pose.Flipped==part.Pose.Flipped;
             foreach(var id in _liveParts[part.Id])
             {
-              var obj=_doc.Objects.FindId(id)!;using var geometry=TransformedCopy(obj.Geometry,transform);
-              if(!_doc.Objects.Replace(id,geometry,false))throw new InvalidOperationException("Could not update a placed-part object.");
-              if(old.Table==part.Table&&old.Pose.Rotation==part.Pose.Rotation&&old.Pose.Flipped==part.Pose.Flipped)continue;
+              var obj=_doc.Objects.FindId(id)!;
+              if(!sameGeometry)
+              {using var geometry=TransformedCopy(obj.Geometry,transform);if(!_doc.Objects.Replace(id,geometry,false))throw new InvalidOperationException("Could not update a placed-part object.");}
+              if(previous==null&&old.Table==part.Table&&old.Pose.Rotation==part.Pose.Rotation&&old.Pose.Flipped==part.Pose.Flipped)continue;
               using var attributes=obj.Attributes.Duplicate();
               attributes.SetUserString(MetadataPrefix+"rotation",part.Pose.Rotation.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
               attributes.SetUserString(MetadataPrefix+"flipped",part.Pose.Flipped.ToString());
               attributes.SetUserString(MetadataPrefix+"table",(part.Table+1).ToString());
-              if(old.Table!=part.Table){attributes.RemoveFromGroup(_liveTables[old.Table].Group);attributes.AddToGroup(_liveTables[part.Table].Group);}
+              int oldGroup=previous?.GetValueOrDefault(part.Id).Group??_liveTables[old.Table].Group;
+              int newGroup=_liveTables[part.Table].Group;
+              if(oldGroup!=newGroup){attributes.RemoveFromGroup(oldGroup);attributes.AddToGroup(newGroup);}
+              attributes.SetUserString(MetadataPrefix+"material",TableMaterial(part.Table).Name);
               if(!_doc.Objects.ModifyAttributes(id,attributes,true))throw new InvalidOperationException("Could not update placed-part attributes.");
             }
           }
@@ -2864,7 +3558,7 @@ namespace vTools.Commands
         if(!(e.IsEndUndo||e.IsEndRedo))return;
         _replayingLiveHistory=false;
         var from=e.IsEndRedo?_manualRedo:_manualUndo;var to=e.IsEndRedo?_manualUndo:_manualRedo;
-        if(from.Count==0||from[^1].DocumentRecord!=e.UndoSerialNumber){_manualUndo.Clear();_manualRedo.Clear();_packedRevision=-1;_status.Text="Drawing history changed; reopen Edit Tables to refresh";return;}
+        if(from.Count==0||from[^1].DocumentRecord!=e.UndoSerialNumber){ClearManualHistory();_packedRevision=-1;_status.Text="Drawing history changed; reopen Edit Tables to refresh";return;}
         var state=from[^1];from.RemoveAt(from.Count-1);to.Add(CaptureManualState(_result) with {DocumentRecord=_doc.CurrentUndoRecordSerialNumber});
         RestoreManualState(state,false);
       }
@@ -2874,6 +3568,9 @@ namespace vTools.Commands
 
       private void ClearPreviewCopies()
       {
+        foreach(var fill in _partFills.Values)fill.Mesh.Dispose();_partFills.Clear();_conflictLayout=null;_conflictIds.Clear();
+        _conflictReasons.Clear();_physicalBounds.Clear();
+        foreach(var group in _sourcePartFills.Values)foreach(var fill in group.Fills)fill.Mesh.Dispose();_sourcePartFills.Clear();
         _activePreviewParts=[];_liveObjectSerials.Clear();_tableObjectSerials.Clear();_gestureObjectSerials.Clear();_gestureObjectIds.Clear();
         ClearHighlights();foreach(var entry in _previewCopies.Values)foreach(var item in entry.Items)item.Geometry.Dispose();_previewCopies.Clear();
         foreach(var entry in _previewOutlines.Values)entry.Outline.Dispose();_previewOutlines.Clear();_previewClearance.Clear();
@@ -2881,6 +3578,10 @@ namespace vTools.Commands
       private void RetainPreviewCopies(IEnumerable<Row> rows)
       {
         var retained=rows.SelectMany(row=>row.InstanceIds()).ToHashSet();
+        foreach(var key in _partFills.Keys.Where(key=>!retained.Contains(key.Id)).ToArray())
+        {_partFills[key].Mesh.Dispose();_partFills.Remove(key);}
+        foreach(int id in _sourcePartFills.Keys.Where(id=>!retained.Contains(id)).ToArray())
+        {foreach(var fill in _sourcePartFills[id].Fills)fill.Mesh.Dispose();_sourcePartFills.Remove(id);}
         foreach(int id in _manualInstances.Keys.Where(id=>!retained.Contains(id)).ToArray())_manualInstances.Remove(id);
         if(_activePreviewInstance is {} active&&!retained.Contains(active))_activePreviewInstance=null;
         foreach(var id in _previewCopies.Keys.Where(id=>!retained.Contains(id)).ToArray())
@@ -2904,7 +3605,7 @@ namespace vTools.Commands
       }
       private IReadOnlyList<Polyline> PreviewClearance(Row row,NestPackingEngine.Placement placement)
       {
-        double gap=RowMaterial(row).Gap;if(gap<=0)return [];
+        double gap=TableMaterial(placement.Table).Gap;if(gap<=0)return [];
         var transform=InstanceTransform(row,placement);
         if(_previewClearance.TryGetValue(placement.Id,out var cached)&&cached.Gap==gap)
         {
@@ -2914,6 +3615,14 @@ namespace vTools.Commands
         }
         var contours=row.Clearance(gap).Select(path=>{var copy=new Polyline(path);copy.Transform(transform);return copy;}).ToArray();
         _previewClearance[placement.Id]=(transform,gap,contours);return contours;
+      }
+      private IEnumerable<(Row Row,NestPackingEngine.Placement Placement)> GapPreviewParts()
+      {
+        if(_locationPicking||_showGap.SelectedIndex<=0)yield break;
+        if(_showGap.SelectedIndex==1)
+        {foreach(var part in _activePreviewParts)yield return part;yield break;}
+        foreach(var placement in VisibleResult.Placements)
+          if(PlacementOwner(placement.Id) is {Included:true} row)yield return (row,placement);
       }
 
       private IReadOnlyList<PlanarPartSelection.Item> PreviewCopies(Row row)
@@ -3017,21 +3726,23 @@ namespace vTools.Commands
       }
       private NestContourPackingEngine.ManualLayout ManualScene(NestPackingEngine.Result result)=>new(result.Placements,
         Enumerable.Range(0,result.Tables).ToDictionary(table=>table,table=>TableMaterial(table).Width),Length,
-        result.Placements.ToDictionary(part=>part.Id,part=>RowMaterial(PlacementOwner(part.Id)!).Gap),
+        result.Placements.ToDictionary(part=>part.Id,part=>TableMaterial(part.Table).Gap),
         Enumerable.Range(0,result.Tables).ToDictionary(table=>table,TableLength),_doc.ModelAbsoluteTolerance);
-      private NestPackingEngine.Pose? ManualPose(Row row,double angle,bool flipped)
+      private NestPackingEngine.Pose? ManualPose(Row row,double angle,bool flipped,int? table=null)
       {
         var before=(row.Rotation,row.Fixed,row.ManualRotation,row.Flipped);
         try
         {
           row.Rotation=NormalizeRotation(angle);row.Fixed=true;row.ManualRotation=true;row.Flipped=flipped;
-          return MaterialPoses(row,RowMaterial(row)).FirstOrDefault(pose=>pose.Flipped==flipped);
+          var settings=SettingsForTable(table??row.Table);var material=settings.Material;
+          return FindMaterialPoses(row,GuideAngle(row),material.Width,material.GrainDeviation,material.Grain,material.ObeyGrain,material.AllowReverse,settings)
+            .FirstOrDefault(pose=>pose.Flipped==flipped);
         }
         finally {(row.Rotation,row.Fixed,row.ManualRotation,row.Flipped)=before;}
       }
       private NestPackingEngine.Placement? TurnPlacement(NestPackingEngine.Placement before,double angle)
       {
-        var row=PlacementOwner(before.Id);if(row==null||ManualPose(row,angle,before.Pose.Flipped) is not {} pose)return null;
+        var row=PlacementOwner(before.Id);if(row==null||ManualPose(row,angle,before.Pose.Flipped,before.Table) is not {} pose)return null;
         var frame=DisplayTablePlane(before.Table);var center=frame.PointAt(before.X+before.Pose.Width/2,before.Y+before.Pose.Length/2);
         if(!InstanceTransform(row,before).TryGetInverse(out var inverse))return null;
         var source=inverse*center;var candidate=before with {X=0,Y=0,Pose=pose};
@@ -3047,21 +3758,100 @@ namespace vTools.Commands
           var row=PlacementOwner(part.Id);
           // Mirroring reverses the stored angle's handedness, but the group still turns rigidly in world space.
           double angle=part.Pose.Rotation+(part.Pose.Flipped?-delta:delta);
-          if(row==null||ManualPose(row,angle,part.Pose.Flipped) is not {} pose||!InstanceTransform(row,part).TryGetInverse(out var inverse))return null;
+          if(row==null||ManualPose(row,angle,part.Pose.Flipped,part.Table) is not {} pose||!InstanceTransform(row,part).TryGetInverse(out var inverse))return null;
           var frame=DisplayTablePlane(part.Table);var center=frame.PointAt(part.X+part.Pose.Width/2,part.Y+part.Pose.Length/2);
           var candidate=part with {X=0,Y=0,Pose=pose};var shift=rotation*center-InstanceTransform(row,candidate)*(inverse*center);
           result.Add(candidate with {X=shift*frame.XAxis,Y=shift*frame.YAxis});
         }
         return result.ToArray();
       }
+      private bool GrainRotation(IReadOnlyList<NestPackingEngine.Placement> parts)=>parts.Any(part=>PlacementOwner(part.Id) is {} row&&UsesGrain(row));
+      private double RotationStepFor(IReadOnlyList<NestPackingEngine.Placement> parts)=>GrainRotation(parts)?ManualGrainRotationStep:ManualKeyboardRotationStep;
+      private NestPackingEngine.Placement[]? MirrorManualGroup(IReadOnlyList<NestPackingEngine.Placement> parts,bool horizontal,Point3d pivot)
+      {
+        var common=DisplayTablePlane(parts[0].Table);var reflection=Transform.Mirror(pivot,horizontal?common.YAxis:common.XAxis);
+        var result=new List<NestPackingEngine.Placement>();
+        foreach(var part in parts)
+        {
+          var row=PlacementOwner(part.Id);double angle=NormalizeRotation(part.Pose.Rotation+(horizontal?ManualGrainRotationStep:0));
+          if(row==null||ManualPose(row,angle,!part.Pose.Flipped,part.Table) is not {} pose||!InstanceTransform(row,part).TryGetInverse(out var inverse))return null;
+          var frame=DisplayTablePlane(part.Table);var center=frame.PointAt(part.X+part.Pose.Width/2,part.Y+part.Pose.Length/2);
+          var candidate=part with {X=0,Y=0,Pose=pose};var shift=reflection*center-InstanceTransform(row,candidate)*(inverse*center);
+          result.Add(candidate with {X=shift*frame.XAxis,Y=shift*frame.YAxis});
+        }
+        return result.ToArray();
+      }
+      private void RotateManual(int direction,bool recover,bool bypass)
+      {
+        if(!CanFineTune)return;EndManualGesture(true);var selected=ManualSelection();if(selected.Length==0)return;
+        if(!CompatibleManualFrames(selected)){_status.Text="Selected tables have incompatible orientations";return;}
+        var before=_result;double delta=direction*RotationStepFor(selected);var pivot=ManualPivot(selected);
+        var desired=TurnManualGroup(selected,delta,pivot);
+        if(desired==null){_status.Text="Rotation blocked by grain rules";return;}
+        if(!bypass)
+        {
+          var scene=ManualScene(before);
+          if(recover)
+          {
+            var relaxed=scene.RelaxRigid(desired);
+            if(relaxed==null){_status.Text=scene.RecoveryBudgetExceeded?"Rotation recovery time limit reached; layout unchanged":"No collision-free rotation fits the table";return;}
+            desired=relaxed;
+          }
+          else if(GrainRotation(selected))
+          {if(!scene.ValidRigid(desired)){_status.Text="Grain reversal blocked by table edge or part gap";return;}}
+          else
+          {
+            var clock=System.Diagnostics.Stopwatch.StartNew();int steps=Math.Max(1,(int)Math.Ceiling(Math.Abs(delta)/ManualRotationCheckStep));
+            for(int step=1;step<=steps;step++)
+            {
+              if(clock.ElapsedMilliseconds>=ManualActionMilliseconds){_status.Text="Rotation check time limit reached; layout unchanged";return;}
+              var candidate=TurnManualGroup(selected,delta*step/steps,pivot);
+              if(candidate==null||!scene.ValidRigid(candidate)){_status.Text="Rotation blocked by table edge or part gap";return;}
+            }
+          }
+        }
+        ShowManual(desired);CommitManual(before);_status.Text=$"Rotated {Math.Abs(delta):G} degrees";
+      }
+      private void FlipManual(bool horizontal,bool bypass)
+      {
+        if(!CanFineTune)return;EndManualGesture(true);var selected=ManualSelection();if(selected.Length==0)return;
+        if(!CompatibleManualFrames(selected)){_status.Text="Selected tables have incompatible orientations";return;}
+        var before=_result;var desired=MirrorManualGroup(selected,horizontal,ManualPivot(selected));
+        if(desired==null){_status.Text="Flip blocked by grain rules";return;}
+        if(!bypass&&!ManualScene(before).ValidRigid(desired)){_status.Text="Flip blocked by table edge or part gap; Ctrl bypasses obstacles";return;}
+        ShowManual(desired);CommitManual(before);_status.Text=horizontal?"Mirrored horizontally":"Mirrored vertically";
+      }
+      private void ChangeFlipped(bool flipped)
+      {
+        if(!CanFineTune){Edit(row=>{row.Flipped=flipped;row.FlipOverride=flipped;});return;}
+        EndManualGesture(true);var before=_result;var desired=new List<NestPackingEngine.Placement>();
+        foreach(var part in ManualSelection().Where(part=>part.Pose.Flipped!=flipped))
+        {
+          NestPackingEngine.Placement[] single=[part];
+          if(MirrorManualGroup(single,true,ManualPivot(single)) is not {} mirrored)
+          {_status.Text="Flip blocked by grain rules";UpdateEditor();return;}
+          desired.Add(mirrored[0]);
+        }
+        if(desired.Count==0){UpdateEditor();return;}
+        // Explicit checkbox values, like numeric pose edits, override collisions while retaining grain rules.
+        ShowManual(desired);
+        if(ReferenceEquals(_result,before)){UpdateEditor();return;}
+        CommitManual(before);_status.Text=flipped?"Flipped selected parts":"Restored selected parts' handedness";
+      }
       private void ShowManual(IReadOnlyList<NestPackingEngine.Placement> changes)
       {
         var byId=changes.ToDictionary(part=>part.Id);
         if(changes.Count>0&&changes.All(part=>_result.Placements.FirstOrDefault(old=>old.Id==part.Id) is {} old&&
           old.Table==part.Table&&old.X==part.X&&old.Y==part.Y&&old.Pose==part.Pose))return;
+        bool transferred=changes.Any(part=>_result.Placements.FirstOrDefault(old=>old.Id==part.Id) is {} old&&old.Table!=part.Table);
         var next=_result with {Placements=_result.Placements.Select(part=>byId.GetValueOrDefault(part.Id)??part).ToList()};
         if(_liveTables.Count>0&&_manualGesture==null&&changes.Count>0&&!ApplyLiveParts(_result,next))return;
         _result=next;
+        if(transferred)
+        {
+          if(changes.FirstOrDefault() is {} active)SelectTableRow(active.Table);
+          RefreshTableHighlights();UpdateNestButton();
+        }
         if(_manualGesture!=null)
         {
           RefreshMovingHighlights();
@@ -3084,8 +3874,7 @@ namespace vTools.Commands
           if(PlacementOwner(part.Id) is {} row&&part.Id==row.Id)
           {row.Fixed=true;row.ManualRotation=true;row.Table=part.Table;row.X=part.X;row.Y=part.Y;row.Rotation=part.Pose.Rotation;row.Flipped=part.Pose.Flipped;SavePartSettings(row);}
         }
-        if(changed)
-        {_manualUndo.Add(snapshot);if(_manualUndo.Count>ManualHistoryLimit)_manualUndo.RemoveAt(0);_manualRedo.Clear();}
+        if(changed)RecordManualState(snapshot);
         if(_liveUndoRecord!=0&&!changed)
         {EndLiveRecord();_applyingLive=true;try{ExecuteLiveHistory(false);_doc.ClearRedoRecords();}finally{_applyingLive=false;}}
         else{if(changed&&_liveUndoRecord!=0)UpdateLiveUsage();EndLiveRecord();}
@@ -3095,12 +3884,33 @@ namespace vTools.Commands
       }
       private ManualState CaptureManualState(NestPackingEngine.Result layout)=>new(layout,
         _rows.ToDictionary(row=>row.Id,row=>new ManualPartState(row.Fixed,row.ManualRotation,row.Flipped,row.Table,row.X,row.Y,row.Rotation)),
-        new(_manualInstances),_activePreviewInstance,Selection:ManualSelection().Select(part=>part.Id).ToArray());
+        new(_manualInstances),_activePreviewInstance,Selection:ManualSelection().Select(part=>part.Id).ToArray())
+        {Tables=_liveTables.Count==0?null:_liveTables.Select(info=>new LiveTableIdentity(info.Group,info.Border,info.Frame,info.Length,info.Material,info.Name,info.LabelIds,info.Divider,info.Settings)).ToArray(),
+          Names=new(_tableNames),DefaultNames=new(_defaultTableNames),Offsets=new(_previewTableOffsets),
+          Sources=_liveTables.Count==0?_rows.ToArray():null,Packed=_packedRevision==_layoutRevision};
+      private void RecordManualState(ManualState state)
+      {
+        _manualUndo.Add(state);if(_manualUndo.Count>ManualHistoryLimit)_manualUndo.RemoveAt(0);
+        _manualRedo.Clear();ReleaseRetiredHistoryRows();
+      }
+      private void ClearManualHistory()
+      {_manualUndo.Clear();_manualRedo.Clear();ReleaseRetiredHistoryRows();}
+      private void ReleaseRetiredHistoryRows()
+      {
+        if(_retiredHistoryRows.Count==0)return;
+        var retained=_rows.Concat(_manualUndo.Concat(_manualRedo).SelectMany(state=>state.Sources??[])).ToHashSet();
+        foreach(var row in _retiredHistoryRows.Where(row=>!retained.Contains(row)).ToArray())
+        {row.Dispose();_retiredHistoryRows.Remove(row);}
+      }
       private void ManualHistory(bool redo)
       {
-        if(!CanFineTune)return;EndManualGesture(true);
+        if(_closed||_placing||_locationPicking||PackingBlocked())return;
+        if(_packing){_status.Text="Stop nesting before using preview Undo/Redo";return;}
+        EndManualGesture(true);
         var from=redo?_manualRedo:_manualUndo;var to=redo?_manualUndo:_manualRedo;
         if(from.Count==0){_status.Text=redo?"Nothing to redo":"Nothing to undo";return;}
+        if(from[^1].Sources is {} sources&&sources.Any(row=>row.Part.Items.Any(item=>_doc.Objects.FindId(item.Id) is not {IsDeleted:false})))
+        {_status.Text="Source objects changed; preview history cannot restore deleted drawing objects";return;}
         var state=from[^1];from.RemoveAt(from.Count-1);to.Add(CaptureManualState(_result));
         if(_liveTables.Count>0)
         {
@@ -3110,11 +3920,22 @@ namespace vTools.Commands
           to[^1]=to[^1] with {DocumentRecord=_liveHistoryInverseRecord};
         }
         RestoreManualState(state,_liveTables.Count==0);
+        ReleaseRetiredHistoryRows();
       }
       private void RestoreManualState(ManualState state,bool persist)
       {
-        if(_liveTables.Count>0)RefreshLiveDecorations();
-        _result=_liveTables.Count>0?state.Layout with {TableMaterials=_result.TableMaterials}:state.Layout;_manualInstances.Clear();foreach(var pair in state.Instances)_manualInstances[pair.Key]=pair.Value;
+        if(state.Sources is {} sources)
+        {
+          ClearHighlights();RetainPreviewCopies(sources);
+          foreach(var row in _rows.Except(sources))_retiredHistoryRows.Add(row);
+          _rows.Clear();_rows.AddRange(sources);_retiredHistoryRows.ExceptWith(sources);
+          RestoreMemberSelection();
+        }
+        if(state.Tables!=null){RestoreLiveTableIdentities(state.Tables);_result=state.Layout;RefreshLiveDecorations();}
+        _tableNames.Clear();foreach(var pair in state.Names)_tableNames[pair.Key]=pair.Value;
+        _defaultTableNames.Clear();foreach(var pair in state.DefaultNames)_defaultTableNames[pair.Key]=pair.Value;
+        _previewTableOffsets.Clear();foreach(var pair in state.Offsets)_previewTableOffsets[pair.Key]=pair.Value;
+        _result=_liveTables.Count>0?state.Layout with {TableMaterials=_result.TableMaterials,TableSettings=_result.TableSettings,TableAlgorithms=_result.TableAlgorithms}:state.Layout;_manualInstances.Clear();foreach(var pair in state.Instances)_manualInstances[pair.Key]=pair.Value;
         foreach(var row in _rows)
         {
           if(!state.Parts.TryGetValue(row.Id,out var part))continue;
@@ -3122,8 +3943,9 @@ namespace vTools.Commands
             (part.Fixed,part.ManualRotation,part.Flipped,part.Table,part.X,part.Y,part.Rotation);
           if(persist)SavePartSettings(row);
         }
-        _activePreviewInstance=state.ActiveInstance;_manualSelectedInstances.Clear();_manualSelectedInstances.UnionWith(state.Selection??[]);_packedRevision=_layoutRevision;_needsNest=false;
-        ShowManual([]);RefreshGrid();if(state.Selection is {Length:>0})SelectManualInstances(state.Selection.Where(id=>_result.Placements.Any(part=>part.Id==id)).ToHashSet());_status.Text="Manual edit history restored";
+        _activePreviewInstance=state.ActiveInstance;_manualSelectedInstances.Clear();_manualSelectedInstances.UnionWith(state.Selection??[]);_packedRevision=state.Packed?_layoutRevision:UnpackedRevision;_needsNest=false;
+        ShowManual([]);RefreshGrid();if(state.Selection is {Length:>0})SelectManualInstances(state.Selection.Where(id=>_result.Placements.Any(part=>part.Id==id)).ToHashSet());
+        _place.Enabled=_liveTables.Count==0&&state.Packed&&_result.Placements.Count>0;_status.Text="Preview edit history restored";
       }
       private bool ManualNumber(NumericStepper field,double value)
       {
@@ -3183,7 +4005,7 @@ namespace vTools.Commands
       }
       private NestPackingEngine.Placement? PreviewHit(Line ray)
       {
-        foreach(var part in _result.Placements.AsEnumerable().Reverse())
+        foreach(var part in VisibleResult.Placements.AsEnumerable().Reverse())
         {
           var row=PlacementOwner(part.Id);if(row==null||!InstanceTransform(row,part).TryGetInverse(out var inverse))continue;
           var source=ray;source.Transform(inverse);
@@ -3227,13 +4049,18 @@ namespace vTools.Commands
       }
       private bool PreviewMouseDown(MouseCallbackEventArgs e)
       {
-        if((_manualGesture!=null||_previewBox!=null)&&e.MouseButton==MouseButton.Right){EndManualGesture(false);return true;}
-        if(_liveTables.Count==0&&e.MouseButton==MouseButton.Left&&!_packing&&!PackingBlocked()&&PlacedPartAt(e) is {} placed)
+        if((_manualGesture!=null||_previewBox!=null||_previewSelectionClick)&&e.MouseButton==MouseButton.Right){EndManualGesture(false);return true;}
+        if(CanAutoEditPlacedTables&&e.MouseButton==MouseButton.Left&&!_packing&&!PackingBlocked()&&PlacedPartAt(e) is {} placed)
           EnterPlacedTables(placed);
-        if(!CanFineTune||e.MouseButton!=MouseButton.Left||e.View?.ActiveViewport is not {} view)return false;
+        if(_closed||_placing||_locationPicking||PackingBlocked()||e.MouseButton!=MouseButton.Left||e.View?.ActiveViewport is not {} view)return false;
         if(!view.GetFrustumLine(e.ViewportPoint.X,e.ViewportPoint.Y,out var ray))return false;
         EndManualGesture(true);
         var hit=PreviewHit(ray);
+        if(!CanFineTune)
+        {
+          if(hit==null)return false;
+          SelectManualPart(hit,e.ShiftKeyDown);_previewSelectionClick=true;return true;
+        }
         bool inTable=Enumerable.Range(0,_result.Tables).Any(table=>
           Rhino.Geometry.Intersect.Intersection.LinePlane(ray,DisplayTablePlane(table),out double t)&&
           DisplayTablePlane(table).ClosestParameter(ray.PointAt(t),out double x,out double y)&&x>=0&&x<=TableMaterial(table).Width&&y>=0&&y<=TableLength(table));
@@ -3245,6 +4072,8 @@ namespace vTools.Commands
       }
       private bool PreviewMouseMove(MouseCallbackEventArgs e)
       {
+        UpdateTableCursor(e);
+        if(_previewSelectionClick)return true;
         if(!CanFineTune)return false;
         if(_previewBox is {} box)
         {if(e.View?.ActiveViewport.Id==box.Viewport)_picking.ShowPreviewBox(box.Viewport,box.Start,e.ViewportPoint);return true;}
@@ -3254,9 +4083,9 @@ namespace vTools.Commands
         if(e.View?.ActiveViewport.Id!=gesture.Viewport||!CursorPoint(e,out var point))return true;
         if(System.Environment.TickCount64-_manualPreviewTick<ManualPreviewInterval)return true;
         gesture.ContactAlignment=ContactAlignmentDistance(e,gesture.Plane);
-        _manualPreviewTick=System.Environment.TickCount64;MoveManualGesture(gesture,point,e.ViewportPoint.X);return true;
+        _manualPreviewTick=System.Environment.TickCount64;MoveManualGesture(gesture,point,e.ViewportPoint.X,e.CtrlKeyDown,e.ShiftKeyDown);return true;
       }
-      private void MoveManualGesture(ManualGesture gesture,Point3d point,int pixelX)
+      private void MoveManualGesture(ManualGesture gesture,Point3d point,int pixelX,bool control,bool shift)
       {
         var selected=gesture.Before.Placements.Where(part=>gesture.Ids.Contains(part.Id)).ToArray();
         if(gesture.Rotation)
@@ -3265,12 +4094,16 @@ namespace vTools.Commands
           if(b.SquareLength<=RhinoMath.ZeroTolerance)return;
           double delta=a.SquareLength<=RhinoMath.ZeroTolerance?(pixelX-gesture.StartPixelX)*ManualRotationPixelStep:
             RhinoMath.ToDegrees(Math.Atan2(b*gesture.Plane.YAxis,b*gesture.Plane.XAxis)-Math.Atan2(a*gesture.Plane.YAxis,a*gesture.Plane.XAxis));
+          bool grain=GrainRotation(selected);
+          if(grain)delta=Math.Round(delta/ManualGrainRotationStep,MidpointRounding.AwayFromZero)*ManualGrainRotationStep;
           var desired=TurnManualGroup(selected,delta,gesture.Pivot);
           if(desired==null){_status.Text="Rotation blocked by grain rules";return;}
-          if(!ControlPressed)
+          if(!control)
           {
-            if(ShiftPressed)
-            {var relaxed=gesture.Scene.RelaxRigid(desired);if(relaxed==null){_status.Text="No collision-free rotation fits the table";return;}desired=relaxed;}
+            if(shift)
+            {var relaxed=gesture.Scene.RelaxRigid(desired);if(relaxed==null){_status.Text=gesture.Scene.RecoveryBudgetExceeded?"Rotation recovery time limit reached":"No collision-free rotation fits the table";return;}desired=relaxed;}
+            else if(grain)
+            {if(!gesture.Scene.ValidRigid(desired)){_status.Text="Grain reversal blocked by table edge or part gap";return;}}
             else
             {
               var current=_result.Placements.Where(part=>gesture.Ids.Contains(part.Id)).ToArray();
@@ -3301,15 +4134,32 @@ namespace vTools.Commands
         }
         else
         {
-          var delta=point-gesture.Start;
           var current=_result.Placements.Where(part=>gesture.Ids.Contains(part.Id)).ToArray();
-          var first=current.First(part=>part.Id==selected[0].Id);
-          double dx=selected[0].X+delta*gesture.Plane.XAxis-first.X,dy=selected[0].Y+delta*gesture.Plane.YAxis-first.Y;
-          ShowManual(ControlPressed?current.Select(part=>part with {X=part.X+dx,Y=part.Y+dy}).ToArray():gesture.Scene.MoveFromAligned(current,dx,dy,gesture.ContactAlignment));
+          ShowManual(DragPlacements(gesture,current,point,control));
         }
+      }
+      private NestPackingEngine.Placement[] DragPlacements(ManualGesture gesture,NestPackingEngine.Placement[] current,Point3d point,bool control)
+      {
+        var selected=gesture.Before.Placements.Where(part=>gesture.Ids.Contains(part.Id)).ToArray();
+        var delta=point-gesture.Start;int? destination=null;
+        if(control)
+          destination=Enumerable.Range(0,_result.Tables).Reverse().Where(table=>
+            TransferTableContains(gesture.Plane,DisplayTablePlane(table),TableMaterial(table).Width,TableLength(table),point)&&
+            selected.All(part=>TableMaterial(part.Table).Name.Equals(TableMaterial(table).Name,StringComparison.OrdinalIgnoreCase)))
+            .Cast<int?>().FirstOrDefault();
+        var desired=selected.Select(part=>
+        {
+          int table=destination??current.Single(value=>value.Id==part.Id).Table;
+          return TransferPlacement(part,DisplayTablePlane(part.Table),DisplayTablePlane(table),table,delta);
+        }).ToArray();
+        if(destination is {} target&&current.Any(part=>part.Table!=target))
+          Log.Write("vNest","Ctrl-drag transfer parts={0} from={1} to={2}",string.Join(",",gesture.Ids),string.Join(",",current.Select(part=>part.Table+1).Distinct()),target+1);
+        var first=current.First(part=>part.Id==selected[0].Id);
+        return control?desired:gesture.Scene.MoveFromAligned(current,desired[0].X-first.X,desired[0].Y-first.Y,gesture.ContactAlignment);
       }
       private bool PreviewMouseUp(MouseCallbackEventArgs e)
       {
+        if(_previewSelectionClick&&e.MouseButton==MouseButton.Left){_previewSelectionClick=false;return true;}
         if(_previewBox is {} box&&e.MouseButton==MouseButton.Left)
         {
           _previewBox=null;_picking.HidePreviewBox();
@@ -3322,11 +4172,12 @@ namespace vTools.Commands
         }
         if(_manualGesture is not {Dragging:true} gesture||e.MouseButton!=MouseButton.Left)return false;
         if((!gesture.Rotation||AltPressed)&&CursorPoint(e,out var point))
-        {gesture.ContactAlignment=ContactAlignmentDistance(e,gesture.Plane);MoveManualGesture(gesture,point,e.ViewportPoint.X);}
+        {gesture.ContactAlignment=ContactAlignmentDistance(e,gesture.Plane);MoveManualGesture(gesture,point,e.ViewportPoint.X,e.CtrlKeyDown,e.ShiftKeyDown);}
         EndManualGesture(true);return true;
       }
       private void EndManualGesture(bool commit)
       {
+        _previewSelectionClick=false;
         if(_previewBox!=null){_previewBox=null;_picking.HidePreviewBox();}
         if(_manualGesture is not {} gesture)return;_manualGesture=null;_gestureObjectIds.Clear();_gestureObjectSerials.Clear();
         if(commit)
@@ -3343,6 +4194,15 @@ namespace vTools.Commands
       }
       private void PreviewKey(int key)
         =>PreviewKeyWithModifiers(key,AltPressed,ShiftPressed,ControlPressed);
+      private static Vector2d ArrowDirection(Vector3d direction,Plane frame)
+      {
+        double x=direction*frame.XAxis,y=direction*frame.YAxis,length=Math.Sqrt(x*x+y*y);
+        if(length<=RhinoMath.ZeroTolerance)return Vector2d.Zero;
+        double threshold=length*Math.Sin(RhinoMath.ToRadians(ManualArrowAxisSnapDegrees));
+        if(Math.Abs(x)<=threshold)x=0;
+        if(Math.Abs(y)<=threshold)y=0;
+        length=Math.Sqrt(x*x+y*y);return new Vector2d(x/length,y/length);
+      }
       private void PreviewKeyWithModifiers(int key,bool alt,bool shift,bool control)
       {
         if(key==PreviewAltKey){_pivotVisible=false;_doc.Views.Redraw();return;}
@@ -3352,31 +4212,14 @@ namespace vTools.Commands
         if(!CompatibleManualFrames(selected)){_status.Text="Selected tables have incompatible orientations";return;}
         if(alt)
         {
-          var beforeRotation=_result;
-          double delta=key is PreviewLeftKey or PreviewUpKey?ManualKeyboardRotationStep:-ManualKeyboardRotationStep;
-          var scene=control?null:ManualScene(beforeRotation);
-          NestPackingEngine.Placement[] desired=[];
-          int steps=control?1:Math.Max(1,(int)Math.Ceiling(Math.Abs(delta)/ManualRotationCheckStep));
-          for(int step=1;step<=steps;step++)
-          {
-            var candidate=TurnManualGroup(selected,delta*step/steps,ManualPivot(selected));
-            if(candidate==null){_status.Text="Rotation blocked by grain rules";return;}
-            desired=candidate;
-            if(scene!=null)
-            {
-              if(shift)
-              {var relaxed=scene.RelaxRigid(desired);if(relaxed==null){_status.Text="No collision-free rotation fits the table";return;}desired=relaxed;}
-              else if(!scene.ValidRigid(desired)){_status.Text="Rotation blocked by table edge or part gap";return;}
-            }
-          }
-          ShowManual(desired);CommitManual(beforeRotation);return;
+          RotateManual(key is PreviewLeftKey or PreviewUpKey?1:-1,shift,control);return;
         }
+        if(shift){FlipManual(key is PreviewLeftKey or PreviewRightKey,control);return;}
         var direction=key==PreviewLeftKey?-view.CameraX:key==PreviewRightKey?view.CameraX:key==PreviewUpKey?view.CameraY:-view.CameraY;
-        var frame=DisplayTablePlane(selected[0].Table);double dx=direction*frame.XAxis,dy=direction*frame.YAxis;
-        double size=Math.Sqrt(dx*dx+dy*dy);if(size<=RhinoMath.ZeroTolerance)return;
+        var motion=ArrowDirection(direction,DisplayTablePlane(selected[0].Table));if(motion.SquareLength==0)return;
         var before=_result;double travel=selected.Max(part=>TableLength(part.Table)+TableMaterial(part.Table).Width);
-        ShowManual(control?selected.Select(part=>part with {X=part.X+dx/size*ManualFreeArrowStep,Y=part.Y+dy/size*ManualFreeArrowStep}).ToArray():
-          ManualScene(before).MoveToContact(selected.Select(part=>part.Id).ToHashSet(),dx/size*travel,dy/size*travel));CommitManual(before);
+        ShowManual(control?selected.Select(part=>part with {X=part.X+motion.X*ManualFreeArrowStep,Y=part.Y+motion.Y*ManualFreeArrowStep}).ToArray():
+          ManualScene(before).MoveToContact(selected.Select(part=>part.Id).ToHashSet(),motion.X*travel,motion.Y*travel));CommitManual(before);
       }
 
       private sealed class PreviewKeyboard : IDisposable
@@ -3423,14 +4266,15 @@ namespace vTools.Commands
                 return CallNextHookEx(_hook,code,remove,pointer);
               }
               bool history=down&&(GetKeyState(PreviewControlKey)&0x8000)!=0&&(GetKeyState(PreviewAltKey)&0x8000)==0&&key is PreviewUndoKey or PreviewRedoKey;
-              if((viewport||manager)&&history)
+              bool rhino=focus!=IntPtr.Zero&&(focus==RhinoApp.MainWindowHandle()||IsChild(RhinoApp.MainWindowHandle(),focus));
+              if(history&&HistoryOwnsFocus(viewport,manager,rhino,manager&&!ManagerRotationAllowed()))
               {
                 bool redo=key==PreviewRedoKey||(GetKeyState(PreviewShiftKey)&0x8000)!=0;
                 System.Runtime.InteropServices.Marshal.WriteInt32(pointer,IntPtr.Size,0);
-                Application.Instance.AsyncInvoke(()=>_history(redo));
+                Application.Instance.AsyncInvoke(()=>{if(!_disposed&&_canEdit()&&RhinoDoc.ActiveDoc==_doc)_history(redo);});
                 return CallNextHookEx(_hook,code,remove,pointer);
               }
-              bool managerRotation=manager&&down&&(GetKeyState(PreviewAltKey)&0x8000)!=0&&
+              bool managerRotation=manager&&down&&((GetKeyState(PreviewAltKey)|GetKeyState(PreviewShiftKey))&0x8000)!=0&&
                 key is PreviewLeftKey or PreviewRightKey or PreviewUpKey or PreviewDownKey&&ManagerRotationAllowed();
               if((viewport||managerRotation)&&_canMove()&&(altUp||down&&(key is PreviewLeftKey or PreviewRightKey or PreviewUpKey or PreviewDownKey or PreviewEscapeKey or PreviewAltKey)))
               {
@@ -3447,7 +4291,7 @@ namespace vTools.Commands
         }
         private void QueueMove(int key,bool alt,bool shift,bool control,bool repeated)
         {
-          if(_disposed||repeated&&_pendingMoves>0)return;
+          if(_disposed||repeated&&(shift&&!alt||_pendingMoves>0))return;
           _pendingMoves++;
           Application.Instance.AsyncInvoke(()=>
           {
@@ -3473,6 +4317,8 @@ namespace vTools.Commands
           }
           return true;
         }
+        internal static bool HistoryOwnsFocus(bool viewport,bool manager,bool rhino,bool textEditing)=>
+          viewport||manager&&!textEditing||rhino&&!manager;
         internal static void FocusViewport(RhinoView view)=>SetFocus(view.Handle);
         internal bool ViewportHasFocus
         {
@@ -3509,19 +4355,16 @@ namespace vTools.Commands
       {
         ClearHighlights();
         RefreshTableHighlights();
-        _tableObjectSerials.Clear();foreach(var table in _liveTables)
-          foreach(var id in new[]{table.Border,table.Divider})if(_doc.Objects.FindId(id) is {} border)_tableObjectSerials.Add(border.RuntimeSerialNumber);
         _liveObjectSerials.Clear();
         foreach(var row in _rows.Where(row=>row.Included))
         foreach(var part in VisibleResult.Placements.Where(part=>row.OwnsInstance(part.Id)))
           if(_liveParts.TryGetValue(part.Id,out var ids))
             foreach(var id in ids)if(_doc.Objects.FindId(id) is {} obj)_liveObjectSerials.Add(obj.RuntimeSerialNumber);
         var selected=SelectedParts.ToHashSet();
-        IEnumerable<Curve> Outlines(IEnumerable<Row> rows)=>rows.SelectMany(row=>_liveTables.Count==0?new[]{row.Part.Outline}:
-          VisibleResult.Placements.Where(part=>row.OwnsInstance(part.Id)&&_manualGesture?.Ids.Contains(part.Id)!=true).Select(part=>PreviewOutline(row,part)));
-        _sources.SetObjects(_liveTables.Count>0?OriginalsForRows(selected):[]);
-        SetOutlineHighlights(_selectedSources,_liveTables.Count==0?Outlines(selected.Where(row=>!RowHasError(row,VisibleResult))):[]);
-        SetOutlineHighlights(_skipped,Outlines(selected.Where(row=>RowHasError(row,VisibleResult))));
+        SetPartFills(_sources,_liveTables.Count>0?selected.SelectMany(OriginalSourceFills):[]);
+        SetPartFills(_selectedSources,_liveTables.Count==0?selected.Where(row=>!RowHasError(row,VisibleResult)).Select(row=>FillForPart(row,null)):[]);
+        SetPartFills(_skipped,selected.Where(row=>RowHasError(row,VisibleResult)).SelectMany(row=>_liveTables.Count==0?new[]{FillForPart(row,null)}:
+          VisibleResult.Placements.Where(part=>row.OwnsInstance(part.Id)).Select(part=>FillForPart(row,part))));
         RefreshMovingHighlights();
       }
       private IEnumerable<Guid> OriginalsForRows(IEnumerable<Row> rows)
@@ -3538,16 +4381,51 @@ namespace vTools.Commands
       }
       private void RefreshTableHighlights()
       {
+        _tableObjectSerials.Clear();foreach(var table in _liveTables)
+          foreach(var id in new[]{table.Border,table.Divider})if(_doc.Objects.FindId(id) is {} border)_tableObjectSerials.Add(border.RuntimeSerialNumber);
+        _activeTable=ActivePartTable;
+        if(_tableCursor is {} cursor&&cursor.Table!=CursorTable)ClearTableCursor();
         _workingTables.SetObjects(_liveTables.Where((_,index)=>!IsTableSelected(index)).SelectMany(table=>new[]{table.Border,table.Divider}).Where(id=>id!=Guid.Empty));
         _selectedWorkingTables.SetObjects(_liveTables.Where((_,index)=>IsTableSelected(index)).SelectMany(table=>new[]{table.Border,table.Divider}).Where(id=>id!=Guid.Empty));
       }
-      private static void SetOutlineHighlights(PreviewDisplay.ObjectHighlighter layer,IEnumerable<Curve> outlines)
-      {var geometry=outlines.ToDictionary(_=>Guid.NewGuid(),curve=>(GeometryBase)curve);layer.SetObjects(geometry.Keys,geometry);}
+      private static void SetPartFills(PreviewDisplay.ObjectHighlighter layer,IEnumerable<PartFill> fills)
+      {var geometry=fills.Where(fill=>fill.Mesh.Faces.Count>0).DistinctBy(fill=>fill.Id).ToDictionary(fill=>fill.Id,fill=>(GeometryBase)fill.Mesh);layer.SetObjects(geometry.Keys,geometry);}
+      private PartFill FillForPart(Row row,NestPackingEngine.Placement? part)
+      {
+        var key=(part?.Id??row.Id,part==null);var transform=part==null?Transform.Identity:InstanceTransform(row,part);
+        if(_partFills.TryGetValue(key,out var fill))
+        {
+          if(fill.Transform==transform)return fill;
+          if(fill.Transform.TryGetInverse(out var inverse)&&fill.Mesh.Transform(transform*inverse))
+          {fill=fill with {Transform=transform};_partFills[key]=fill;return fill;}
+          fill.Mesh.Dispose();
+        }
+        var mesh=Mesh.CreateFromPlanarBoundary(row.Part.Outline,MeshingParameters.FastRenderMesh,_doc.ModelAbsoluteTolerance)??new Mesh();
+        mesh.Transform(transform);fill=new(Guid.NewGuid(),transform,mesh);_partFills[key]=fill;return fill;
+      }
+      private IEnumerable<PartFill> OriginalSourceFills(Row row)
+      {
+        var objects=OriginalsForRows(new[]{row}).Distinct().Select(_doc.Objects.FindId).Where(obj=>obj!=null).OrderBy(obj=>obj.Id).ToArray();
+        string signature=string.Join(";",objects.Select(obj=>obj.Id.ToString("N")+":"+obj.Geometry.DataCRC(0)));
+        if(_sourcePartFills.TryGetValue(row.Id,out var cached)&&cached.Signature==signature)return cached.Fills;
+        if(cached!=null)foreach(var fill in cached.Fills)fill.Mesh.Dispose();
+        var parts=objects.Length==0?[]:PlanarPartSelection.Capture(_doc,objects.Select(obj=>obj.Id).ToArray(),_doc.ModelAbsoluteTolerance,requirePlanarDetails:false);
+        var fills=new List<PartFill>();
+        foreach(var source in parts)
+        {
+          try{var mesh=Mesh.CreateFromPlanarBoundary(source.Outline,MeshingParameters.FastRenderMesh,_doc.ModelAbsoluteTolerance);if(mesh!=null)fills.Add(new(Guid.NewGuid(),Transform.Identity,mesh));}
+          finally{source.Dispose();}
+        }
+        _sourcePartFills[row.Id]=new(signature,fills.ToArray());return fills;
+      }
       private void RefreshMovingHighlights()
       {
         _previewHasFocus=_manualGesture!=null||_previewKeyboard.ViewportHasFocus;
+        RefreshConflictHighlights();
         _highlight.DrawOnTop=_manualGesture!=null;
-        var geometry=new Dictionary<Guid,GeometryBase>();
+        _selectedMirroredParts.DrawOnTop=_manualGesture!=null;
+        var fills=new List<PartFill>();
+        var mirrored=new List<PartFill>();
         var active=new List<(Row Row,NestPackingEngine.Placement Placement)>();
         var selected=SelectedParts;
         foreach(var row in selected)
@@ -3557,30 +4435,105 @@ namespace vTools.Commands
           {
           if(_manualSelectedInstances.Count>0&&!_manualSelectedInstances.Contains(placement.Id))continue;
           if(_activePreviewInstance.HasValue&&selected.Length==1&&placement.Id!=_activePreviewInstance.Value)continue;
-          geometry.Add(Guid.NewGuid(),PreviewOutline(row,placement));
+          if(!_conflictIds.Contains(placement.Id))(placement.Pose.Flipped?mirrored:fills).Add(FillForPart(row,placement));
           InstancePreviewCopies(row,placement);active.Add((row,placement));
           }
         }
-        _highlight.SetObjects(_previewHasFocus?geometry.Keys:[],geometry);
-        _inactiveHighlight.SetObjects(_previewHasFocus?[]:geometry.Keys,geometry);
+        SetCurrentPartFills(fills,mirrored,_previewHasFocus);
         _activePreviewParts=active.ToArray();
+        RefreshMirroredHighlights(active.Select(part=>part.Placement.Id).ToHashSet());
       }
-      private void DocumentClosed(object? sender,DocumentEventArgs e) { if(e.Document.RuntimeSerialNumber==DocumentSerial) Close(); }
+      private void SetCurrentPartFills(IEnumerable<PartFill> normal,IEnumerable<PartFill> mirrored,bool focused)
+      {
+        SetPartFills(_highlight,focused?normal:[]);SetPartFills(_inactiveHighlight,focused?[]:normal);
+        SetPartFills(_selectedMirroredParts,focused?mirrored:[]);SetPartFills(_inactiveMirroredParts,focused?[]:mirrored);
+      }
+      private void RefreshMirroredHighlights(IReadOnlySet<int> active)
+      {
+        var result=VisibleResult;
+        SetPartFills(_mirroredParts,result.Placements.Where(part=>part.Pose.Flipped&&!active.Contains(part.Id)&&
+          !_conflictIds.Contains(part.Id)&&!result.Errors.ContainsKey(part.Id)).Select(part=>(Part:part,Row:PlacementOwner(part.Id)))
+          .Where(item=>item.Row is {Included:true}).Select(item=>FillForPart(item.Row!,item.Part)));
+      }
+      private void RefreshConflictDiagnostics()
+      {
+        var result=VisibleResult;long now=System.Diagnostics.Stopwatch.GetTimestamp();
+        if(!ReferenceEquals(result,_conflictLayout)&&(_manualGesture==null||
+          (now-_conflictTick)/(double)System.Diagnostics.Stopwatch.Frequency>=ConflictRefreshSeconds))
+        {
+          _conflictIds.Clear();_conflictReasons.Clear();
+          var details=ManualScene(result).ConflictDetails();
+          foreach(var group in details.GroupBy(detail=>detail.Id))
+          {
+            var reasons=new List<string>();
+            foreach(var detail in group)
+            {
+              if(detail.Kind=="boundary")continue;
+              string other=detail.Other is {} id?PlacementOwner(id)?.Name??id.ToString():string.Empty;
+              reasons.Add(detail.Kind=="overlap"?"Overlaps "+other:detail.Kind=="gap"?
+                $"Gap to {other}: {detail.Actual:G4} < {detail.Required:G4}":"Missing table");
+            }
+            if(group.Any(detail=>detail.Kind=="boundary")&&result.Placements.FirstOrDefault(part=>part.Id==group.Key) is {} part)
+              reasons.AddRange(PhysicalBoundaryReasons(part));
+            if(reasons.Count==0)continue;
+            _conflictIds.Add(group.Key);_conflictReasons[group.Key]=string.Join("; ",reasons.Distinct());
+          }
+          _conflictLayout=result;_conflictTick=now;
+        }
+      }
+      private IEnumerable<string> PhysicalBoundaryReasons(NestPackingEngine.Placement part)
+      {
+        var row=PlacementOwner(part.Id);if(row==null)yield break;
+        var frame=DisplayTablePlane(part.Table);var transform=Transform.PlaneToPlane(frame,Plane.WorldXY)*InstanceTransform(row,part);
+        if(!_physicalBounds.TryGetValue(part.Id,out var cached)||cached.Transform!=transform)
+        {
+          var cutting=row.Part.Items.Where(item=>item.Geometry is Curve&&item.Attributes.LayerIndex>=0&&item.Attributes.LayerIndex<_doc.Layers.Count&&
+            _doc.Layers[item.Attributes.LayerIndex].Name.StartsWith(CutLayerPrefix,StringComparison.OrdinalIgnoreCase)).Select(item=>(Curve)item.Geometry).ToArray();
+          var bounds=BoundingBox.Empty;
+          foreach(var curve in cutting.Length>0?cutting:new[]{row.Part.Outline})
+          {using var copy=curve.DuplicateCurve();copy.Transform(transform);bounds.Union(copy.GetBoundingBox(true));}
+          cached=(transform,bounds);_physicalBounds[part.Id]=cached;
+        }
+        var box=cached.Bounds;double tolerance=_doc.ModelAbsoluteTolerance;
+        foreach(var edge in new[]{("left",-box.Min.X),("right",box.Max.X-TableMaterial(part.Table).Width),
+          ("start",-box.Min.Y),("end",box.Max.Y-TableLength(part.Table))})
+          if(edge.Item2>tolerance)yield return $"Outside table {edge.Item1}: {edge.Item2:G4}";
+      }
+      private void RefreshConflictHighlights()
+      {
+        RefreshConflictDiagnostics();
+        var active=ManualSelection().Select(part=>part.Id).ToHashSet();
+        var fills=new List<PartFill>();var inactive=new List<PartFill>();
+        var result=VisibleResult;
+        foreach(var part in result.Placements.Where(part=>_conflictIds.Contains(part.Id)))
+        {
+          if(PlacementOwner(part.Id) is {} row)(_previewHasFocus&&active.Contains(part.Id)?fills:inactive).Add(FillForPart(row,part));
+        }
+        SetPartFills(_conflicts,fills);SetPartFills(_inactiveConflicts,inactive);
+      }
+      private void DocumentClosed(object? sender,DocumentEventArgs e)
+      {if(e.Document.RuntimeSerialNumber==DocumentSerial){_documentClosing=true;Close();}}
+      private void ApplicationClosing(object? sender,EventArgs e) { _documentClosing=true;Close(); }
       private void DisposeState()
       {
-        EndManualGesture(true);
-        if(!_closed&&_externalPartSettings.Count>0) ReloadExternalPartSettings();
+        bool hostClosing=HostIsClosing;
+        _hostCloseGuard?.Dispose();
+        _windowPlacement?.Dispose();
+        if(hostClosing)
+        {_manualGesture=null;_previewBox=null;_gestureObjectIds.Clear();_gestureObjectSerials.Clear();_liveUndoRecord=0;}
+        else EndManualGesture(true);
+        if(!hostClosing&&!_closed&&_externalPartSettings.Count>0) ReloadExternalPartSettings();
         if(_closed) return; _closed=true; _timer.Stop(); _timer.Dispose();
         _pendingPlacedTables.Clear();
-        _manualUndo.Clear();_manualRedo.Clear();
-        foreach(var row in _rows) SavePartSettings(row);
+        ClearManualHistory();
+        if(!hostClosing)foreach(var row in _rows) SavePartSettings(row);
         if(_originalLayout!=null)foreach(var row in _originalLayout.Rows)row.Dispose();
         foreach(var table in _liveTables)table.Dispose();_liveTables.Clear();
         ClearTableLabels();
         foreach(var reset in _resets) reset.Dispose();
         _packingCancellation?.Cancel();
-        RhinoDoc.CloseDocument-=DocumentClosed; RhinoDoc.UserStringChanged-=PartSettingsChanged; Rhino.Commands.Command.UndoRedo-=LiveUndoRedo; RhinoApp.Idle-=PackingIdle; _previewKeyboard.Dispose(); _picking.Dispose(); ClearHighlights(); ClearPreviewCopies(); _highlight.Dispose(); _inactiveHighlight.Dispose(); _sources.Dispose(); _selectedSources.Dispose(); _workingTables.Dispose(); _selectedWorkingTables.Dispose(); _skipped.Dispose(); _preview.Enabled=false;
-        foreach(var row in _rows) row.Dispose(); _rows.Clear(); _doc.Views.Redraw();
+        RhinoDoc.CloseDocument-=DocumentClosed;RhinoApp.Closing-=ApplicationClosing; RhinoDoc.UserStringChanged-=PartSettingsChanged; Rhino.Commands.Command.UndoRedo-=LiveUndoRedo; RhinoApp.Idle-=PackingIdle; _previewKeyboard.Dispose(); _picking.Dispose(); ClearHighlights(); ClearPreviewCopies(); _highlight.Dispose(); _inactiveHighlight.Dispose(); _mirroredParts.Dispose(); _selectedMirroredParts.Dispose(); _inactiveMirroredParts.Dispose(); _sources.Dispose(); _selectedSources.Dispose(); _workingTables.Dispose(); _selectedWorkingTables.Dispose(); _skipped.Dispose(); _conflicts.Dispose(); _inactiveConflicts.Dispose(); _preview.Enabled=false;
+        foreach(var row in _rows) row.Dispose(); _rows.Clear();if(!hostClosing)_doc.Views.Redraw();
       }
 
       private void Place()
@@ -3615,10 +4568,13 @@ namespace vTools.Commands
             var attributes=new ObjectAttributes {LayerIndex=reference,Name=TableName};
             attributes.AddToGroup(tableGroup); NestTableMetadata.Identify(attributes,tableGroupId,session,table,tableName,NestTableMetadata.BorderRole);
             attributes.SetUserString(MetadataPrefix+"material",material.Name);
-            attributes.SetUserString(MetadataPrefix+"tableLength",Length.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            attributes.SetUserString(MetadataPrefix+"tableLength",TableLength(table).ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            if(_result.TableSettings.TryGetValue(table,out var tableSettings))
+              attributes.SetUserString(TableSettingsKey,System.Text.Json.JsonSerializer.Serialize(tableSettings));
             attributes.SetUserString(MetadataPrefix+"occupiedLength",OccupiedLength(_result,table).ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             attributes.SetUserString(MetadataPrefix+"partCount",_result.Placements.Count(part=>part.Table==table).ToString(System.Globalization.CultureInfo.InvariantCulture));
             attributes.SetUserString(MetadataPrefix+"tableWidth",material.Width.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            WriteAlgorithmStamp(attributes,_result.TableAlgorithms.GetValueOrDefault(table));
             var tableFrame=DisplayTablePlane(table);
             attributes.SetUserString(TableFrameKey,System.Text.Json.JsonSerializer.Serialize(new[]{tableFrame.OriginX,tableFrame.OriginY,tableFrame.OriginZ,
               tableFrame.XAxis.X,tableFrame.XAxis.Y,tableFrame.XAxis.Z,tableFrame.YAxis.X,tableFrame.YAxis.Y,tableFrame.YAxis.Z}));
@@ -3629,6 +4585,7 @@ namespace vTools.Commands
             if(TryTableLabelDivider(border,out var divider))
             {
               using var dividerAttributes=attributes.Duplicate();dividerAttributes.ObjectId=Guid.Empty;dividerAttributes.Name=string.Empty;
+              WriteAlgorithmStamp(dividerAttributes,null);
               dividerAttributes.SetUserString(NestTableMetadata.RoleKey,NestTableMetadata.LabelDividerRole);
               var dividerId=_doc.Objects.AddLine(divider,dividerAttributes);
               if(dividerId==Guid.Empty)throw new InvalidOperationException("Could not add table label divider.");added.Add(dividerId);
@@ -3727,6 +4684,98 @@ namespace vTools.Commands
         return copy;
       }
 
+      private sealed record RulerTick(Point3d Point,double Inches,bool Major);
+      private sealed record TableRulerData(Plane Frame,double Width,double Length,double Inch,RulerTick[] AlongLength,RulerTick[] AcrossWidth,Line[] Grid);
+      private readonly Dictionary<int,TableRulerData> _tableRulers=[];
+      private (int Table,double X,double Y,bool AlongLength,bool AcrossWidth,Guid Viewport)? _tableCursor;
+      private long _tableCursorTick;
+      private static double ModelInch(UnitSystem units)=>units is UnitSystem.None or UnitSystem.CustomUnits?1:RhinoMath.UnitScale(UnitSystem.Inches,units);
+      private int? CursorTable=>SelectedNestTables.Cast<int?>().FirstOrDefault()??ActivePartTable??_activeTable;
+      private static TableRulerData CreateTableRulers(Plane frame,double width,double length,double inch)
+      {
+        RulerTick[] Ticks(double size,bool alongLength)
+        {
+          double total=size/inch;
+          int step=total<=MaximumRulerTicks?1:RulerFootInches*Math.Max(1,(int)Math.Ceiling(total/MaximumRulerTicks/RulerFootInches));
+          return Enumerable.Range(0,(int)Math.Min(MaximumRulerTicks,Math.Floor(total/step))+1).Select(index=>
+          {double value=(double)index*step;return new RulerTick(alongLength?frame.PointAt(width,value*inch):frame.PointAt(width-value*inch,length),value,(index*step)%RulerFootInches==0);}).ToArray();
+        }
+        int count=(int)Math.Min(MaximumRulerTicks,Math.Max(0,Math.Ceiling(length/(TableGridInches*inch))-1));
+        var grid=Enumerable.Range(1,count).Select(index=>new Line(frame.PointAt(0,index*TableGridInches*inch),frame.PointAt(width,index*TableGridInches*inch))).ToArray();
+        return new(frame,width,length,inch,Ticks(length,true),Ticks(width,false),grid);
+      }
+      private TableRulerData RulersForTable(int table)
+      {
+        var frame=DisplayTablePlane(table);double width=TableMaterial(table).Width,length=TableLength(table),inch=ModelInch(_doc.ModelUnitSystem);
+        if(_tableRulers.TryGetValue(table,out var cached)&&cached.Frame==frame&&cached.Width==width&&cached.Length==length&&cached.Inch==inch)return cached;
+        return _tableRulers[table]=CreateTableRulers(frame,width,length,inch);
+      }
+      private static (double X,double Y,bool AlongLength,bool AcrossWidth) TableCursorCoordinates(Plane frame,double width,double length,Point3d point)
+      {
+        frame.ClosestParameter(point,out double across,out double along);
+        if(Math.Abs(across)<=RulerCoordinateTolerance)across=0;else if(Math.Abs(across-width)<=RulerCoordinateTolerance)across=width;
+        if(Math.Abs(along)<=RulerCoordinateTolerance)along=0;else if(Math.Abs(along-length)<=RulerCoordinateTolerance)along=length;
+        return(along,width-across,along>=0&&along<=length,across>=0&&across<=width);
+      }
+      private void UpdateTableCursor(MouseCallbackEventArgs e)
+      {
+        if(_closed||e.View?.ActiveViewport is not {} view||System.Environment.TickCount64-_tableCursorTick<TableCursorInterval)return;
+        _tableCursorTick=System.Environment.TickCount64;
+        if(CursorTable is not {} table||table<0||table>=VisibleResult.Tables||!view.GetFrustumLine(e.ViewportPoint.X,e.ViewportPoint.Y,out var ray)||
+          !Rhino.Geometry.Intersect.Intersection.LinePlane(ray,DisplayTablePlane(table),out double parameter))
+        {ClearTableCursor();return;}
+        var data=TableCursorCoordinates(DisplayTablePlane(table),TableMaterial(table).Width,TableLength(table),ray.PointAt(parameter));
+        if(!data.AlongLength&&!data.AcrossWidth){ClearTableCursor();if(_manualGesture==null)e.View.Redraw();return;}
+        _tableCursor=(table,data.X,data.Y,data.AlongLength,data.AcrossWidth,view.Id);
+        double inch=ModelInch(_doc.ModelUnitSystem);
+        _cursorReadout.Text=FormattableString.Invariant($"{TableDisplayName(table)}    X: {data.X/inch:F3} in    Y: {data.Y/inch:F3} in");
+        if(_manualGesture==null)e.View.Redraw();
+      }
+      private void ClearTableCursor(){_tableCursor=null;_cursorReadout.Text=EmptyCursorStatus;}
+      private void DrawTableRulers(DrawEventArgs e)
+      {
+        for(int table=0;table<VisibleResult.Tables;table++)
+        {
+          var data=RulersForTable(table);var center=data.Frame.PointAt(data.Width/2,data.Length/2);
+          if(!e.Viewport.IsVisible(new Rectangle3d(data.Frame,data.Width,data.Length).BoundingBox))continue;
+          if(!e.Viewport.GetWorldToScreenScale(center,out double scale)||!double.IsFinite(scale)||scale<=0)continue;
+          if(ShowTableGrid)e.Display.DrawLines(data.Grid,TableGridColor,RulerStrokeWidth);
+          void DrawTicks(RulerTick[] ticks,Vector3d outward)
+          {
+            double inchPixels=data.Inch*scale;
+            if(inchPixels<RulerMinimumTickPixels/MaximumRulerTicks)return;
+            int step=inchPixels>=RulerMinimumTickPixels?1:RulerFootInches*Math.Max(1,(int)Math.Ceiling(RulerMinimumTickPixels/(inchPixels*RulerFootInches)));
+            int labelStep=RulerFootInches*Math.Max(1,(int)Math.Ceiling(RulerMinimumLabelPixels/(inchPixels*RulerFootInches)));
+            var lines=new List<Line>();
+            foreach(var tick in ticks)
+            {
+              if(tick.Inches%step!=0)continue;
+              double pixels=tick.Major?RulerMajorPixels:RulerMinorPixels;
+              lines.Add(new(tick.Point,tick.Point+outward*(pixels/scale)));
+              if(tick.Major&&tick.Inches%labelStep==0)
+              {var point=e.Viewport.WorldToClient(tick.Point+outward*((RulerMajorPixels+RulerTextPaddingPixels)/scale));e.Display.Draw2dText(tick.Inches.ToString("0",System.Globalization.CultureInfo.InvariantCulture),RulerColor,point,true,RulerTextSize);}
+            }
+            e.Display.DrawLines(lines,RulerColor,RulerStrokeWidth);
+          }
+          DrawTicks(data.AlongLength,data.Frame.XAxis);DrawTicks(data.AcrossWidth,data.Frame.YAxis);
+        }
+      }
+      private void DrawTableCursor(DrawEventArgs e)
+      {
+        if(_tableCursor is not {} cursor||cursor.Viewport!=e.Viewport.Id||cursor.Table!=CursorTable||cursor.Table>=VisibleResult.Tables)return;
+        var frame=DisplayTablePlane(cursor.Table);double width=TableMaterial(cursor.Table).Width,length=TableLength(cursor.Table);
+        void Arrow(Point3d point,Vector3d outward)
+        {
+          var tip=e.Viewport.WorldToClient(point);var normal=e.Viewport.WorldToClient(point+outward)-tip;if(!normal.Unitize())return;
+          var side=new Vector2d(-normal.Y,normal.X);var tail=tip+normal*RulerCursorPixels;
+          var first=tip+normal*(RulerCursorPixels/2)+side*(RulerCursorPixels/3);var second=tip+normal*(RulerCursorPixels/2)-side*(RulerCursorPixels/3);
+          for(int pass=0;pass<2;pass++)foreach(var end in new[]{tail,first,second})
+            e.Display.Draw2dLine(new System.Drawing.PointF((float)tip.X,(float)tip.Y),new System.Drawing.PointF((float)end.X,(float)end.Y),pass==0?SDColor.White:SDColor.Black,pass==0?MirrorCueHalo:MirrorCueStroke);
+        }
+        if(cursor.AlongLength)Arrow(frame.PointAt(width,cursor.X),frame.XAxis);
+        if(cursor.AcrossWidth)Arrow(frame.PointAt(width-cursor.Y,length),frame.YAxis);
+      }
+
       private sealed class Preview(NestWindow window) : DisplayConduit
       {
         private bool SuppressObject(uint serial)=>window._liveTables.Count>0&&
@@ -3744,7 +4793,7 @@ namespace vTools.Commands
         {
           if(e.RhinoDoc.RuntimeSerialNumber!=window.DocumentSerial)return;
           e.Display.PushDepthTesting(false);e.Display.PushDepthWriting(false);
-          try{DrawTables(e.Display);window._workingTables.DrawForegroundHighlights(e);window._selectedWorkingTables.DrawForegroundHighlights(e);}
+          try{window.DrawTableRulers(e);DrawTables(e.Display);window._workingTables.DrawForegroundHighlights(e);window._selectedWorkingTables.DrawForegroundHighlights(e);}
           finally{e.Display.PopDepthWriting();e.Display.PopDepthTesting();}
         }
         protected override void CalculateBoundingBox(CalculateBoundingBoxEventArgs e)
@@ -3754,7 +4803,7 @@ namespace vTools.Commands
             if(row.DrawnGuide is {} guide) e.IncludeBoundingBox(new BoundingBox(new[]{guide.From,guide.To}));
           for(int table=0;table<PreviewTableCount(window.VisibleResult.Tables,window._locationPicking);table++)
           { var plane=window.DisplayTablePlane(table);
-            e.IncludeBoundingBox(new Rectangle3d(plane,window.TableMaterial(table).Width,Length).BoundingBox);
+            e.IncludeBoundingBox(new Rectangle3d(plane,window.TableMaterial(table).Width,window.TableLength(table)).BoundingBox);
             foreach(var label in window.LabelsForTable(table)) e.IncludeBoundingBox(label.GetBoundingBox(true));
             e.IncludeBoundingBox(window.TableOutlineForTable(table).GetBoundingBox(true)); }
           foreach(var part in window.VisibleResult.Placements)
@@ -3772,6 +4821,9 @@ namespace vTools.Commands
         protected override void PostDrawObjects(DrawEventArgs e)
         {
           if(e.RhinoDoc.RuntimeSerialNumber!=window.DocumentSerial) return;
+          e.Display.PushDepthWriting(false);
+          try{foreach(var layer in new[]{window._sources,window._selectedSources,window._skipped,window._mirroredParts,window._inactiveHighlight,window._highlight,window._selectedMirroredParts,window._inactiveMirroredParts,window._inactiveConflicts,window._conflicts})layer.DrawShadedHighlights(e);}
+          finally{e.Display.PopDepthWriting();}
           Draw(e.Display);
         }
         protected override void DrawForeground(DrawEventArgs e)
@@ -3781,21 +4833,35 @@ namespace vTools.Commands
         internal void DrawPartHighlights(DrawEventArgs e)
         {
           if(e.RhinoDoc.RuntimeSerialNumber!=window.DocumentSerial)return;
-          window._sources.DrawForegroundHighlights(e);
-          window._selectedSources.DrawForegroundHighlights(e);
-          window._skipped.DrawForegroundHighlights(e);
           e.Display.PushDepthTesting(false);e.Display.PushDepthWriting(false);
           try
           {
             foreach(var part in window._activePreviewParts)DrawContents(e.Display,part.Row,part.Placement);
-            window._highlight.DrawForegroundHighlights(e);
-            window._inactiveHighlight.DrawForegroundHighlights(e);
-            if(window._showGap.Checked==true&&!window._locationPicking)
-              foreach(var part in window._activePreviewParts)
-                foreach(var path in window.PreviewClearance(part.Row,part.Placement))e.Display.DrawPolyline(path,GapOutlineColor,GapOutlineWidth);
+            foreach(var part in window.GapPreviewParts())
+              foreach(var path in window.PreviewClearance(part.Row,part.Placement))e.Display.DrawPolyline(path,GapOutlineColor,GapOutlineWidth);
+            foreach(var part in window.VisibleResult.Placements.Where(part=>part.Pose.Flipped))
+            {
+              if(window.PlacementOwner(part.Id) is not {Included:true} row)continue;
+              var cue=row.MirrorCue();if(!cue.Point.IsValid)continue;
+              var transform=window.InstanceTransform(row,part);var point=e.Viewport.WorldToClient(transform*cue.Point);
+              var x=e.Viewport.WorldToClient(transform*(cue.Point+row.Part.Plane.XAxis*cue.Clearance))-point;
+              var y=e.Viewport.WorldToClient(transform*(cue.Point+row.Part.Plane.YAxis*cue.Clearance))-point;
+              double trace=x.SquareLength+y.SquareLength,determinant=x.X*y.Y-x.Y*y.X;
+              double radius=Math.Sqrt(Math.Max(0,(trace-Math.Sqrt(Math.Max(0,trace*trace-4*determinant*determinant)))/2));
+              int size=(int)Math.Min(MirrorCueSize,Math.Floor(radius)-MirrorCuePadding);if(size<MinimumMirrorCueSize)continue;
+              DrawMirrorCue(e.Display,point,size);
+            }
             DrawPivot(e.Display);
+            window.DrawTableCursor(e);
           }
           finally{e.Display.PopDepthWriting();e.Display.PopDepthTesting();}
+        }
+        private static void DrawMirrorCue(DisplayPipeline display,Point2d center,int size)
+        {
+          for(int pass=0;pass<2;pass++)
+          foreach(var segment in MirrorCueSegments)
+            display.Draw2dLine(new System.Drawing.PointF((float)(center.X+segment.From.X*size),(float)(center.Y+segment.From.Y*size)),
+              new System.Drawing.PointF((float)(center.X+segment.To.X*size),(float)(center.Y+segment.To.Y*size)),pass==0?SDColor.White:SDColor.Black,pass==0?MirrorCueHalo:MirrorCueStroke);
         }
         private void DrawPivot(DisplayPipeline display)
         {
@@ -3833,7 +4899,7 @@ namespace vTools.Commands
               }
               continue;
             }
-            using var border=new Rectangle3d(plane,window.TableMaterial(table).Width,Length).ToNurbsCurve();
+            using var border=new Rectangle3d(plane,window.TableMaterial(table).Width,window.TableLength(table)).ToNurbsCurve();
             var color=window.IsTableSelected(table)?SelectedTableStyle.BodyColor:TableColor;
             PreviewDisplay.DrawCurve(display,window.TableOutlineForTable(table),color);
             if(TryTableLabelDivider(window.TableOutlineForTable(table),out var labelDivider))display.DrawLine(labelDivider,color);
@@ -4025,7 +5091,7 @@ namespace vTools.Commands
         Material(_partGap,preset=>preset.Gap,"gap"); Material(_grainDeviation,preset=>preset.GrainDeviation,"grain deviation");
         Add(_grain,()=>_grain.SelectedIndex!=(int)MaterialBaseline().Grain,()=>_grain.SelectedIndex=(int)MaterialBaseline().Grain,"material grain mode");
         Add(_rotationPreset,()=>_rotationPreset.SelectedIndex!=(int)DefaultRotationMode,()=>_rotationPreset.SelectedIndex=(int)DefaultRotationMode,"free rotation");
-        Add(_allowReverse,()=>AllowReverse!=MaterialBaseline().AllowReverse,()=>_allowReverse.SelectedIndex=MaterialBaseline().AllowReverse?1:0,"material grain reversal");
+        Add(_allowReverse,()=>_allowReverse.SelectedIndex!=(MaterialBaseline().AllowReverse?1:0),()=>_allowReverse.SelectedIndex=MaterialBaseline().AllowReverse?1:0,"material grain reversal");
         Add(_obeyDefault,()=>_obeyDefault.Checked!=MaterialBaseline().ObeyGrain,()=>_obeyDefault.Checked=MaterialBaseline().ObeyGrain,"material grain obedience");
         void PartNumber(NumericStepper field,Func<Row,bool> changed,Action<Row> reset,string name)
         {
@@ -4051,6 +5117,7 @@ namespace vTools.Commands
 namespace vTools.Commands
 {
   using System.Globalization;
+  using Eto.Drawing;
   using Eto.Forms;
   using Rhino;
   using Rhino.DocObjects;
@@ -4111,10 +5178,18 @@ namespace vTools.Commands
     {
       private readonly Dictionary<int,string> _tableNames=[];
       private readonly Dictionary<int,string> _defaultTableNames=[];
-      private readonly GridView _tableGrid=new() {AllowMultipleSelection=false,RowHeight=GridRowHeight};
+      private readonly Dictionary<int,Vector3d> _previewTableOffsets=[];
+      private readonly GridView _tableGrid=new() {AllowMultipleSelection=true,RowHeight=GridRowHeight};
+      private readonly Dictionary<NumericStepper,(NestMixedNumber Editor,DropDown Values,Func<TableSettings,double> Read)> _tableNumbers=[];
+      private readonly Dictionary<NumericStepper,Control> _tableNumberViews=[];
+      private MaterialPreset[] _tableMaterialChoices=[];
+      private bool _changingTableSettings;
+      private TableSettings? _defaultsBeforeTableEdit;
+      private int[] SettingsTables=>SelectedNestTables is {Length:>0} selected?selected:_liveTables.Count>0?Enumerable.Range(0,_liveTables.Count).ToArray():[];
+      private readonly Button _chooseTablesAction=new() {Text="Choose Tables...",ToolTip="Choose which placed tables to edit; checked tables can be removed from the editing set"};
       private readonly GridView _materialUsageGrid=new() {AllowMultipleSelection=false,RowHeight=GridRowHeight};
       private readonly TabControl _lists=new();
-      private bool _tableEditing;
+      private bool _tableEditing,_partEditing;
       private sealed record TableLabels(string Key,Point3d Origin,TextEntity[] Text,Curve Frame,Curve Outline,double FrameWidth,double Clearance);
       private readonly Dictionary<int,TableLabels> _tableLabels=[];
       private readonly Dictionary<(string Text,double Height,string Font,bool Bold,bool Italic,uint Style,double Scale,Plane Plane,Plane Frame),BoundingBox> _labelMeasurements=[];
@@ -4132,40 +5207,672 @@ namespace vTools.Commands
           if(!_defaultTableNames.ContainsKey(table))_defaultTableNames[table]=DefaultTableNamePrefix+next++;
         return _defaultTableNames[index];
       }
+      private string PartTableNames(IEnumerable<NestPackingEngine.Placement> copies)
+      {
+        var tables=copies.Select(part=>part.Table).Distinct().OrderBy(table=>table).ToArray();
+        return tables.Length==0?"-":string.Join(", ",tables.Select(TableDisplayName));
+      }
       private Control CreateListsView(Control editor,Control actions,Control caption)
       {
         _tableGrid.Columns.Add(new GridColumn {HeaderText="Name",DataCell=new TextBoxCell(0),Editable=true,Width=PartNameWidth,Expand=true,HeaderToolTip="Editable table name"});
         _tableGrid.Columns.Add(new GridColumn {HeaderText="Used length x used width",DataCell=new TextBoxCell(1),Width=FieldWidth});
-        _tableGrid.Columns.Add(new GridColumn {HeaderText="Used material",DataCell=new TextBoxCell(2),Width=FieldWidth});
-        _tableGrid.Columns.Add(new GridColumn {HeaderText="Material",DataCell=new TextBoxCell(3),Width=FieldWidth});
+        _tableGrid.Columns.Add(new GridColumn {HeaderText="Used material",DataCell=new TextBoxCell(2),Width=SettingColumnWidth});
+        _tableGrid.Columns.Add(new GridColumn {HeaderText="Material",DataCell=new TextBoxCell(3),Width=MaterialColumnWidth,Editable=true});
         _tableGrid.Columns.Add(new GridColumn {HeaderText="Parts",DataCell=new TextBoxCell(4),Width=TablePartCountWidth});
+        foreach(var column in new[]{("Width",5),("Length",6),("Gap",7)})
+          _tableGrid.Columns.Add(new GridColumn {HeaderText=column.Item1,DataCell=new TextBoxCell(column.Item2),Editable=true,Width=SettingColumnWidth});
         _tableGrid.CellEditing+=(_,_)=>_tableEditing=true;
         _tableGrid.CellEdited+=(_,e)=>
         {
           _tableEditing=false;
-          if(e.Item is GridItem {Tag:int table} item) RenameTable(table,Convert.ToString(item.Values[0])??string.Empty);
+          if(_packing){RefreshTableRows();return;}
+          if(e.Item is not GridItem {Tag:int table} item)return;
+          if(e.Column==0)RenameTable(table,Convert.ToString(item.Values[0])??string.Empty);
+          else if(e.Column==3)
+          {
+            string name=Convert.ToString(item.Values[3])??string.Empty;
+            var material=_materialPresets.FirstOrDefault(value=>value.Name.Equals(name,StringComparison.OrdinalIgnoreCase));
+            if(material!=null)ApplyTableCellSettings(table,settings=>settings with {Material=material});
+            else{_status.Text="Choose an existing material name";RefreshTableRows();}
+          }
+          else if(e.Column is >=5 and <=7)
+          {
+            if(double.TryParse(Convert.ToString(item.Values[e.Column]),NumberStyles.Float,CultureInfo.CurrentCulture,out double value)&&double.IsFinite(value))
+            {
+              ApplyTableCellSettings(table,settings=>e.Column==5?settings with {Material=settings.Material with {Width=value}}:
+                e.Column==6?settings with {Length=value}:settings with {Material=settings.Material with {Gap=value}});
+            }
+            else _status.Text="Enter a valid number";
+            RefreshTableRows();
+          }
         };
         _tableGrid.KeyDown+=(_,e)=> { if(e.Key==Keys.Escape) { _tableEditing=false; Application.Instance.AsyncInvoke(RefreshTableRows); } };
-        _tableGrid.SelectionChanged+=(_,_)=> { if(!_updating) {if(_liveTables.Count>0)SetPlacedControls(true);RefreshTableHighlights();_doc.Views.Redraw();} };
+        if(_tableGrid.ControlObject is System.Windows.Controls.DataGrid nativeTableGrid)
+        {
+          nativeTableGrid.Resources[System.Windows.SystemColors.InactiveSelectionHighlightBrushKey]=System.Windows.SystemColors.HighlightBrush;
+          nativeTableGrid.Resources[System.Windows.SystemColors.InactiveSelectionHighlightTextBrushKey]=System.Windows.SystemColors.HighlightTextBrush;
+        }
+        _tableGrid.SelectionChanged+=(_,_)=> { if(!_updating) {if(_liveTables.Count>0)SetPlacedControls(true);UpdateNestButton();RefreshTableHighlights();_doc.Views.Redraw();} };
+        var tableMenu=new ContextMenu();
+        var nestTable=new ButtonMenuItem {Text="Re-nest Selected Tables",ToolTip="Pool selected tables by material and pack their parts together; keep other tables unchanged"};
+        var separateTables=new ButtonMenuItem {Text="Re-nest Each Table Separately",ToolTip="Rearrange each selected table using only its own current parts"};
+        tableMenu.Items.Add(nestTable);tableMenu.Items.Add(separateTables);_tableGrid.ContextMenu=tableMenu;
+        _tableGrid.CellClick+=(_,e)=>
+        {if(e.Buttons==MouseButtons.Alternate&&e.Row>=0&&!_tableGrid.SelectedRows.Contains(e.Row))_tableGrid.SelectedRow=e.Row;
+          nestTable.Enabled=separateTables.Enabled=!_packing&&SelectedNestTables.Length>0;};
+        nestTable.Click+=(_,_)=>ReNestSelectedTables(SelectedNestTables);
+        separateTables.Click+=(_,_)=>ReNestTables(SelectedNestTables);
         _materialUsageGrid.Columns.Add(new GridColumn {HeaderText="Material",DataCell=new TextBoxCell(0),Width=PartNameWidth,Expand=true});
         _materialUsageGrid.Columns.Add(new GridColumn {HeaderText="Used tables",DataCell=new TextBoxCell(1),Width=MaterialUsageTableCountWidth});
         _materialUsageGrid.Columns.Add(new GridColumn {HeaderText="Total yardage",DataCell=new TextBoxCell(2),Width=TotalYardageWidth});
         _materialUsageGrid.SelectionChanged+=(_,_)=> { if(!_updating) {RefreshTableHighlights();_doc.Views.Redraw();} };
         EnableSorting(_tableGrid,SortTableColumn);EnableSorting(_materialUsageGrid,SortMaterialColumn);
         _lists.Pages.Add(new TabPage {Text="Parts",Content=_grid});
-        _lists.Pages.Add(new TabPage {Text="Tables",Content=_tableGrid});
+        _chooseTablesAction.Click+=(_,_)=>ChoosePlacedTables();
+        _lists.Pages.Add(new TabPage {Text="Tables",Content=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
+          new TableRow(new TableLayout {Rows={new TableRow(_chooseTablesAction,new TableCell(null,true))}}),
+          new TableRow(new TableCell(_tableGrid,true)){ScaleHeight=true}}}});
         _lists.Pages.Add(new TabPage {Text="Materials",Content=_materialUsageGrid});
         _lists.SelectedIndexChanged+=(_,_)=>
-        { bool parts=_lists.SelectedIndex==0; editor.Visible=actions.Visible=caption.Visible=parts; if(_liveTables.Count>0)SetPlacedControls(true);RefreshTableHighlights();_doc.Views.Redraw(); };
+        { bool parts=_lists.SelectedIndex==0; editor.Enabled=actions.Enabled=caption.Enabled=parts;
+          if(_settingsPanel!=null)_settingsPanel.Visible=true;
+          if(_liveTables.Count>0)SetPlacedControls(true);UpdateNestButton();RefreshTableHighlights();_doc.Views.Redraw(); };
         return _lists;
       }
-      private bool IsTableSelected(int table)=>_lists.SelectedIndex switch
+      private int[] SelectedNestTables=>_lists.SelectedIndex==1?_tableGrid.SelectedItems.OfType<GridItem>().Select(item=>item.Tag).OfType<int>()
+        .Where(table=>table>=0&&table<VisibleResult.Tables).Distinct().Order().ToArray():[];
+      private int? ActivePartTable
       {
-        1=>_tableGrid.SelectedItem is GridItem {Tag:int selectedTable}&&selectedTable==table,
+        get
+        {
+          var placements=VisibleResult.Placements;
+          var active=placements.FirstOrDefault(part=>part.Id==_activePreviewInstance)??placements.FirstOrDefault(part=>_manualSelectedInstances.Contains(part.Id));
+          if(active!=null)return active.Table;
+          var selected=SelectedParts;return placements.FirstOrDefault(part=>selected.Any(row=>row.OwnsInstance(part.Id)))?.Table;
+        }
+      }
+      private void SelectTableRow(int table)
+      {
+        bool updating=_updating;_updating=true;
+        try
+        {
+          if(_tableGrid.DataStore is IEnumerable<GridItem> rows)
+          {int index=rows.ToList().FindIndex(item=>item.Tag is int value&&value==table);if(index>=0)_tableGrid.SelectedRow=index;}
+        }
+        finally{_updating=updating;}
+      }
+      private bool IsTableSelected(int table)=>_manualGesture!=null?_activeTable==table:_lists.SelectedIndex switch
+      {
+        1=>SelectedNestTables.Contains(table),
         2=>_materialUsageGrid.SelectedItem is GridItem {Tag:MaterialUsage material}&&
           TableMaterial(table).Name.Equals(material.Name,StringComparison.OrdinalIgnoreCase),
-        _=>false
+        _=>_activeTable==table
       };
+      private sealed record TableJob(int Table,TableSettings Settings,List<NestPackingEngine.Input> Inputs);
+      private sealed record PooledTableLayout(NestPackingEngine.Result Layout,int[] Origins)
+      {internal IReadOnlySet<int> ResetPositions {get;init;}=new HashSet<int>();} // Instance ids released from old table-local pin/angle state by a fresh combined nest.
+      private void RestoreLiveTableIdentities(IEnumerable<LiveTableIdentity> identities)
+      {
+        var restored=new List<LiveTable>();
+        foreach(var info in identities)
+        {
+          if(_doc.Objects.FindId(info.Border)?.Geometry is not Curve outline)throw new InvalidOperationException("A placed table frame is missing from drawing history.");
+          restored.Add(new(info.Group,info.Border,outline.DuplicateCurve(),info.Frame,info.Length,info.Material,info.Name,
+            info.Labels.Select(id=>_doc.Objects.FindId(id)?.Geometry).OfType<TextEntity>().Select(text=>(TextEntity)text.Duplicate()).ToArray(),info.Labels,info.Divider,info.Settings));
+        }
+        foreach(var info in _liveTables)info.Dispose();_liveTables.Clear();_liveTables.AddRange(restored);
+      }
+      private LiveTable CreatePooledLiveTable(int table,TableSettings settings,Plane frame,string name)
+      {
+        int group=_doc.Groups.Add(UniqueTableGroupName(name));if(group<0)throw new InvalidOperationException("Could not create replacement table group.");
+        var plane=new Plane(frame.PointAt(settings.Material.Width,0),frame.YAxis,-frame.XAxis);
+        string[] rows=[settings.Material.Name,..TableLabelRowsWithParts(name,0,0,0,YardsPerUnit())];
+        var labels=BuildTableLabels(string.Empty,rows,plane,settings.Material.Width,settings.Length);
+        try
+        {
+          using var attributes=new ObjectAttributes {LayerIndex=UzipCommon.EnsureLayer(_doc,TableLayer),Name=TableName};
+          attributes.AddToGroup(group);NestTableMetadata.Identify(attributes,_doc.Groups[group].Id,Guid.NewGuid().ToString("N"),table,name,NestTableMetadata.BorderRole);
+          attributes.SetUserString(MetadataPrefix+"material",settings.Material.Name);
+          var border=_doc.Objects.AddCurve(labels.Outline,attributes);if(border==Guid.Empty)throw new InvalidOperationException("Could not create replacement table outline.");
+          Guid divider=Guid.Empty;
+          if(TryTableLabelDivider(labels.Outline,out var line))
+          {
+            attributes.ObjectId=Guid.Empty;attributes.Name=string.Empty;attributes.SetUserString(NestTableMetadata.RoleKey,NestTableMetadata.LabelDividerRole);
+            divider=_doc.Objects.AddLine(line,attributes);if(divider==Guid.Empty)throw new InvalidOperationException("Could not create replacement table divider.");
+          }
+          var ids=new List<Guid>();attributes.SetUserString(NestTableMetadata.RoleKey,NestTableMetadata.LabelRole);
+          foreach(var text in labels.Text)
+          {attributes.ObjectId=Guid.Empty;var id=_doc.Objects.AddText(text,attributes);if(id==Guid.Empty)throw new InvalidOperationException("Could not create replacement table label.");ids.Add(id);}
+          return new(group,border,labels.Outline.DuplicateCurve(),frame,settings.Length,settings.Material,name,
+            labels.Text.Select(text=>(TextEntity)text.Duplicate()).ToArray(),ids.ToArray(),divider,settings);
+        }
+        finally{labels.Frame.Dispose();labels.Outline.Dispose();foreach(var text in labels.Text)text.Dispose();}
+      }
+      private bool ApplyPooledTables(NestPackingEngine.Result before,PooledTableLayout pooled)
+      {
+        var oldNames=Enumerable.Range(0,before.Tables).ToDictionary(table=>table,TableDisplayName);var snapshot=CaptureManualState(before);
+        var after=pooled.Layout;var oldTables=_liveTables.ToArray();bool live=oldTables.Length>0;
+        var oldOffsets=live?null:Enumerable.Range(0,before.Tables).ToDictionary(table=>table,DisplayOffset);
+        var previous=live?before.Placements.ToDictionary(part=>part.Id,part=>(InstanceTransform(PlacementOwner(part.Id)!,part),oldTables[part.Table].Group)):null;
+        if(live)
+        {
+          if(!_doc.UndoRecordingEnabled||(_liveUndoRecord=_doc.BeginUndoRecord("vNest combined table re-nest"))==0)
+          {_status.Text="Enable Rhino undo before re-nesting placed tables";return false;}
+        }
+        uint record=_liveUndoRecord;bool success=false;_applyingLive=live;
+        try
+        {
+          _tableNames.Clear();_defaultTableNames.Clear();
+          for(int table=0;table<after.Tables;table++)if(pooled.Origins[table]>=0)_tableNames[table]=oldNames[pooled.Origins[table]];
+          if(live)
+          {
+            var replacements=new List<LiveTable>();
+            long nextName=NextTableNumber(oldNames.Values.Concat(NestTableMetadata.TableGroups(_doc).Select(group=>_doc.Groups.GroupName(group))));
+            for(int table=0;table<after.Tables;table++)
+            {
+              int origin=pooled.Origins[table];var settings=after.TableSettings.GetValueOrDefault(table)??SettingsForTable(origin);
+              if(origin>=0)
+              {
+                var info=oldTables[origin];replacements.Add(info with {Outline=info.Outline.DuplicateCurve(),Labels=info.Labels.Select(text=>(TextEntity)text.Duplicate()).ToArray(),
+                  Material=settings.Material,Length=settings.Length,Settings=settings});
+              }
+              else
+              {
+                var previousTable=replacements.LastOrDefault()??oldTables[^1];var frame=previousTable.Frame;
+                frame.Origin+=frame.XAxis*(previousTable.Material.Width+TableGap);
+                string name=DefaultTableNamePrefix+nextName++;_tableNames[table]=name;
+                replacements.Add(CreatePooledLiveTable(table,settings,frame,name));
+              }
+            }
+            _liveTables.Clear();_liveTables.AddRange(replacements);
+            _result=after;
+            if(!ApplyLiveParts(before,after,previous))throw new InvalidOperationException("Could not move all placed parts to the replacement tables.");
+            foreach(var info in oldTables.Where((_,index)=>!pooled.Origins.Contains(index)))
+              foreach(var id in info.LabelIds.Concat(new[]{info.Border,info.Divider}).Where(id=>id!=Guid.Empty))
+                if(!_doc.Objects.Delete(id,true))throw new InvalidOperationException("Could not remove an unused table frame.");
+            UpdateLiveUsage();
+          }
+          else
+          {
+            _previewTableOffsets.Clear();
+            for(int table=0;table<after.Tables;table++)
+            {
+              int origin=pooled.Origins[table];
+              _previewTableOffsets[table]=origin>=0?oldOffsets![origin]:table==0?Vector3d.Zero:
+                _previewTableOffsets[table-1]-_plane.YAxis*(after.TableMaterials[table].Width+TableGap);
+            }
+            _result=after;
+          }
+          foreach(var part in after.Placements)
+          {
+            if(pooled.ResetPositions.Contains(part.Id))_manualInstances.Remove(part.Id);
+            if(_manualInstances.ContainsKey(part.Id))_manualInstances[part.Id]=part;
+            if(PlacementOwner(part.Id) is {} row&&part.Id==row.Id)
+            {
+              row.Table=part.Table;row.X=part.X;row.Y=part.Y;row.Rotation=part.Pose.Rotation;row.Flipped=part.Pose.Flipped;
+              if(pooled.ResetPositions.Contains(part.Id)){row.Fixed=false;row.ManualRotation=false;}
+            }
+          }
+          _manualUndo.Add(snapshot with {DocumentRecord=record});_manualRedo.Clear();ClearTableLabels();success=true;return true;
+        }
+        catch(Exception ex)
+        {
+          Log.Write("vNest","combined table replacement restored: {0}",ex);_result=before;
+          if(live&&_liveUndoRecord!=0){EndLiveRecord();ExecuteLiveHistory(false);_doc.ClearRedoRecords();}
+          if(snapshot.Tables!=null)RestoreLiveTableIdentities(snapshot.Tables);
+          _tableNames.Clear();foreach(var pair in snapshot.Names)_tableNames[pair.Key]=pair.Value;
+          _defaultTableNames.Clear();foreach(var pair in snapshot.DefaultNames)_defaultTableNames[pair.Key]=pair.Value;
+          _previewTableOffsets.Clear();foreach(var pair in snapshot.Offsets)_previewTableOffsets[pair.Key]=pair.Value;
+          _status.Text="Could not replace selected tables; previous layout restored";return false;
+        }
+        finally
+        {
+          EndLiveRecord();_applyingLive=false;
+          if(live)foreach(var info in oldTables)info.Dispose();
+          if(success)_activeTable=null;
+        }
+      }
+      private static PooledTableLayout MergeSelectedTables(NestPackingEngine.Result before,IReadOnlySet<int> selected,NestPackingEngine.Result pooled)
+      {
+        var available=selected.Order().GroupBy(table=>before.TableMaterials[table].Name,StringComparer.OrdinalIgnoreCase)
+          .ToDictionary(group=>group.Key,group=>new Queue<int>(group),StringComparer.OrdinalIgnoreCase);
+        var replacements=new Dictionary<int,int>();var appended=new List<int>();
+        for(int table=0;table<pooled.Tables;table++)
+        {
+          string material=pooled.TableMaterials[table].Name;
+          if(available.TryGetValue(material,out var slots)&&slots.TryDequeue(out int source))replacements[source]=table;
+          else appended.Add(table);
+        }
+        var origins=new List<int>();var retained=new Dictionary<int,int>();var moved=new Dictionary<int,int>();
+        for(int table=0;table<before.Tables;table++)
+          if(!selected.Contains(table)){retained[table]=origins.Count;origins.Add(table);}
+          else if(replacements.TryGetValue(table,out int local)){moved[local]=origins.Count;origins.Add(table);}
+        foreach(int local in appended){moved[local]=origins.Count;origins.Add(-1);}
+        var materials=new Dictionary<int,MaterialPreset>();var settings=new Dictionary<int,TableSettings>();var algorithms=new Dictionary<int,AlgorithmStamp>();
+        void CopyTable(NestPackingEngine.Result source,int from,int to)
+        {
+          if(source.TableMaterials.TryGetValue(from,out var material))materials[to]=material;
+          if(source.TableSettings.TryGetValue(from,out var recipe))settings[to]=recipe;
+          if(source.TableAlgorithms.TryGetValue(from,out var algorithm))algorithms[to]=algorithm;
+        }
+        foreach(var pair in retained)CopyTable(before,pair.Key,pair.Value);
+        foreach(var pair in moved)CopyTable(pooled,pair.Key,pair.Value);
+        var affected=before.Placements.Where(part=>selected.Contains(part.Table)).Select(part=>part.Id).ToHashSet();
+        var errors=before.Errors.Where(pair=>!affected.Contains(pair.Key)).ToDictionary(pair=>pair.Key,pair=>pair.Value);
+        foreach(var pair in pooled.Errors)errors[pair.Key]=pair.Value;
+        var layout=before with {Placements=before.Placements.Where(part=>!selected.Contains(part.Table))
+          .Select(part=>part with {Table=retained[part.Table]}).Concat(pooled.Placements.Select(part=>part with {Table=moved[part.Table]})).ToList(),
+          Tables=origins.Count,Errors=errors,TableMaterials=materials,TableSettings=settings,TableAlgorithms=algorithms,
+          Search=pooled.Search,Profile=pooled.Profile,Stopped=pooled.Stopped};
+        return new(layout,origins.ToArray()){ResetPositions=affected};
+      }
+      private TableSettings? ChoosePoolSettings(int[] tables)
+      {
+        var first=SettingsForTable(tables[0]);if(tables.All(table=>SettingsForTable(table)==first))return first;
+        using var dialog=new Dialog<TableSettings?> {Title=first.Material.Name+" - Re-nest Settings",Padding=new Padding(WindowPadding),Resizable=false};
+        var choice=new DropDown {Width=FieldWidth,DataStore=tables.Select(TableDisplayName).ToArray(),SelectedIndex=0};
+        var details=new Label();
+        void Describe()
+        {
+          var settings=SettingsForTable(tables[Math.Max(0,choice.SelectedIndex)]);
+          details.Text=$"Width: {settings.Material.Width:G}   Length: {settings.Length:G}   Gap: {settings.Material.Gap:G}\n"+
+            $"Grain: {settings.Material.Grain}   Deviation: {settings.Material.GrainDeviation:G}   Rotation: {RotationLabels[(int)settings.Rotation]}";
+        }
+        choice.SelectedIndexChanged+=(_,_)=>Describe();Describe();
+        var use=new Button {Text="Use Settings"};var cancel=new Button {Text="Cancel"};dialog.DefaultButton=use;dialog.AbortButton=cancel;
+        use.Click+=(_,_)=>dialog.Close(SettingsForTable(tables[Math.Max(0,choice.SelectedIndex)]));cancel.Click+=(_,_)=>dialog.Close(null);
+        dialog.Content=new TableLayout {Spacing=new Size(ControlGap,ControlGap),Rows={
+          new TableRow(Caption("Settings from"),choice),new TableRow(details),new TableRow(new TableCell(null,true),use,cancel)}};
+        return dialog.ShowModal(this);
+      }
+      private void ReNestSelectedTables(int[] tables)
+      {
+        if(_closed||_packing||_locationPicking||PackingBlocked())return;
+        tables=tables.Distinct().Where(table=>table>=0&&table<_result.Tables).Order().ToArray();if(tables.Length==0)return;
+        EndManualGesture(true);var before=_result;var selected=tables.ToHashSet();var batches=new List<MaterialBatch>();
+        try
+        {
+          foreach(var group in tables.GroupBy(table=>TableMaterial(table).Name,StringComparer.OrdinalIgnoreCase))
+          {
+            var sources=group.ToArray();var settings=ChoosePoolSettings(sources);if(settings==null)return;
+            var ids=before.Placements.Where(part=>sources.Contains(part.Table)).Select(part=>part.Id).ToArray();
+            var inputs=FreshTableInputs(ids,settings);
+            if(inputs.Count>0)batches.Add(new(settings.Material,inputs){Settings=settings});
+          }
+        }
+        catch(Exception ex){Log.Write("vNest","combined table preparation failed: {0}",ex);_status.Text="Could not prepare selected tables";return;}
+        if(batches.Count==0){_status.Text="No current parts to re-nest";return;}
+        var clock=System.Diagnostics.Stopwatch.StartNew();ClearNestElapsed();int revision=_layoutRevision;
+        var cancellation=new CancellationTokenSource();_packingCancellation=cancellation;_packing=true;_stopping=false;_needsNest=false;
+        Interlocked.Exchange(ref _bestInProgress,null);_workingResult=null;_place.Enabled=false;UpdateNestButton();_status.SetProgress(0,TimeSpan.Zero);
+        double search=SearchTime,length=Length;NestPackingEngine.Result? best=null;
+        void Accept(NestPackingEngine.Result local)
+        {
+          // Never publish an incomplete material pool: stopping must not remove an existing part.
+          if(local.Errors.Count!=0||!local.Placements.Select(part=>part.Id).ToHashSet().SetEquals(batches.SelectMany(batch=>batch.Inputs).Select(input=>input.Id)))return;
+          best=PreferLayout(local,best);
+        }
+        Log.Write("vNest","combined table nest started tables={0} materials={1} parts={2}",string.Join(",",tables),batches.Count,batches.Sum(batch=>batch.Inputs.Count));
+        Task.Run(()=>SolveMaterialsWithStages(batches,length,search,null,null,cancellation.Token,Accept,null,
+          (material,stage,percent,total)=>Application.Instance.AsyncInvoke(()=>
+          {if(!_closed&&_packing&&ReferenceEquals(_packingCancellation,cancellation))_status.SetStageProgress(material+": "+stage,percent,total);})))
+          .ContinueWith(task=>Application.Instance.AsyncInvoke(()=>
+        {
+          clock.Stop();_packing=false;_packingCancellation=null;cancellation.Dispose();_workingResult=null;_stopping=false;
+          if(_closed)return;
+          int[]? selectedAfter=null;
+          _status.EndProgress();
+          if(task.IsCompletedSuccessfully)Accept(task.Result);
+          if(task.IsFaulted||revision!=_layoutRevision||best==null)
+          {
+            _status.Text="Selected tables retained; no complete replacement layout";
+            if(task.IsCompletedSuccessfully&&task.Result.Errors.Count>0)
+              foreach(var error in task.Result.Errors)
+              {string name=PlacementOwner(error.Key)?.Name??error.Key.ToString();RhinoApp.WriteLine("vNest: cannot re-nest {0}: {1}.",name,error.Value);Log.Write("vNest","combined nest rejected part={0} reason={1}",name,error.Value);}
+            if(task.Exception!=null)Log.Write("vNest","combined table nest failed: {0}",task.Exception);
+          }
+          else
+          {
+            var merged=MergeSelectedTables(before,selected,best);
+            if(ApplyPooledTables(before,merged))
+            {
+              selectedAfter=merged.Origins.Select((origin,index)=>(origin,index)).Where(pair=>pair.origin<0||selected.Contains(pair.origin)).Select(pair=>pair.index).ToArray();
+              int moved=_result.Placements.Count(part=>before.Placements.FirstOrDefault(old=>old.Id==part.Id) is {} old&&
+                (old.Table!=part.Table||Math.Abs(old.X-part.X)>PoseDimensionTolerance||Math.Abs(old.Y-part.Y)>PoseDimensionTolerance||Math.Abs(NormalizeRotation(old.Pose.Rotation-part.Pose.Rotation))>GrainAngularTolerance));
+              _packedRevision=_layoutRevision;_needsNest=false;_status.Text=$"Re-nested {tables.Length} tables; {moved} parts moved; {_result.Tables} total tables";
+              Log.Write("vNest","fresh combined nest applied selectedTables={0} movedParts={1} consumedBefore={2:G17} consumedAfter={3:G17}",tables.Length,moved,UsedLength(before),UsedLength(_result));
+            }
+          }
+          ShowNestElapsed(clock.Elapsed);UpdateNestButton();if(_liveTables.Count>0)SetPlacedControls(true);
+          Interlocked.Exchange(ref _bestInProgress,null);_place.Enabled=_liveTables.Count==0&&_result.Placements.Count>0;
+          RefreshGrid();
+          if(selectedAfter!=null&&_tableGrid.DataStore is IEnumerable<GridItem> tableRows)
+          {
+            bool updating=_updating;_updating=true;
+            try{_tableGrid.UnselectAll();int index=0;foreach(var item in tableRows){if(item.Tag is int table&&selectedAfter.Contains(table))_tableGrid.SelectRow(index);index++;}}
+            finally{_updating=updating;}
+          }
+          UpdateNestButton();RefreshHighlights();_doc.Views.Redraw();
+        }));
+      }
+      private List<NestPackingEngine.Input> FreshTableInputs(IEnumerable<int> ids,TableSettings settings)
+      {
+        var inputs=new List<NestPackingEngine.Input>();var requested=ids.ToArray();
+        foreach(int id in requested)
+        {
+          var row=PlacementOwner(id);if(row==null)continue;
+          var saved=(row.Fixed,row.ManualRotation,row.Rotation,row.Flipped);
+          try
+          {
+            row.Fixed=false;row.ManualRotation=false;row.FreeRotationPoseLimit=RotationSearchLimit(row,requested.Length);
+            var poses=FindMaterialPoses(row,GuideAngle(row),settings.Material.Width,settings.Material.GrainDeviation,
+              settings.Material.Grain,settings.Material.ObeyGrain,settings.Material.AllowReverse,settings);
+            inputs.Add(new(id,poses,false,DefaultTable,DefaultCoordinate,DefaultCoordinate)
+              {Gap=settings.Material.Gap,TableAllowance=_result.TableAllowance,
+                GrainGuided=GrainConstrained(row.GrainOverride??settings.Material.Grain,GuideAngle(row),row.ObeyGrainOverride??settings.Material.ObeyGrain)});
+          }
+          finally{(row.Fixed,row.ManualRotation,row.Rotation,row.Flipped)=saved;}
+        }
+        return ShuffleInputs(inputs,_nestRandom);
+      }
+      private List<NestPackingEngine.Input> TableInputs(IEnumerable<int> ids,TableSettings settings,bool confined)
+      {
+        var inputs=new List<NestPackingEngine.Input>();var requested=ids.ToArray();
+        foreach(int id in requested)
+        {
+          var row=PlacementOwner(id);if(row==null)continue;
+          row.FreeRotationPoseLimit=RotationSearchLimit(row,requested.Length);
+          var current=_result.Placements.FirstOrDefault(part=>part.Id==id);
+          bool pinned=current!=null&&(id==row.Id?row.Fixed:_manualInstances.ContainsKey(id));
+          IReadOnlyList<NestPackingEngine.Pose> poses=pinned?
+            ManualPose(row,current!.Pose.Rotation,current.Pose.Flipped,current.Table) is {} pose?[pose]:[]:
+            FindMaterialPoses(row,GuideAngle(row),settings.Material.Width,settings.Material.GrainDeviation,
+              settings.Material.Grain,settings.Material.ObeyGrain,settings.Material.AllowReverse,settings);
+          inputs.Add(new(id,poses,pinned||row.Fixed&&id==row.Id,DefaultTable,current?.X??row.X,current?.Y??row.Y)
+            {Gap=settings.Material.Gap,TableAllowance=_result.TableAllowance,TableLimit=confined?1:NestPackingEngine.MaximumTables,
+              GrainGuided=GrainConstrained(row.GrainOverride??settings.Material.Grain,GuideAngle(row),row.ObeyGrainOverride??settings.Material.ObeyGrain)});
+        }
+        return ShuffleInputs(inputs,_nestRandom);
+      }
+      private static NestPackingEngine.Result ReplaceTableLayout(NestPackingEngine.Result before,TableJob job,NestPackingEngine.Result local)
+      {
+        int offset=job.Table<0?before.Tables:job.Table;
+        var ids=job.Inputs.Select(input=>input.Id).ToHashSet();
+        var errors=before.Errors.Where(pair=>!ids.Contains(pair.Key)).ToDictionary(pair=>pair.Key,pair=>pair.Value);
+        foreach(var pair in local.Errors)errors[pair.Key]=pair.Value;
+        var materials=new Dictionary<int,MaterialPreset>(before.TableMaterials);
+        var settings=new Dictionary<int,TableSettings>(before.TableSettings);
+        var algorithms=new Dictionary<int,AlgorithmStamp>(before.TableAlgorithms);
+        for(int table=0;table<local.Tables;table++){materials[offset+table]=job.Settings.Material;settings[offset+table]=job.Settings;}
+        for(int table=0;table<local.Tables;table++)
+        {algorithms.Remove(offset+table);if(local.TableAlgorithms.TryGetValue(table,out var stamp))algorithms[offset+table]=stamp;}
+        return before with {Placements=before.Placements.Where(part=>!ids.Contains(part.Id)).Concat(local.Placements.Select(part=>part with {Table=offset+part.Table})).ToList(),
+          Tables=job.Table<0?before.Tables+local.Tables:before.Tables,Errors=errors,TableMaterials=materials,TableSettings=settings,TableAlgorithms=algorithms,Search=local.Search,Profile=local.Profile};
+      }
+      private void ReNestTables(int[] tables,bool includeUnplaced=false)
+      {
+        if(_closed||_packing||_locationPicking||PackingBlocked())return;
+        var clock=System.Diagnostics.Stopwatch.StartNew();
+        ClearNestElapsed();
+        EndManualGesture(true);var before=_result;var jobs=new List<TableJob>();
+        var inventory=includeUnplaced?_rows.Where(row=>row.Included).SelectMany(row=>row.InstanceIds()).ToHashSet():
+          before.Placements.Select(part=>part.Id).ToHashSet();
+        try
+        {
+          foreach(int table in tables.Distinct().Where(table=>table>=0&&table<before.Tables))
+          {
+            var settings=SettingsForTable(table);
+            var inputs=TableInputs(before.Placements.Where(part=>part.Table==table&&inventory.Contains(part.Id)).Select(part=>part.Id),settings,true);
+            if(inputs.Count>0)jobs.Add(new(table,settings,inputs));
+          }
+          if(includeUnplaced)
+          {
+            var placed=before.Placements.Select(part=>part.Id).ToHashSet();
+            foreach(var group in _rows.Where(row=>row.Included).GroupBy(row=>RowMaterial(row).Name,StringComparer.OrdinalIgnoreCase))
+            {
+              var ids=group.SelectMany(row=>row.InstanceIds()).Where(id=>!placed.Contains(id)).ToArray();if(ids.Length==0)continue;
+              var settings=new TableSettings(RowMaterial(group.First()),Length,RotationChoice,RotationStep,AllowFlip);
+              jobs.Add(new(-1,settings,TableInputs(ids,settings,false)));
+            }
+          }
+        }
+        catch(Exception ex){clock.Stop();Log.Write("vNest","table-only preparation failed: {0}",ex);_status.Text="Could not prepare table parts";ShowNestElapsed(clock.Elapsed);return;}
+        if(jobs.Count==0){_status.Text="No current parts to re-nest";return;}
+        int revision=_layoutRevision;double seconds=SearchTime;var cancellation=new CancellationTokenSource();
+        _packingCancellation=cancellation;_packing=true;_stopping=false;_needsNest=false;
+        _workingResult=before;Interlocked.Exchange(ref _bestInProgress,before);_place.Enabled=false;UpdateNestButton();_status.SetProgress(0,TimeSpan.Zero);
+        var scene=ManualScene(before);
+        var names=jobs.ToDictionary(job=>job,job=>job.Table<0?job.Settings.Material.Name:TableDisplayName(job.Table));
+        var validBefore=jobs.ToDictionary(job=>job,job=>job.Table<0||scene.Valid(before.Placements.Where(part=>part.Table==job.Table).ToArray())&&
+          job.Inputs.All(input=>before.Placements.FirstOrDefault(part=>part.Id==input.Id) is {} part&&
+            input.Poses.Any(pose=>pose.Flipped==part.Pose.Flipped&&Math.Abs(NormalizeRotation(pose.Rotation-part.Pose.Rotation))<=GrainAngularTolerance)));
+        int failures=0;
+        Task.Run(()=>
+        {
+          var current=before with {Placements=before.Placements.Where(part=>inventory.Contains(part.Id)).ToList(),
+            Errors=before.Errors.Where(pair=>inventory.Contains(pair.Key)).ToDictionary(pair=>pair.Key,pair=>pair.Value)};
+          for(int index=0;index<jobs.Count&&!cancellation.IsCancellationRequested;index++)
+          {
+            var job=jobs[index];var baseLayout=current;NestPackingEngine.Result? best=null;
+            string name=names[job];
+            void Accept(NestPackingEngine.Result local)
+            {
+              if(job.Table<0&&baseLayout.Tables+local.Tables>NestPackingEngine.MaximumTables)return;
+              if(job.Table>=0&&(local.Tables!=1||local.Placements.Count!=job.Inputs.Count||local.Errors.Count!=0||
+                !local.Placements.Select(part=>part.Id).ToHashSet().SetEquals(job.Inputs.Select(input=>input.Id))))return;
+              var candidate=ReplaceTableLayout(baseLayout,job,local);
+              if(best==null)best=job.Table<0||!validBefore[job]?candidate:PreferLayout(candidate,baseLayout);
+              else best=PreferLayout(candidate,best);
+              Interlocked.Exchange(ref _bestInProgress,best);
+            }
+            void PreviewTable(NestPackingEngine.Result local)
+            {
+              Accept(local);var snapshot=best;if(snapshot==null)return;
+              Application.Instance.AsyncInvoke(()=>
+              {
+                if(_closed||!_packing||!ReferenceEquals(_packingCancellation,cancellation)||revision!=_layoutRevision)return;
+                _workingResult=snapshot;RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
+              });
+            }
+            int stageIndex=index;
+            var initial=job.Table>=0?new NestPackingEngine.Result(baseLayout.Placements.Where(part=>part.Table==job.Table)
+              .Select(part=>part with {Table=0}).ToList(),1,[]){TableAllowance=baseLayout.TableAllowance}:null;
+            var solved=NestContourPackingEngine.SolveFromLayoutWithStages(job.Inputs,job.Settings.Material.Width,job.Settings.Length,null,PreviewTable,
+              cancellation.Token,seconds/Math.Max(1,jobs.Count),Accept,null,(stage,percent,total)=>Application.Instance.AsyncInvoke(()=>
+              {
+                if(!_closed&&_packing&&ReferenceEquals(_packingCancellation,cancellation))
+                {_status.SetStageProgress(name+": "+stage,percent,(100*stageIndex+total)/jobs.Count);}
+              }),initial);
+            Accept(solved);
+            if(best!=null)current=best;else failures++;
+            Log.Write("vNest","table-only nest table={0} parts={1} retained={2} width={3} length={4} gap={5}",name,job.Inputs.Count,best==null,job.Settings.Material.Width,job.Settings.Length,job.Settings.Material.Gap);
+          }
+          return current;
+        }).ContinueWith(task=>Application.Instance.AsyncInvoke(()=>
+        {
+          clock.Stop();_packing=false;_packingCancellation=null;cancellation.Dispose();_workingResult=null;_stopping=false;
+          if(_closed)return;
+          _status.EndProgress();UpdateNestButton();if(_liveTables.Count>0)SetPlacedControls(true);
+          if(task.IsFaulted||task.IsCanceled||revision!=_layoutRevision)
+          {_status.Text="Table re-nest not applied; previous layout retained";if(task.Exception!=null)Log.Write("vNest","table-only nesting failed: {0}",task.Exception);}
+          else
+          {
+            var after=task.Result;
+            if(ApplyTableNest(before,after))
+            {
+              _packedRevision=_layoutRevision;_needsNest=false;
+              _status.Text=failures>0?$"{failures} table(s) could not fit all current parts; retained previous layout":"Table re-nest complete";
+            }
+          }
+          ShowNestElapsed(clock.Elapsed);
+          Interlocked.Exchange(ref _bestInProgress,null);_place.Enabled=_liveTables.Count==0&&_result.Placements.Count>0;
+          RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
+        }));
+      }
+      private bool ApplyTableNest(NestPackingEngine.Result before,NestPackingEngine.Result after)
+      {
+        var snapshot=CaptureManualState(before);
+        if(_liveTables.Count>0&&!ApplyLiveParts(before,after))return false;
+        try
+        {
+          _result=after;
+          if(_liveUndoRecord!=0)UpdateLiveUsage();
+          if(_liveTables.Count==0||_liveUndoRecord!=0)
+          {_manualUndo.Add(snapshot with {DocumentRecord=_liveUndoRecord});_manualRedo.Clear();}
+          foreach(var part in after.Placements)
+          {
+            if(_manualInstances.ContainsKey(part.Id))_manualInstances[part.Id]=part;
+            if(PlacementOwner(part.Id) is {} row&&part.Id==row.Id)
+            {row.Table=part.Table;row.X=part.X;row.Y=part.Y;row.Rotation=part.Pose.Rotation;row.Flipped=part.Pose.Flipped;}
+          }
+          return true;
+        }
+        catch(Exception ex)
+        {
+          _result=before;
+          if(_liveUndoRecord!=0)
+          {EndLiveRecord();_applyingLive=true;try{ExecuteLiveHistory(false);_doc.ClearRedoRecords();RefreshLiveDecorations();}finally{_applyingLive=false;}}
+          _status.Text="Could not update placed table; previous layout restored";Log.Write("vNest","table-only apply failed: {0}",ex);return false;
+        }
+        finally{EndLiveRecord();}
+      }
+      private static TableSettings? ReadTableSettings(ObjectAttributes attributes)
+      {
+        string? json=attributes.GetUserString(TableSettingsKey);
+        if(string.IsNullOrEmpty(json)||json.Length>MaximumPartSettingsCharacters)return null;
+        try
+        {
+          var settings=System.Text.Json.JsonSerializer.Deserialize<TableSettings>(json);
+          return settings!=null&&ValidTableSettings(settings)?settings:null;
+        }
+        catch(System.Text.Json.JsonException ex){Log.Write("vNest","table settings ignored: {0}",ex.Message);return null;}
+      }
+      private static bool ValidTableSettings(TableSettings settings)=>settings.Material!=null&&
+        !string.IsNullOrWhiteSpace(settings.Material.Name)&&
+        double.IsFinite(settings.Material.Width)&&settings.Material.Width>0&&double.IsFinite(settings.Length)&&settings.Length>0&&
+        double.IsFinite(settings.Material.Gap)&&settings.Material.Gap>=0&&Enum.IsDefined(settings.Rotation)&&Enum.IsDefined(settings.Material.Grain)&&
+        double.IsFinite(settings.Material.GrainDeviation)&&settings.Material.GrainDeviation>=0&&settings.Material.GrainDeviation<=MaximumGrainDeviation&&
+        double.IsFinite(settings.Step)&&settings.Step>=MinimumRotationStep&&settings.Step<=MaximumRotationStep;
+      private void CreateTableEditor()
+      {
+        if(_tableNumbers.Count>0)return;
+        void Numeric(NumericStepper field,Func<TableSettings,double> read)
+        {
+          field.Width=FieldWidth-TableValuePickerWidth-ControlGap;
+          var editor=new NestMixedNumber(field);var values=new DropDown {Width=TableValuePickerWidth,Visible=false,ToolTip="Apply one of the selected tables' current values to all selected tables"};
+          _tableNumbers[field]=(editor,values,read);
+          void Change(double value)
+          {
+            if(_updating||_changingTableSettings)return;
+            _updating=true;try{field.Value=value;_displayedNumbers[field]=field.Value;}finally{_updating=false;}
+            GlobalChanged(field);
+          }
+          editor.Committed+=Change;
+          values.SelectedIndexChanged+=(_,_)=>
+          {if(!_updating&&values.SelectedIndex>=0&&double.TryParse(values.DataStore.Cast<string>().ElementAt(values.SelectedIndex),NumberStyles.Float,CultureInfo.InvariantCulture,out double value))Change(value);};
+          _tableNumberViews[field]=new TableLayout {Spacing=new Size(ControlGap,0),Rows={new TableRow(new TableCell(editor,true),values)}};
+        }
+        Numeric(_width,s=>s.Material.Width);Numeric(_length,s=>s.Length);Numeric(_partGap,s=>s.Material.Gap);
+        Numeric(_grainDeviation,s=>s.Material.GrainDeviation);Numeric(_rotationStep,s=>s.Step);
+      }
+      private void UpdateTableEditor()
+      {
+        if(_changingTableSettings)return;
+        var selected=SettingsTables;
+        _settingsScope.Text=selected.Length==1?TableDisplayName(selected[0])+" Settings":selected.Length>1?$"{selected.Length} Working Tables":"Material Defaults";
+        if(_tableNumbers.Count==0)return;
+        if(selected.Length==0)
+        {
+          bool previous=_updating;_updating=true;
+          try
+          {
+            if(_defaultsBeforeTableEdit is {} defaults)
+            {
+              _grain.DataStore=GrainNames;_rotationPreset.DataStore=RotationLabels;_allowReverse.DataStore=ReversalLabels;
+              _width.Value=defaults.Material.Width;_length.Value=defaults.Length;_partGap.Value=defaults.Material.Gap;_grainDeviation.Value=defaults.Material.GrainDeviation;
+              _grain.SelectedIndex=(int)defaults.Material.Grain;_rotationPreset.SelectedIndex=(int)defaults.Rotation;_rotationStep.Value=defaults.Step;
+              _obeyDefault.Checked=defaults.Material.ObeyGrain;_allowReverse.SelectedIndex=defaults.Material.AllowReverse?1:0;_allowFlip.Checked=defaults.AllowFlip;
+              _defaultsBeforeTableEdit=null;RefreshMaterialChoices();
+              _obeyDefault.ThreeState=_allowFlip.ThreeState=false;
+            }
+            foreach(var pair in _tableNumbers){pair.Value.Editor.SetMixed(false);pair.Value.Values.Visible=false;_displayedNumbers[pair.Key]=pair.Key.Value;}
+            _tableNumbers[_rotationStep].Editor.Enabled=RotationChoice==RotationMode.Custom;
+            _saveMaterialAs.Enabled=true;
+          }
+          finally{_updating=previous;}
+          return;
+        }
+        _defaultsBeforeTableEdit??=new(CurrentMaterialValues(),_length.Value,(RotationMode)Math.Max(0,_rotationPreset.SelectedIndex),_rotationStep.Value,_allowFlip.Checked==true);
+        var settings=selected.Select(SettingsForTable).ToArray();bool updating=_updating;_updating=true;
+        try
+        {
+          _saveMaterial.Enabled=_saveMaterialAs.Enabled=false;
+          _tableMaterialChoices=_materialPresets.Concat(settings.Select(s=>s.Material)).DistinctBy(material=>material.Name,StringComparer.OrdinalIgnoreCase).ToArray();
+          ShowChoice(_material,_tableMaterialChoices.Select(m=>m.Name),settings.Select(s=>Array.FindIndex(_tableMaterialChoices,m=>m.Name.Equals(s.Material.Name,StringComparison.OrdinalIgnoreCase))));
+          ShowChoice(_grain,GrainNames,settings.Select(s=>(int)s.Material.Grain));ShowChoice(_rotationPreset,RotationLabels,settings.Select(s=>(int)s.Rotation));
+          ShowChoice(_allowReverse,ReversalLabels,settings.Select(s=>s.Material.AllowReverse?1:0));
+          _obeyDefault.ThreeState=_allowFlip.ThreeState=true;
+          ShowCheck(_obeyDefault,settings.Select(s=>s.Material.ObeyGrain));ShowCheck(_allowFlip,settings.Select(s=>s.AllowFlip));
+          foreach(var pair in _tableNumbers)
+          {
+            var values=settings.Select(pair.Value.Read).Distinct().ToArray();pair.Key.Value=values[0];pair.Value.Editor.SetMixed(values.Length>1);
+            _displayedNumbers[pair.Key]=pair.Key.Value;
+            pair.Value.Values.DataStore=values.Select(value=>value.ToString("R",CultureInfo.InvariantCulture)).ToArray();
+            pair.Value.Values.SelectedIndex=-1;pair.Value.Values.Visible=values.Length>1;
+          }
+          bool custom=settings.Any(s=>s.Rotation==RotationMode.Custom);_tableNumbers[_rotationStep].Editor.Enabled=_tableNumbers[_rotationStep].Values.Enabled=custom;
+        }
+        finally{_updating=updating;}
+      }
+      private void ChangeSelectedTableSettings(Func<TableSettings,TableSettings> change)
+      {
+        if(_updating||_packing||_closed||_changingTableSettings)return;
+        var selected=SettingsTables;if(selected.Length==0)return;
+        var changes=selected.ToDictionary(table=>table,table=>change(SettingsForTable(table)));
+        if(changes.Values.Any(settings=>!ValidTableSettings(settings))){_status.Text="Use positive dimensions and valid gap, grain and rotation values";UpdateTableEditor();return;}
+        _changingTableSettings=true;
+        try{ApplyTableSettingsBatch(changes);}
+        finally{_changingTableSettings=false;UpdateTableEditor();}
+      }
+      private void ApplyTableCellSettings(int table,Func<TableSettings,TableSettings> change)
+      {
+        if(SelectedNestTables.Contains(table)){ChangeSelectedTableSettings(change);return;}
+        var settings=change(SettingsForTable(table));
+        if(ValidTableSettings(settings))ApplyTableSettings(table,settings);else _status.Text="Use positive dimensions and valid gap, grain and rotation values";
+      }
+      private void ApplyTableSettings(int table,TableSettings settings)
+        =>ApplyTableSettingsBatch(new Dictionary<int,TableSettings>{{table,settings}});
+      private void ApplyTableSettingsBatch(IReadOnlyDictionary<int,TableSettings> requested)
+      {
+        if(_packing||requested.Any(pair=>pair.Key<0||pair.Key>=_result.Tables||!ValidTableSettings(pair.Value)))return;
+        var changes=requested.Where(pair=>SettingsForTable(pair.Key)!=pair.Value).ToDictionary(pair=>pair.Key,pair=>pair.Value);if(changes.Count==0)return;
+        EndManualGesture(true);var before=_result;var snapshot=CaptureManualState(before);
+        var overrides=new Dictionary<int,TableSettings>(before.TableSettings);var materials=new Dictionary<int,MaterialPreset>(before.TableMaterials);
+        foreach(var pair in changes){overrides[pair.Key]=pair.Value;materials[pair.Key]=pair.Value.Material;}
+        uint undo=0;
+        if(_liveTables.Count>0)
+        {
+          undo=_doc.UndoRecordingEnabled?_doc.BeginUndoRecord("vNest table settings"):0;
+          if(undo==0){_status.Text="Enable Rhino undo before changing placed tables";return;}
+        }
+        bool success=false;_applyingLive=true;
+        try
+        {
+          _result=before with {TableSettings=overrides,TableMaterials=materials};
+          if(_liveTables.Count>0)
+          {
+            foreach(var pair in changes)_liveTables[pair.Key]=_liveTables[pair.Key] with {Material=pair.Value.Material,Length=pair.Value.Length,Settings=pair.Value};
+            UpdateLiveUsage();
+          }
+          _manualUndo.Add(snapshot with {DocumentRecord=undo});_manualRedo.Clear();
+          _packedRevision=_layoutRevision;_needsNest=false;success=true;
+        }
+        catch(Exception ex){_result=before;_status.Text="Could not change table settings";Log.Write("vNest","table settings failed: {0}",ex);}
+        finally{if(undo!=0)_doc.EndUndoRecord(undo);_applyingLive=false;}
+        if(!success&&undo!=0){_applyingLive=true;try{ExecuteLiveHistory(false);_doc.ClearRedoRecords();if(snapshot.Tables!=null)RestoreLiveTableIdentities(snapshot.Tables);RefreshLiveDecorations();}finally{_applyingLive=false;}}
+        RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
+        if(success)_status.Text=$"{changes.Count} table(s) updated; re-nest to rearrange current parts";
+      }
       private void RefreshMaterialUsage(MaterialUsage[] usage)
       {
         string? selected=(_materialUsageGrid.SelectedItem as GridItem)?.Tag is MaterialUsage selectedUsage?selectedUsage.Name:null;
@@ -4215,14 +5922,14 @@ namespace vTools.Commands
             finally{_applyingLive=false;}
           }
         }
-        RefreshTableRows();RefreshHighlights();_doc.Views.Redraw();
+        RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
       }
       private double YardsPerUnit()=>_doc.ModelUnitSystem is UnitSystem.None or UnitSystem.CustomUnits
         ?double.NaN:RhinoMath.UnitScale(_doc.ModelUnitSystem,UnitSystem.Yards);
       private void RefreshTableRows()
       {
         if(_tableEditing||_closed) return;
-        int? selected=(_tableGrid.SelectedItem as GridItem)?.Tag as int?; bool before=_updating; _updating=true;
+        var selected=_tableGrid.SelectedItems.OfType<GridItem>().Select(item=>item.Tag).OfType<int>().ToHashSet(); bool before=_updating; _updating=true;
         try
         {
           var items=Enumerable.Range(0,VisibleResult.Tables).Select(table=>
@@ -4231,18 +5938,22 @@ namespace vTools.Commands
             var rows=TableLabelRows(TableDisplayName(table),OccupiedWidth(VisibleResult,table),OccupiedLength(VisibleResult,table),YardsPerUnit());
             rows[^1]=YardageText(OccupiedLength(VisibleResult,table)+VisibleResult.TableAllowance,YardsPerUnit());
             return new GridItem {Tag=table,Values=rows.Cast<object>().Append(material.Name)
-              .Append(VisibleResult.Placements.Count(part=>part.Table==table).ToString(CultureInfo.InvariantCulture)).ToArray()};
+              .Append(VisibleResult.Placements.Count(part=>part.Table==table).ToString(CultureInfo.InvariantCulture))
+              .Concat(new object[]{material.Width.ToString(CultureInfo.CurrentCulture),TableLength(table).ToString(CultureInfo.CurrentCulture),material.Gap.ToString(CultureInfo.CurrentCulture)}).ToArray()};
           }).ToList();
           var ordered=SortedItems(items,_tableSortColumn,_tableSortDescending,item=>_tableSortColumn switch
           {1=>(OccupiedLength(VisibleResult,(int)item.Tag!),OccupiedWidth(VisibleResult,(int)item.Tag!)),
-            2=>OccupiedLength(VisibleResult,(int)item.Tag!),_=>item.Values[_tableSortColumn]});
+            2=>OccupiedLength(VisibleResult,(int)item.Tag!),5=>TableMaterial((int)item.Tag!).Width,
+            6=>TableLength((int)item.Tag!),7=>TableMaterial((int)item.Tag!).Gap,_=>item.Values[_tableSortColumn]});
           _tableGrid.DataStore=ordered;
-          if(selected.HasValue){int index=ordered.FindIndex(item=>(int)item.Tag! ==selected.Value);if(index>=0)_tableGrid.SelectedRow=index;}
+          _tableGrid.UnselectAll();for(int index=0;index<ordered.Count;index++)if(selected.Contains((int)ordered[index].Tag!))_tableGrid.SelectRow(index);
         }
         finally { _updating=before; }
+        UpdateNestButton();
       }
       private Vector3d DisplayOffset(int table)
       {
+        if(_previewTableOffsets.TryGetValue(table,out var saved))return saved;
         double offset=0;
         for(int index=1;index<=table;index++)
           offset+=TableMaterial(index).Width+TableGap;
@@ -4283,13 +5994,13 @@ namespace vTools.Commands
         var rows=new[]{material.Name}.Concat(TableLabelRowsWithParts(TableDisplayName(table),parts,usedWidth,used,YardsPerUnit())).ToArray();
         rows[^1]=YardageText(used+VisibleResult.TableAllowance,YardsPerUnit());
         var style=_doc.DimStyles.Current;
-        string key=string.Join("\n",rows)+FormattableString.Invariant($"|{width:R}|{Length:R}|{_doc.ModelSpaceTextScale:R}|{style.Id}|{style.DimensionScale:R}|{style.Font.FaceName}|{style.Font.Bold}|{style.Font.Italic}");
+        string key=string.Join("\n",rows)+FormattableString.Invariant($"|{width:R}|{TableLength(table):R}|{_doc.ModelSpaceTextScale:R}|{style.Id}|{style.DimensionScale:R}|{style.Font.FaceName}|{style.Font.Bold}|{style.Font.Italic}");
         if(_tableLabels.TryGetValue(table,out var previous)&&previous.Key==key)
           return previous;
         if(previous!=null) { foreach(var text in previous.Text) text.Dispose(); previous.Frame.Dispose(); previous.Outline.Dispose(); }
         try
         {
-          var result=BuildTableLabels(key,rows,new Plane(Point3d.Origin,_plane.XAxis,_plane.YAxis),width,Length);
+          var result=BuildTableLabels(key,rows,new Plane(Point3d.Origin,_plane.XAxis,_plane.YAxis),width,TableLength(table));
           _tableLabels[table]=result;return result;
         }
         catch{_tableLabels.Remove(table);throw;}
@@ -4451,7 +6162,8 @@ namespace vTools.Commands
 
     protected override void OnMouseDown(MouseCallbackEventArgs e)
     {
-      if(_canPick()&&PreviewMouseDown?.Invoke(e)==true){e.Cancel=true;base.OnMouseDown(e);return;}
+      if(_canPick()&&PreviewMouseDown?.Invoke(e)==true)
+      {_blankSelection=null;_interiorMembers=null;_dragged=false;_selectionBox.Enabled=false;e.Cancel=true;base.OnMouseDown(e);return;}
       if(e.MouseButton==MouseButton.Left&&_canPick()&&SelectionSuppressed?.Invoke()==true){e.Cancel=true;base.OnMouseDown(e);return;}
       if(_blankSelection!=null&&e.MouseButton==MouseButton.Right)
       {e.Cancel=true;CancelGesture(this,EventArgs.Empty);base.OnMouseDown(e);return;}
@@ -4749,6 +6461,7 @@ namespace vTools
     }
     internal sealed record Input(int Id,IReadOnlyList<Pose> Poses,bool Fixed=false,int Table=0,double X=0,double Y=0)
     {
+      internal int TableLimit { get; init; }=MaximumTables; // Positive exclusive table-index limit; one confines a table-only re-nest to its original sheet.
       internal int? ShuffleRank { get; init; }=DefaultShuffleRank;
       internal bool GrainGuided { get; init; }=DefaultGrainGuided;
       internal double Gap { get; init; }=DefaultGap;
@@ -4764,6 +6477,8 @@ namespace vTools
       int CollisionCalls,double CollisionSeconds,int PosesPruned,int CacheEntries,long CacheVertices);
     internal sealed record Result(List<Placement> Placements,int Tables,Dictionary<int,string> Errors)
     {
+      internal IReadOnlyDictionary<int,vTools.Commands.NestWorkflow.AlgorithmStamp> TableAlgorithms {get;init;}=new Dictionary<int,vTools.Commands.NestWorkflow.AlgorithmStamp>(); // Per-table solver provenance; missing entries are legacy/unknown, never inferred from the current plug-in.
+      internal IReadOnlyDictionary<int,vTools.Commands.NestWorkflow.TableSettings> TableSettings { get; init; }=new Dictionary<int,vTools.Commands.NestWorkflow.TableSettings>();
       internal IReadOnlyDictionary<int,vTools.Commands.NestWorkflow.MaterialPreset> TableMaterials { get; init; }=new Dictionary<int,vTools.Commands.NestWorkflow.MaterialPreset>();
       internal double TableAllowance { get; init; }=DefaultTableAllowance;
       internal bool IsTrial { get; init; }=DefaultTrial;
@@ -4986,16 +6701,21 @@ namespace vTools
     // Polygon packing defaults and numeric/search limits
     private static readonly (string Name,int Start,int End)[] PackingStages =
       [("Preparing outlines",0,5),("Placing parts",5,50),("Compacting",50,55),("Filling gaps",55,60),
-       ("Stacking similar shapes",60,68),("Repacking clusters",68,80),("Refining stacks",80,84),("Matching parts",84,88),("Searching layouts",88,95),
-       ("Testing part orders",95,98),("Combining tables",98,100),("Finalizing",100,100)]; // Ordered stage names and planned percentage ranges; total progress is not a time estimate.
+       ("Stacking similar shapes",60,68),("Matching parts",68,76),("Repacking clusters",76,84),("Refining stacks",84,88),("Searching layouts",88,95),
+       ("Testing part orders",95,98),("Combining tables",98,99),("Closing gaps",99,100),("Finalizing",100,100)]; // Ordered stage names and planned percentage ranges; total progress is not a time estimate.
     private const int Precision = 6; // Decimal places retained by polygon Boolean and Minkowski operations; zero through eight.
     private const double ClearanceArcToleranceFraction = 0.001; // Maximum guide/packing arc chord error as a fraction of gap; manual clearance uses exact circular distances.
     private const double ClearanceJoinLimit = 2.0; // Clipper join parameter; round joins do not extend corner clearance beyond the requested radius.
     private const double CoordinateTolerance = 1e-6; // Model-unit roundoff accepted at table edges and coincident contacts.
     private const double ManualGapTolerance = 10 * CoordinateTolerance; // Model-unit saved-placement roundoff allowed in manual clearance only; physical overlap and table bounds stay unchanged.
     private const double ManualGapToleranceFraction = 0.01; // Maximum fraction of requested Gap allowed as drawing-tolerance slack during manual editing; never removes a positive gap entirely.
+    private const int ManualRecoveryVertices = 32; // Maximum vertices per candidate-search contour during interactive obstacle recovery; final collision checks always retain the full outline.
+    private const int ManualRecoverySimplifications = 16; // Maximum tolerance doublings before candidate search falls back to a four-corner enclosure.
+    private const int ManualRecoveryMilliseconds = 150; // Soft UI-thread recovery budget in milliseconds; checked between bounded polygon operations and exact candidate checks.
+    private const int ManualRecoveryCacheLimit = 256; // Maximum simplified candidate contours retained in one manual scene; positive entry count.
     private const double AreaTolerance = 1e-8; // Square-model-unit threshold distinguishing contact from polygon overlap.
     private const double SweepParallelTolerance = 1e-12; // Model-unit-squared determinant below which swept edges are treated as parallel.
+    private const double SweepProjectionRoundoff = 64 * 2.2204460492503131e-16; // Relative double-precision error at projected contact boundaries; not model-unit gap slack or a repeated clearance reduction.
     private const double SweepCircleRelativeTolerance = 1e-14; // Relative quadratic-discriminant roundoff discarded for tangent swept circular contacts; zero would treat cancellation noise as a collision.
     internal const double DefaultManualContactAlignment = 0.0; // Model-unit contact alignment radius; zero disables alignment for non-viewport geometry callers.
     private const int ArrowGapRecoveryRefinements = 32; // Maximum bisections locating the nearest valid reverse arrow position after a gap increase.
@@ -5004,24 +6724,35 @@ namespace vTools
     private const int OrderTrials = 6; // Deterministic area/extent orders compared, independent of selection order.
     internal const double DefaultSearchSeconds = 30.0; // Default refinement seconds after the initial layout; zero disables refinement.
     private const double BeamTimeFraction = 0.95; // Refinement deadline fraction for full-layout search, leaving time for alternative orders.
-    private const double PairTimeFraction = 0.85; // Refinement deadline fraction for joint pair reassignment after cluster searches.
+    private const double PairTimeFraction = 0.55; // Refinement deadline fraction for pair matching before clusters/stacks can exhaust its budget.
     private const double ClusterTimeFraction = 0.75; // Refinement deadline fraction reserved for complete cluster reinsertions; zero through one.
     private const double StackTimeFraction = 0.90; // Refinement deadline fraction for fitting shape-similar stacks after general cluster searches; zero through one.
-    private const double StackEarlyTimeFraction = 0.45; // Refinement deadline fraction reserved before general clusters when every eligible sparse profile belongs to one compatible family.
+    private const double StackEarlyTimeFraction = 0.35; // Refinement deadline fraction for initial compatible-profile stacks; leaves reserved time for pair matching.
+    private const int PairProfileSamples = 24; // Width-axis cross-sections per permitted pose for cheap all-pairs complement screening; exact polygons still validate every accepted placement.
+    private const double LocalPairTimeFraction = 0.45; // Refinement deadline for same-table partner trials, before the broader pair deadline; zero through PairTimeFraction.
+    private const int LocalPairTrialLimit = 8; // Maximum pair-seeded local table packing trials; each trial retains unrelated tables and skinny placements.
+    private const int LocalPairMovableLimit = 6; // Maximum nonfixed, nonskinny neighbours repositioned around a promising local pair; at least two.
+    private const int LocalPairOrders = 2; // Partner-first and reversed-partner constructive packing orders per local table.
+    private const int LocalPairReferencePoses = 2; // Current and allowed opposite first-part orientations tested with partner lookahead; never creates a disallowed pose.
     private const int StackProfileSamples = 32; // Cross-sections along the long axis used to compare actual outline profiles; positive integer.
     private const double StackProfileTolerance = 0.12; // Maximum normalized RMS boundary difference for matching profiles; zero through one, without implicit mirroring.
     private const double StackSizeRatio = 1.25; // Maximum corresponding width/length ratio for shape-family membership; at least one.
     private const double StackMinimumAspect = 1.5; // Minimum long/short extent ratio for a hooked or sparse profile; at least one.
     private const double StackMaximumFill = 0.65; // Maximum outline area divided by bounding-box area for stack candidates; zero through one, excluding dense rectangles/circles.
-    private const int StackEligibleLimit = 16; // Maximum movable sparse profiles considered in one bounded stacking pass.
     private const int StackMinimumMembers = 2; // Minimum similar parts in one stack; singles remain in their existing positions.
-    private const int StackMaximumMembers = 6; // Maximum members per stack; larger families are split into size-balanced, interleaved banks.
-    private const int StackMaximumBanks = 4; // Maximum banks simultaneously fitted against the remaining fixed/movable obstacles.
-    private const int StackReferencePoses = 2; // Current and allowed opposite reference poses tested per bank; no pose is synthesized.
+    private const double StackBuildBudgetFraction = 0.5; // Fraction of the remaining stack-stage budget spent constructing banks; reserves time to place complete banks.
+    private const double StackMixBudgetFraction = 0.5; // Fraction of remaining stack fitting time reserved for alternating partial-family trials; zero through one.
+    private const double StackMixCompoundFraction = 0.5; // Fraction of remaining partial-stack time available to one rigid remainder trial, reserving time for flexible fills; zero through one.
+    private const int StackMixSeedContacts = 1; // Valid seed contacts tried per size/orientation before advancing to another partial-stack recipe; does not limit members or banks.
     private const int StackGrowthBeam = 4; // Different stagger patterns retained per allowed reference pose while growing a bank.
-    private const int StackLayoutBeam = 8; // Complete-bank placement alternatives retained while fitting banks together.
     private const double StackPitchToleranceFraction = 0.02; // Fraction of the smallest positive member gap used to merge near-identical stagger trials.
+    private const double StackPitchGrowth = 1.125; // Scale multiplier for widening a repeated stagger pitch until exact clearance is met; greater than one, bounded by table geometry.
+    private const int StackPitchRefinementSteps = 16; // Bisections reducing excess repeated-pitch clearance after a collision-free seed is found; positive integer.
     private const int StackAnchorLimit = 8192; // Maximum no-fit-boundary contact anchors considered per bank insertion; positive integer.
+    private static readonly PointD[] StackContactOffsets =
+      [new(2*ContactTolerance,0),new(-2*ContactTolerance,0),new(0,2*ContactTolerance),new(0,-2*ContactTolerance),
+       new(2*ContactTolerance,2*ContactTolerance),new(-2*ContactTolerance,2*ContactTolerance),
+       new(2*ContactTolerance,-2*ContactTolerance),new(-2*ContactTolerance,-2*ContactTolerance)]; // Model-unit contact nudges around simplified no-fit paths; exact outline/gap checks still decide validity.
     private const int SmallClusterJobLimit = 10; // Movable part count at or below which the entire material job can be reconsidered together.
     private const int ClusterMinimumParts = 3; // Minimum movable members in a local removal/reinsertion neighborhood.
     private const int ClusterMaximumParts = 6; // Maximum movable members in a large-job neighborhood; small whole-job searches use SmallClusterJobLimit instead.
@@ -5034,7 +6765,8 @@ namespace vTools
     private const double AnchorWidthSeparation = 0.05; // Fraction of moving-part width distinguishing alternative contact positions; zero through one.
     private const double AnchorLengthSeparation = 0.02; // Fraction of moving-part length distinguishing alternative contact positions; zero through one.
     private const double CompactTimeFraction = 0.08; // Initial refinement fraction for individual contour-based compaction.
-    private const int CompactPasses = 2; // Maximum same-pose compaction sweeps per solve; preserves fixed positions and allowed rotations.
+    private const int CompactPasses = 4; // Maximum same-pose settling sweeps; preserves fixed positions and allowed rotations.
+    private const double FinalCompactSeconds = 4.0; // Maximum extra seconds closing spaces vacated by gap filling and later repacking; zero disables final settling.
     private const int PairAnchorAlternatives = 4; // Different table/contact locations retained for the first member of a joint pair.
     private const double CombineSeconds = 6.0; // Soft seconds budget for automatically consolidating existing tables after refinement, including when SearchTime is zero.
     private const int CombineOrders = 4; // Table-pair repacking orders: orphan-table first, area, length and shortest-first.
@@ -5066,6 +6798,8 @@ namespace vTools
       private readonly IReadOnlyDictionary<int,double> _lengths;
       private readonly double _gapTolerance;
       private readonly Dictionary<int,Placed> _parts;
+      private readonly Dictionary<string,PathD> _recoveryContacts=[];
+      internal bool RecoveryBudgetExceeded {get;private set;}
 
       internal ManualLayout(IReadOnlyList<Placement> parts,IReadOnlyDictionary<int,double> widths,double length,IReadOnlyDictionary<int,double> gaps)
         :this(parts,widths,length,gaps,new Dictionary<int,double>()) { }
@@ -5090,6 +6824,35 @@ namespace vTools
         =>ValidCore(changes,true);
       internal bool ValidRigid(IReadOnlyList<Placement> changes)
         =>ValidCore(changes,false);
+      internal sealed record Conflict(int Id,int? Other,string Kind,double Actual,double Required);
+      internal HashSet<int> ConflictingIds()=>ConflictDetails().Select(detail=>detail.Id).ToHashSet();
+      internal List<Conflict> ConflictDetails()
+      {
+        var result=new List<Conflict>();
+        foreach(var group in _parts.Values.GroupBy(part=>part.Table))
+        {
+          var parts=group.OrderBy(part=>part.X).ToArray();
+          for(int index=0;index<parts.Length;index++)
+          {
+            var part=parts[index];
+            if(!_widths.TryGetValue(part.Table,out double width))result.Add(new(part.Shape.Id,null,"missing-table",0,0));
+            else if(!Inside(part.Shape,part.X,part.Y,width,_lengths.GetValueOrDefault(part.Table,_length)))
+              result.Add(new(part.Shape.Id,null,"boundary",Math.Max(Math.Max(-part.X,-part.Y),Math.Max(part.X+part.Shape.Pose.Width-width,part.Y+part.Shape.Pose.Length-_lengths.GetValueOrDefault(part.Table,_length))),0));
+            for(int other=index+1;other<parts.Length;other++)
+            {
+              var next=parts[other];
+              if(next.X>part.X+part.Shape.Pose.Width+Math.Max(part.Shape.Gap,next.Shape.Gap))continue;
+              if(!Collides(part,next))continue;
+              bool overlap=Collides(WithGap(part,0),WithGap(next,0));
+              double required=Math.Max(_gaps.GetValueOrDefault(part.Shape.Id),_gaps.GetValueOrDefault(next.Shape.Id));
+              double distance=overlap?0:Math.Sqrt(NearbyEdges(part,next,0,0,required).Select(pair=>EdgeDistanceSquared(pair.Moving,pair.Fixed)).DefaultIfEmpty(double.PositiveInfinity).Min());
+              string kind=overlap?"overlap":"gap";
+              result.Add(new(part.Shape.Id,next.Shape.Id,kind,distance,required));result.Add(new(next.Shape.Id,part.Shape.Id,kind,distance,required));
+            }
+          }
+        }
+        return result;
+      }
       private bool ValidCore(IReadOnlyList<Placement> changes,bool internalGaps)
       {
         var moved=changes.Select(Make).ToArray();var ids=changes.Select(part=>part.Id).ToHashSet();
@@ -5220,12 +6983,19 @@ namespace vTools
           double min=Math.Min(a,b),max=Math.Max(a,b),lo=double.PositiveInfinity,hi=double.NegativeInfinity;
           foreach(var corner in corners){double value=corner.x*x+corner.y*y;lo=Math.Min(lo,value);hi=Math.Max(hi,value);}
           double speed=dx*x+dy*y;
-          if(Math.Abs(speed)<=SweepParallelTolerance)return max>lo+SweepParallelTolerance&&min<hi-SweepParallelTolerance;
-          double first=(lo-max)/speed,last=(hi-min)/speed;
+          if(Math.Abs(speed)<=SweepParallelTolerance)return SweepSeparation(max,lo)>SweepParallelTolerance&&SweepSeparation(min,hi)<-SweepParallelTolerance;
+          // Resolve cancellation at touching boundaries before deciding whether movement enters the clearance strip.
+          double first=SweepSeparation(lo,max)/speed,last=SweepSeparation(hi,min)/speed;
           entry=Math.Max(entry,Math.Min(first,last));exit=Math.Min(exit,Math.Max(first,last));return entry<exit;
         }
         if(Axis(ex,ey)&&Axis(-ey,ex)&&Axis(moving.A.y-moving.B.y,moving.B.x-moving.A.x)&&exit>0)return Math.Min(limit,Math.Max(0,entry));
         return limit;
+      }
+      private static double SweepSeparation(double first,double second)
+      {
+        double difference=first-second;
+        double roundoff=SweepProjectionRoundoff*Math.Max(1,Math.Max(Math.Abs(first),Math.Abs(second)));
+        return Math.Abs(difference)<=roundoff?0:difference;
       }
       private static double CapsuleTravel(PointD point,BoundaryEdge edge,double dx,double dy,double radius,double limit)
       {
@@ -5235,7 +7005,10 @@ namespace vTools
         void Circle(PointD center)
         {
           double x=point.x-center.x,y=point.y-center.y,dot=x*dx+y*dy;
-          double offset=x*x+y*y-radius*radius;
+          double distanceSquared=x*x+y*y,radiusSquared=radius*radius;
+          double offset=distanceSquared-radiusSquared;
+          if(Math.Abs(offset)<=SweepProjectionRoundoff*Math.Max(distanceSquared,radiusSquared))offset=0;
+          if(offset==0&&dot>=0)return;
           double discriminant=dot*dot-speed*offset;
           if(discriminant<=SweepCircleRelativeTolerance*(dot*dot+speed*(x*x+y*y+radius*radius)))return;
           double root=Math.Sqrt(discriminant),entry=(-dot-root)/speed,exit=(-dot+root)/speed;
@@ -5246,8 +7019,8 @@ namespace vTools
         double entry=0,exit=limit;
         bool Slab(double position,double direction,double min,double max)
         {
-          if(Math.Abs(direction)<=SweepParallelTolerance)return position>min+SweepParallelTolerance&&position<max-SweepParallelTolerance;
-          double first=(min-position)/direction,last=(max-position)/direction;
+          if(Math.Abs(direction)<=SweepParallelTolerance)return SweepSeparation(position,min)>SweepParallelTolerance&&SweepSeparation(position,max)<-SweepParallelTolerance;
+          double first=SweepSeparation(min,position)/direction,last=SweepSeparation(max,position)/direction;
           entry=Math.Max(entry,Math.Min(first,last));exit=Math.Min(exit,Math.Max(first,last));return entry<exit;
         }
         double px=point.x-edge.A.x,py=point.y-edge.A.y;
@@ -5389,8 +7162,26 @@ namespace vTools
         }
         return best;
       }
+      private PathD RecoveryContact(Shape shape)
+      {
+        if(shape.Path.Count<=ManualRecoveryVertices)return shape.Path;
+        if(_recoveryContacts.TryGetValue(shape.GeometryKey,out var saved))return saved;
+        PathD? contact=null;double tolerance=ContactTolerance;
+        for(int pass=0;pass<ManualRecoverySimplifications;pass++,tolerance*=2)
+        {
+          var candidate=Clipper.SimplifyPath(shape.Path,tolerance,true);
+          if(candidate.Count<3)break;
+          if(candidate.Count<=ManualRecoveryVertices){contact=candidate;break;}
+        }
+        contact??=new PathD {new(0,0),new(shape.Pose.Width,0),new(shape.Pose.Width,shape.Pose.Length),new(0,shape.Pose.Length)};
+        if(_recoveryContacts.Count>=ManualRecoveryCacheLimit)_recoveryContacts.Clear();
+        _recoveryContacts[shape.GeometryKey]=contact;return contact;
+      }
+      private bool RecoveryExpired(System.Diagnostics.Stopwatch watch)
+      {if(watch.ElapsedMilliseconds<ManualRecoveryMilliseconds)return false;RecoveryBudgetExceeded=true;return true;}
       internal Placement[]? Relax(IReadOnlyList<Placement> desired)
       {
+        RecoveryBudgetExceeded=false;var watch=System.Diagnostics.Stopwatch.StartNew();
         if(Valid(desired))return desired.ToArray();
         var ids=desired.Select(part=>part.Id).ToHashSet();var accepted=new List<Placed>();var result=new List<Placement>();
         foreach(var part in desired)
@@ -5403,22 +7194,30 @@ namespace vTools
           var forbidden=new PathsD();
           foreach(var other in obstacles)
           {
-            var paths=Minkowski.Diff(moving.Shape.Path,other.Shape.Path,true,Precision);double gap=Math.Max(moving.Shape.Gap,other.Shape.Gap);
+            if(RecoveryExpired(watch))return null;
+            var paths=Minkowski.Diff(RecoveryContact(moving.Shape),RecoveryContact(other.Shape),true,Precision);double gap=Math.Max(moving.Shape.Gap,other.Shape.Gap);
             if(gap>0)paths=RoundClearance(paths,gap);
             forbidden.AddRange(paths.Select(path=>NestContourPackingEngine.Move(path,other.X,other.Y)));
           }
+          if(RecoveryExpired(watch))return null;
           var bounds=new PathsD{new(){new(0,0),new(maxX,0),new(maxX,maxY),new(0,maxY)}};
           var allowed=maxX>CoordinateTolerance&&maxY>CoordinateTolerance?Clipper.Difference(bounds,forbidden,FillRule.NonZero,Precision):forbidden;
           foreach(var path in allowed)
           for(int index=0;index<path.Count;index++)
           {
+            if(RecoveryExpired(watch))return null;
             var a=path[index];var b=path[(index+1)%path.Count];double x=b.x-a.x,y=b.y-a.y,length=x*x+y*y;
             double fraction=length<=Rhino.RhinoMath.ZeroTolerance?0:Math.Clamp(((part.X-a.x)*x+(part.Y-a.y)*y)/length,0,1);
             candidates.Add(new(Math.Clamp(a.x+fraction*x,0,maxX),Math.Clamp(a.y+fraction*y,0,maxY)));
             candidates.Add(new(Math.Clamp(a.x,0,maxX),Math.Clamp(a.y,0,maxY)));
           }
-          var nearest=candidates.OrderBy(point=>(point.x-part.X)*(point.x-part.X)+(point.y-part.Y)*(point.y-part.Y))
-            .Select(point=>new Placed(moving.Shape,part.Table,point.x,point.y)).FirstOrDefault(candidate=>!obstacles.Any(other=>Collides(candidate,other)));
+          Placed? nearest=null;
+          foreach(var point in candidates.OrderBy(point=>(point.x-part.X)*(point.x-part.X)+(point.y-part.Y)*(point.y-part.Y)))
+          {
+            if(RecoveryExpired(watch))return null;
+            var candidate=new Placed(moving.Shape,part.Table,point.x,point.y);
+            if(!obstacles.Any(other=>Collides(candidate,other))){nearest=candidate;break;}
+          }
           if(nearest==null)return null;
           accepted.Add(nearest);result.Add(part with {X=nearest.X,Y=nearest.Y});
         }
@@ -5426,6 +7225,7 @@ namespace vTools
       }
       internal Placement[]? RelaxRigid(IReadOnlyList<Placement> desired)
       {
+        RecoveryBudgetExceeded=false;var watch=System.Diagnostics.Stopwatch.StartNew();
         if(desired.Count==0)return [];
         if(desired.Count==1)return Relax(desired);
         if(ValidRigid(desired))return desired.ToArray();
@@ -5439,15 +7239,18 @@ namespace vTools
         foreach(var part in moving)
         foreach(var other in _parts.Values.Where(other=>other.Table==part.Table&&!ids.Contains(other.Shape.Id)))
         {
-          var paths=Minkowski.Diff(part.Shape.Path,other.Shape.Path,true,Precision);double gap=Math.Max(part.Shape.Gap,other.Shape.Gap);
+          if(RecoveryExpired(watch))return null;
+          var paths=Minkowski.Diff(RecoveryContact(part.Shape),RecoveryContact(other.Shape),true,Precision);double gap=Math.Max(part.Shape.Gap,other.Shape.Gap);
           if(gap>0)paths=RoundClearance(paths,gap);
           forbidden.AddRange(paths.Select(path=>NestContourPackingEngine.Move(path,other.X-part.X,other.Y-part.Y)));
         }
+        if(RecoveryExpired(watch))return null;
         var bounds=new PathsD{new(){new(minX,minY),new(maxX,minY),new(maxX,maxY),new(minX,maxY)}};
         var allowed=maxX-minX>CoordinateTolerance&&maxY-minY>CoordinateTolerance?Clipper.Difference(bounds,forbidden,FillRule.NonZero,Precision):forbidden;
         foreach(var path in allowed)
         for(int index=0;index<path.Count;index++)
         {
+          if(RecoveryExpired(watch))return null;
           var a=path[index];var b=path[(index+1)%path.Count];double x=b.x-a.x,y=b.y-a.y,length=x*x+y*y;
           double fraction=length<=SweepParallelTolerance?0:Math.Clamp(-(a.x*x+a.y*y)/length,0,1);
           candidates.Add(new(Math.Clamp(a.x+fraction*x,minX,maxX),Math.Clamp(a.y+fraction*y,minY,maxY)));
@@ -5455,6 +7258,7 @@ namespace vTools
         }
         foreach(var point in candidates.OrderBy(point=>point.x*point.x+point.y*point.y))
         {
+          if(RecoveryExpired(watch))return null;
           var shifted=desired.Select(part=>part with {X=part.X+point.x,Y=part.Y+point.y}).ToArray();
           if(ValidRigid(shifted))return shifted;
         }
@@ -5464,6 +7268,7 @@ namespace vTools
 
     private sealed record Shape(int Id,Pose Pose,PathD Path,PathD Contact,double Area)
     {
+      internal int TableLimit { get; init; }=NestPackingEngine.MaximumTables; // Exclusive table-index limit copied from its solve-local input.
       internal bool Skinny { get; init; }=DefaultSkinny;
       internal double Gap { get; init; }=NestPackingEngine.DefaultGap;
       internal double TableAllowance { get; init; }=NestPackingEngine.DefaultTableAllowance;
@@ -5573,12 +7378,15 @@ namespace vTools
       =>SolveUntilStoppedWithStages(inputs,width,length,progress,preview,cancellationToken,searchSeconds,accepted,activity,null);
     internal static Result SolveUntilStoppedWithStages(IReadOnlyList<Input> inputs,double width,double length,Action<int>? progress,Action<Result>? preview,
       CancellationToken cancellationToken,double searchSeconds,Action<Result>? accepted,Action<string>? activity,Action<string,int,int>? stages)
+      =>SolveFromLayoutWithStages(inputs,width,length,progress,preview,cancellationToken,searchSeconds,accepted,activity,stages,null);
+    internal static Result SolveFromLayoutWithStages(IReadOnlyList<Input> inputs,double width,double length,Action<int>? progress,Action<Result>? preview,
+      CancellationToken cancellationToken,double searchSeconds,Action<Result>? accepted,Action<string>? activity,Action<string,int,int>? stages,Result? initial)
     {
       NestPackingDependency.EnsurePolygonsLoaded();
       var kept=new Result([],0,[]);
       void Keep(Result result) { kept=result; accepted?.Invoke(result); }
       try
-      { return SolveLoaded(inputs,width,length,progress,preview,cancellationToken,Math.Max(0,double.IsFinite(searchSeconds)?searchSeconds:DefaultSearchSeconds),Keep,activity,stages); }
+      { return SolveLoaded(inputs,width,length,progress,preview,cancellationToken,Math.Max(0,double.IsFinite(searchSeconds)?searchSeconds:DefaultSearchSeconds),Keep,activity,stages,initial); }
       catch(OperationCanceledException) when(cancellationToken.IsCancellationRequested)
       {
         var placed=kept.Placements.Select(part=>part.Id).ToHashSet(); var errors=new Dictionary<int,string>(kept.Errors);
@@ -5588,7 +7396,31 @@ namespace vTools
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static Result SolveLoaded(IReadOnlyList<Input> inputs,double width,double length,Action<int>? progress,Action<Result>? preview,CancellationToken cancellationToken,double searchSeconds,Action<Result>? accepted=null,Action<string>? activity=null,Action<string,int,int>? stages=null)
+    private static Plan? InitialPlan(Result? initial,IReadOnlyList<Input> inputs,Dictionary<int,Shape[]> shapes,double width,double length,CancellationToken token)
+    {
+      if(initial==null||initial.Stopped||initial.IsTrial||initial.Placements.Count==0||initial.Tables<1||initial.Tables>NestPackingEngine.MaximumTables)return null;
+      var byId=inputs.ToDictionary(input=>input.Id);var ids=initial.Placements.Select(part=>part.Id).ToHashSet();
+      if(ids.Count!=initial.Placements.Count||ids.Count+initial.Errors.Count!=inputs.Count||initial.Errors.Keys.Any(id=>ids.Contains(id)||!byId.ContainsKey(id)))return null;
+      bool Same(Pose a,Pose b)=>a.Flipped==b.Flipped&&Math.Abs(Math.IEEERemainder(a.Rotation-b.Rotation,360))<=CoordinateTolerance&&
+        Math.Abs(a.Width-b.Width)<=CoordinateTolerance&&Math.Abs(a.Length-b.Length)<=CoordinateTolerance&&
+        (ReferenceEquals(a.Contour,b.Contour)||a.Contour!=null&&b.Contour!=null&&a.Contour.Count==b.Contour.Count&&
+          a.Contour.Zip(b.Contour).All(pair=>Math.Abs(pair.First.X-pair.Second.X)<=CoordinateTolerance&&Math.Abs(pair.First.Y-pair.Second.Y)<=CoordinateTolerance));
+      var parts=new List<Placed>();
+      foreach(var part in initial.Placements)
+      {
+        token.ThrowIfCancellationRequested();
+        if(!byId.TryGetValue(part.Id,out var input)||part.Table<0||part.Table>=initial.Tables||part.Table>=input.TableLimit||
+          input.Fixed&&(part.Table!=input.Table||Math.Abs(part.X-input.X)>CoordinateTolerance||Math.Abs(part.Y-input.Y)>CoordinateTolerance))return null;
+        var shape=shapes[part.Id].FirstOrDefault(shape=>Same(shape.Pose,part.Pose));
+        if(shape==null||!Inside(shape,part.X,part.Y,width,length))return null;
+        var placed=new Placed(shape,part.Table,part.X,part.Y);
+        if(parts.Any(other=>other.Table==part.Table&&Collides(placed,other)))return null;parts.Add(placed);
+      }
+      return new(parts,initial.Tables,new(initial.Errors));
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static Result SolveLoaded(IReadOnlyList<Input> inputs,double width,double length,Action<int>? progress,Action<Result>? preview,CancellationToken cancellationToken,double searchSeconds,Action<Result>? accepted=null,Action<string>? activity=null,Action<string,int,int>? stages=null,Result? initial=null)
     {
       int currentStage=-1,stagePercent=-1;
       void StageProgress(int value)
@@ -5611,6 +7443,8 @@ namespace vTools
         return new Result([],0,inputs.ToDictionary(input=>input.Id,_=>"Invalid part gap"));
       if(inputs.Any(input=>!double.IsFinite(input.TableAllowance)||input.TableAllowance<0))
         return new Result([],0,inputs.ToDictionary(input=>input.Id,_=>"Invalid table allowance"));
+      if(inputs.Any(input=>input.TableLimit<1||input.TableLimit>NestPackingEngine.MaximumTables))
+        return new Result([],0,inputs.ToDictionary(input=>input.Id,_=>"Invalid table limit"));
       var metrics=new SolveMetrics();
       int prepared=0;
       var shapes=inputs.ToDictionary(input=>input.Id,input=>
@@ -5618,7 +7452,7 @@ namespace vTools
         bool skinny=!input.Fixed&&SkinnyPriority(input,width,length)>0;
         var options=input.Poses.Select(pose=>
         { cancellationToken.ThrowIfCancellationRequested(); var shape=CreateShape(input.Id,pose); return shape==null?null:shape with
-          {Skinny=skinny,Gap=input.Gap,TableAllowance=input.TableAllowance,Metrics=metrics}; })
+          {Skinny=skinny,Gap=input.Gap,TableAllowance=input.TableAllowance,TableLimit=input.TableLimit,Metrics=metrics}; })
           .Where(shape=>shape!=null).Cast<Shape>().ToArray();
         StageProgress(100*++prepared/Math.Max(1,inputs.Count)); return options;
       });
@@ -5635,7 +7469,9 @@ namespace vTools
         preview(Report(plan,trial));
       }
       Stage(1);
-      best=Pack(inputs,shapes,width,length,0,cache,value=> {progress?.Invoke(value);StageProgress(value*2);},partial=> { accepted?.Invoke(Report(partial)); Preview(partial); },cancellationToken);
+      best=InitialPlan(initial,inputs,shapes,width,length,cancellationToken);
+      if(best==null)best=Pack(inputs,shapes,width,length,0,cache,value=> {progress?.Invoke(value);StageProgress(value*2);},partial=> { accepted?.Invoke(Report(partial)); Preview(partial); },cancellationToken);
+      else{progress?.Invoke(50);StageProgress(100);Log.Write("vNest","refining existing layout parts={0} tables={1}",best.Parts.Count,best.Tables);}
       initialSeconds=clock.Elapsed.TotalSeconds; state.Layouts++;
       Preview(best,true);
       accepted?.Invoke(Report(best));
@@ -5652,15 +7488,16 @@ namespace vTools
         best=ImproveStacksCore(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
           plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },cancellationToken,true);
         Stage(5);
+        best=ImprovePairs(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
+          plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },progress,cancellationToken);
+        Stage(6);
         best=ImproveClusters(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
           plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },cancellationToken);
-        Stage(6);
+        Stage(7);
         best=ImproveStacks(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
           plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },cancellationToken);
-        Stage(7);
         best=ImproveHalfTurns(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
           (plan,trial)=>Preview(plan,false,trial),plan=>accepted?.Invoke(Report(plan)),cancellationToken);
-        best=ImprovePairs(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },progress,cancellationToken);
         Stage(8);
         best=SearchLayouts(best,inputs,shapes,width,length,cache,refinement,searchSeconds,state,
           (plan,trial)=>Preview(plan,false,trial),()=>false,plan=> { accepted?.Invoke(Report(plan)); Preview(plan,true); },progress,cancellationToken);
@@ -5684,14 +7521,18 @@ namespace vTools
       Stage(10);
       best=CombineTables(best,inputs,shapes,width,length,cache,state,
         plan=> {accepted?.Invoke(Report(plan));Preview(plan,true);},cancellationToken);
-      cancellationToken.ThrowIfCancellationRequested(); Stage(11); StageProgress(100); progress?.Invoke(100);
+      Stage(11);
+      if(searchSeconds>0)best=Compact(best,inputs,width,length,cache,Stopwatch.StartNew(),FinalCompactSeconds/CompactTimeFraction,state,
+        plan=> {accepted?.Invoke(Report(plan));Preview(plan,true);},cancellationToken);
+      cancellationToken.ThrowIfCancellationRequested(); Stage(12); StageProgress(100); progress?.Invoke(100);
       accepted?.Invoke(Report(best));
       Preview(best,true);
       return Report(best!);
     }
 
     private static Result Snapshot(Plan plan)=>new(plan.Parts.Select(part=>new Placement(part.Shape.Id,part.Table,part.X,part.Y,part.Shape.Pose)).ToList(),plan.Tables,new(plan.Errors))
-      {TableAllowance=plan.Parts.Select(part=>part.Shape.TableAllowance).DefaultIfEmpty(NestPackingEngine.DefaultTableAllowance).Max()};
+      {TableAllowance=plan.Parts.Select(part=>part.Shape.TableAllowance).DefaultIfEmpty(NestPackingEngine.DefaultTableAllowance).Max(),
+        TableAlgorithms=plan.Parts.Select(part=>part.Table).Distinct().ToDictionary(table=>table,_=>vTools.Commands.NestWorkflow.CurrentAlgorithm)};
 
     private static Plan CombineTables(Plan best,IReadOnlyList<Input> inputs,Dictionary<int,Shape[]> shapes,double width,double length,
       Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,SearchState state,Action<Plan> preview,CancellationToken token)
@@ -5828,11 +7669,14 @@ namespace vTools
           token.ThrowIfCancellationRequested();
           var current=best.Parts.First(part=>part.Shape.Id==id);
           var others=best.Parts.Where(part=>part.Shape.Id!=id).ToList();
-          var replacement=FindPlacement([current.Shape],others,width,length,best.Tables,cache,token,Expired,new Dictionary<int,double>{{current.Table,length}});
+          var replacement=FindPlacement([current.Shape],others,width,length,best.Tables,cache,token,Expired,new Dictionary<int,double>{{current.Table,length}},true);
           if(replacement==null) continue;
           others.Add(replacement); state.Tests++;
           var candidate=CompactTableOrigins(new Plan(others,best.Tables,new(best.Errors)),fixedIds,width);
-          if(Better(candidate,best)) { best=candidate; state.Improvements++; improved=true; preview(best); }
+          // Interior pieces may have to settle before the last piece can shorten a table.
+          bool settling=Used(candidate)<=Used(best)+CoordinateTolerance&&
+            candidate.Parts.Sum(part=>part.Y)<best.Parts.Sum(part=>part.Y)-CoordinateTolerance;
+          if(Better(candidate,best)||settling) { best=candidate; state.Improvements++; improved=true; preview(best); }
         }
         if(!improved) break;
       }
@@ -5996,6 +7840,35 @@ namespace vTools
       return profile;
     }
 
+    private static bool TryGrowStack(StackBank bank,Shape shape,double width,double length,bool reverse,Func<bool> stop,CancellationToken token,out StackBank candidate)
+    {
+      candidate=null!;
+      if(bank.Parts.Count<2)return false;
+      double axisX=bank.Parts[1].X-bank.Parts[0].X,axisY=bank.Parts[1].Y-bank.Parts[0].Y;
+      if(reverse){axisX=-axisX;axisY=-axisY;}
+      var ordered=bank.Parts.OrderBy(part=>part.X*axisX+part.Y*axisY).ToArray();
+      var last=ordered[^1];var previous=ordered[^2];double dx=last.X-previous.X,dy=last.Y-previous.Y;
+      if(Math.Abs(dx)+Math.Abs(dy)<=CoordinateTolerance)return false;
+      double Limit(double point,double direction,double minimum,double maximum)=>Math.Abs(direction)<=CoordinateTolerance?double.PositiveInfinity:
+        (direction>0?maximum-point:minimum-point)/direction;
+      double limit=Math.Min(Limit(last.X,dx,bank.Width-width,width-shape.Pose.Width),Limit(last.Y,dy,bank.Length-length,length-shape.Pose.Length));
+      if(!double.IsFinite(limit)||limit<1)return false;
+      bool Clear(double scale)
+      {
+        token.ThrowIfCancellationRequested();var placed=new Placed(shape,0,last.X+dx*scale,last.Y+dy*scale);
+        return !bank.Parts.Any(other=>Collides(placed,other));
+      }
+      double blocked=1,scale=1;
+      while(!stop()&&!Clear(scale))
+      {blocked=scale;if(scale>=limit)return false;scale=Math.Min(limit,scale*StackPitchGrowth);}
+      if(stop())return false;
+      for(int pass=0;scale>blocked&&pass<StackPitchRefinementSteps&&!stop();pass++)
+      {double middle=(blocked+scale)/2;if(Clear(middle))scale=middle;else blocked=middle;}
+      if(stop())return false;
+      candidate=NormalizeStack(bank.Parts.Append(new Placed(shape,0,last.X+dx*scale,last.Y+dy*scale)));
+      return candidate.Width<=width+CoordinateTolerance&&candidate.Length<=length+CoordinateTolerance;
+    }
+
     private static double StackHead(Shape shape)
     {
       double twiceArea=0,moment=0;bool alongY=shape.Pose.Length>=shape.Pose.Width;
@@ -6021,7 +7894,7 @@ namespace vTools
         Math.Max(shape.Pose.Width,shape.Pose.Length)>=StackMinimumAspect*Math.Min(shape.Pose.Width,shape.Pose.Length);
       var eligible=SkinnyFirst(best.Parts.Where(part=>!fixedIds.Contains(part.Shape.Id)&&shapes[part.Shape.Id].Any(Eligible)),part=>part.Shape.Skinny)
         .ThenByDescending(part=>shapes[part.Shape.Id].Where(Eligible).Max(shape=>Math.Max(shape.Pose.Width,shape.Pose.Length))).ThenBy(part=>part.Shape.Id)
-        .Take(StackEligibleLimit).ToArray();
+        .ToArray();
       if(eligible.Length<StackMinimumMembers)return best;
       var options=eligible.ToDictionary(part=>part.Shape.Id,part=>PairPoses(part.Shape,shapes[part.Shape.Id]).Where(Eligible).ToArray());
       var profiles=new Dictionary<Shape,double[]>();
@@ -6036,29 +7909,40 @@ namespace vTools
       }
       var remaining=eligible.Where(part=>options[part.Shape.Id].Length>0).Select(part=>part.Shape.Id).ToList();
       var families=new List<int[]>();
-      while(remaining.Count>0&&families.Count<StackMaximumBanks&&!Expired())
+      var opposingFamilies=new List<int[]>();
+      while(remaining.Count>0&&!Expired())
       {
         token.ThrowIfCancellationRequested();int seed=remaining[0];var reference=options[seed][0];
         var family=remaining.Where(id=>options[id].Min(shape=>Similarity(reference,shape))<=StackProfileTolerance).ToArray();
-        if(early&&family.Length!=remaining.Count)return best;
         remaining.RemoveAll(family.Contains);
-        int count=(family.Length+StackMaximumMembers-1)/StackMaximumMembers;
-        for(int bank=0;bank<count&&families.Count<StackMaximumBanks;bank++)
+        if(!early&&family.Length>=2*StackMinimumMembers&&family.All(id=>options[id].Any(shape=>
+          shape.Pose.Flipped==options[id][0].Pose.Flipped&&Math.Abs(Math.Abs(Math.IEEERemainder(shape.Pose.Rotation-options[id][0].Pose.Rotation,360))-180)<=HalfTurnAngleTolerance)))
         {
-          var members=family.Where((_,index)=>index%count==bank).ToArray();
-          if(members.Length>=StackMinimumMembers)families.Add(members);
+          // Refine opposing sub-banks after the whole-family fit; their size remains unrestricted.
+          families.Add(family.Where((_,index)=>index%2==0).ToArray());
+          opposingFamilies.Add(family.Where((_,index)=>index%2!=0).ToArray());
         }
+        else if(family.Length>=StackMinimumMembers)families.Add(family);
       }
+      families.AddRange(opposingFamilies);
       if(families.Count==0)return best;
       double pitchTolerance=Math.Max(ContactTolerance,eligible.Select(part=>part.Shape.Gap).Where(gap=>gap>0).DefaultIfEmpty(0).Min()*StackPitchToleranceFraction);
       string Pattern(IEnumerable<Placed> parts)=>string.Join(";",parts.Select(part=>string.Create(CultureInfo.InvariantCulture,
         $"{part.Shape.Id}:{part.Table}:{part.Shape.Pose.Rotation:R}:{part.Shape.Pose.Flipped}:{Math.Round(part.X/pitchTolerance)}:{Math.Round(part.Y/pitchTolerance)}")));
       var banks=new List<List<StackBank>>();
-      foreach(var family in families)
+      var bankFamilies=new List<int[]>();
+      double buildDeadline=clock.Elapsed.TotalSeconds+(searchSeconds*(early?StackEarlyTimeFraction:StackTimeFraction)-clock.Elapsed.TotalSeconds)*StackBuildBudgetFraction;
+      for(int familyIndex=0;familyIndex<families.Count;familyIndex++)
       {
+        var family=families[familyIndex];
         if(Expired())return best;token.ThrowIfCancellationRequested();var variants=new List<StackBank>();
-        foreach(var reference in options[family[0]].Take(StackReferencePoses))
+        var references=options[family[0]];
+        for(int referenceIndex=0;referenceIndex<references.Length;referenceIndex++)
         {
+          var reference=references[referenceIndex];
+          double referenceDeadline=clock.Elapsed.TotalSeconds+Math.Max(0,buildDeadline-clock.Elapsed.TotalSeconds)/
+            Math.Max(1,(families.Count-familyIndex)*(references.Length-referenceIndex));
+          bool BuildExpired()=>Expired()||clock.Elapsed.TotalSeconds>=referenceDeadline;
           var aligned=family.Select(id=>options[id].MinBy(shape=>Similarity(reference,shape))!).ToArray();
           if(aligned.Any(shape=>Similarity(reference,shape)>StackProfileTolerance))continue;
           aligned=aligned.OrderByDescending(shape=>Math.Max(shape.Pose.Width,shape.Pose.Length)).ThenBy(shape=>shape.Id).ToArray();
@@ -6067,53 +7951,94 @@ namespace vTools
           {
             var next=new List<StackBank>();
             foreach(var bank in growing)
-            foreach(var point in StackAnchors([new(shape,0,0,0)],bank.Parts,null,cache,token,Expired))
             {
-              if(Expired())return best;state.Tests++;var member=new Placed(shape,0,point.x,point.y);
-              if(bank.Parts.Any(other=>Collides(member,other)))continue;
-              var candidate=NormalizeStack(bank.Parts.Append(member));
-              if(candidate.Width<=width+CoordinateTolerance&&candidate.Length<=length+CoordinateTolerance)next.Add(candidate);
+              bool repeatedSeed=false;
+              foreach(bool reverse in new[]{false,true})
+              {
+                if(!TryGrowStack(bank,shape,width,length,reverse,BuildExpired,token,out var repeated))continue;
+                repeatedSeed=true;
+                next.Add(repeated);
+                next=next.OrderBy(candidate=>candidate.Width*candidate.Length).ThenBy(candidate=>candidate.Length)
+                  .DistinctBy(candidate=>Pattern(candidate.Parts)).Take(StackGrowthBeam).ToList();
+              }
+              if(repeatedSeed)continue;
+              var contacts=StackAnchors([new(shape,0,0,0)],bank.Parts,null,cache,token,BuildExpired).Select(point=>
+                (Point:point,Width:Math.Max(bank.Width,point.x+shape.Pose.Width)-Math.Min(0,point.x),
+                  Length:Math.Max(bank.Length,point.y+shape.Pose.Length)-Math.Min(0,point.y)))
+                .Where(contact=>contact.Width<=width+CoordinateTolerance&&contact.Length<=length+CoordinateTolerance)
+                .OrderBy(contact=>contact.Width*contact.Length).ThenBy(contact=>contact.Length);
+              foreach(var contact in contacts)
+              {
+                if(BuildExpired())break;
+                if(next.Count>=StackGrowthBeam&&contact.Width*contact.Length>next[^1].Width*next[^1].Length+AreaTolerance)break;
+                state.Tests++;var member=new Placed(shape,0,contact.Point.x,contact.Point.y);
+                if(bank.Parts.Any(other=>Collides(member,other)))continue;
+                next.Add(NormalizeStack(bank.Parts.Append(member)));
+                next=next.OrderBy(candidate=>candidate.Width*candidate.Length).ThenBy(candidate=>candidate.Length)
+                  .DistinctBy(candidate=>Pattern(candidate.Parts)).Take(StackGrowthBeam).ToList();
+              }
             }
             growing=next.OrderBy(bank=>bank.Width*bank.Length).ThenBy(bank=>bank.Length).DistinctBy(bank=>Pattern(bank.Parts)).Take(StackGrowthBeam).ToList();
             if(growing.Count==0)break;
           }
-          variants.AddRange(growing);
+          variants.AddRange(growing.Where(bank=>bank.Parts.Count==family.Length));
         }
-        if(variants.Count==0)return best;
+        if(variants.Count==0)
+        {
+          // Split only when a whole family cannot form a fitting bank; never cap its member count.
+          if(family.Length>=2*StackMinimumMembers&&clock.Elapsed.TotalSeconds<buildDeadline)
+          {
+            families.RemoveAt(familyIndex);
+            families.InsertRange(familyIndex,new[]{family.Where((_,index)=>index%2==0).ToArray(),family.Where((_,index)=>index%2!=0).ToArray()});
+            familyIndex--;
+          }
+          continue;
+        }
         Log.Write("vNest","similar-profile stack members={0} variants={1} shortestLength={2:G17}",string.Join(",",family),variants.Count,variants.Min(bank=>bank.Length));
-        banks.Add(variants);
-        state.StageProgress?.Invoke(50*banks.Count/families.Count);
+        banks.Add(variants);bankFamilies.Add(family);
+        state.StageProgress?.Invoke(50*(familyIndex+1)/families.Count);
       }
-      var selected=families.SelectMany(ids=>ids).ToHashSet();
+      if(banks.Count==0)return best;
+      var selected=bankFamilies.SelectMany(ids=>ids).ToHashSet();
       var outsiders=best.Parts.Where(part=>!selected.Contains(part.Shape.Id)).ToList();
+      double stageDeadline=searchSeconds*(early?StackEarlyTimeFraction:StackTimeFraction);
       double lower=outsiders.Count==0?banks.Max(variants=>variants.Min(bank=>bank.Length))+best.Parts.Max(part=>part.Shape.TableAllowance):double.NegativeInfinity;
-      if(Used(best)<=lower+CoordinateTolerance)return best;
-      var beams=new List<Plan>{new(outsiders,outsiders.Select(part=>part.Table+1).DefaultIfEmpty(0).Max(),new(best.Errors))};
+      if(Used(best)<=lower+CoordinateTolerance)
+        return ImprovePartialStacks(best,inputs,shapes,banks,width,length,cache,clock,stageDeadline,state,accepted,token);
+      var root=new Plan(outsiders,outsiders.Select(part=>part.Table+1).DefaultIfEmpty(0).Max(),new(best.Errors));
       var tables=best.Parts.Select(part=>part.Table).Distinct().Order().ToArray();
-      for(int index=0;index<banks.Count&&!Expired();index++)
+      double fitDeadline=banks.Count>1?clock.Elapsed.TotalSeconds+(stageDeadline-clock.Elapsed.TotalSeconds)*(1-StackMixBudgetFraction):stageDeadline;
+      bool FitExpired()=>Expired()||clock.Elapsed.TotalSeconds>=fitDeadline;
+      IEnumerable<Plan> Choices(int index,Plan beam)
       {
-        var next=new List<Plan>();
-        foreach(var beam in beams)
+        var seen=new HashSet<string>();
         foreach(var bank in banks[index].OrderBy(bank=>
           bank.Parts.Average(part=>StackHead(part.Shape))*beam.Parts.Where(part=>selected.Contains(part.Shape.Id)).Select(part=>StackHead(part.Shape)).DefaultIfEmpty(0).Average()).ThenBy(bank=>bank.Length))
         foreach(int table in tables)
         {
-          if(Expired())return best;token.ThrowIfCancellationRequested();
+          if(FitExpired())yield break;token.ThrowIfCancellationRequested();
+          if(bank.Parts.Any(part=>table>=part.Shape.TableLimit))continue;
           var occupied=beam.Parts.Where(part=>part.Table==table).ToList();
           bool floating=!outsiders.Any(part=>part.Table==table);
           var extent=occupied.Count>0?NormalizeStack(occupied):null;
+          double otherUsage=beam.Parts.Where(part=>part.Table!=table).GroupBy(part=>part.Table)
+            .Sum(group=>group.Max(part=>part.Y+part.Shape.Pose.Length)+group.Max(part=>part.Shape.TableAllowance));
+          double allowance=occupied.Concat(bank.Parts).Max(part=>part.Shape.TableAllowance);
+          double available=Math.Min(length,Used(best)-otherUsage-allowance);
           var region=(MinX:floating&&extent!=null?extent.Width-width:0,MaxX:width-bank.Width,
-            MinY:floating&&extent!=null?extent.Length-length:0,MaxY:length-bank.Length);
+            MinY:floating&&extent!=null?extent.Length-available:0,MaxY:available-bank.Length);
           if(region.MinX>region.MaxX||region.MinY>region.MaxY)continue;
-          Plan? complete=null;
-          var anchors=StackAnchors(bank.Parts,occupied,region,cache,token,Expired)
+          var anchors=StackAnchors(bank.Parts,occupied,region,cache,token,FitExpired)
             .Where(point=>point.x>=region.MinX-CoordinateTolerance&&point.x<=region.MaxX+CoordinateTolerance&&
               point.y>=region.MinY-CoordinateTolerance&&point.y<=region.MaxY+CoordinateTolerance)
             .OrderBy(point=>floating?Math.Max(extent?.Length??0,point.y+bank.Length)-Math.Min(0,point.y):
               Math.Max(occupied.Select(part=>part.Y+part.Shape.Pose.Length).DefaultIfEmpty(0).Max(),point.y+bank.Length)).ToArray();
           foreach(var point in anchors)
           {
-            if(Expired())break;state.Tests++;
+            if(FitExpired())yield break;state.Tests++;
+            double occupiedLength=floating?Math.Max(extent?.Length??0,point.y+bank.Length)-Math.Min(0,point.y):
+              Math.Max(occupied.Select(part=>part.Y+part.Shape.Pose.Length).DefaultIfEmpty(0).Max(),point.y+bank.Length);
+            if(otherUsage+occupiedLength+allowance>Used(best)+CoordinateTolerance)break;
             if(point.x<region.MinX-CoordinateTolerance||point.x>region.MaxX+CoordinateTolerance||
               point.y<region.MinY-CoordinateTolerance||point.y>region.MaxY+CoordinateTolerance)continue;
             double x=Math.Clamp(point.x,region.MinX,region.MaxX),y=Math.Clamp(point.y,region.MinY,region.MaxY);
@@ -6121,27 +8046,232 @@ namespace vTools
             if(moved.Any(part=>occupied.Any(other=>Collides(part,other))))continue;
             var local=occupied.Concat(moved).ToList();var placed=floating?NormalizeStack(local):new StackBank(local,
               local.Max(part=>part.X+part.Shape.Pose.Width),local.Max(part=>part.Y+part.Shape.Pose.Length));
-            if(placed.Width>width+CoordinateTolerance||placed.Length>length+CoordinateTolerance)continue;
+            if(placed.Width>width+CoordinateTolerance||placed.Length>available+CoordinateTolerance)continue;
             var all=beam.Parts.Where(part=>part.Table!=table).Concat(placed.Parts).ToList();
             var candidate=new Plan(all,all.Select(part=>part.Table+1).DefaultIfEmpty(0).Max(),new(best.Errors));
-            if(index==banks.Count-1)
-            {
-              state.Layouts++;
-              if(complete==null||Better(candidate,complete))complete=candidate;
-              if(Used(complete)<=lower+CoordinateTolerance)break;
-            }
-            else next.Add(candidate);
-          }
-          if(complete!=null&&Better(complete,best)&&ValidCluster(complete,best,fixedIds,width,length,token))
-          {
-            Log.Write("vNest","stack improvement members={0} materialBefore={1:G17} materialAfter={2:G17}",string.Join(",",selected.Order()),Used(best),Used(complete));
-            best=complete;state.Improvements++;accepted(best);
-            if(Used(best)<=lower+CoordinateTolerance)return best;
+            if(seen.Add(Pattern(candidate.Parts)))yield return candidate;
           }
         }
-        beams=next.OrderBy(Used).ThenBy(plan=>plan.Tables).ThenBy(SkinnyLeft).DistinctBy(plan=>Pattern(plan.Parts)).Take(StackLayoutBeam).ToList();
-        state.StageProgress?.Invoke(50+50*(index+1)/banks.Count);
-        if(beams.Count==0)break;
+      }
+      var pending=new Stack<(int Index,IEnumerator<Plan> Choices)>();pending.Push((0,Choices(0,root).GetEnumerator()));
+      try
+      {
+        while(pending.Count>0&&!FitExpired())
+        {
+          token.ThrowIfCancellationRequested();var current=pending.Peek();
+          if(!current.Choices.MoveNext()){pending.Pop().Choices.Dispose();continue;}
+          var candidate=current.Choices.Current;
+          state.StageProgress?.Invoke(50+50*(current.Index+1)/banks.Count);
+          if(current.Index+1<banks.Count){pending.Push((current.Index+1,Choices(current.Index+1,candidate).GetEnumerator()));continue;}
+          state.Layouts++;
+          if(!Better(candidate,best)||!ValidCluster(candidate,best,fixedIds,width,length,token))continue;
+          Log.Write("vNest","stack improvement members={0} materialBefore={1:G17} materialAfter={2:G17}",string.Join(",",selected.Order()),Used(best),Used(candidate));
+          best=candidate;state.Improvements++;accepted(best);
+          if(Used(best)<=lower+CoordinateTolerance)break;
+        }
+      }
+      finally{while(pending.Count>0)pending.Pop().Choices.Dispose();}
+      return ImprovePartialStacks(best,inputs,shapes,banks,width,length,cache,clock,stageDeadline,state,accepted,token);
+    }
+
+    private static Placed[] OrderedStackParts(StackBank bank)
+    {
+      if(bank.Parts.Count<2)return bank.Parts.ToArray();
+      double x=bank.Parts[1].X-bank.Parts[0].X,y=bank.Parts[1].Y-bank.Parts[0].Y;
+      return bank.Parts.OrderBy(part=>part.X*x+part.Y*y).ThenBy(part=>part.Shape.Id).ToArray();
+    }
+
+    private static StackBank PartialStack(StackBank bank,int count,bool reverse)
+    {
+      var ordered=OrderedStackParts(bank);
+      return NormalizeStack((reverse?ordered.AsEnumerable().Reverse():ordered).Take(count));
+    }
+
+    private static IEnumerable<(int First,int Second)> PartialStackSizes(int first,int second)
+    {
+      var a=Enumerable.Range(1,Math.Max(0,first-1)).OrderBy(count=>Math.Abs(first-2*count)).ThenBy(count=>count).ToArray();
+      var b=Enumerable.Range(1,Math.Max(0,second-1)).OrderBy(count=>Math.Abs(second-2*count)).ThenBy(count=>count).ToArray();
+      for(int diagonal=0;diagonal<a.Length+b.Length-1;diagonal++)
+        for(int index=Math.Max(0,diagonal-b.Length+1);index<=Math.Min(diagonal,a.Length-1);index++)
+          yield return(a[index],b[diagonal-index]);
+    }
+
+    private static int[] AlternatingStackOrder(StackBank first,StackBank second,IReadOnlySet<int> seeded,int firstCount,int secondCount)
+    {
+      var a=OrderedStackParts(first).Select(part=>part.Shape.Id).Where(id=>!seeded.Contains(id)).ToArray();
+      var b=OrderedStackParts(second).Select(part=>part.Shape.Id).Where(id=>!seeded.Contains(id)).ToArray();
+      var result=new List<int>();int ai=0,bi=0;
+      while(ai<a.Length||bi<b.Length)
+      {
+        for(int count=0;count<firstCount&&ai<a.Length;count++)result.Add(a[ai++]);
+        for(int count=0;count<secondCount&&bi<b.Length;count++)result.Add(b[bi++]);
+      }
+      return result.ToArray();
+    }
+
+    private static IEnumerable<StackBank> RemainingStackVariants(StackBank bank,IReadOnlySet<int> seeded,Dictionary<int,Shape[]> shapes)
+    {
+      var remaining=NormalizeStack(bank.Parts.Where(part=>!seeded.Contains(part.Shape.Id)));
+      yield return remaining;
+      var reversed=new List<Placed>();
+      foreach(var part in remaining.Parts)
+      {
+        var opposite=shapes[part.Shape.Id].FirstOrDefault(shape=>shape.Pose.Flipped==part.Shape.Pose.Flipped&&
+          Math.Abs(Math.Abs(Math.IEEERemainder(shape.Pose.Rotation-part.Shape.Pose.Rotation,360))-180)<=HalfTurnAngleTolerance);
+        if(opposite==null)yield break;
+        reversed.Add(new(opposite,0,remaining.Width-part.X-part.Shape.Pose.Width,remaining.Length-part.Y-part.Shape.Pose.Length));
+      }
+      yield return NormalizeStack(reversed);
+    }
+
+    private static Plan? CompletePartialStacks(Plan previous,StackBank first,StackBank second,IReadOnlyDictionary<int,Placed> seeded,IReadOnlyList<Placed> outside,
+      int table,double width,double length,Dictionary<int,Shape[]> shapes,Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,CancellationToken token,Func<bool> stop)
+    {
+      var seededIds=seeded.Keys.ToHashSet();
+      var firstChoices=RemainingStackVariants(first,seededIds,shapes).OrderBy(bank=>
+        bank.Parts.Average(part=>StackHead(part.Shape))*first.Parts.Average(part=>StackHead(part.Shape))).ToArray();
+      var secondChoices=RemainingStackVariants(second,seededIds,shapes).OrderBy(bank=>
+        bank.Parts.Average(part=>StackHead(part.Shape))*second.Parts.Average(part=>StackHead(part.Shape))).ToArray();
+      var occupied=outside.Where(part=>part.Table==table).Concat(seeded.Values).ToArray();
+      double otherUsage=outside.Where(part=>part.Table!=table).GroupBy(part=>part.Table)
+        .Sum(group=>group.Max(part=>part.Y+part.Shape.Pose.Length)+group.Max(part=>part.Shape.TableAllowance));
+      double available=Math.Min(length,Used(previous)-otherUsage-previous.Parts.Max(part=>part.Shape.TableAllowance));
+      foreach(var a in firstChoices)
+      foreach(var b in secondChoices.OrderBy(bank=>-bank.Parts.Average(part=>StackHead(part.Shape))*a.Parts.Average(part=>StackHead(part.Shape))))
+      {
+        if(stop())return null;token.ThrowIfCancellationRequested();
+        if(a.Parts.Concat(b.Parts).Any(part=>table>=part.Shape.TableLimit)||a.Width>width||b.Width>width||a.Length>available||b.Length>available)continue;
+        int tested=0;var testedPoints=new List<PointD>();
+        var firstPoints=StackAnchors(a.Parts,occupied,(0,width-a.Width,0,available-a.Length),cache,token,stop)
+          .Where(point=>point.x>=0&&point.y>=0&&point.x+a.Width<=width&&point.y+a.Length<=available)
+          .OrderBy(point=>point.y+a.Length).ThenBy(point=>point.x);
+        foreach(var location in firstPoints)
+        {
+          if(stop()||tested>=PairAnchorAlternatives)break;
+          if(testedPoints.Any(point=>Math.Abs(point.x-location.x)<a.Width*AnchorWidthSeparation&&Math.Abs(point.y-location.y)<a.Length*AnchorLengthSeparation))continue;
+          var moved=a.Parts.Select(part=>new Placed(part.Shape,table,part.X+location.x,part.Y+location.y)).ToArray();
+          if(moved.Where((part,index)=>moved.Take(index).Any(other=>Collides(part,other))).Any()||moved.Any(part=>occupied.Any(other=>Collides(part,other))))continue;
+          tested++;testedPoints.Add(location);var obstacles=occupied.Concat(moved).ToArray();
+          var secondPoints=StackAnchors(b.Parts,obstacles,(0,width-b.Width,0,available-b.Length),cache,token,stop)
+            .Where(point=>point.x>=0&&point.y>=0&&point.x+b.Width<=width&&point.y+b.Length<=available)
+            .OrderBy(point=>point.y+b.Length).ThenBy(point=>point.x);
+          foreach(var point in secondPoints)
+          {
+            if(stop())break;
+            var last=b.Parts.Select(part=>new Placed(part.Shape,table,part.X+point.x,part.Y+point.y)).ToArray();
+            if(last.Where((part,index)=>last.Take(index).Any(other=>Collides(part,other))).Any()||last.Any(part=>obstacles.Any(other=>Collides(part,other))))continue;
+            var all=outside.Concat(seeded.Values).Concat(moved).Concat(last).ToList();
+            var candidate=new Plan(all,all.Select(part=>part.Table+1).DefaultIfEmpty(0).Max(),new(previous.Errors));
+            if(Better(candidate,previous))return candidate;
+          }
+        }
+      }
+      return null;
+    }
+
+    private static Plan ImprovePartialStacks(Plan best,IReadOnlyList<Input> inputs,Dictionary<int,Shape[]> shapes,List<List<StackBank>> banks,
+      double width,double length,Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,Stopwatch clock,double deadline,SearchState state,
+      Action<Plan> accepted,CancellationToken token)
+    {
+      bool Expired()=>clock.Elapsed.TotalSeconds>=deadline;
+      var byId=inputs.ToDictionary(input=>input.Id);var fixedIds=inputs.Where(input=>input.Fixed).Select(input=>input.Id).ToHashSet();int trials=0;
+      for(int distance=1;distance<banks.Count&&!Expired();distance++)
+      for(int index=0;index+distance<banks.Count&&!Expired();index++)
+      {
+        token.ThrowIfCancellationRequested();
+        var first=banks[index].OrderBy(bank=>bank.Length).ThenBy(bank=>bank.Width).ToArray();
+        var second=banks[index+distance].OrderBy(bank=>bank.Length).ThenBy(bank=>bank.Width).ToArray();
+        if(first[0].Parts.Count<2||second[0].Parts.Count<2)continue;
+        var moving=first[0].Parts.Concat(second[0].Parts).Select(part=>part.Shape.Id).ToHashSet();
+        using var recipes=PartialStackSizes(first[0].Parts.Count,second[0].Parts.Count).GetEnumerator();
+        var sizes=new List<(int First,int Second)>();bool finished=false;int variants=2*Math.Max(first.Length,second.Length);
+        for(int wave=0;!Expired()&&(!finished||wave<sizes.Count+variants-1);wave++)
+        {
+          if(!finished){if(recipes.MoveNext())sizes.Add(recipes.Current);else finished=true;}
+          for(int recipe=0;recipe<sizes.Count&&!Expired();recipe++)
+          {
+            token.ThrowIfCancellationRequested();
+            int variant=wave-recipe;if(variant<0||variant>=variants)continue;
+            var a=first[(variant/2)%first.Length];bool sameHead=(variant&1)==0;
+            var b=second.OrderBy(bank=>(sameHead?-1:1)*bank.Parts.Average(part=>StackHead(part.Shape))*a.Parts.Average(part=>StackHead(part.Shape)))
+              .ThenBy(bank=>bank.Length).ElementAt((variant/2)%second.Length);
+            var size=sizes[recipe];var left=PartialStack(a,size.First,(variant&2)!=0);var right=PartialStack(b,size.Second,(variant&4)!=0);
+            var outside=best.Parts.Where(part=>!moving.Contains(part.Shape.Id)).ToArray();
+            var tables=best.Parts.Where(part=>moving.Contains(part.Shape.Id)).Select(part=>part.Table).Distinct().Order().ToArray();
+            foreach(int table in tables)
+            {
+              if(Expired())break;
+              if(left.Parts.Concat(right.Parts).Any(part=>table>=part.Shape.TableLimit))continue;
+              var occupied=outside.Where(part=>part.Table==table).ToArray();
+              double otherUsage=outside.Where(part=>part.Table!=table).GroupBy(part=>part.Table)
+                .Sum(group=>group.Max(part=>part.Y+part.Shape.Pose.Length)+group.Max(part=>part.Shape.TableAllowance));
+              double available=Math.Min(length,Used(best)-otherUsage-best.Parts.Max(part=>part.Shape.TableAllowance));
+              if(left.Width>width||right.Width>width||left.Length>available||right.Length>available)continue;
+              var leftPoints=occupied.Length==0?new[]{new PointD(0,0)}:StackAnchors(left.Parts,occupied,
+                (0,width-left.Width,0,available-left.Length),cache,token,Expired)
+                .Where(point=>point.x>=0&&point.y>=0&&point.x+left.Width<=width&&point.y+left.Length<=available)
+                .OrderBy(point=>point.y+left.Length).ThenBy(point=>point.x).Take(PairAnchorAlternatives).ToArray();
+              foreach(var location in leftPoints)
+              {
+                var pinnedLeft=left.Parts.Select(part=>new Placed(part.Shape,table,part.X+location.x,part.Y+location.y)).ToArray();
+                if(pinnedLeft.Any(part=>occupied.Any(other=>Collides(part,other))))continue;
+                var obstacles=occupied.Concat(pinnedLeft).ToArray();int alternatives=0;
+                var rightPoints=StackAnchors(right.Parts,obstacles,(0,width-right.Width,0,available-right.Length),cache,token,Expired)
+                  .Where(point=>point.x>=0&&point.y>=0&&point.x+right.Width<=width&&point.y+right.Length<=available)
+                  .OrderBy(point=>point.y+right.Length).ThenBy(point=>point.x);
+                foreach(var point in rightPoints)
+                {
+                  if(Expired()||alternatives>=StackMixSeedContacts)break;
+                  var seeded=pinnedLeft.Concat(right.Parts.Select(part=>new Placed(part.Shape,table,part.X+point.x,part.Y+point.y))).ToDictionary(part=>part.Shape.Id);
+                  if(seeded.Values.Any(part=>!pinnedLeft.Contains(part)&&obstacles.Any(other=>Collides(part,other))))continue;
+                  var pins=seeded.Values.ToArray();
+                  if(pins.Where((part,offset)=>pins.Take(offset).Any(other=>Collides(part,other))).Any())continue;
+                  alternatives++;token.ThrowIfCancellationRequested();
+                  double groupedDeadline=clock.Elapsed.TotalSeconds+(deadline-clock.Elapsed.TotalSeconds)*StackMixCompoundFraction;
+                  bool GroupedExpired()=>Expired()||clock.Elapsed.TotalSeconds>=groupedDeadline;
+                  var grouped=CompletePartialStacks(best,a,b,seeded,outside,table,width,length,shapes,cache,token,GroupedExpired);
+                  if(grouped!=null&&ValidCluster(grouped,best,fixedIds,width,length,token))
+                  {
+                    Log.Write("vNest","alternating partial banks improved seed={0}+{1} materialBefore={2:G17} materialAfter={3:G17}",size.First,size.Second,Used(best),Used(grouped));
+                    best=grouped;state.Layouts++;state.Improvements++;accepted(best);
+                  }
+                  if(Expired())break;
+                  var trialShapes=new Dictionary<int,Shape[]>();
+                  foreach(var part in best.Parts)
+                  {
+                    int id=part.Shape.Id;
+                    if(seeded.TryGetValue(id,out var pin)){trialShapes[id]=[pin.Shape];continue;}
+                    if(!moving.Contains(id)){trialShapes[id]=[part.Shape];continue;}
+                    var preferred=a.Parts.Concat(b.Parts).First(member=>member.Shape.Id==id).Shape;
+                    var opposite=shapes[id].FirstOrDefault(shape=>shape.Pose.Flipped==preferred.Pose.Flipped&&
+                      Math.Abs(Math.Abs(Math.IEEERemainder(shape.Pose.Rotation-preferred.Pose.Rotation,360))-180)<=HalfTurnAngleTolerance);
+                    trialShapes[id]=opposite==null?[preferred]:[preferred,opposite];
+                  }
+                  var order=AlternatingStackOrder(a,b,seeded.Keys.ToHashSet(),size.First,size.Second).Select((id,rank)=>(id,rank)).ToDictionary(value=>value.id,value=>value.rank);
+                  var trialInputs=best.Parts.Select(part=>
+                  {
+                    int id=part.Shape.Id;var pin=seeded.GetValueOrDefault(id)??part;
+                    return byId[id] with {Fixed=seeded.ContainsKey(id)||!moving.Contains(id),Table=pin.Table,X=pin.X,Y=pin.Y,
+                      Poses=trialShapes[id].Select(shape=>shape.Pose).ToArray(),ShuffleRank=order.GetValueOrDefault(id)};
+                  }).ToArray();
+                  bool overBudget=false;
+                  void BoundMaterial(Plan partial)
+                  {if(Used(CompactTableOrigins(partial,fixedIds,width))>Used(best)+CoordinateTolerance)overBudget=true;}
+                  bool TrialExpired()=>Expired()||overBudget;
+                  trials++;Log.Write("vNest","partial stack trial={0} families={1},{2} seed={3}+{4} members={5}",trials,index,index+distance,size.First,size.Second,moving.Count);
+                  var packed=Pack(trialInputs,trialShapes,width,length,OrderTrials,cache,null,BoundMaterial,token,TrialExpired);
+                  Log.Write("vNest","partial stack fill trial={0} seed={1}+{2} sameHead={3} placed={4}/{5} errors={6} material={7:G17} pruned={8}",
+                    trials,size.First,size.Second,sameHead,packed.Parts.Count,best.Parts.Count,string.Join(";",packed.Errors.Select(pair=>pair.Key+":"+pair.Value)),Used(packed),overBudget);
+                  if(packed.Parts.Count!=best.Parts.Count||packed.Errors.Count>0)continue;
+                  var candidate=CompactTableOrigins(packed with {Errors=new(best.Errors)},fixedIds,width);state.Layouts++;
+                  if(!Better(candidate,best)||!ValidCluster(candidate,best,fixedIds,width,length,token))continue;
+                  Log.Write("vNest","partial stack improvement seed={0}+{1} materialBefore={2:G17} materialAfter={3:G17}",size.First,size.Second,Used(best),Used(candidate));
+                  best=candidate;state.Improvements++;accepted(best);
+                }
+              }
+            }
+          }
+        }
       }
       return best;
     }
@@ -6178,7 +8308,11 @@ namespace vTools
       }
       foreach(var point in candidates.Where(point=>double.IsFinite(point.x)&&double.IsFinite(point.y))
         .DistinctBy(point=>(Math.Round(point.x,Precision),Math.Round(point.y,Precision))).Take(StackAnchorLimit))
-      {if(stop())yield break;token.ThrowIfCancellationRequested();yield return point;}
+      {
+        if(stop())yield break;token.ThrowIfCancellationRequested();yield return point;
+        if(region!=null)foreach(var offset in StackContactOffsets)
+        {if(stop())yield break;token.ThrowIfCancellationRequested();yield return new(point.x+offset.x,point.y+offset.y);}
+      }
     }
 
     private static bool ValidCluster(Plan candidate,Plan previous,IReadOnlySet<int> fixedIds,double width,double length,CancellationToken token)
@@ -6232,25 +8366,160 @@ namespace vTools
       }
     }
 
+    private readonly record struct PairSection(double Low,double High);
+    private sealed record PairCandidate(Placed First,Placed Second,double Saving)
+    {internal double Potential {get;init;} // Model-unit saving capped by the occupied tail released when both parts leave their present slots.
+    }
+    private static PairSection[] PairProfile(Shape shape)
+    {
+      var result=new PairSection[PairProfileSamples];
+      for(int sample=0;sample<result.Length;sample++)
+      {
+        double x=shape.Pose.Width*(sample+0.5)/result.Length,low=double.PositiveInfinity,high=double.NegativeInfinity;
+        for(int index=0;index<shape.Path.Count;index++)
+        {
+          var a=shape.Path[index];var b=shape.Path[(index+1)%shape.Path.Count];
+          if(!(a.x<=x&&x<b.x||b.x<=x&&x<a.x))continue;
+          double y=a.y+(x-a.x)*(b.y-a.y)/(b.x-a.x);low=Math.Min(low,y);high=Math.Max(high,y);
+        }
+        result[sample]=new(low,high);
+      }
+      return result;
+    }
+    private static double PairComplementSaving(Shape first,Shape second,double width,Dictionary<Shape,PairSection[]> profiles)
+    {
+      double aw=first.Pose.Width,bw=second.Pose.Width,ah=first.Pose.Length,bh=second.Pose.Length,gap=Math.Max(first.Gap,second.Gap);
+      double boxLength=aw+bw+gap<=width+CoordinateTolerance?Math.Max(ah,bh):ah+bh+gap;
+      if(boxLength<=Math.Max(ah,bh))return 0;
+      if(!profiles.TryGetValue(first,out var a))profiles.Add(first,a=PairProfile(first));
+      if(!profiles.TryGetValue(second,out var b))profiles.Add(second,b=PairProfile(second));
+      double best=boxLength;
+      PairSection At(PairSection[] sections,double x,double extent)=>sections[Math.Clamp((int)(x/extent*sections.Length),0,sections.Length-1)];
+      foreach(double ax in new[]{0.0,width-aw}.Distinct())
+      foreach(double bx in new[]{0.0,width-bw,ax+aw+gap,ax-bw-gap}.Distinct().Where(x=>x>=0&&x+bw<=width+CoordinateTolerance))
+      {
+        double left=Math.Max(ax,bx),right=Math.Min(ax+aw,bx+bw);
+        if(right<=left)
+        {
+          double separation=Math.Max(bx-ax-aw,ax-bx-bw);
+          if(separation>=gap-CoordinateTolerance)best=Math.Min(best,Math.Max(ah,bh));
+          continue;
+        }
+        double above=0,below=0;
+        for(int sample=0;sample<PairProfileSamples;sample++)
+        {
+          double x=left+(right-left)*(sample+0.5)/PairProfileSamples;
+          var firstSlice=At(a,x-ax,aw);var secondSlice=At(b,x-bx,bw);
+          if(!double.IsFinite(firstSlice.Low)||!double.IsFinite(secondSlice.Low))continue;
+          above=Math.Max(above,firstSlice.High-secondSlice.Low+gap);
+          below=Math.Max(below,secondSlice.High-firstSlice.Low+gap);
+        }
+        best=Math.Min(best,Math.Min(Math.Max(ah,above+bh),Math.Max(bh,below+ah)));
+      }
+      // This is a ranking estimate, never a collision or grain-validity decision.
+      return Math.Max(0,boxLength-best);
+    }
+    private static PairCandidate[] RankPairCandidates(Placed[] movable,Dictionary<int,Shape[]> shapes,double width,double length,CancellationToken token)
+      =>RankPairCandidatesCore(movable,movable,shapes,width,length,token);
+    private static PairCandidate[] RankPairCandidatesCore(Placed[] movable,IReadOnlyList<Placed> allParts,Dictionary<int,Shape[]> shapes,double width,double length,CancellationToken token)
+    {
+      var options=movable.ToDictionary(part=>part.Shape.Id,part=>PairPoses(part.Shape,shapes[part.Shape.Id])
+        .Where(shape=>Inside(shape,0,0,width,length)).ToArray());
+      var profiles=new Dictionary<Shape,PairSection[]>();var pairs=new List<PairCandidate>();
+      var tables=allParts.GroupBy(part=>part.Table).ToDictionary(group=>group.Key,group=>group.ToArray());
+      for(int first=0;first<movable.Length;first++)
+      for(int second=first+1;second<movable.Length;second++)
+      {
+        token.ThrowIfCancellationRequested();double saving=0;
+        foreach(var a in options[movable[first].Shape.Id])
+        foreach(var b in options[movable[second].Shape.Id])
+          saving=Math.Max(saving,PairComplementSaving(a,b,width,profiles));
+        var firstPart=movable[first];var secondPart=movable[second];
+        double released=new[]{firstPart.Table,secondPart.Table}.Distinct().Sum(table=>tables[table].Max(part=>part.Y+part.Shape.Pose.Length)-
+          tables[table].Where(part=>part.Shape.Id!=firstPart.Shape.Id&&part.Shape.Id!=secondPart.Shape.Id).Select(part=>part.Y+part.Shape.Pose.Length).DefaultIfEmpty(0).Max());
+        pairs.Add(new(firstPart,secondPart,saving){Potential=Math.Min(saving,released)});
+      }
+      return pairs.OrderByDescending(pair=>pair.Potential).ThenByDescending(pair=>pair.Saving)
+        .ThenByDescending(pair=>Math.Min(pair.First.Shape.Area,pair.Second.Shape.Area)).ThenBy(pair=>pair.First.Shape.Id).ThenBy(pair=>pair.Second.Shape.Id).ToArray();
+    }
+    private static Plan ImproveLocalPairTables(Plan best,IReadOnlyList<Input> inputs,Dictionary<int,Shape[]> shapes,PairCandidate[] ranked,double width,double length,
+      Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,Stopwatch clock,double searchSeconds,SearchState state,Action<Plan> accepted,CancellationToken token)
+    {
+      bool Expired()=>clock.Elapsed.TotalSeconds>=searchSeconds*LocalPairTimeFraction;
+      var fixedIds=inputs.Where(input=>input.Fixed).Select(input=>input.Id).ToHashSet();var byId=inputs.ToDictionary(input=>input.Id);
+      var candidates=ranked.Where(pair=>pair.First.Table==pair.Second.Table&&pair.Saving>CoordinateTolerance&&
+        !pair.First.Shape.Skinny&&!pair.Second.Shape.Skinny).DistinctBy(pair=>pair.First.Table).ToArray();
+      int trials=0;
+      foreach(var pair in candidates)
+      {
+        if(Expired()||trials>=LocalPairTrialLimit)break;token.ThrowIfCancellationRequested();
+        int table=pair.First.Table;
+        var local=best.Parts.Where(part=>part.Table==table).ToArray();
+        var pairIds=new[]{pair.First.Shape.Id,pair.Second.Shape.Id};
+        var moving=local.Where(part=>pairIds.Contains(part.Shape.Id)).Concat(local.Where(part=>!pairIds.Contains(part.Shape.Id)&&
+          !fixedIds.Contains(part.Shape.Id)&&!part.Shape.Skinny).OrderByDescending(part=>part.Y+part.Shape.Pose.Length))
+          .Take(LocalPairMovableLimit).Select(part=>part.Shape.Id).ToHashSet();
+        var localShapes=new Dictionary<int,Shape[]>();var originals=new Dictionary<Shape,Shape>();
+        foreach(var part in local)
+        {
+          var allowed=moving.Contains(part.Shape.Id)?shapes[part.Shape.Id]:[part.Shape];
+          localShapes[part.Shape.Id]=allowed.Select(shape=>
+          {var limited=shape with {TableLimit=1};originals.Add(limited,shape);return limited;}).ToArray();
+        }
+        var seeds=Enumerable.Range(0,LocalPairOrders).SelectMany(order=>
+        {
+          int first=pairIds[order%pairIds.Length],second=pairIds[(order+1)%pairIds.Length];
+          return PairPoses(local.First(part=>part.Shape.Id==first).Shape,shapes[first]).Take(LocalPairReferencePoses)
+            .Select(shape=>(First:first,Second:second,Shape:shape));
+        }).ToArray();
+        foreach(var seed in seeds)
+        {
+          if(Expired()||trials>=LocalPairTrialLimit)break;token.ThrowIfCancellationRequested();trials++;
+          int first=seed.First,second=seed.Second;
+          var trialShapes=new Dictionary<int,Shape[]>(localShapes)
+            {[first]=localShapes[first].Where(shape=>shape.Pose==seed.Shape.Pose).ToArray()};
+          var localInputs=local.Select(part=>byId[part.Shape.Id] with
+          {
+            Fixed=!moving.Contains(part.Shape.Id),Table=0,X=part.X,Y=part.Y,TableLimit=1,
+            Poses=trialShapes[part.Shape.Id].Select(shape=>shape.Pose).ToArray(),
+            ShuffleRank=part.Shape.Id==first?0:part.Shape.Id==second?1:2+Array.IndexOf(local,part)
+          }).ToArray();
+          Log.Write("vNest","local pair trial table={0} pair={1},{2} first={3} angle={4:G17}",table+1,pairIds[0],pairIds[1],first,seed.Shape.Pose.Rotation);
+          var packed=Pack(localInputs,trialShapes,width,length,OrderTrials,cache,null,null,token,Expired);
+          if(packed.Tables!=1||packed.Errors.Count>0||packed.Parts.Count!=local.Length)continue;
+          var parts=best.Parts.Where(part=>part.Table!=table).Concat(packed.Parts.Select(part=>new Placed(originals[part.Shape],table,part.X,part.Y))).ToList();
+          var candidate=new Plan(parts,best.Tables,new(best.Errors));state.Layouts++;
+          if(!Better(candidate,best)||!ValidCluster(candidate,best,fixedIds,width,length,token))continue;
+          Log.Write("vNest","local pair improvement table={0} pair={1},{2} moved={3} materialBefore={4:G17} materialAfter={5:G17}",
+            table+1,pairIds[0],pairIds[1],moving.Count,Used(best),Used(candidate));
+          best=candidate;state.Improvements++;accepted(best);
+        }
+      }
+      Log.Write("vNest","local pair trials={0} tables={1} budgetExpired={2}",trials,candidates.Length,Expired());
+      return best;
+    }
     private static Plan ImprovePairs(Plan best,IReadOnlyList<Input> inputs,Dictionary<int,Shape[]> shapes,double width,double length,
       Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,Stopwatch clock,double searchSeconds,SearchState state,Action<Plan> preview,Action<int>? progress,CancellationToken token)
     {
       var fixedIds=inputs.Where(input=>input.Fixed).Select(input=>input.Id).ToHashSet();
       var movable=best.Parts.Where(part=>!fixedIds.Contains(part.Shape.Id)).ToArray();
-      double Concavity(Placed part)=>1-part.Shape.Area/(part.Shape.Pose.Width*part.Shape.Pose.Length);
-      double Contribution(Placed part)=>best.Parts.Where(other=>other.Table==part.Table).Max(other=>other.Y+other.Shape.Pose.Length)-
-        best.Parts.Where(other=>other.Table==part.Table&&other.Shape.Id!=part.Shape.Id).Select(other=>other.Y+other.Shape.Pose.Length).DefaultIfEmpty(0).Max();
-      var allPairs=movable.SelectMany((first,index)=>movable.Skip(index+1).Select(second=>(First:first,Second:second))).ToArray();
-      var byContribution=allPairs.OrderByDescending(pair=>Contribution(pair.First)+Contribution(pair.Second))
-        .ThenByDescending(pair=>Math.Min(pair.First.Shape.Area,pair.Second.Shape.Area)).ThenByDescending(pair=>Concavity(pair.First)+Concavity(pair.Second)).ToArray();
-      var byFit=allPairs.OrderByDescending(pair=>Math.Max(Concavity(pair.First),Concavity(pair.Second)))
-        .ThenByDescending(pair=>Math.Min(pair.First.Shape.Area,pair.Second.Shape.Area)).ThenByDescending(pair=>Concavity(pair.First)+Concavity(pair.Second)).ToArray();
-      var pairs=SkinnyFirst(Enumerable.Range(0,allPairs.Length).SelectMany(index=>new[]{byContribution[index],byFit[index]})
-        .DistinctBy(pair=>(pair.First.Shape.Id,pair.Second.Shape.Id)),pair=>pair.First.Shape.Skinny||pair.Second.Shape.Skinny).Take(PairTrials).ToArray();
+      var allPairs=RankPairCandidatesCore(movable,best.Parts,shapes,width,length,token);
+      var partners=new Dictionary<int,PairCandidate>();
+      foreach(var pair in allPairs){partners.TryAdd(pair.First.Shape.Id,pair);partners.TryAdd(pair.Second.Shape.Id,pair);}
+      var coverage=SkinnyFirst(movable.Where(part=>partners.ContainsKey(part.Shape.Id)),part=>part.Shape.Skinny)
+        .ThenByDescending(part=>partners[part.Shape.Id].Saving).Select(part=>partners[part.Shape.Id]);
+      var covered=coverage.DistinctBy(pair=>(pair.First.Shape.Id,pair.Second.Shape.Id)).ToArray();
+      var pairs=Enumerable.Range(0,allPairs.Length).SelectMany(index=>index<covered.Length?new[]{covered[index],allPairs[index]}:new[]{allPairs[index]})
+        .DistinctBy(pair=>(pair.First.Shape.Id,pair.Second.Shape.Id)).Take(PairTrials).ToArray();
+      int examined=0;
+      Log.Write("vNest","pair matching screened={0} scheduled={1} coveredParts={2}/{3} bestComplementSaving={4:G17}",allPairs.Length,pairs.Length,
+        pairs.SelectMany(pair=>new[]{pair.First.Shape.Id,pair.Second.Shape.Id}).Distinct().Count(),movable.Length,allPairs.FirstOrDefault()?.Saving??0);
+      best=ImproveLocalPairTables(best,inputs,shapes,allPairs,width,length,cache,clock,searchSeconds,state,preview,token);
       bool Expired()=>clock.Elapsed.TotalSeconds>=searchSeconds*PairTimeFraction;
       for(int index=0;index<pairs.Length&&!Expired();index++)
       {
-        token.ThrowIfCancellationRequested(); var pair=pairs[index];
+        token.ThrowIfCancellationRequested(); var pair=pairs[index];examined++;
+        Log.Write("vNest","pair refinement trial={0} pair={1},{2} saving={3:G17} potential={4:G17}",examined,pair.First.Shape.Id,pair.Second.Shape.Id,pair.Saving,pair.Potential);
         foreach(var (firstId,secondId) in SkinnyFirst(new[]{(pair.First.Shape.Id,pair.Second.Shape.Id),(pair.Second.Shape.Id,pair.First.Shape.Id)},order=>shapes[order.Item1][0].Skinny))
         {
           var others=best.Parts.Where(part=>part.Shape.Id!=firstId&&part.Shape.Id!=secondId).ToList();
@@ -6261,7 +8530,8 @@ namespace vTools
             state.Tests++;
             token.ThrowIfCancellationRequested();
             var locations=PlacementChoices([firstShape],others,width,length,best.Tables,cache,token,Expired,state,null)
-              .GroupBy(part=>part.Table).Select(group=>group.OrderBy(part=>part.Y+part.Shape.Pose.Length).ThenByDescending(part=>part.X+part.Shape.Pose.Width).First())
+              .GroupBy(part=>part.Table).SelectMany(group=>DistinctContactAnchors(group.OrderBy(part=>part.Y+part.Shape.Pose.Length)
+                .ThenByDescending(part=>part.X+part.Shape.Pose.Width),PairAnchorAlternatives))
               .OrderBy(part=>MaterialWith(others,part)).Take(PairAnchorAlternatives).ToList();
             var previous=best.Parts.First(part=>part.Shape.Id==firstId);
             var atPrevious=new Placed(firstShape,previous.Table,previous.X,previous.Y);
@@ -6283,6 +8553,7 @@ namespace vTools
         progress?.Invoke(55+20*(index+1)/Math.Max(1,pairs.Length));
         state.StageProgress?.Invoke(100*(index+1)/Math.Max(1,pairs.Length));
       }
+      Log.Write("vNest","pair matching examined={0}/{1} budgetExpired={2}",examined,pairs.Length,Expired());
       progress?.Invoke(75); return best;
     }
 
@@ -6418,7 +8689,7 @@ namespace vTools
     private static IEnumerable<Placed> PlacementChoices(IReadOnlyList<Shape> shapes,IReadOnlyList<Placed> parts,double width,double length,int tables,
       Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,CancellationToken token,Func<bool> stop,SearchState state,Action<Placed>? trial)
     {
-      for(int table=0;table<=tables&&table<NestPackingEngine.MaximumTables&&!stop();table++)
+      for(int table=0;table<=tables&&table<shapes.Select(shape=>shape.TableLimit).DefaultIfEmpty(0).Min()&&!stop();table++)
       {
         var occupied=parts.Where(part=>part.Table==table).ToArray();
         var choices=new List<Placed>();
@@ -6471,6 +8742,8 @@ namespace vTools
       double candidateLeft=SkinnyLeft(candidate),previousLeft=SkinnyLeft(previous);
       if(Math.Abs(candidateLeft-previousLeft)>CoordinateTolerance) return candidateLeft<previousLeft;
       if(SkinnyMoved(candidate,previous)) return false;
+      double starts=candidate.Parts.Sum(part=>part.Y),previousStarts=previous.Parts.Sum(part=>part.Y);
+      if(Math.Abs(starts-previousStarts)>CoordinateTolerance)return starts<previousStarts;
       return candidate.Parts.Sum(part=>part.X+part.Shape.Pose.Width)>previous.Parts.Sum(part=>part.X+part.Shape.Pose.Width)+CoordinateTolerance;
     }
 
@@ -6498,7 +8771,7 @@ namespace vTools
         cancellationToken.ThrowIfCancellationRequested(); processed++; Report();
         var shape=shapes[input.Id].FirstOrDefault();
         if(shape==null) { errors[input.Id]="No allowed rotation"; continue; }
-        if(input.Table<0||input.Table>=NestPackingEngine.MaximumTables||!Inside(shape,input.X,input.Y,width,length))
+        if(input.Table<0||input.Table>=input.TableLimit||!Inside(shape,input.X,input.Y,width,length))
         { errors[input.Id]="Fixed part outside table"; continue; }
         var part=new Placed(shape,input.Table,input.X,input.Y);
         if(parts.Any(other=>other.Table==input.Table&&Collides(part,other)))
@@ -6546,7 +8819,7 @@ namespace vTools
       Dictionary<(Shape Moving,Shape Fixed),PathsD> cache,CancellationToken token,Func<bool>? stop)
     {
       // Build a compact seed; global reassignment subsequently compares its actual occupied material.
-      for(int table=0;table<=tables&&table<NestPackingEngine.MaximumTables;table++)
+      for(int table=0;table<=tables&&table<shapes.Select(shape=>shape.TableLimit).DefaultIfEmpty(0).Min();table++)
       {
         token.ThrowIfCancellationRequested(); if(stop?.Invoke()==true) return null;
         var placed=FindPlacement(shapes,parts,width,length,tables,cache,token,stop,new Dictionary<int,double>{{table,length}});
@@ -6564,7 +8837,7 @@ namespace vTools
       Placed? accepted=null;
       int bestGap=-1;
       double bestLength=double.PositiveInfinity,bestY=double.PositiveInfinity,bestBottom=double.NegativeInfinity;
-      for(int table=0;table<=tables&&table<NestPackingEngine.MaximumTables;table++)
+      for(int table=0;table<=tables&&table<shapes.Select(shape=>shape.TableLimit).DefaultIfEmpty(0).Min();table++)
       {
         if(materialLimits!=null&&!materialLimits.ContainsKey(table)) continue;
         double availableLength=materialLimits?.GetValueOrDefault(table)??length;
@@ -6572,7 +8845,7 @@ namespace vTools
         var occupied=parts.Where(part=>part.Table==table).ToArray();
         foreach(var shape in shapes.OrderBy(shape=>Math.Abs(shape.Pose.Rotation)))
         {
-          token.ThrowIfCancellationRequested(); if(stop?.Invoke()==true) return null;
+          token.ThrowIfCancellationRequested(); if(stop?.Invoke()==true) return accepted;
           if(!Inside(shape,0,0,width,availableLength)) continue;
           double extraAllowance=Math.Max(allowances.GetValueOrDefault(table),shape.TableAllowance)-allowances.GetValueOrDefault(table);
           double lowerBound=existingMaterial+Math.Max(tableEnd,shape.Pose.Length)-tableEnd+extraAllowance;
@@ -6582,7 +8855,7 @@ namespace vTools
           { if(shape.Metrics is {} profile) profile.PosesPruned++; continue; }
           foreach(var point in Anchors(shape,occupied,width,availableLength,cache,token))
           {
-            token.ThrowIfCancellationRequested(); if(stop?.Invoke()==true) return null;
+            token.ThrowIfCancellationRequested(); if(stop?.Invoke()==true) return accepted;
             double end=point.y+shape.Pose.Length;
             double material=existingMaterial+Math.Max(tableEnd,end)-tableEnd+extraAllowance;
             if(material>bestLength+CoordinateTolerance) continue;

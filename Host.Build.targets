@@ -1,0 +1,31 @@
+<Project>
+  <PropertyGroup>
+    <OutputPath Condition="'$(RhinoHostMajor)' != '' and '$(HostVariantBuild)' != 'true'">bin/$(Configuration)/Rhino$(RhinoHostMajor)/$(TargetFramework)/</OutputPath>
+    <IntermediateOutputPath Condition="'$(RhinoHostMajor)' != '' and '$(HostVariantBuild)' != 'true'">obj/$(Configuration)/Rhino$(RhinoHostMajor)/$(TargetFramework)/</IntermediateOutputPath>
+    <Win32Resource Condition="'$(MSBuildProjectName)' == 'vObjectPropertiesPlus' and '$(RhinoHostMajor)' != ''">$(IntermediateOutputPath)vObjectPropertiesPlus.res</Win32Resource>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Rhino8RuntimeAssemblyName Condition="'$(Rhino8RuntimeAssemblyName)' == ''">$(MSBuildProjectName)</Rhino8RuntimeAssemblyName>
+    <Rhino8RuntimeDll>bin/Release/Rhino8/net10.0-windows/$(Rhino8RuntimeAssemblyName).dll</Rhino8RuntimeDll>
+    <Rhino8RuntimeResource Condition="'$(MSBuildProjectName)' == 'vObjectPropertiesPlus'">obj/$(Configuration)/Rhino8/net10.0-windows/vObjectPropertiesPlus.res</Rhino8RuntimeResource>
+    <ReleaseDllPaths>$(ReleaseDllPaths);$(Rhino8RuntimeDll)</ReleaseDllPaths>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Content Update="Toolbar\$(MSBuildProjectName).rui">
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+  <Target Name="SeedInstalledToolbar" AfterTargets="Build" BeforeTargets="CreateReleaseBackup"
+          Condition="'$(TargetFramework)' != '' and Exists('$(MSBuildProjectDirectory)\Toolbar\$(MSBuildProjectName).rui') and !Exists('$(TargetDir)$(MSBuildProjectName).rui')">
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\Toolbar\$(MSBuildProjectName).rui" DestinationFiles="$(TargetDir)$(MSBuildProjectName).rui" />
+  </Target>
+
+  <Target Name="BuildRhino8ModernRuntime" AfterTargets="Build" BeforeTargets="UpdateReadmeVersion;CommitReleaseVersion"
+          Condition="'$(TargetFramework)' == '' and '$(HostVariantBuild)' != 'true' and '$(SkipHostVariantBuild)' != 'true' and '$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build" BuildInParallel="false"
+             Properties="Configuration=$(Configuration);TargetFramework=net10.0-windows;TargetFrameworks=;RhinoHostMajor=8;HostVariantBuild=true;AutoCommitVersionOnRelease=false;AssemblyName=$(Rhino8RuntimeAssemblyName);OutputPath=bin/$(Configuration)/Rhino8/net10.0-windows/;AppendTargetFrameworkToOutputPath=false;IntermediateOutputPath=obj/$(Configuration)/Rhino8/net10.0-windows/;Win32Resource=$(Rhino8RuntimeResource);RhinoSystemDirectory=$(ProgramFiles)\Rhino 8\System" />
+    <Exec Condition="'$(Configuration)' == 'Release'"
+          Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Register.ps1&quot;" />
+  </Target>
+</Project>

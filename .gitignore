@@ -2,17 +2,8 @@
 bin/*
 obj/
 
-# Keep the release plugin binary under source control.
-!bin/Release/
-bin/Release/*
-!bin/Release/net7.0-windows/
-bin/Release/net7.0-windows/*
-!bin/Release/net7.0-windows/vTools.dll
-!bin/Release/net7.0-windows/vTools.rui
-!bin/Release/net10.0-windows/
-bin/Release/net10.0-windows/*
-!bin/Release/net10.0-windows/vTools.dll
-!bin/Release/net10.0-windows/vTools.rui
+
+deploy/
 
 # User/IDE files
 .vs/
@@ -34,3 +25,26 @@ backups/
 # OS files
 Thumbs.db
 Desktop.ini
+
+# Coordinated host/runtime release artifacts
+!bin/Release/
+bin/Release/*
+!bin/Release/Rhino8/
+bin/Release/Rhino8/*
+!bin/Release/Rhino8/net7.0-windows/
+bin/Release/Rhino8/net7.0-windows/*
+!bin/Release/Rhino8/net7.0-windows/vTools.dll
+!bin/Release/Rhino8/net10.0-windows/
+bin/Release/Rhino8/net10.0-windows/*
+!bin/Release/Rhino8/net10.0-windows/vTools.dll
+!bin/Release/Rhino9/
+bin/Release/Rhino9/*
+!bin/Release/Rhino9/net10.0-windows/
+bin/Release/Rhino9/net10.0-windows/*
+!bin/Release/Rhino9/net10.0-windows/vTools.dll
+
+# Local regression checks live outside the repository.
+/Tests/
+
+# Generated C# Dev Kit project cache
+*.lscache

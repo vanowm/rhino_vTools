@@ -7,6 +7,7 @@ namespace vTools.Commands
   using System.IO;
   using System.Linq;
   using System.Reflection;
+  using System.Text.RegularExpressions;
   using System.Threading;
   using System.Xml.Linq;
   using Rhino;
@@ -35,6 +36,8 @@ namespace vTools.Commands
     private const bool DefaultRemoveGrain = true; // true omits open GRAIN-named/layered curves from export; false includes them without changing source geometry.
     private const bool DefaultMoveOrigin = true; // true moves export copies to the world origin; false preserves source drawing coordinates.
     private const string GrainIdentifier = "GRAIN"; // Case-insensitive object name or leaf layer name identifying an open grain guide.
+    private const string NestMetadataPrefix = "vNest."; // Internal nesting bookkeeping omitted from export-copy user text; originals retain all provenance.
+    private static readonly Regex NativeSkippedCounts = new(@"^[^:\r\n]+:\s*\d+\s+written,\s*(\d+)\s+skipped[^\S\r\n]*\r?$",RegexOptions.Multiline|RegexOptions.CultureInvariant|RegexOptions.IgnoreCase); // English native export totals; a nonzero skipped count rejects the temporary file.
     private const bool DefaultOptimize = true; // true runs vCleanup before export; false leaves the source document untouched.
     private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.
     private static readonly string[] CleanupActionNames = ["Ask", "Delete", "Ignore"]; // Saved export-only cleanup behavior; independent of vCleanup's own deletion setting.
@@ -162,11 +165,12 @@ namespace vTools.Commands
         int selectedCount = 0;
         foreach (Guid id in exportIds)
           if (doc.Objects.Select(id)) selectedCount++;
-        if (selectedCount == 0)
-          throw new InvalidOperationException("No prepared objects could be selected.");
+        if (selectedCount != exportIds.Count)
+          throw new InvalidOperationException("Not all prepared objects could be selected; export cancelled.");
         if (!TryChoosePath(doc, out string path))
           return Result.Cancel;
         tempPath = MakeTemporaryPath(path);
+        string beforeExport = RhinoApp.CommandHistoryWindowText ?? string.Empty;
         using (CommandHistoryCleanup.BeginExport(EnglishName, tempPath))
         {
           if (!doc.ExportSelected(tempPath, options.ToDictionary()))
@@ -174,6 +178,7 @@ namespace vTools.Commands
         }
         if (!WaitForFile(tempPath))
           throw new IOException("Rhino did not create a nonempty DXF file.");
+        VerifyNativeExport(beforeExport, RhinoApp.CommandHistoryWindowText ?? string.Empty);
         if (targets.Any(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.LabelRole))
           NormalizeTableDxfAttachments(tempPath);
         CopyExportFile(tempPath, path);
@@ -223,6 +228,36 @@ namespace vTools.Commands
         return !string.Equals(obj.Attributes.Name?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase) &&
           !string.Equals(layer?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase);
       }).ToArray();
+    }
+
+    private static ObjectAttributes ExportAttributes(ObjectAttributes source)
+    {
+      var attributes = source.Duplicate();
+      attributes.ObjectId = Guid.NewGuid();
+      attributes.RemoveFromAllGroups();
+      // Long source-object lists make Rhino's DXF writer skip otherwise valid geometry.
+      foreach (string? key in attributes.GetUserStrings().AllKeys)
+        if (key?.StartsWith(NestMetadataPrefix, StringComparison.OrdinalIgnoreCase) == true)
+          attributes.SetUserString(key, null);
+      return attributes;
+    }
+
+    private static void VerifyNativeExport(string before, string current)
+    {
+      if (!current.StartsWith(before, StringComparison.Ordinal))
+      {
+        Log.Write("vExportDXF", "native export totals unavailable: command history was replaced during export");
+        throw new InvalidOperationException("Could not verify Rhino's export result; the destination was not replaced.");
+      }
+      string output = current[before.Length..];
+      long skipped = NativeSkippedCounts.Matches(output).Cast<Match>()
+        .Sum(match => long.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
+      if (skipped == 0 && !output.Contains("Objects were skipped in export.", StringComparison.OrdinalIgnoreCase) &&
+          !output.Contains("Error converting ", StringComparison.OrdinalIgnoreCase)) return;
+      Log.Write("vExportDXF", "native export rejected: {0}", output);
+      throw new InvalidOperationException(skipped > 0
+        ? $"Rhino skipped {skipped} object(s); the incomplete export was discarded and the destination was not replaced."
+        : "Rhino reported a conversion failure; the incomplete export was discarded and the destination was not replaced.");
     }
 
     private static ExportSettings LoadSettings(RhinoDoc doc)
@@ -592,9 +627,7 @@ namespace vTools.Commands
           using var geometry = piece.Geometry.Duplicate();
           if (geometry == null || !geometry.Transform(translation))
             throw new InvalidOperationException($"Could not copy object {source.Id} for export.");
-          var attributes = piece.Attributes.Duplicate();
-          attributes.ObjectId = Guid.NewGuid();
-          attributes.RemoveFromAllGroups();
+          using var attributes = ExportAttributes(piece.Attributes);
           Guid copyId = doc.Objects.Add(geometry, attributes);
           if (copyId == Guid.Empty)
             throw new InvalidOperationException($"Could not add temporary copy of {source.Id}.");
@@ -635,9 +668,7 @@ namespace vTools.Commands
               return false;
             geometries.Add(geometry);
             bounds.Union(geometry.GetBoundingBox(true));
-            var attrs = piece.Attributes.Duplicate();
-            attrs.ObjectId = Guid.NewGuid();
-            attrs.RemoveFromAllGroups();
+            var attrs = ExportAttributes(piece.Attributes);
             attributes.Add(attrs);
           }
         }
@@ -670,6 +701,8 @@ namespace vTools.Commands
       {
         foreach (var geometry in geometries)
           geometry.Dispose();
+        foreach (var attrs in attributes)
+          attrs.Dispose();
       }
     }
 

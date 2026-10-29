@@ -66,11 +66,13 @@ namespace vTools.Commands
     private const string MetadataVersion = "1"; // Serialized vShade metadata schema version.
     private const string SessionStateSection = "vShade.sessions"; // Document-string section containing resumable shade snapshots keyed by session GUID.
     private const string ShadeGroupPrefix = "vShade_"; // Prefix for the output group name; the session GUID follows it.
+    private const int OutputDrawOrderStep = 1; // Positive draw-order increment placing new shade output above existing document objects; never changes geometry or Z.
     private const double DefaultSplitWidth = 63.0; // Material width in model units; must exceed twice the 0.5-unit joint overlap.
     private const double SplitJointOverlap = 0.5; // Total overlap across each split in model units; each part extends 0.25 past the seam.
     private const double SplitLayoutGap = 1.0; // Empty model-unit spacing between laid-out copies.
     private const double SplitAngleStepDegrees = 5.0; // Angular sampling interval in degrees for initial material-length search.
     private const int SplitBoundarySamples = 256; // Boundary samples for inexpensive initial layout scoring; positive integer.
+    private const int WholeFitRefinementPasses = 16; // Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.
     private const int SplitMaxParts = 16; // Maximum number of panel parts proposed automatically; positive integer.
     private const int SplitSeamRefinementSteps = 16; // Candidate positions evaluated per seam on each optimization pass; positive integer.
     private const int SplitSeamRefinementPasses = 3; // Coordinate-descent passes over all proposed seams; positive integer.
@@ -1228,6 +1230,7 @@ namespace vTools.Commands
             throw new InvalidOperationException("could not group shade output");
         }
 
+        BringOutputForward(doc,newOutputIds);
         SaveShadeState(doc, sessionId, originalPlacements, scallopSizes);
         foreach (var id in existingOutputIds)
           doc.Objects.Delete(id, quiet: true);
@@ -1248,6 +1251,20 @@ namespace vTools.Commands
       {
         foreach (var item in connectionGeometry)
           item.Curve.Dispose();
+      }
+    }
+
+    private static void BringOutputForward(RhinoDoc doc,IEnumerable<Guid> outputIds)
+    {
+      var ids=outputIds.ToHashSet();
+      if(ids.Count==0)return;
+      int maximum=doc.Objects.Where(obj=>!ids.Contains(obj.Id)).Select(obj=>obj.Attributes.DisplayOrder).DefaultIfEmpty(0).Max();
+      int order=maximum>=int.MaxValue-OutputDrawOrderStep?int.MaxValue:Math.Max(OutputDrawOrderStep,maximum+OutputDrawOrderStep);
+      foreach(var id in ids)
+      {
+        if(doc.Objects.FindId(id) is not {} obj)throw new InvalidOperationException("a new shade object is missing");
+        using var attributes=obj.Attributes.Duplicate();attributes.DisplayOrder=order;
+        if(!doc.Objects.ModifyAttributes(id,attributes,true))throw new InvalidOperationException("could not bring new shade output forward");
       }
     }
 
@@ -2007,9 +2024,14 @@ namespace vTools.Commands
       if (!side.Unitize())
         throw new InvalidOperationException("scallop connector has no perpendicular direction");
 
-      var orientation = Vector3d.Multiply(
-        side,
-        from.Geometry.InteriorDirection + to.Geometry.InteriorDirection);
+      var midpoint = 0.5 * (connection.Line.From + connection.Line.To);
+      var insideSides=placements.Where(placement=>placement.Connect&&placement.Geometry.PerpendicularLine.HasValue&&
+          placement.Sequence!=connection.FromSequence&&placement.Sequence!=connection.ToSequence)
+        .Select(placement=>Vector3d.Multiply(side,placement.Geometry.Corner-midpoint))
+        .Where(distance=>Math.Abs(distance)>tolerance).ToArray();
+      // A common half-plane identifies the selected boundary's interior, including closing diagonals.
+      var orientation=insideSides.Length>0&&(insideSides.All(distance=>distance>0)||insideSides.All(distance=>distance<0))
+        ?insideSides[0]:Vector3d.Multiply(side,from.Geometry.InteriorDirection+to.Geometry.InteriorDirection);
       if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
         orientation = Vector3d.Multiply(side, from.Geometry.InteriorDirection);
       if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
@@ -2027,8 +2049,7 @@ namespace vTools.Commands
         : size.Value;
       if (!double.IsFinite(bulge) || bulge <= tolerance)
         throw new InvalidOperationException("ScallopSize is too small for a connector");
-      var midpoint = 0.5 * (connection.Line.From + connection.Line.To) + side * bulge;
-      var arc = new Arc(connection.Line.From, midpoint, connection.Line.To);
+      var arc = new Arc(connection.Line.From, midpoint + side * bulge, connection.Line.To);
       if (!arc.IsValid)
         throw new InvalidOperationException("could not construct an inward scallop arc");
       return new ArcCurve(arc);
@@ -2843,12 +2864,16 @@ namespace vTools.Commands
       public BoundingBox Bounds { get; } = bounds;
       public Brep? Face { get; } = face;
       public List<(GeometryBase Geometry, Color Color)> PreviewDetails { get; } = [];
+      // Label geometry is owned by PreviewDetails; these attributes accompany the same cached pieces at commit.
+      public List<(GeometryBase Geometry, ObjectAttributes Attributes)> LabelDetails { get; } = [];
       public void Dispose()
       {
         Outline.Dispose();
         Face?.Dispose();
         foreach (var detail in PreviewDetails)
           detail.Geometry.Dispose();
+        foreach (var detail in LabelDetails)
+          detail.Attributes.Dispose();
       }
     }
 
@@ -2889,6 +2914,7 @@ namespace vTools.Commands
       var dragAxis = Vector3d.Unset;
       var lastDragRefresh = 0L;
       var dragging = false;
+      var manualSplits = false;
       var panels = new List<SplitPanel>();
 
       bool UpdateDrag(Point3d cursor)
@@ -2899,8 +2925,12 @@ namespace vTools.Commands
         if (direction.Length <= tolerance)
           return false;
         var angle = SplitDragAngle(sourcePlane, direction, dragAxis);
-        if (!TryProposeSplitAtPivot(source, sourcePlane, _splitWidth, angle, dragPivot,
-              out var next, out var pivotSeamIndex) ||
+        SplitProposal next;
+        int pivotSeamIndex = seamMoving;
+        var proposed = manualSplits
+          ? TryAdjustManualSplit(source, sourcePlane, _splitWidth, proposal, seamMoving, angle, dragPivot, tolerance, out next)
+          : TryProposeSplitAtPivot(source, sourcePlane, _splitWidth, angle, dragPivot, out next, out pivotSeamIndex);
+        if (!proposed ||
             !TryReplaceSplitPanels(doc, outputIds, source, next, tolerance, panels))
           return false;
         proposal = next with { MaterialLength = SplitMaterialLength(panels) };
@@ -2930,6 +2960,7 @@ namespace vTools.Commands
           var widthOption = new OptionDouble(_splitWidth, SplitJointOverlap * 2 + tolerance, double.MaxValue);
           getter.AddOptionDouble("SplitWidth", ref widthOption);
           var resetIndex = getter.AddOption("Auto");
+          var addIndex = getter.AddOption("AddSplit");
           getter.MouseMove += (_, e) =>
           {
             dragging = seamMoving >= 0 && e.LeftButtonDown;
@@ -2975,6 +3006,39 @@ namespace vTools.Commands
           var result = getter.Get(onMouseUp: true);
           if (result == GetResult.Option)
           {
+            if (getter.Option()?.Index == addIndex)
+            {
+              using var addGetter = new GetPoint();
+              addGetter.EnableTransparentCommands(true);
+              addGetter.PermitObjectSnap(AllowSplitDragObjectSnaps);
+              addGetter.EnableObjectSnapCursors(AllowSplitDragObjectSnaps);
+              addGetter.Constrain(sourcePlane, false);
+              addGetter.SetCommandPrompt("Location for additional parallel split");
+              addGetter.DynamicDraw += (_, e) =>
+              {
+                DrawSplitPreview(e.Display, doc, source, proposal, panels, cplane,
+                  DefaultSplitPreviewAnchor(source, cplane), -1, sourceColor);
+                if (TryInsertSplit(source, proposal, e.CurrentPoint, _splitWidth, tolerance, out var candidate))
+                {
+                  using var cut = BuildSplitSeam(source, candidate.Frame, FrameY(candidate.Frame, e.CurrentPoint), tolerance);
+                  if (cut != null) PreviewDisplay.DrawOutlinedCurve(e.Display, cut, SplitSeamColor);
+                }
+              };
+              if (addGetter.Get() == GetResult.Point)
+              {
+                if (TryInsertSplit(source, proposal, addGetter.Point(), _splitWidth, tolerance, out var candidate) &&
+                    TryReplaceSplitPanels(doc, outputIds, source, candidate, tolerance, panels))
+                {
+                  proposal = candidate with { MaterialLength = SplitMaterialLength(panels) };
+                  manualSplits = true;
+                  Log.Write("vShade", $"manual split added cuts={proposal.Seams.Count}");
+                }
+                else RhinoApp.WriteLine("vShade: split must cross the shade, remain distinct and keep all parts within SplitWidth.");
+              }
+              seamMoving = seamHover = -1;
+              dragging = false;
+              continue;
+            }
             if (getter.Option()?.Index == resetIndex ||
                 Math.Abs(_splitWidth - widthOption.CurrentValue) > tolerance)
             {
@@ -2988,6 +3052,7 @@ namespace vTools.Commands
               SaveOptions();
               proposal = next;
               proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
+              manualSplits = false;
             }
             continue;
           }
@@ -3004,6 +3069,7 @@ namespace vTools.Commands
               SaveOptions();
               proposal = next;
               proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
+              manualSplits = false;
             }
             continue;
           }
@@ -3111,13 +3177,75 @@ namespace vTools.Commands
 
     private static bool TryProposeSplit(Curve source, Plane cplane, double width, out SplitProposal proposal)
     {
+      if(TryWholeSplitProposal(source,cplane,width,out proposal))return true;
       var valid = PlanarPartSplitter.TryPropose(source, cplane, SplitPlannerSettings(width), out var shared);
       proposal = valid ? ShadeSplitProposal(shared) : null!;
       return valid;
     }
 
+    private static bool TryWholeSplitProposal(Curve source,Plane plane,double width,out SplitProposal proposal)
+    {
+      proposal=null!;
+      if(!double.IsFinite(width)||width<=0)return false;
+      var parameters=source.DivideByCount(SplitBoundarySamples,true);
+      if(parameters==null||parameters.Length<3)return false;
+      var points=source.TryGetPolyline(out var polyline)?polyline.ToArray():parameters.Select(source.PointAt).ToArray();
+      var angles=Enumerable.Range(0,(int)Math.Ceiling(180/SplitAngleStepDegrees)).Select(index=>RhinoMath.ToRadians(index*SplitAngleStepDegrees))
+        .Concat(points.Zip(points.Skip(1),(a,b)=>PlaneAngle(plane,b-a))).Distinct();
+      SplitProposal? whole=null;double bestWidth=double.PositiveInfinity,bestAngle=0;
+      void Test(double angle)
+      {
+        var frame=PlanarPartSplitter.RotatedFrame(plane,angle);var bounds=source.GetBoundingBox(frame);
+        if(!bounds.IsValid)return;
+        double span=bounds.Diagonal.Y;
+        if(span<bestWidth){bestWidth=span;bestAngle=angle;}
+        if(span<=width+RhinoMath.ZeroTolerance&&(whole==null||bounds.Diagonal.X<whole.MaterialLength))
+          whole=new(frame,bounds.Min.Y,bounds.Max.Y,[],bounds.Diagonal.X);
+      }
+      foreach(double angle in angles)Test(angle);
+      double step=RhinoMath.ToRadians(SplitAngleStepDegrees)/2;
+      for(int pass=0;whole==null&&pass<WholeFitRefinementPasses;pass++,step/=2)
+      {double center=bestAngle;Test(center-step);Test(center+step);}
+      if(whole==null)return false;
+      proposal=whole;return true;
+    }
+
     private static bool ValidSplitSeams(SplitProposal proposal, double width, double tolerance) =>
-      PlanarPartSplitter.Valid(SharedSplitProposal(proposal), SplitPlannerSettings(width), tolerance);
+      proposal.Seams.Count==0?proposal.MaxY>proposal.MinY&&proposal.MaxY-proposal.MinY<=width+tolerance:
+        PlanarPartSplitter.Valid(SharedSplitProposal(proposal),
+          SplitPlannerSettings(width) with { MaxParts = Math.Max(SplitMaxParts, proposal.Seams.Count + 1) }, tolerance);
+
+    private static bool TryInsertSplit(Curve source, SplitProposal proposal, Point3d point,
+      double width, double tolerance, out SplitProposal next)
+    {
+      next = proposal;
+      if (!point.IsValid) return false;
+      double y = FrameY(proposal.Frame, point);
+      if (y <= proposal.MinY + tolerance || y >= proposal.MaxY - tolerance ||
+          proposal.Seams.Any(seam => Math.Abs(seam - y) <= tolerance)) return false;
+      var candidate = proposal with { Seams = proposal.Seams.Append(y).OrderBy(seam => seam).ToList() };
+      if (!ValidSplitSeams(candidate, width, tolerance)) return false;
+      using var cut = BuildSplitSeam(source, candidate.Frame, y, tolerance);
+      if (cut == null) return false;
+      next = candidate;
+      return true;
+    }
+
+    private static bool TryAdjustManualSplit(Curve source, Plane plane, double width, SplitProposal proposal,
+      int seamIndex, double angle, Point3d pivot, double tolerance, out SplitProposal next)
+    {
+      next = proposal;
+      if (seamIndex < 0 || seamIndex >= proposal.Seams.Count || !pivot.IsValid) return false;
+      var frame = PlanarPartSplitter.RotatedFrame(plane, angle);
+      var bounds = source.GetBoundingBox(frame);
+      if (!bounds.IsValid) return false;
+      double shift = FrameY(frame, pivot) - proposal.Seams[seamIndex];
+      var candidate = new SplitProposal(frame, bounds.Min.Y, bounds.Max.Y,
+        proposal.Seams.Select(y => y + shift).ToList(), proposal.MaterialLength);
+      if (!ValidSplitSeams(candidate, width, tolerance)) return false;
+      next = candidate;
+      return true;
+    }
 
     private static bool TryReplaceSplitPanels(
       RhinoDoc doc, IReadOnlyList<Guid> outputIds,
@@ -3165,8 +3293,6 @@ namespace vTools.Commands
         for (var index = 0; index < panels.Count; index++)
         {
           var panel = panels[index];
-          var firstY = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
-          var lastY = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
           foreach (var sourceId in outputIds)
           {
             var obj = doc.Objects.FindId(sourceId);
@@ -3183,16 +3309,10 @@ namespace vTools.Commands
                 detail, panel, proposal.Frame, tolerance, boundary))
                 panel.PreviewDetails.Add((clipped, color));
             }
-            else if (obj.Geometry is TextEntity label)
-            {
-              var y = FrameY(proposal.Frame, label.Plane.Origin);
-              if (y >= firstY - tolerance && y <= lastY + tolerance &&
-                  panel.Outline.Contains(label.Plane.Origin, proposal.Frame, tolerance) != PointContainment.Outside &&
-                  label.Duplicate() is TextEntity labelCopy)
-                panel.PreviewDetails.Add((labelCopy, color));
-            }
           }
         }
+        foreach (var obj in SplitLabelObjects(doc, outputIds))
+          BuildSplitLabelPieces(doc, obj, proposal, panels, tolerance);
         return true;
       }
       catch (Exception ex)
@@ -3479,6 +3599,80 @@ namespace vTools.Commands
       return bounds.IsValid ? bounds : text.GetBoundingBox(frame);
     }
 
+    private static RhinoObject[] SplitLabelObjects(RhinoDoc doc,IReadOnlyList<Guid> outputIds)
+    {
+      var output=outputIds.Select(doc.Objects.FindId).Where(obj=>obj!=null).Cast<RhinoObject>().ToArray();
+      var groups=output.Where(obj=>obj.Attributes.GetUserString(MetadataPrefix+"role")!="bisector")
+        .SelectMany(obj=>obj.Attributes.GetGroupList()??[]).Distinct();
+      return output.Concat(groups.SelectMany(group=>doc.Groups.GroupMembers(group)))
+        .Where(obj=>obj.Geometry is TextEntity or TextDot).DistinctBy(obj=>obj.Id).ToArray();
+    }
+
+    private static void BuildSplitLabelPieces(RhinoDoc doc, RhinoObject obj, SplitProposal proposal,
+      IReadOnlyList<SplitPanel> panels, double tolerance)
+    {
+      if (obj.Attributes.GetUserString(MetadataPrefix + "role") is "reinforcement_part_label") return;
+      void Add(SplitPanel panel, GeometryBase geometry)
+      {
+        panel.PreviewDetails.Add((geometry, obj.Attributes.DrawColor(doc)));
+        panel.LabelDetails.Add((geometry, obj.Attributes.Duplicate()));
+      }
+      if (obj.Geometry is TextDot dot)
+      {
+        double y = FrameY(proposal.Frame, dot.Point);
+        for (int index = 0; index < panels.Count; index++)
+        {
+          double lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
+          double upper = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
+          if (y >= lower - tolerance && y <= upper + tolerance &&
+              panels[index].Outline.Contains(dot.Point, proposal.Frame, tolerance) != PointContainment.Outside)
+          { Add(panels[index], dot.Duplicate()); break; }
+        }
+        return;
+      }
+      if (obj.Geometry is not TextEntity text) return;
+      var parent = doc.DimStyles.FindId(text.DimensionStyleId) ?? doc.DimStyles.Current;
+      using var measurement = (TextEntity)text.Duplicate();
+      measurement.ParentDimensionStyle = parent;
+      measurement.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(doc, text, doc.Views.ActiveView?.ActiveViewport);
+      using var style = measurement.GetDimensionStyle(parent);
+      var glyphs = measurement.CreateCurves(style ?? parent, true, SplitLabelGlyphScale, SplitLabelGlyphSpacing) ?? [];
+      try
+      {
+        var bounds = BoundingBox.Empty;
+        foreach (var glyph in glyphs) bounds.Union(glyph.GetBoundingBox(proposal.Frame));
+        if (!bounds.IsValid) bounds = text.GetBoundingBox(proposal.Frame);
+        bool crosses = proposal.Seams.Any(y => bounds.Min.Y < y - tolerance && bounds.Max.Y > y + tolerance);
+        if (!crosses)
+        {
+          double y = bounds.Center.Y;
+          for (int index = 0; index < panels.Count; index++)
+          {
+            double lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
+            double upper = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
+            if (y < lower - tolerance || y > upper + tolerance) continue;
+            bool Inside(Curve glyph)
+            {
+              if (panels[index].Outline.Contains(glyph.PointAtStart, proposal.Frame, tolerance) == PointContainment.Outside) return false;
+              using var intersections = Intersection.CurveCurve(glyph, panels[index].Outline, tolerance, tolerance);
+              return intersections != null && intersections.Count == 0;
+            }
+            bool contained = glyphs.Length == 0
+              ? panels[index].Outline.Contains(text.Plane.Origin, proposal.Frame, tolerance) != PointContainment.Outside
+              : glyphs.All(Inside);
+            if (contained) { Add(panels[index], text.Duplicate()); return; }
+          }
+        }
+        if (glyphs.Length == 0 && crosses)
+          throw new InvalidOperationException($"could not outline text '{text.PlainText}' crossing a split");
+        foreach (var panel in panels)
+        foreach (var glyph in glyphs)
+        foreach (var clipped in ClipSplitDetail(glyph, panel.Outline, proposal.Frame, tolerance))
+          Add(panel, clipped);
+      }
+      finally { foreach (var glyph in glyphs) glyph.Dispose(); }
+    }
+
     private static bool CommitSplit(
       RhinoDoc doc, Curve source, Guid sessionId, IReadOnlyList<Guid> outputIds,
       SplitProposal proposal, IReadOnlyList<SplitPanel> panels,
@@ -3600,31 +3794,19 @@ namespace vTools.Commands
               }
             }
           }
-          var firstY = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
-          var lastY = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
-          foreach (var sourceId in outputIds)
+          foreach (var detail in panel.LabelDetails)
           {
-            var obj = doc.Objects.FindId(sourceId);
-            if (obj?.Geometry is not TextEntity label)
-              continue;
-            var y = FrameY(proposal.Frame, label.Plane.Origin);
-            if (y < firstY - tolerance || y > lastY + tolerance ||
-                panel.Outline.Contains(label.Plane.Origin, proposal.Frame, tolerance) == PointContainment.Outside)
-              continue;
-            using var copy = label.Duplicate() as TextEntity;
+            using var copy = detail.Geometry.Duplicate();
             if (copy == null)
               continue;
             copy.Transform(transform);
-            var labelAttributes = new ObjectAttributes
-            {
-              LayerIndex = obj.Attributes.LayerIndex,
-              Name = SplitPartObjectName
-            };
+            using var labelAttributes = detail.Attributes.Duplicate();
+            labelAttributes.RemoveFromAllGroups();labelAttributes.Name=SplitPartObjectName;
             labelAttributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
             labelAttributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-            var labelId = doc.Objects.AddText(copy, labelAttributes);
+            var labelId = doc.Objects.Add(copy, labelAttributes);
             if (labelId == Guid.Empty)
-              throw new InvalidOperationException("could not copy a reinforcement label");
+              throw new InvalidOperationException("could not copy split text or label outlines");
             created.Add(labelId);
             partIds.Add(labelId);
           }
@@ -3668,6 +3850,7 @@ namespace vTools.Commands
               !doc.Groups.AddToGroup(shadeGroup.Value, sourceSeams))
             throw new InvalidOperationException("could not add split cuts to the original shade group");
         }
+        BringOutputForward(doc,created);
         doc.Views.Redraw();
         Log.Write("vShade", $"split source={sessionId} parts={panels.Count} width={_splitWidth:G17} cuts={proposal.Seams.Count}");
         return true;
@@ -3756,6 +3939,7 @@ namespace vTools.Commands
           AddReinforcementParts(doc,doc.Views.ActiveView?.ActiveViewport.ConstructionPlane()??Plane.WorldXY,
             PrepareSourceCaps(doc,placements,scallopSizes,tolerance),Array.Empty<ShadeConnectionGeometry>(),sessionId,tolerance,retained);
         }
+        BringOutputForward(doc,retained.Skip(retainedCount));
         SaveShadeState(doc,sessionId,placements,scallopSizes);
         foreach(var id in oldParts) doc.Objects.Delete(id,true);
         outputIds.Clear(); outputIds.AddRange(retained);

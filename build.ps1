@@ -1,5 +1,6 @@
 param(
     [switch]$Publish,
+    [switch]$Rebuild,
     [switch]$ComposeOnly,
     [string]$Message
 )
@@ -16,18 +17,21 @@ $projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectFile.Name)
 $gitDirectory = Join-Path $PSScriptRoot '.git'
 $pendingFile = Join-Path $PSScriptRoot '.git\release-pending-message.txt'
 $releaseDllPaths = @(
-    "bin\Release\net7.0-windows\$projectName.dll",
-    "bin\Release\net10.0-windows\$projectName.dll"
+    "bin\Release\Rhino8\net7.0-windows\$projectName.dll",
+    "bin\Release\Rhino9\net10.0-windows\$projectName.dll",
+    "bin\Release\Rhino8\net10.0-windows\$projectName.dll"
 )
 $helpGeneratorPath = Join-Path $PSScriptRoot 'GenerateCommandHelp.ps1'
 $helpSourcePath = Join-Path $PSScriptRoot 'README.md'
 $helpTemplatePath = Join-Path $PSScriptRoot 'Help\vToolsHelp.template.html'
 $generatedHelpPath = Join-Path $PSScriptRoot 'Help\vToolsHelp.html'
 $helpOutputPaths = @(
-    'bin\Release\net7.0-windows\vToolsHelp.html',
-    'bin\Release\net10.0-windows\vToolsHelp.html',
-    'bin\Debug\net7.0-windows\vToolsHelp.html',
-    'bin\Debug\net10.0-windows\vToolsHelp.html'
+    'bin\Release\Rhino8\net7.0-windows\vToolsHelp.html',
+    'bin\Release\Rhino9\net10.0-windows\vToolsHelp.html',
+    'bin\Debug\Rhino8\net7.0-windows\vToolsHelp.html',
+    'bin\Debug\Rhino9\net10.0-windows\vToolsHelp.html',
+    'bin\Release\Rhino8\net10.0-windows\vToolsHelp.html',
+    'bin\Debug\Rhino8\net10.0-windows\vToolsHelp.html'
 )
 
 function Normalize-ChangedTextFiles {
@@ -167,7 +171,8 @@ function New-ReleaseOutputSnapshot {
     $entries = [System.Collections.Generic.List[object]]::new()
     foreach ($relativeDllPath in $DllPaths) {
         $outputDirectory = Resolve-ReleaseOutputDirectory -RelativeDllPath $relativeDllPath
-        $snapshotDirectory = Join-Path $snapshotRoot ([System.IO.Path]::GetFileName($outputDirectory))
+        $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'bin\Release')).TrimEnd('\') + '\'
+        $snapshotDirectory = Join-Path $snapshotRoot $outputDirectory.Substring($releaseRoot.Length)
         $existed = Test-Path -LiteralPath $outputDirectory -PathType Container
         if ($existed) {
             New-Item -ItemType Directory -Path $snapshotDirectory -Force -ErrorAction Stop | Out-Null
@@ -319,7 +324,9 @@ foreach ($relativePath in $releaseDllPaths) {
     }
 }
 
-if ($releaseOutputsCurrent) {
+if ($releaseOutputsCurrent -and -not $Rebuild) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'Register.ps1')
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     if ($Publish) {
         Write-Host "$projectName Release DLLs already match source version $expectedVersion; skipping compilation." -ForegroundColor Green
         Write-Host 'Continuing publish commit flow with the existing Release outputs.' -ForegroundColor Green
@@ -328,6 +335,7 @@ if ($releaseOutputsCurrent) {
             $projectFile.FullName,
             '-t:CommitReleaseVersion',
             '-p:Configuration=Release',
+            '-p:SkipHostVariantBuild=true',
             "-p:BuildVersion=$expectedVersion",
             "-p:Version=$expectedVersion"
         )

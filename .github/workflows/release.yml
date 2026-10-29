@@ -15,45 +15,24 @@ jobs:
       - name: Check out tagged files
         uses: actions/checkout@v4
 
-      - name: Create release and upload plug-in files
+      - name: Validate host builds, package companions and publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-          ASSEMBLY_NAME: vTools
         run: |
-          $runtimes = @('net7.0-windows', 'net10.0-windows')
-          $staging = Join-Path $env:RUNNER_TEMP "$env:ASSEMBLY_NAME-$env:RELEASE_TAG"
-          New-Item -ItemType Directory -Path $staging -Force | Out-Null
-
-          $assets = @()
-          foreach ($runtime in $runtimes) {
-            $source = Join-Path $PWD "bin/Release/$runtime/$env:ASSEMBLY_NAME.dll"
-            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-              throw "Could not find the $runtime $env:ASSEMBLY_NAME.dll in the tagged repository."
-            }
-
-            $asset = Join-Path $staging "$env:ASSEMBLY_NAME-$runtime.dll"
-            Copy-Item -LiteralPath $source -Destination $asset -Force
-            $assets += $asset
-          }
-
-          $ruiSource = Join-Path $PWD "Toolbar/$env:ASSEMBLY_NAME.rui"
-          if (Test-Path -LiteralPath $ruiSource -PathType Leaf) {
-            $ruiAsset = Join-Path $staging "$env:ASSEMBLY_NAME.rui"
-            Copy-Item -LiteralPath $ruiSource -Destination $ruiAsset -Force
-            $assets += $ruiAsset
-          }
-
-          $title = "$env:ASSEMBLY_NAME $env:RELEASE_TAG"
-
-          & gh release view $env:RELEASE_TAG *> $null
+          $destination = Join-Path $env:RUNNER_TEMP "rhino-plugin-$env:RELEASE_TAG"
+          $json = & powershell -NoProfile -ExecutionPolicy Bypass -File ./PackageRelease.ps1 -Version $env:RELEASE_TAG -OutputDirectory $destination
+          if ($LASTEXITCODE -ne 0) { throw 'Release validation or packaging failed.' }
+          $assets = @((($json -join "`n") | ConvertFrom-Json).Assets)
+          $name = (Get-ChildItem -Filter '*.csproj' -File | Select-Object -First 1).BaseName
+          $release = & gh release view $env:RELEASE_TAG --json assets 2>$null
           if ($LASTEXITCODE -eq 0) {
-            & gh release upload $env:RELEASE_TAG @assets --clobber
+            $existing = @((($release -join "`n") | ConvertFrom-Json).assets.name)
+            $missing = @($assets | Where-Object { [IO.Path]::GetFileName($_) -notin $existing })
+            if ($missing.Count -gt 0) { & gh release upload $env:RELEASE_TAG @missing }
+            else { Write-Host 'All assets already published; existing assets retained.' }
           } else {
-            & gh release create $env:RELEASE_TAG @assets --verify-tag --title $title --generate-notes
+            & gh release create $env:RELEASE_TAG @assets --verify-tag --title "$name $env:RELEASE_TAG" --generate-notes
           }
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "GitHub release publishing failed for $env:RELEASE_TAG."
-          }
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release publishing failed.' }

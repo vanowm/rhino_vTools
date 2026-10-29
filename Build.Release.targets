@@ -11,7 +11,7 @@
     <CopyRetryCount>0</CopyRetryCount>
     <CopyRetryDelayMilliseconds>0</CopyRetryDelayMilliseconds>
     <AutoCommitVersionOnRelease Condition="'$(AutoCommitVersionOnRelease)' == ''">true</AutoCommitVersionOnRelease>
-    <ReleaseDllPath>bin/Release/$(TargetFramework)/$(AssemblyName).dll</ReleaseDllPath>
+    <ReleaseDllPath>bin/Release/Rhino$(RhinoHostMajor)/$(TargetFramework)/$(AssemblyName).dll</ReleaseDllPath>
     <ReleaseDllPaths Condition="'$(ReleaseDllPaths)' == ''">$(ReleaseDllPath)</ReleaseDllPaths>
     <IsReleaseCoordinator Condition="'$(TargetFrameworks)' == '' and '$(TargetFramework)' != ''">true</IsReleaseCoordinator>
     <IsReleaseCoordinator Condition="'$(TargetFrameworks)' != '' and '$(TargetFramework)' == ''">true</IsReleaseCoordinator>
@@ -67,7 +67,7 @@
   <Target Name="CreateReleaseBackup" AfterTargets="Build" Condition="'$(Configuration)' == 'Release' and '$(TargetFramework)' != ''">
     <PropertyGroup>
       <BackupTimestamp>$([System.DateTime]::Now.ToString('yy.MM.dd.HHmmss'))</BackupTimestamp>
-      <BackupOutputRoot>$(MSBuildProjectDirectory)\bin\Release\backups\$(BackupTimestamp)\$(TargetFramework)</BackupOutputRoot>
+      <BackupOutputRoot>$(MSBuildProjectDirectory)\bin\Release\backups\$(BackupTimestamp)\Rhino$(RhinoHostMajor)\$(TargetFramework)</BackupOutputRoot>
     </PropertyGroup>
 
     <ItemGroup>

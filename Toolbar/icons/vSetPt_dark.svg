@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 36 36" role="img" aria-labelledby="title">
+  <title id="title">vSetPt: set curve endpoints to a shared point</title>
+  <g fill="none" stroke="#dee2e6" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 5C18 3 15 18 29 18"/>
+    <path d="M4.5 18C13 10 20 25 29 18"/>
+    <path d="M4.5 31C18 33 15 18 29 18"/>
+  </g>
+  <g fill="#343a40" stroke="#dee2e6" stroke-width="1.25">
+    <circle cx="4.5" cy="5" r="2.4"/>
+    <circle cx="4.5" cy="18" r="2.4"/>
+    <circle cx="4.5" cy="31" r="2.4"/>
+  </g>
+  <circle cx="29" cy="18" r="4" fill="#a9e34b" stroke="#c0eb75" stroke-width="1.5"/>
+</svg>

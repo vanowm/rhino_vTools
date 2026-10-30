@@ -57,7 +57,6 @@ namespace vTools.Commands
   {
     // Defaults and customizable constants; the enabled default is shared with vTogglePerpGumball.
     internal const string ApplyProxyCommandName = "vPerpGumballProxy"; // Hidden script-runner name; Rhino excludes Proxy commands from dynamic help.
-    private const string ApplyProxyMacro = "_" + ApplyProxyCommandName; // Command macro used to execute pending gumball work without changing command help.
     private const string RelocateMacroFormat = "-_GumballRelocate {0} {1} {2}"; // Three world-coordinate points: origin, X-axis point, Y-axis point; the third completes the command.
     private const string ResetMacro = "-_GumballReset"; // Immediate native reset; no trailing Enter command is needed.
     private const string Tag = "vTogglePerpGumball";
@@ -789,12 +788,15 @@ namespace vTools.Commands
         InvalidateLastApplyState();
         return;
       }
-      var queued = false;
+      var applied = false;
       try
       {
-        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-proxy-idle-call", ApplyProxyMacro);
-        queued = RhinoApp.RunScript(doc.RuntimeSerialNumber, ApplyProxyMacro, false);
-        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-proxy-idle-return", ApplyProxyMacro, queued);
+        EnsureProxyDoesNotRepeat();
+        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-proxy-direct-call", ApplyProxyCommandName);
+        // Execute the command itself; a queued macro can become the repeat target despite DoNotRepeat.
+        var result = RhinoApp.ExecuteCommand(doc, ApplyProxyCommandName);
+        applied = result == Result.Success;
+        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-proxy-direct-return", ApplyProxyCommandName, applied);
       }
       catch (Exception ex)
       {
@@ -803,13 +805,28 @@ namespace vTools.Commands
       }
       finally
       {
-        if (!queued)
+        if (!applied)
         {
           _applyQueued = false;
           _pendingCommand = null;
         }
       }
     }
+
+    private static void EnsureProxyDoesNotRepeat()
+    {
+      // Customized Rhino lists override command flags; retain every user entry and add only our proxy.
+      if (!Rhino.ApplicationSettings.NeverRepeatList.UseNeverRepeatList) return;
+      var existing = Rhino.ApplicationSettings.NeverRepeatList.CommandNames();
+      var updated = IncludeProxyInNeverRepeatList(existing);
+      if (ReferenceEquals(existing, updated)) return;
+      Rhino.ApplicationSettings.NeverRepeatList.SetList(updated);
+      Log.Write(Tag, "excluded internal gumball proxy from the active custom never-repeat list");
+    }
+
+    private static string[] IncludeProxyInNeverRepeatList(string[] existing) =>
+      existing.Any(name => string.Equals(name.TrimStart('_'), ApplyProxyCommandName, StringComparison.OrdinalIgnoreCase))
+        ? existing : existing.Append(ApplyProxyCommandName).ToArray();
 
     internal static Result ApplyPendingCommand()
     {

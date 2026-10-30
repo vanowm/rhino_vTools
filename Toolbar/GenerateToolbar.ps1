@@ -74,6 +74,16 @@ $buttons = @(
     LeftScript = '!_Isolate'
     RightScript = '!_Show'
     Icon = "Isolate_Show.svg"
+  },
+  @{
+    Name = "vSetPt"
+    Tooltip = "Set curve endpoints or selected control points"
+    Id = "13bb3909-c2a2-4a73-85c2-3cf2cd5cfd6a"
+    LeftMacroId = "13bb3909-c2a2-4a73-85c2-3cf2cd5cfd6a"
+    LeftScript = '!_vSetPt'
+    Icon = "vSetPt.svg"
+    DarkIcon = "vSetPt_dark.svg"
+    MainToolbar = $true
   }
 )
 
@@ -141,6 +151,17 @@ try {
   $writer.WriteString($isolateToolbarId)
   $writer.WriteEndElement()
   $writer.WriteEndElement()
+  foreach ($button in $buttons | Where-Object { $_.MainToolbar }) {
+    $writer.WriteStartElement("tool_bar_item")
+    $writer.WriteAttributeString("guid", $button.Id)
+    $writer.WriteAttributeString("button_display_mode", "control_only")
+    $writer.WriteAttributeString("button_style", "normal")
+    $writer.WriteStartElement("text")
+    $writer.WriteElementString("locale_1033", $button.Name)
+    $writer.WriteEndElement()
+    $writer.WriteElementString("left_macro_id", $button.LeftMacroId)
+    $writer.WriteEndElement()
+  }
   $writer.WriteEndElement()
 
   $writer.WriteStartElement("tool_bar")
@@ -150,7 +171,7 @@ try {
   $writer.WriteStartElement("text")
   $writer.WriteElementString("locale_1033", "vIsolate")
   $writer.WriteEndElement()
-  foreach ($button in $buttons) {
+  foreach ($button in $buttons | Where-Object { -not $_.MainToolbar }) {
     $writer.WriteStartElement("tool_bar_item")
     $writer.WriteAttributeString("guid", $button.Id)
     $writer.WriteAttributeString("button_display_mode", "control_only")
@@ -243,7 +264,13 @@ try {
     $writer.WriteRaw($svg)
     $writer.WriteEndElement()
     $writer.WriteStartElement("dark")
-    $writer.WriteRaw($svg)
+    $darkSvg = if ($button.DarkIcon) {
+      Get-SvgXml (Join-Path $IconDirectory $button.DarkIcon)
+    }
+    else {
+      $svg
+    }
+    $writer.WriteRaw($darkSvg)
     $writer.WriteEndElement()
     $writer.WriteEndElement()
   }

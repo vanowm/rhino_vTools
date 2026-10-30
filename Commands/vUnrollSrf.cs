@@ -47,13 +47,13 @@ namespace vTools.Commands
     private const double DefaultXExtents = 0.0; // Row width in model units; zero disables row wrapping.
     private const bool DefaultEdgeDots = true; // true creates matching shared-edge dots; false omits them.
     private const bool DefaultSplitFaces = false; // true unrolls polysurface faces separately; false keeps polysurfaces together.
-    private const bool DefaultUV = true; // true delegates to native UnrollSrfUV; false delegates to native UnrollSrf.
+    private const bool DefaultUV = true; // true uses native UnrollSrfUV; false uses RhinoCommon's developable Unroller without command macros.
     private const bool DefaultQuietNative = true; // true removes recognized native progress from command history after each native call; false retains native output unchanged.
     private const int LiveDisplayRefreshMilliseconds = 150; // Minimum milliseconds between batch viewport updates; only the first source forces an initial refresh.
     private const double LiveDisplayTimeFraction = 0.10; // Target display share of batch runtime, greater than zero and less than one; expensive refreshes increase the cooldown.
     private const double SourceOrientationEpsilon = 1e-10; // Dimensionless threshold for ambiguous projected source axes or negligible planar rotation.
     private const string NativeUVCommandName = "_-UnrollSrfUV"; // Scriptable UV-preserving native unroll command.
-    private const string NativeDevelopableCommandName = "_-UnrollSrf"; // Scriptable native developable-surface unroll command.
+    private const string NativeDevelopableCommandName = "_-UnrollSrf"; // Developable-mode identifier; routed to RhinoCommon.Unroller rather than submitted as a macro.
     private const string TextObjectName = "MultiUnroll_NumberLabel"; // Object name assigned to generated part-number labels.
     private const string FailureMarkerName = "MultiUnroll_FailedMarker"; // Object name assigned to failed-unroll markers.
     private const string LabelNumberKey = "MultiUnrollLabelNumber"; // User-data key storing a reusable part number.
@@ -79,6 +79,8 @@ namespace vTools.Commands
     private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
     private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
     private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
+    private const double ConicalFaceSeparationFactor = 10.0; // Document-tolerance multiplier for separating developed faces before seam reconstruction; positive.
+    private const double FollowingSplitParameterFraction = 1e-10; // Curve-domain fraction for merging repeated face-boundary intersection parameters; positive and less than one.
     private const double SharedPointToleranceFactor = 1.0; // Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.
     private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native unroll labels with flat edges.
     private const double NativeSeamMaxRelativeLengthError = 0.01; // Maximum 0..1 relative edge-length error accepted by source-topology fallback seam matching.
@@ -186,6 +188,7 @@ namespace vTools.Commands
       _surfaceLayer = options.SurfaceLayer;
       _labelLayer = options.LabelLayer;
       _dotLayer = options.DotLayer;
+      Dbg($"run options uv={_uv} quiet_native={_quietNative} explode={_explode} engine={(_uv ? NativeUVCommandName : "RhinoCommon.Unroller")}");
 
       var sources = new List<SourceSurface>();
       foreach (var id in surfaceIds)
@@ -429,7 +432,7 @@ namespace vTools.Commands
                     out unrolledPoints, out unrolledDots,
                     out string nativeDetails))
               {
-                Dbg($"part={number} unroll_method=native_command {nativeDetails}");
+                Dbg($"part={number} unroll_method={(_uv ? "native_command" : "native_unroller")} {nativeDetails}");
               }
               else
               {
@@ -441,6 +444,7 @@ namespace vTools.Commands
           catch (Exception ex)
           {
             Dbg($"part={number} unroll_failed error={ex.Message}");
+            RhinoApp.WriteLine($"{EnglishName}: part #{number} failed to unroll. {ex.Message}");
             AddFailureMarker(doc, src, frame);
             AddValid(failedSourceIds, src.Id);
             failed++;
@@ -831,13 +835,14 @@ namespace vTools.Commands
           xLimit, doc.ModelUnitSystem);
       }
 
-      var msg = $"Successfully unrolled {done} objects";
+      var msg = $"{EnglishName}: successfully unrolled {done}/{sources.Count} objects";
       if (failed > 0)
         msg += $" | Unable to unroll {failed} objects";
       if (assignment.Skipped > 0)
         msg += $" | Skipped {assignment.Skipped} following object(s) not close to selected surfaces";
       msg += $" | Labels {_labelMode} | RotateFlatParts {(_rotateFlatParts ? "Yes" : "No")} | EdgeDots {(_edgeDots ? "On" : "Off")}";
       RhinoApp.WriteLine(msg);
+      Dbg($"run finished uv={_uv} completed={done} failed={failed} total={sources.Count} skipped={assignment.Skipped}");
 
       return done > 0 ? Result.Success : Result.Nothing;
     }
@@ -1064,7 +1069,7 @@ namespace vTools.Commands
       {
         switch (option.EnglishName)
         {
-          case "UV":                RhinoApp.WriteLine("UV: Yes uses native UnrollSrfUV; No uses native UnrollSrf."); break;
+          case "UV":                RhinoApp.WriteLine("UV: Yes uses native UnrollSrfUV; No uses RhinoCommon's developable Unroller."); break;
           case "QuietNative":       RhinoApp.WriteLine("QuietNative: remove routine native unroll progress from history, retaining warnings and discrepancies."); break;
           case "RotateFlatParts":    RhinoApp.WriteLine("RotateFlatParts: rotate each flat part so its label text faces up."); break;
           case "EdgeDots":           RhinoApp.WriteLine("EdgeDots: place numbered match dots on shared edges between adjacent parts."); break;
@@ -1270,6 +1275,11 @@ namespace vTools.Commands
       flatDots = Array.Empty<TextDot>();
       details = "not_attempted";
 
+      if (!nativeUnrollCommand.EndsWith("UV", StringComparison.OrdinalIgnoreCase))
+        return TryPerformDevelopableUnroll(source.Brep, doc.ModelAbsoluteTolerance,
+          doc.ModelRelativeTolerance, explode, curves, points, dots,
+          out flatBreps, out flatCurves, out flatPoints, out flatDots, out details);
+
       var selectedBefore = SelectedIds(doc);
       var temporaryInputIds = new List<Guid>();
       var temporaryOutputIds = new List<Guid>();
@@ -1308,9 +1318,6 @@ namespace vTools.Commands
           nativeUnrollCommand +
           $" _Explode=_{(nativeExplode ? "Yes" : "No")}" +
           $" _Labels=_{(nativeLabels ? "Yes" : "No")}" +
-          (nativeUnrollCommand.EndsWith("UV", StringComparison.OrdinalIgnoreCase)
-            ? string.Empty
-            : " _RelativeTolerance=" + doc.ModelRelativeTolerance.ToString("R", CultureInfo.InvariantCulture)) +
           $" _SelId {commandSourceId:D}" +
           string.Concat(followingIds.Select(id => $" _SelId {id:D}")) +
           " _Enter";
@@ -1338,7 +1345,7 @@ namespace vTools.Commands
         {
           AppearanceSettings.EchoPromptsToHistoryWindow = false;
           AppearanceSettings.EchoCommandsToHistoryWindow = false;
-          ran = RhinoApp.RunScript(command, false);
+          ran = RhinoApp.RunScript(doc.RuntimeSerialNumber, command, false);
         }
         finally
         {
@@ -1427,6 +1434,59 @@ namespace vTools.Commands
           RestoreSelection(doc, selectedBefore);
         }
         finally { doc.Views.EnableRedraw(redrawBefore,false,false); }
+      }
+    }
+
+    private static bool TryPerformDevelopableUnroll(
+      Brep source, double absoluteTolerance, double relativeTolerance, bool explode,
+      IReadOnlyList<Curve> curves, IReadOnlyList<Point> points, IReadOnlyList<TextDot> dots,
+      out Brep[] flatBreps, out Curve[] flatCurves, out Point3d[] flatPoints,
+      out TextDot[] flatDots, out string details)
+    {
+      flatBreps = Array.Empty<Brep>();
+      flatCurves = Array.Empty<Curve>();
+      flatPoints = Array.Empty<Point3d>();
+      flatDots = Array.Empty<TextDot>();
+      bool succeeded = false;
+      try
+      {
+        using var input = source.DuplicateBrep();
+        var unroller = new Unroller(input)
+        {
+          AbsoluteTolerance = absoluteTolerance,
+          RelativeTolerance = relativeTolerance,
+          ExplodeOutput = explode || NativeForceExplodePolysurfaces && source.Faces.Count > 1
+        };
+        foreach (var curve in curves) unroller.AddFollowingGeometry(curve);
+        foreach (var point in points) unroller.AddFollowingGeometry(point.Location);
+        foreach (var dot in dots) unroller.AddFollowingGeometry(dot);
+        flatBreps = unroller.PerformUnroll(out flatCurves, out flatPoints, out flatDots) ?? Array.Empty<Brep>();
+        flatCurves ??= Array.Empty<Curve>();
+        flatPoints ??= Array.Empty<Point3d>();
+        flatDots ??= Array.Empty<TextDot>();
+        int outputFaces = flatBreps.Sum(brep => brep.Faces.Count);
+        succeeded = flatBreps.Length > 0 && flatBreps.All(brep => brep.IsValid) && outputFaces == source.Faces.Count;
+        details = $"engine=RhinoCommon.Unroller source_faces={source.Faces.Count} output_faces={outputFaces}" +
+          $" breps={flatBreps.Length} curves={flatCurves.Length} points={flatPoints.Length} dots={flatDots.Length}" +
+          (succeeded ? string.Empty : " error=invalid_or_missing_developable_output");
+        return succeeded;
+      }
+      catch (Exception ex)
+      {
+        details = $"engine=RhinoCommon.Unroller error={ex.Message}";
+        return false;
+      }
+      finally
+      {
+        if (!succeeded)
+        {
+          foreach (var geometry in (flatBreps ?? Array.Empty<Brep>()).Cast<GeometryBase>()
+            .Concat(flatCurves ?? Array.Empty<Curve>()).Concat(flatDots ?? Array.Empty<TextDot>())) geometry?.Dispose();
+          flatBreps = Array.Empty<Brep>();
+          flatCurves = Array.Empty<Curve>();
+          flatPoints = Array.Empty<Point3d>();
+          flatDots = Array.Empty<TextDot>();
+        }
       }
     }
 
@@ -3166,50 +3226,198 @@ namespace vTools.Commands
       unrolledDots = Array.Empty<TextDot>();
       details = string.Empty;
 
-      if (sourceBrep == null || sourceBrep.Faces.Count != 1)
+      if (sourceBrep == null || sourceBrep.Faces.Count == 0)
         return false;
 
-      if (!ConicalSurfaceDevelopment.TryCreate(sourceBrep, tolerance,
-          out var flatBrep, out var flatSurface, out details))
-        return false;
-      using var mappedSurface = flatSurface;
-      var sourceFace = sourceBrep.Faces[0];
-
+      var flatBreps = new List<Brep>(sourceBrep.Faces.Count);
+      var sourceFaces = new List<Brep>(sourceBrep.Faces.Count);
+      var flatSurfaces = new List<Surface>(sourceBrep.Faces.Count);
       var mappedCurves = new List<Curve>(curves.Count);
-      foreach (var curve in curves)
-      {
-        using var uvCurve = sourceFace.Pullback(curve, tolerance);
-        if (uvCurve == null)
-          throw new InvalidOperationException("Cannot map a following curve onto the conical surface.");
-        var mapped = flatSurface.Pushup(uvCurve, tolerance);
-        if (mapped == null || !mapped.IsValid)
-          throw new InvalidOperationException("Cannot develop a following curve on the conical surface.");
-        mappedCurves.Add(mapped);
-      }
-
       var mappedPoints = new List<Point3d>(points.Count);
-      foreach (var point in points)
-      {
-        if (!TryMapUvPoint(sourceFace, flatSurface, point.Location, out var mapped))
-          throw new InvalidOperationException("Cannot develop a following point on the conical surface.");
-        mappedPoints.Add(mapped);
-      }
-
       var mappedDots = new List<TextDot>(dots.Count);
-      foreach (var dot in dots)
+      var faceDetails = new List<string>(sourceBrep.Faces.Count);
+      bool transferred = false;
+      try
       {
-        if (!TryMapUvPoint(sourceFace, flatSurface, dot.Point, out var mapped))
-          throw new InvalidOperationException("Cannot develop a following label on the conical surface.");
-        var copy = dot.Duplicate() as TextDot ?? new TextDot(dot.Text ?? string.Empty, mapped);
-        copy.Point = mapped;
-        mappedDots.Add(copy);
-      }
+        double nextX = 0.0;
+        foreach (var face in sourceBrep.Faces)
+        {
+          var singleFace = face.DuplicateFace(false);
+          sourceFaces.Add(singleFace);
+          Brep flatBrep = null!;
+          NurbsSurface flatSurface = null!;
+          string faceDetail;
+          try
+          {
+            if (!ConicalSurfaceDevelopment.TryCreate(singleFace, tolerance,
+                out flatBrep, out flatSurface, out faceDetail))
+              return false;
+          }
+          catch
+          {
+            flatBrep?.Dispose();
+            flatSurface?.Dispose();
+            throw;
+          }
+          flatBreps.Add(flatBrep);
+          flatSurfaces.Add(flatSurface);
+          faceDetails.Add($"face={face.FaceIndex} {faceDetail}");
 
-      unrolledBreps = new[] { flatBrep };
-      unrolledCurves = mappedCurves.ToArray();
-      unrolledPoints = mappedPoints.ToArray();
-      unrolledDots = mappedDots.ToArray();
-      return true;
+          // Distinct staging positions preserve following-object ownership while
+          // the existing source-topology reconstruction aligns the shared seams.
+          if (sourceBrep.Faces.Count > 1)
+          {
+            var box = flatSurface.GetBoundingBox(true);
+            var translation = Transform.Translation(nextX - box.Min.X, -box.Min.Y, 0.0);
+            if (!flatBrep.Transform(translation) || !flatSurface.Transform(translation))
+              throw new InvalidOperationException("Cannot position a developed conical face.");
+            nextX += box.Max.X - box.Min.X + tolerance * ConicalFaceSeparationFactor;
+          }
+        }
+
+        foreach (var curve in curves)
+        {
+          var pieces = SplitConicalFollowingCurve(curve, sourceBrep, tolerance);
+          try
+          {
+            foreach (var piece in pieces)
+            {
+              int owner = ConicalFollowingCurveFace(piece, sourceFaces, tolerance);
+              if (owner < 0)
+                throw new InvalidOperationException("Cannot associate a following curve with a conical face.");
+              using var uvCurve = sourceFaces[owner].Faces[0].Pullback(piece, tolerance);
+              if (uvCurve == null)
+                throw new InvalidOperationException("Cannot map a following curve onto the conical surface.");
+              var mapped = flatSurfaces[owner].Pushup(uvCurve, tolerance);
+              if (mapped == null || !mapped.IsValid)
+              {
+                mapped?.Dispose();
+                throw new InvalidOperationException("Cannot develop a following curve on the conical surface.");
+              }
+              mappedCurves.Add(mapped);
+            }
+          }
+          finally
+          {
+            foreach (var piece in pieces) piece.Dispose();
+          }
+        }
+
+        foreach (var point in points)
+        {
+          int owner = ClosestFlatBrep(sourceFaces, point.Location);
+          if (owner < 0 || !TryMapUvPoint(sourceFaces[owner].Faces[0], flatSurfaces[owner],
+              point.Location, out var mapped))
+            throw new InvalidOperationException("Cannot develop a following point on the conical surface.");
+          mappedPoints.Add(mapped);
+        }
+
+        foreach (var dot in dots)
+        {
+          int owner = ClosestFlatBrep(sourceFaces, dot.Point);
+          string text = dot.Text ?? string.Empty;
+          if (text.StartsWith(NativeFaceHelperDotPrefix, StringComparison.Ordinal) &&
+              int.TryParse(text.Substring(text.LastIndexOf(':') + 1), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out int helperFace) &&
+              helperFace >= 0 && helperFace < sourceFaces.Count)
+            owner = helperFace;
+          if (owner < 0 || !TryMapUvPoint(sourceFaces[owner].Faces[0], flatSurfaces[owner],
+              dot.Point, out var mapped))
+            throw new InvalidOperationException("Cannot develop a following label on the conical surface.");
+          var copy = dot.Duplicate() as TextDot ?? new TextDot(text, mapped);
+          copy.Point = mapped;
+          mappedDots.Add(copy);
+        }
+
+        unrolledBreps = flatBreps.ToArray();
+        unrolledCurves = mappedCurves.ToArray();
+        unrolledPoints = mappedPoints.ToArray();
+        unrolledDots = mappedDots.ToArray();
+        details = $"faces={flatBreps.Count} " + string.Join("; ", faceDetails);
+        transferred = true;
+        return true;
+      }
+      finally
+      {
+        foreach (var surface in flatSurfaces) surface.Dispose();
+        foreach (var face in sourceFaces) face.Dispose();
+        if (!transferred)
+        {
+          foreach (var brep in flatBreps) brep.Dispose();
+          foreach (var curve in mappedCurves) curve.Dispose();
+          foreach (var dot in mappedDots) dot.Dispose();
+        }
+      }
+    }
+
+    private static List<Curve> SplitConicalFollowingCurve(Curve curve, Brep source, double tolerance)
+    {
+      if (source.Faces.Count == 1)
+        return new List<Curve> { curve.DuplicateCurve() };
+      var parameters = new List<double> { curve.Domain.T0, curve.Domain.T1 };
+      foreach (var edge in source.Edges)
+      {
+        using var intersections = Rhino.Geometry.Intersect.Intersection.CurveCurve(curve, edge, tolerance, tolerance);
+        if (intersections == null) continue;
+        foreach (var intersection in intersections)
+        {
+          parameters.Add(intersection.ParameterA);
+          if (intersection.IsOverlap)
+            parameters.Add(intersection.OverlapA.T1);
+        }
+      }
+      parameters.Sort();
+      double parameterTolerance = Math.Abs(curve.Domain.Length) * FollowingSplitParameterFraction;
+      var pieces = new List<Curve>();
+      try
+      {
+        double start = curve.Domain.T0;
+        foreach (double end in parameters)
+        {
+          if (end <= start + parameterTolerance || end > curve.Domain.T1) continue;
+          var piece = curve.Trim(start, end);
+          if (piece == null || !piece.IsValid)
+          {
+            piece?.Dispose();
+            throw new InvalidOperationException("Cannot split a following curve at a conical face boundary.");
+          }
+          pieces.Add(piece);
+          start = end;
+        }
+        if (pieces.Count == 0)
+          throw new InvalidOperationException("No following curve remains after splitting at conical face boundaries.");
+        return pieces;
+      }
+      catch
+      {
+        foreach (var piece in pieces) piece.Dispose();
+        throw;
+      }
+    }
+
+    private static int ConicalFollowingCurveFace(Curve curve, IReadOnlyList<Brep> faces, double tolerance)
+    {
+      if (faces.Count == 1) return 0;
+      int bestFace = -1;
+      double bestDistance = double.PositiveInfinity;
+      double limit = Math.Max(tolerance * FollowingTolFactor,
+        curve.GetBoundingBox(true).Diagonal.Length * FollowingDiagFactor);
+      for (int faceIndex = 0; faceIndex < faces.Count; faceIndex++)
+      {
+        double maximumDistance = 0.0;
+        for (int sample = 0; sample < FollowingCurveSamples; sample++)
+        {
+          var point = curve.PointAt(curve.Domain.ParameterAt((double)sample / (FollowingCurveSamples - 1)));
+          var closest = faces[faceIndex].ClosestPoint(point);
+          maximumDistance = Math.Max(maximumDistance, point.DistanceTo(closest));
+        }
+        if (maximumDistance <= limit && maximumDistance < bestDistance)
+        {
+          bestDistance = maximumDistance;
+          bestFace = faceIndex;
+        }
+      }
+      return bestFace;
     }
 
 
@@ -4946,6 +5154,8 @@ namespace vTools
   {
     // Defaults and customizable constants
     private const double ApexRelativeTolerance = 1.0e-10; // Maximum collapsed-row variation as a fraction of the surface diagonal; smaller is stricter.
+    private const double RulingRelativeTolerance = 1.0e-10; // Maximum straight-control-grid residual relative to surface diagonal; additionally bounded by the fitting tolerance.
+    private const double UniformWeightRelativeTolerance = 1.0e-12; // Maximum relative NURBS weight spread treated as roundoff, not a genuinely rational parameterization.
     private const double FitToleranceFactor = 0.02; // Fraction of document absolute tolerance allowed for flat-surface fitting; positive and less than one.
     private const double IntegrationToleranceFactor = 0.1; // Fraction of the fitting error budget allocated to angular integration; positive and less than one.
     private const int MinimumFitDegree = 3; // Minimum curved-direction spline degree; three permits smooth curvature without changing UV coordinates.
@@ -4969,32 +5179,14 @@ namespace vTools
 
       var face = source.Faces[0];
       using var surface = face.UnderlyingSurface().ToNurbsSurface();
-      if (surface == null || surface.IsRational)
+      if (surface == null || !NormalizeUniformWeights(surface))
         return false;
-      int linearDirection = surface.OrderU == 2 && surface.Points.CountU == 2 ? 0 :
-        surface.OrderV == 2 && surface.Points.CountV == 2 ? 1 : -1;
-      if (linearDirection < 0 || surface.IsPeriodic(1 - linearDirection))
+      if (!TryGetConicalRuling(surface, tolerance, out int linearDirection,
+            out int apexSide, out Point3d apex, out double[] rulingFractions) ||
+          surface.IsPeriodic(1 - linearDirection))
         return false;
-
-      int curvedCount = linearDirection == 0 ? surface.Points.CountV : surface.Points.CountU;
       double apexTolerance = Math.Max(RhinoMath.ZeroTolerance,
         surface.GetBoundingBox(true).Diagonal.Length * ApexRelativeTolerance);
-      int apexSide = -1;
-      Point3d apex = Point3d.Unset;
-      for (int side = 0; side < 2; side++)
-      {
-        var candidate = ControlPointAt(surface, linearDirection, side, 0);
-        if (Enumerable.Range(1, curvedCount - 1).All(index =>
-            candidate.DistanceTo(ControlPointAt(surface, linearDirection, side, index)) <= apexTolerance))
-        {
-          if (apexSide >= 0)
-            return false;
-          apexSide = side;
-          apex = candidate;
-        }
-      }
-      if (apexSide < 0)
-        return false;
 
       double fitTolerance = Math.Max(RhinoMath.ZeroTolerance, tolerance * FitToleranceFactor);
       var linearDomain = surface.Domain(linearDirection);
@@ -5046,11 +5238,12 @@ namespace vTools
             throw new InvalidOperationException("Cannot refine the conical boundary spline.");
       }
 
-      int countU = linearDirection == 0 ? 2 : fitted.Points.Count;
-      int countV = linearDirection == 0 ? fitted.Points.Count : 2;
+      int linearOrder = linearDirection == 0 ? surface.OrderU : surface.OrderV;
+      int countU = linearDirection == 0 ? rulingFractions.Length : fitted.Points.Count;
+      int countV = linearDirection == 0 ? fitted.Points.Count : rulingFractions.Length;
       flatSurface = NurbsSurface.Create(3, false,
-        linearDirection == 0 ? 2 : fitted.Order,
-        linearDirection == 0 ? fitted.Order : 2, countU, countV);
+        linearDirection == 0 ? linearOrder : fitted.Order,
+        linearDirection == 0 ? fitted.Order : linearOrder, countU, countV);
       if (flatSurface == null)
         throw new InvalidOperationException("Cannot create the developed conical surface.");
       var linearKnots = linearDirection == 0 ? flatSurface.KnotsU : flatSurface.KnotsV;
@@ -5061,16 +5254,17 @@ namespace vTools
       for (int index = 0; index < curvedKnots.Count; index++)
         curvedKnots[index] = fitted.Knots[index];
       for (int index = 0; index < fitted.Points.Count; index++)
-        for (int side = 0; side < 2; side++)
+        for (int side = 0; side < rulingFractions.Length; side++)
         {
           int u = linearDirection == 0 ? side : index;
           int v = linearDirection == 0 ? index : side;
-          var point = side == apexSide ? Point3d.Origin : fitted.Points[index].Location;
+          double fraction = apexSide == 0 ? rulingFractions[side] : 1.0 - rulingFractions[side];
+          var point = Point3d.Origin + fraction * (fitted.Points[index].Location - Point3d.Origin);
           if (!flatSurface.Points.SetControlPoint(u, v, new ControlPoint(point)))
             throw new InvalidOperationException("Cannot assign the developed conical control points.");
         }
 
-      double metricError = ValidateMetric(surface, flatSurface);
+      double metricError = ValidateMetric(face.UnderlyingSurface(), flatSurface);
       if (metricError > MetricRelativeTolerance)
         throw new InvalidOperationException($"Conical development metric error {metricError:G6} exceeds its limit.");
       flatBrep = source.IsSurface ? flatSurface.ToBrep() :
@@ -5079,9 +5273,69 @@ namespace vTools
         throw new InvalidOperationException("Cannot preserve the conical face trims.");
       if (flatBrep.Faces[0].OrientationIsReversed != face.OrientationIsReversed)
         flatBrep.Flip();
-      details = $"linear={(linearDirection == 0 ? "U" : "V")} cvs={fitted.Points.Count}" +
+      details = $"linear={(linearDirection == 0 ? "U" : "V")} ruling_order={linearOrder} cvs={fitted.Points.Count}" +
         $" fit_error={error:G6} metric_error={metricError:G6}";
       return true;
+    }
+
+    private static bool NormalizeUniformWeights(NurbsSurface surface)
+    {
+      if (!surface.IsRational) return true;
+      double weight = surface.Points.GetControlPoint(0, 0).Weight;
+      if (!RhinoMath.IsValidDouble(weight) || weight <= 0.0) return false;
+      for (int u = 0; u < surface.Points.CountU; u++)
+        for (int v = 0; v < surface.Points.CountV; v++)
+        {
+          double current = surface.Points.GetControlPoint(u, v).Weight;
+          if (!RhinoMath.IsValidDouble(current) ||
+              Math.Abs(current - weight) > Math.Abs(weight) * UniformWeightRelativeTolerance)
+            return false;
+        }
+      return surface.MakeNonRational();
+    }
+
+    private static bool TryGetConicalRuling(NurbsSurface surface, double tolerance,
+      out int direction, out int apexSide, out Point3d apex, out double[] fractions)
+    {
+      direction = -1; apexSide = -1; apex = Point3d.Unset; fractions = Array.Empty<double>();
+      double diagonal = surface.GetBoundingBox(true).Diagonal.Length;
+      double apexTolerance = Math.Max(RhinoMath.ZeroTolerance, diagonal * ApexRelativeTolerance);
+      double rulingTolerance = Math.Max(RhinoMath.ZeroTolerance,
+        Math.Min(diagonal * RulingRelativeTolerance, tolerance * FitToleranceFactor));
+      for (int candidateDirection = 0; candidateDirection < 2; candidateDirection++)
+      {
+        int linearCount = candidateDirection == 0 ? surface.Points.CountU : surface.Points.CountV;
+        int curvedCount = candidateDirection == 0 ? surface.Points.CountV : surface.Points.CountU;
+        for (int side = 0; side < 2; side++)
+        {
+          int endpoint = side == 0 ? 0 : linearCount - 1;
+          var candidate = ControlPointAt(surface, candidateDirection, endpoint, 0);
+          if (!Enumerable.Range(1, curvedCount - 1).All(index =>
+              candidate.DistanceTo(ControlPointAt(surface, candidateDirection, endpoint, index)) <= apexTolerance))
+            continue;
+          int longest = Enumerable.Range(0, curvedCount).OrderByDescending(index =>
+            ControlPointAt(surface, candidateDirection, 0, index).DistanceToSquared(
+              ControlPointAt(surface, candidateDirection, linearCount - 1, index))).First();
+          var first = ControlPointAt(surface, candidateDirection, 0, longest);
+          var delta = ControlPointAt(surface, candidateDirection, linearCount - 1, longest) - first;
+          if (delta.Length <= apexTolerance) continue;
+          var candidateFractions = Enumerable.Range(0, linearCount).Select(index =>
+            ((ControlPointAt(surface, candidateDirection, index, longest) - first) * delta) / delta.SquareLength).ToArray();
+          bool linear = true;
+          for (int index = 0; index < linearCount && linear; index++)
+            for (int curve = 0; curve < curvedCount && linear; curve++)
+            {
+              var start = ControlPointAt(surface, candidateDirection, 0, curve);
+              var end = ControlPointAt(surface, candidateDirection, linearCount - 1, curve);
+              var expected = start + candidateFractions[index] * (end - start);
+              linear = expected.DistanceTo(ControlPointAt(surface, candidateDirection, index, curve)) <= rulingTolerance;
+            }
+          if (!linear) continue;
+          direction = candidateDirection; apexSide = side; apex = candidate; fractions = candidateFractions;
+          return true;
+        }
+      }
+      return false;
     }
 
     private static Point3d ControlPointAt(NurbsSurface surface, int direction, int side, int index) =>

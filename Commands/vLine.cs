@@ -23,6 +23,7 @@ namespace vTools.Commands
 
     private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" }; // Command option names in chain-mode index order.
     private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" }; // Constraint-solution priorities in persisted index order.
+    private static readonly string[] ConstraintSpaceValues = ["CPlane", "3D"]; // Explicit endpoint constraint spaces, in saved-index order.
     private static readonly Color SourceFeedbackColor = Color.Orange; // Highlight color for a locked source curve.
     private static readonly Color HoverFeedbackColor = Color.Orange; // Highlight color for a candidate curve under the cursor.
 
@@ -44,6 +45,9 @@ namespace vTools.Commands
     private const double DefaultAngle = 0.0; // Angle in degrees.
     private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
     private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+    private const int ConstraintSpace3D = 1; // Saved option index for true spatial endpoint tangency/perpendicularity; index zero is CPlane.
+    private const int DefaultConstraintSpace = 0; // CPlane by default; one selects true 3D for explicit endpoint modes.
+    private const bool DefaultSolveIn3D = false; // false retains legacy CPlane solver calls; true evaluates full spatial directions.
     private const double AcceptedConstraintDistanceFactor = 4.0; // Positive multiplier of document absolute tolerance for validating final curve contact.
     private static readonly (string Name, OsnapModes Mode)[] OneShotSnapOptions =
     [
@@ -70,6 +74,7 @@ namespace vTools.Commands
     private const string AngleKey = "angle";
     private const string AngleRelativeKey = "angleRelative";
     private const string LayerKey = "layer";
+    private const string ConstraintSpaceKey = "constraintSpace";
     private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
     private static int _chainMode = DefaultChainMode;
@@ -79,6 +84,7 @@ namespace vTools.Commands
     private static double _angle = DefaultAngle;
     private static bool   _angleRelative = DefaultAngleRelative;
     private static string _layer = DefaultLayer;
+    private static int _constraintSpace = DefaultConstraintSpace;
 
     private static bool _debugMode = false;
 
@@ -622,6 +628,7 @@ namespace vTools.Commands
           var angle = _angle;
           var angleRelative = _angleRelative;
           var layer = _layer;
+          var constraintSpace = DefaultConstraintSpace;
 
           if (ToolsOptionStore.TryGetDouble(section, ChainModeKey, out var persistedChain))
             chainMode = ClampIndex((int)Math.Round(persistedChain, MidpointRounding.AwayFromZero), ChainModeValues.Length);
@@ -633,8 +640,10 @@ namespace vTools.Commands
             angleRelative = persistedAngleRelative;
           if (ToolsOptionStore.TryGetString(section, LayerKey, out var persistedLayer))
             layer = NormalizeLayerOption(persistedLayer);
+          if (ToolsOptionStore.TryGetDouble(section, ConstraintSpaceKey, out var persistedSpace) && double.IsFinite(persistedSpace))
+            constraintSpace = ClampIndex((int)Math.Round(persistedSpace), ConstraintSpaceValues.Length);
 
-          return (chainMode, priority, persistConstraint, length, angle, angleRelative, layer);
+          return (chainMode, priority, persistConstraint, length, angle, angleRelative, layer, constraintSpace);
         });
 
       _chainMode = ClampIndex(values.chainMode, ChainModeValues.Length);
@@ -644,6 +653,7 @@ namespace vTools.Commands
       _angle = values.angle;
       _angleRelative = values.angleRelative;
       _layer = NormalizeLayerOption(values.layer);
+      _constraintSpace = values.constraintSpace;
     }
 
     private static void SavePersistedOptions()
@@ -657,6 +667,7 @@ namespace vTools.Commands
           section[PersistConstraintKey] = _persistConstraint;
           section[AngleRelativeKey] = _angleRelative;
           section[LayerKey] = _layer;
+          section[ConstraintSpaceKey] = _constraintSpace;
         });
     }
 
@@ -730,6 +741,7 @@ namespace vTools.Commands
         getPoint.ClearCommandOptions();
         var chainModeOptionIndex = getPoint.AddOptionList(
           "Mode", ChainModeValues, chainModeIndex);
+        var constraintSpaceOption = getPoint.AddOptionList("ConstraintSpace", ConstraintSpaceValues, _constraintSpace);
         getPoint.AddOptionToggle("BothSides", ref bothSides);
 
         var idxNormal = getPoint.AddOption("Normal");
@@ -777,6 +789,12 @@ namespace vTools.Commands
           var option = getPoint.Option();
           if (option == null)
             continue;
+          if (option.Index == constraintSpaceOption)
+          {
+            _constraintSpace = ClampIndex(option.CurrentListOptionIndex, ConstraintSpaceValues.Length);
+            SavePersistedOptions();
+            continue;
+          }
           if (oneShotSnap.TrySelect(option.Index))
           {
             getPoint.DynamicDraw -= drawWarning;
@@ -1226,9 +1244,7 @@ namespace vTools.Commands
       Curve? fallbackPairEndCurve = null;
       EndpointConstraintKind? fallbackPairEndKind = null;
       var fallbackPairLine = Line.Unset;
-      var lastPreviewResolvedStart = Point3d.Unset;
-      var lastPreviewResolvedEnd   = Point3d.Unset;
-      var lastPreviewSnapType = OsnapModes.None;
+      PreviewSegment? lastPreview = null;
       OsnapModes? acceptedSnapOverride = null;
       Curve? acceptedCurveOverride = null;
 
@@ -1568,7 +1584,7 @@ namespace vTools.Commands
         if (modeName is "perp" or "perp_any")
         {
           DebugLog($"PerpNear: hint=({curveHint.X:F3},{curveHint.Y:F3},{curveHint.Z:F3}) curve={curve.GetType().Name} preview={preview}");
-          var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18);
+          var pt = PerpPointFromStartWithHint(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18, _constraintSpace == ConstraintSpace3D);
           if (pt.HasValue)
           {
             double lockedLength = Math.Abs(lengthOption.CurrentValue);
@@ -1596,21 +1612,21 @@ namespace vTools.Commands
             return pt.Value;
           }
           DebugLog("PerpNear: null -> trying fallback");
-          var fb = PerpFallbackToPointedSegment(startPoint, curve, curveHint, preview);
+          var fb = PerpFallbackToPointedSegment(startPoint, curve, curveHint, preview, _constraintSpace == ConstraintSpace3D);
           DebugLog($"PerpNear: fallback={(fb.HasValue ? $"({fb.Value.X:F3},{fb.Value.Y:F3},{fb.Value.Z:F3})" : "null")}");
           return fb;
         }
 
         if (modeName is "tangent" or "tangent_any")
-          return TangentPointFromStart(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18);
+          return TangentPointFromStart(startPoint, curve, curveHint, preview ? 80 : 240, preview ? 16 : 18, _constraintSpace == ConstraintSpace3D);
 
         if (modeName == "auto")
         {
-          var perp = PerpPointFromStartWithHint(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18);
-          var tan = TangentPointFromStart(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18);
+          var perp = PerpPointFromStartWithHint(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18, _constraintSpace == ConstraintSpace3D);
+          var tan = TangentPointFromStart(startPoint, curve, cursorPoint, preview ? 80 : 240, preview ? 16 : 18, _constraintSpace == ConstraintSpace3D);
 
           if (!perp.HasValue)
-            perp = PerpFallbackToPointedSegment(startPoint, curve, cursorPoint, preview);
+            perp = PerpFallbackToPointedSegment(startPoint, curve, cursorPoint, preview, _constraintSpace == ConstraintSpace3D);
 
           if (!perp.HasValue && !tan.HasValue)
             return null;
@@ -1699,10 +1715,26 @@ namespace vTools.Commands
         }
 
         var hint = modeName is "perp" or "tangent" ? HoveredConstraintPoint(cursorPoint) : cursorPoint;
-        return curve == null ? null : ResolveEndReference(curve, solvedEnd, hint, kind, doc.ModelAbsoluteTolerance);
+        var reference = curve == null ? null : ResolveEndReference(curve, solvedEnd, hint, kind, doc.ModelAbsoluteTolerance);
+        return reference.HasValue ? reference.Value with {DirectionPlane = _constraintSpace == ConstraintSpace3D ? null : cplane} : null;
       }
 
       bool TryResolveSegment(
+        Point3d cursorPoint,
+        bool preview,
+        out Point3d resolvedStart,
+        out Point3d resolvedEnd)
+      {
+        if (!TryResolveSegmentCore(cursorPoint, preview, out resolvedStart, out resolvedEnd))
+          return false;
+        if (SegmentMatchesResolvedConstraints(new Line(resolvedStart, resolvedEnd),
+              startConstraint, activeEndConstraint, doc.ModelAbsoluteTolerance))
+          return true;
+        lastResolveFailure = "resolved line does not satisfy its curve references";
+        return false;
+      }
+
+      bool TryResolveSegmentCore(
         Point3d cursorPoint,
         bool preview,
         out Point3d resolvedStart,
@@ -1930,14 +1962,14 @@ namespace vTools.Commands
                   firstConstraint,
                   endConstraint,
                   preview,
-                  out solvedLine))
+                  out solvedLine, _constraintSpace == ConstraintSpace3D))
               return true;
 
             return preview && TryResolveFixedStartConstraintPair(
               firstConstraint,
               endConstraint,
               preview: false,
-              out solvedLine);
+              out solvedLine, _constraintSpace == ConstraintSpace3D);
           }
 
           if (TryResolveConstraintPair(
@@ -2055,7 +2087,7 @@ namespace vTools.Commands
           endCurve,
           resolvedEndSeed,
           cursorPoint,
-          selectedEndKind);
+          selectedEndKind) {DirectionPlane = _constraintSpace == ConstraintSpace3D ? null : cplane};
         return resolvedStart.IsValid && resolvedEnd.IsValid;
       }
 
@@ -2094,12 +2126,10 @@ namespace vTools.Commands
 
           if (!TryResolveSegment(e.CurrentPoint, preview: true, out var previewStart, out var ep))
           {
-            lastPreviewResolvedEnd = Point3d.Unset;
+            lastPreview = null;
             return;
           }
-          lastPreviewResolvedStart = previewStart;
-          lastPreviewResolvedEnd   = ep;
-          lastPreviewSnapType = getPoint.OsnapEventType;
+          lastPreview = new(new Line(previewStart, ep), SnapshotEndReference(activeEndConstraint), getPoint.OsnapEventType);
           if (bothSides.CurrentValue)
           {
             var vec = ep - previewStart;
@@ -2128,6 +2158,7 @@ namespace vTools.Commands
         }
         catch (Exception ex)
         {
+          lastPreview = null;
           var details = ex.ToString();
           if (!string.Equals(details, lastPreviewException, StringComparison.Ordinal))
           {
@@ -2185,6 +2216,7 @@ namespace vTools.Commands
           var idxPriority = mode == "auto"
             ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
             : -1;
+          var idxConstraintSpace = getPoint.AddOptionList("ConstraintSpace", ConstraintSpaceValues, _constraintSpace);
           var idxFromPoint = startConstraint?.Kind == EndpointConstraintKind.Perpendicular
             ? getPoint.AddOption("FromPoint")
             : -1;
@@ -2237,6 +2269,7 @@ namespace vTools.Commands
           acceptedCurveOverride = null;
           var result = getPoint.Get();
           layerSession.ObserveCurrentLayer(doc);
+          if (result != GetResult.Point) lastPreview = null;
 
           if (result == GetResult.Undo)
           {
@@ -2294,18 +2327,19 @@ namespace vTools.Commands
             DebugLog($"Click: cursor=({clickedRaw.X:F3},{clickedRaw.Y:F3},{clickedRaw.Z:F3}) mode={mode ?? "free"}");
             Point3d resolvedStart;
             Point3d endPoint;
-            bool resolveNativeConstraint = startConstraint.HasValue && string.IsNullOrWhiteSpace(mode) &&
-                                           NativeSnapConstraintKind(acceptedSnapType).HasValue;
-            if (lastPreviewResolvedEnd.IsValid && !resolveNativeConstraint && lastPreviewSnapType == acceptedSnapType)
+            EndReference? acceptedReference;
+            if (lastPreview is {} shown)
             {
-              resolvedStart = lastPreviewResolvedStart;
-              endPoint      = lastPreviewResolvedEnd;
+              resolvedStart = shown.Line.From;
+              endPoint = shown.Line.To;
+              acceptedReference = shown.EndReference;
+              Log.Write("vLine.Accept", $"using displayed solution previewSnap={shown.Snap} clickSnap={acceptedSnapType}");
             }
             else
             {
               try
               {
-                if (!TryResolveSegment(clickedRaw, preview: false, out resolvedStart, out endPoint))
+                if (!TryResolveSegment(clickedRaw, preview: true, out resolvedStart, out endPoint))
                 {
                   Log.Write(
                     "vLine",
@@ -2314,6 +2348,7 @@ namespace vTools.Commands
                   RhinoApp.WriteLine($"vLine: no valid {mode ?? "endpoint"} solution found at this cursor location.");
                   continue;
                 }
+                acceptedReference = SnapshotEndReference(activeEndConstraint);
               }
               catch (Exception ex)
               {
@@ -2323,21 +2358,12 @@ namespace vTools.Commands
               }
             }
 
-            var acceptedLine = new Line(resolvedStart, endPoint);
-            if ((startConstraint.HasValue && !SegmentMatchesConstraint(acceptedLine, startConstraint.Value, true, doc.ModelAbsoluteTolerance)) ||
-                (activeEndConstraint.HasValue && !SegmentMatchesEndReference(acceptedLine, activeEndConstraint.Value)))
-            {
-              lastPreviewResolvedEnd = Point3d.Unset;
-              Log.Write("vLine.Accept", $"rejected final constraint mismatch snap={acceptedSnapType} start={resolvedStart} end={endPoint}");
-              RhinoApp.WriteLine("vLine: the line does not satisfy the selected curve constraints. Choose another endpoint.");
-              continue;
-            }
             Log.Write("vLine", $"accept mode={mode ?? "free"} snap={acceptedSnapType} start={resolvedStart} end={endPoint}");
-            if (activeEndConstraint.HasValue)
+            if (acceptedReference.HasValue)
             {
-              var acceptedConstraint = activeEndConstraint.Value;
+              var acceptedConstraint = acceptedReference.Value;
               var tangent2d = ToCPlane2d(
-                acceptedConstraint.Curve.TangentAt(acceptedConstraint.SeedParameter),
+                acceptedConstraint.Tangent,
                 cplane);
               var direction2d = ToCPlane2d(endPoint - resolvedStart, cplane);
               double angleErrorDegrees = double.NaN;
@@ -2358,7 +2384,7 @@ namespace vTools.Commands
                 "vLine.Constraint",
                 $"kind={acceptedConstraint.Kind} cplaneAngleErrorDeg={angleErrorDegrees:G6} " +
                 $"length={lengthOption.CurrentValue:G6} bothSides={bothSides.CurrentValue} " +
-                $"curvePoint={acceptedConstraint.Curve.PointAt(acceptedConstraint.SeedParameter)}");
+                $"curvePoint={acceptedConstraint.Point}");
             }
             var state = new ConstraintState(mode, persistConstraint.CurrentValue, priorityIndex, lengthOption.CurrentValue, angleLock.CurrentValue, angleOption.CurrentValue, angleRelative.CurrentValue);
             return SecondPointResult.WithPoint(resolvedStart, endPoint, bothSides.CurrentValue, chainModeIndex, state);
@@ -2369,6 +2395,13 @@ namespace vTools.Commands
             var option = getPoint.Option();
             if (option == null)
               continue;
+            if (option.Index == idxConstraintSpace)
+            {
+              _constraintSpace = ClampIndex(option.CurrentListOptionIndex, ConstraintSpaceValues.Length);
+              fallbackPairEndCurve = null; fallbackPairLine = Line.Unset;
+              SavePersistedOptions();
+              continue;
+            }
             if (oneShotSnap.TrySelect(option.Index))
             {
               RestartPointGetter();
@@ -2392,8 +2425,7 @@ namespace vTools.Commands
               fromFirstPoint = true;
               fromPointActive = false;
               getPoint.SetBasePoint(startPoint, true);
-              lastPreviewResolvedStart = Point3d.Unset;
-              lastPreviewResolvedEnd = Point3d.Unset;
+              lastPreview = null;
               Log.Write(
                 "vLine",
                 $"FromFirstPoint activated start={startPoint} " +
@@ -2416,8 +2448,7 @@ namespace vTools.Commands
                 fromFirstPoint = true;
                 fromPointActive = true;
                 getPoint.SetBasePoint(startPoint, true);
-                lastPreviewResolvedStart = Point3d.Unset;
-                lastPreviewResolvedEnd = Point3d.Unset;
+                lastPreview = null;
                 Log.Write(
                   "vLine",
                   $"FromPoint selected start={startPoint} seed={updatedConstraint.SeedParameter:R}");
@@ -2940,22 +2971,10 @@ namespace vTools.Commands
       return true;
     }
 
-    private static double PerpScore2d(Curve curve, double t, Point3d startPoint, Plane cplane)
-    {
-      var point = curve.PointAt(t);
-      var tangent = curve.TangentAt(t);
+    private static double PerpScore(Curve curve, double t, Point3d startPoint, Plane? cplane)
+      => ReferenceDirectionScore(curve.TangentAt(t), startPoint - curve.PointAt(t), EndpointConstraintKind.Perpendicular, cplane);
 
-      var v2 = ToCPlane2d(startPoint - point, cplane);
-      var t2 = new Vector2d(Vector3d.Multiply(tangent, cplane.XAxis), Vector3d.Multiply(tangent, cplane.YAxis));
-
-      if (!TryUnitize2d(v2, out var v2u) || !TryUnitize2d(t2, out var t2u))
-        return 1.0;
-
-      var dot = (t2u.X * v2u.X) + (t2u.Y * v2u.Y);
-      return Math.Abs(dot);
-    }
-
-    private static (double Parameter, double Error) RefinePerpParameter(Curve curve, Point3d startPoint, Plane cplane, double t0, double t1, int iterations)
+    private static (double Parameter, double Error) RefinePerpParameter(Curve curve, Point3d startPoint, Plane? cplane, double t0, double t1, int iterations)
     {
       const double phi = 0.61803398875;
       var a = Math.Min(t0, t1);
@@ -2963,8 +2982,8 @@ namespace vTools.Commands
 
       var c = b - ((b - a) * phi);
       var d = a + ((b - a) * phi);
-      var fc = PerpScore2d(curve, c, startPoint, cplane);
-      var fd = PerpScore2d(curve, d, startPoint, cplane);
+      var fc = PerpScore(curve, c, startPoint, cplane);
+      var fd = PerpScore(curve, d, startPoint, cplane);
 
       for (var i = 0; i < iterations; i++)
       {
@@ -2974,7 +2993,7 @@ namespace vTools.Commands
           d = c;
           fd = fc;
           c = b - ((b - a) * phi);
-          fc = PerpScore2d(curve, c, startPoint, cplane);
+          fc = PerpScore(curve, c, startPoint, cplane);
         }
         else
         {
@@ -2982,20 +3001,20 @@ namespace vTools.Commands
           c = d;
           fc = fd;
           d = a + ((b - a) * phi);
-          fd = PerpScore2d(curve, d, startPoint, cplane);
+          fd = PerpScore(curve, d, startPoint, cplane);
         }
       }
 
       var best = 0.5 * (a + b);
-      return (best, PerpScore2d(curve, best, startPoint, cplane));
+      return (best, PerpScore(curve, best, startPoint, cplane));
     }
 
-    private static Point3d? PerpPointFromStartWithHint(Point3d startPoint, Curve curve, Point3d hintPoint, int samples, int refineIterations)
+    private static Point3d? PerpPointFromStartWithHint(Point3d startPoint, Curve curve, Point3d hintPoint, int samples, int refineIterations, bool use3D = DefaultSolveIn3D)
     {
-      var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+      Plane? cplane = use3D ? null : RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
       if (CurveIsLinear(curve, out var line))
       {
-        var t = ClosestLineParameterInCPlane(line, startPoint, cplane);
+        var t = use3D ? line.ClosestParameter(startPoint) : ClosestLineParameterInCPlane(line, startPoint, cplane!.Value);
         var point = line.PointAt(t);
 
         // Only accept the projected perpendicular if it lies on the finite line segment.
@@ -3026,7 +3045,7 @@ namespace vTools.Commands
       {
         var t = a + dt * i;
         parameters.Add(t);
-        values.Add(PerpScore2d(curve, t, startPoint, cplane));
+        values.Add(PerpScore(curve, t, startPoint, cplane));
       }
 
       for (var i = 1; i < values.Count - 1; i++)
@@ -3150,7 +3169,7 @@ namespace vTools.Commands
       return valid[0].Point;
     }
 
-    private static Point3d? PerpFallbackToPointedSegment(Point3d startPoint, Curve curve, Point3d hintPoint, bool preview)
+    private static Point3d? PerpFallbackToPointedSegment(Point3d startPoint, Curve curve, Point3d hintPoint, bool preview, bool use3D = DefaultSolveIn3D)
     {
       var segments = curve.DuplicateSegments();
       if (segments == null || segments.Length == 0)
@@ -3179,35 +3198,23 @@ namespace vTools.Commands
       if (bestSeg == null)
         return null;
 
-      var pt = PerpPointFromStartWithHint(startPoint, bestSeg, hintPoint, preview ? 80 : 240, preview ? 16 : 18);
+      var pt = PerpPointFromStartWithHint(startPoint, bestSeg, hintPoint, preview ? 80 : 240, preview ? 16 : 18, use3D);
       if (pt.HasValue)
         return pt;
 
       if (CurveIsLinear(bestSeg, out var line))
       {
         var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
-        return line.PointAt(ClosestLineParameterInCPlane(line, startPoint, cplane));
+        return line.PointAt(use3D ? line.ClosestParameter(startPoint) : ClosestLineParameterInCPlane(line, startPoint, cplane));
       }
 
       return null;
     }
 
-    private static double TangentScore2d(Curve curve, double t, Point3d startPoint, Plane cplane)
-    {
-      var point = curve.PointAt(t);
-      var tangent = curve.TangentAt(t);
+    private static double TangentScore(Curve curve, double t, Point3d startPoint, Plane? cplane)
+      => ReferenceDirectionScore(curve.TangentAt(t), startPoint - curve.PointAt(t), EndpointConstraintKind.Tangent, cplane);
 
-      var v2 = ToCPlane2d(startPoint - point, cplane);
-      var t2 = new Vector2d(Vector3d.Multiply(tangent, cplane.XAxis), Vector3d.Multiply(tangent, cplane.YAxis));
-
-      if (!TryUnitize2d(v2, out var v2u) || !TryUnitize2d(t2, out var t2u))
-        return 1.0;
-
-      var cross = (t2u.X * v2u.Y) - (t2u.Y * v2u.X);
-      return Math.Abs(cross);
-    }
-
-    private static (double Parameter, double Error) RefineTangentParameter(Curve curve, Point3d startPoint, Plane cplane, double t0, double t1, int iterations)
+    private static (double Parameter, double Error) RefineTangentParameter(Curve curve, Point3d startPoint, Plane? cplane, double t0, double t1, int iterations)
     {
       const double phi = 0.61803398875;
       var a = Math.Min(t0, t1);
@@ -3215,8 +3222,8 @@ namespace vTools.Commands
 
       var c = b - ((b - a) * phi);
       var d = a + ((b - a) * phi);
-      var fc = TangentScore2d(curve, c, startPoint, cplane);
-      var fd = TangentScore2d(curve, d, startPoint, cplane);
+      var fc = TangentScore(curve, c, startPoint, cplane);
+      var fd = TangentScore(curve, d, startPoint, cplane);
 
       for (var i = 0; i < iterations; i++)
       {
@@ -3226,7 +3233,7 @@ namespace vTools.Commands
           d = c;
           fd = fc;
           c = b - ((b - a) * phi);
-          fc = TangentScore2d(curve, c, startPoint, cplane);
+          fc = TangentScore(curve, c, startPoint, cplane);
         }
         else
         {
@@ -3234,17 +3241,17 @@ namespace vTools.Commands
           c = d;
           fc = fd;
           d = a + ((b - a) * phi);
-          fd = TangentScore2d(curve, d, startPoint, cplane);
+          fd = TangentScore(curve, d, startPoint, cplane);
         }
       }
 
       var best = 0.5 * (a + b);
-      return (best, TangentScore2d(curve, best, startPoint, cplane));
+      return (best, TangentScore(curve, best, startPoint, cplane));
     }
 
-    private static Point3d? TangentPointFromStart(Point3d startPoint, Curve curve, Point3d hintPoint, int samples, int refineIterations)
+    private static Point3d? TangentPointFromStart(Point3d startPoint, Curve curve, Point3d hintPoint, int samples, int refineIterations, bool use3D = DefaultSolveIn3D)
     {
-      var cplane = RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
+      Plane? cplane = use3D ? null : RhinoDoc.ActiveDoc?.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
 
       var domain = curve.Domain;
       var a = domain.T0;
@@ -3268,7 +3275,7 @@ namespace vTools.Commands
       {
         var t = a + dt * i;
         parameters.Add(t);
-        values.Add(TangentScore2d(curve, t, startPoint, cplane));
+        values.Add(TangentScore(curve, t, startPoint, cplane));
       }
 
       for (var i = 1; i < values.Count - 1; i++)
@@ -4149,7 +4156,8 @@ namespace vTools.Commands
       EndpointConstraint constraint,
       Point3d oppositePoint,
       bool preview,
-      out Point3d constrainedPoint)
+      out Point3d constrainedPoint,
+      bool use3D = DefaultSolveIn3D)
     {
       constrainedPoint = Point3d.Unset;
       Point3d? point;
@@ -4160,12 +4168,12 @@ namespace vTools.Commands
           constraint.Curve,
           constraint.HintPoint,
           preview ? 80 : 240,
-          preview ? 8 : 18);
+          preview ? 8 : 18, use3D);
         point ??= PerpFallbackToPointedSegment(
           oppositePoint,
           constraint.Curve,
           constraint.HintPoint,
-          preview);
+          preview, use3D);
       }
       else
       {
@@ -4174,7 +4182,7 @@ namespace vTools.Commands
           constraint.Curve,
           constraint.HintPoint,
           preview ? 80 : 240,
-          preview ? 8 : 18);
+          preview ? 8 : 18, use3D);
       }
 
       if (!point.HasValue)
@@ -4398,15 +4406,36 @@ namespace vTools.Commands
       double parameter,
       Vector3d direction)
     {
-      var tangent = constraint.Curve.TangentAt(parameter);
+      return ReferenceDirectionsMatch(constraint.Curve.TangentAt(parameter), direction,
+        constraint.Kind, null, ConstraintAngleToleranceRadians());
+    }
+
+    private static bool ReferenceDirectionsMatch(Vector3d tangent, Vector3d direction,
+      EndpointConstraintKind kind, Plane? plane, double angleTolerance)
+    {
+      if (plane is {} referencePlane)
+      {
+        tangent -= referencePlane.Normal * (tangent * referencePlane.Normal);
+        direction -= referencePlane.Normal * (direction * referencePlane.Normal);
+      }
       if (!tangent.Unitize() || !direction.Unitize())
         return false;
 
       var dot = Math.Abs(Vector3d.Multiply(tangent, direction));
-      var angleTolerance = ConstraintAngleToleranceRadians();
-      return constraint.Kind == EndpointConstraintKind.Tangent
+      return kind == EndpointConstraintKind.Tangent
         ? 1.0 - dot <= Math.Max(1.0 - Math.Cos(angleTolerance), 1e-10)
         : dot <= Math.Max(Math.Sin(angleTolerance), 1e-6);
+    }
+
+    private static double ReferenceDirectionScore(Vector3d tangent, Vector3d direction, EndpointConstraintKind kind, Plane? plane)
+    {
+      if (plane is {} referencePlane)
+      {
+        tangent -= referencePlane.Normal * (tangent * referencePlane.Normal);
+        direction -= referencePlane.Normal * (direction * referencePlane.Normal);
+      }
+      if (!tangent.Unitize() || !direction.Unitize()) return 1.0;
+      return kind == EndpointConstraintKind.Perpendicular ? Math.Abs(tangent * direction) : Vector3d.CrossProduct(tangent, direction).Length;
     }
 
     private static EndpointConstraintKind? NativeSnapConstraintKind(OsnapModes snap)
@@ -4434,7 +4463,12 @@ namespace vTools.Commands
     }
 
     private static bool SegmentMatchesEndReference(Line line, EndpointConstraint constraint)
-      => line.IsValid && DirectionMatchesConstraintAtSeed(constraint, line.Direction);
+      => line.IsValid && ReferenceDirectionsMatch(constraint.Curve.TangentAt(constraint.SeedParameter),
+        line.Direction, constraint.Kind, constraint.DirectionPlane, ConstraintAngleToleranceRadians());
+
+    private static bool SegmentMatchesResolvedConstraints(Line line, EndpointConstraint? start, EndpointConstraint? end, double tolerance)
+      => line.IsValid && (!start.HasValue || SegmentMatchesConstraint(line, start.Value, true, tolerance)) &&
+         (!end.HasValue || SegmentMatchesEndReference(line, end.Value));
 
     private static bool TryResolveSnappedConstraintPair(
       EndpointConstraint start, Curve endCurve, Point3d snapPoint, OsnapModes snap,
@@ -4491,7 +4525,8 @@ namespace vTools.Commands
       EndpointConstraint startConstraint,
       EndpointConstraint endConstraint,
       bool preview,
-      out Line line)
+      out Line line,
+      bool use3D = DefaultSolveIn3D)
     {
       line = Line.Unset;
       var fixedStart = startConstraint.Curve.PointAt(
@@ -4500,7 +4535,7 @@ namespace vTools.Commands
             endConstraint,
             fixedStart,
             preview,
-            out var constrainedEnd))
+            out var constrainedEnd, use3D))
         return false;
 
       var candidate = new Line(fixedStart, constrainedEnd);
@@ -5155,7 +5190,15 @@ namespace vTools.Commands
       Point3d HintPoint,
       EndpointConstraintKind Kind,
       Guid ObjectId = default,
-      ComponentIndex ComponentIndex = default);
+      ComponentIndex ComponentIndex = default)
+    {
+      internal Plane? DirectionPlane { get; init; } // null validates true 3D directions; explicit endpoint modes capture the CPlane used by their solver.
+    }
+
+    private readonly record struct EndReference(EndpointConstraintKind Kind, Point3d Point, Vector3d Tangent);
+    private readonly record struct PreviewSegment(Line Line, EndReference? EndReference, OsnapModes Snap);
+    private static EndReference? SnapshotEndReference(EndpointConstraint? constraint)
+      => constraint is {} value ? new(value.Kind, value.Curve.PointAt(value.SeedParameter), value.Curve.TangentAt(value.SeedParameter)) : null;
 
     private readonly record struct EndAnchor(
       Point3d Point,

@@ -83,7 +83,8 @@ namespace vTools.Commands
     private const int RulerStrokeWidth = 1; // Screen-pixel width of ruler ticks and the optional three-foot grid; never adds document geometry.
     private const double RulerMinorPixels = 4.0,RulerMajorPixels = 9.0; // Screen-pixel lengths of inch and foot ticks outside the material frame.
     private const double RulerMinimumTickPixels = 3.0,RulerMinimumLabelPixels = 36.0; // Minimum on-screen tick/label separation; suppress subpixel clutter while zoomed out.
-    private const int RulerTextSize = 10; // Ruler-label height in screen pixels; labels report inches, not feet.
+    private const int RulerTextSize = 10; // Screen-pixel height of inch labels and their secondary yard values.
+    private const int RulerTextLineSpacing = 12; // Screen-pixel separation between inch and yard labels.
     private const double RulerTextPaddingPixels = 9.0; // Screen-pixel gap beyond major tick tips to their label centers.
     private const double RulerCursorPixels = 8.0; // Length of the cursor arrow shaft in screen pixels.
     private const int TableCursorInterval = 30; // Minimum milliseconds between hover-coordinate redraws; manual gestures share their normal redraw.
@@ -213,7 +214,7 @@ namespace vTools.Commands
     private sealed record PoseKey(double Width,double Length,GrainMode Mode,RotationMode RotationChoice,double Step,bool Reverse,bool Obey,double Deviation,double? Guide,bool Manual,double Rotation,bool AllowFlip,bool? Flip,int FreePoseCount);
     internal sealed class Row(Part part,int id,Vector3d? guide) : IDisposable
     {
-      internal Part Part { get; }=part;
+      internal Part Part { get; private set; }=part;
       internal int Id { get; }=id;
       internal string Name { get; set; }=id.ToString(System.Globalization.CultureInfo.InvariantCulture);
       internal string DefaultName { get; set; }=id.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -266,6 +267,13 @@ namespace vTools.Commands
       }
       private double _clearanceGap=double.NaN; // NaN marks an unbuilt source-space gap contour.
       private Polyline[] _clearance=[];
+      internal void ReplaceGeometry(Part replacement)
+      {
+        var previous=Part;Part=replacement;
+        _poseKey=null;_poses=null;_outlinePoints=null;_mirrorCue=null;_previewBounds=BoundingBox.Unset;
+        _clearanceGap=double.NaN;_clearance=[];
+        previous.Dispose();
+      }
       internal IReadOnlyList<Polyline> Clearance(double gap)
       {
         if(_clearanceGap==gap)return _clearance;
@@ -1707,6 +1715,7 @@ namespace vTools.Commands
       private readonly Dictionary<(int Id,bool Original),PartFill> _partFills=[];
       private sealed record SourcePartFills(string Signature,PartFill[] Fills);
       private readonly Dictionary<int,SourcePartFills> _sourcePartFills=[];
+      private readonly HashSet<Guid> _changedPartObjects=[];
       private readonly Dictionary<int,(Transform Transform,List<PlanarPartSelection.Item> Items,Line? DrawnGuide)> _previewCopies=[];
       private readonly Dictionary<int,(Transform Transform,Curve Outline)> _previewOutlines=[];
       private readonly Dictionary<int,(Transform Transform,double Gap,Polyline[] Contours)> _previewClearance=[];
@@ -1996,6 +2005,7 @@ namespace vTools.Commands
         RhinoDoc.UserStringChanged+=PartSettingsChanged;
         Rhino.Commands.Command.UndoRedo+=LiveUndoRedo;
         RhinoApp.Idle+=PackingIdle;
+        _picking.GeometryChanged+=PartGeometryChanged;
         var placement=ToolsOptionStore.Read(Section,section=>ReadWindowPlacement(ToolsOptionStore.TryGetString(section,WindowPlacementKey,out var json)?json:null));
         _windowPlacement=new WindowPlacementSession(this,placement,value=>
         {
@@ -2290,6 +2300,8 @@ namespace vTools.Commands
         if(!_closed&&_previewHasFocus!=(_manualGesture!=null||_previewKeyboard.ViewportHasFocus))
         {RefreshMovingHighlights();if(!_previewHasFocus)_pivotVisible=false;_doc.Views.Redraw();}
         if(_pendingPlacedTables.Count>0) { OpenPreselectedTables(); return; }
+        if(!_closed&&_placedRulersDirty&&!Busy())RefreshPlacedRulers();
+        if(!_closed&&!_packing&&!_applyingLive&&!_replayingLiveHistory&&_liveUndoRecord==0&&_manualGesture==null&&_changedPartObjects.Count>0&&!PackingBlocked()) RefreshChangedPartGeometry();
         if(!_closed&&!_applyingLive&&!_replayingLiveHistory&&_liveUndoRecord==0&&_externalPartSettings.Count>0&&!PackingBlocked()) ReloadExternalPartSettings();
         if(_needsNest&&!_closed&&!_locationPicking&&!_packing&&!PackingBlocked()) ReNest();
       }
@@ -2299,6 +2311,61 @@ namespace vTools.Commands
         string? section=e.Key.StartsWith(PartSettingsSection+"\\",StringComparison.Ordinal)?PartSettingsSection:
           e.Key.StartsWith(PartNamesSection+"\\",StringComparison.Ordinal)?PartNamesSection:null;
         if(section!=null) _externalPartSettings.Add(e.Key[(section.Length+1)..]);
+      }
+      private void PartGeometryChanged(Guid id)
+      {
+        if(_closed)return;
+        if(_placedTableRulers.ContainsKey(id)||_doc.Objects.FindId(id) is {} obj&&NestTableMetadata.IsTableBorder(_doc,obj))_placedRulersDirty=true;
+        if(_placing||_applyingLive||_replayingLiveHistory||
+          !_rows.Any(row=>row.Part.Items.Any(item=>item.Id==id)||_liveParts.TryGetValue(row.Id,out var ids)&&ids.Contains(id)))return;
+        _changedPartObjects.Add(id);
+        if(_packing){_needsNest=false;_packingCancellation?.Cancel();}
+      }
+      private void RefreshChangedPartGeometry()
+      {
+        var changed=_changedPartObjects.ToHashSet();_changedPartObjects.Clear();bool refreshed=false;
+        foreach(var row in _rows)
+        {
+          bool live=_liveParts.TryGetValue(row.Id,out var liveIds);
+          var ids=live?liveIds!:row.Part.Items.Select(item=>item.Id).ToArray();
+          if(!ids.Any(changed.Contains))continue;
+          var captured=new List<PlanarPartSelection.Part>();
+          try
+          {
+            captured=PlanarPartSelection.Capture(_doc,ids,_doc.ModelAbsoluteTolerance,requirePlanarDetails:false);
+            if(captured.Count!=1)
+            {_status.Text="Changed part has no single closed boundary";Log.Write("vNest","geometry refresh needs one boundary part={0} found={1}",row.Name,captured.Count);continue;}
+            var source=captured[0];EnsureCutFootprint(_doc,source);
+            var placements=_result.Placements.Where(part=>row.OwnsInstance(part.Id)).ToArray();
+            var transforms=placements.ToDictionary(part=>part.Id,part=>InstanceTransform(row,part));
+            var inverse=Transform.Identity;
+            if(live&&(placements.Length==0||!transforms[placements[0].Id].TryGetInverse(out inverse)))continue;
+            var replacement=new PlanarPartSelection.Part(source.Outline.DuplicateCurve(),row.Part.Plane,source.Attributes.Duplicate(),
+              source.Items.Select(item=>item with {Geometry=item.Geometry.Duplicate(),Attributes=item.Attributes.Duplicate()}).ToList());
+            replacement.Outline.Transform(inverse);foreach(var item in replacement.Items)item.Geometry.Transform(inverse);
+            if(!refreshed){ClearManualHistory();ClearPreviewCopies();refreshed=true;}
+            row.ReplaceGeometry(replacement);
+            // Keep the displayed transform fixed even when the edited outline changes its bounding box.
+            var updates=new Dictionary<int,NestPackingEngine.Placement>();
+            foreach(var previous in placements)
+            {
+              if(ManualPose(row,previous.Pose.Rotation,previous.Pose.Flipped,previous.Table) is not {} pose)continue;
+              var next=previous with {Pose=pose};var origin=row.Part.Plane.Origin;
+              var shift=transforms[previous.Id]*origin-InstanceTransform(row,next)*origin;var frame=DisplayTablePlane(previous.Table);
+              next=next with {X=next.X+shift*frame.XAxis,Y=next.Y+shift*frame.YAxis};updates[next.Id]=next;
+              if(_manualInstances.ContainsKey(next.Id))_manualInstances[next.Id]=next;
+              if(next.Id==row.Id){row.X=next.X;row.Y=next.Y;}
+            }
+            _result=_result with {Placements=_result.Placements.Select(part=>updates.GetValueOrDefault(part.Id,part)).ToList()};
+          }
+          catch(Exception ex){_status.Text="Could not refresh changed part";Log.Write("vNest","geometry refresh failed part={0}: {1}",row.Name,ex);}
+          finally{foreach(var part in captured)part.Dispose();}
+        }
+        if(!refreshed)return;
+        _workingResult=null;Interlocked.Exchange(ref _bestInProgress,null);_layoutRevision++;
+        _packedRevision=UnpackedRevision;_place.Enabled=false;_needsNest=false;
+        _status.Text="Part geometry refreshed; re-nest to update placement";
+        RefreshGrid();RefreshHighlights();_doc.Views.Redraw();
       }
       private void ReloadExternalPartSettings()
       {
@@ -2626,7 +2693,7 @@ namespace vTools.Commands
 
       private void ReNest()
       {
-        if(_closed||_locationPicking||_liveTables.Count>0) return;
+        if(_closed||_locationPicking||_liveTables.Count>0||!_rows.Any(row=>row.Included)) return;
         if(_result.TableSettings.Count>0){ReNestTables(Enumerable.Range(0,_result.Tables).ToArray(),true);return;}
         EndManualGesture(true);
         if(PackingBlocked()||_packing)
@@ -2784,15 +2851,17 @@ namespace vTools.Commands
         for(int column=0;column<_tableGrid.Columns.Count;column++)_tableGrid.Columns[column].Editable=!_packing&&(column is 0 or 3||column>=5);
         for(int column=0;column<_grid.Columns.Count;column++)_grid.Columns[column].Editable=!_packing&&column!=8&&column!=17;
         _nest.Text=_packing?"Stop":count>1?"Nest Tables":table?"Nest Table":"Nest";
-        _nest.Enabled=!_stopping;
+        _nest.Enabled=NestActionAvailable(_packing,_stopping,_rows.Any(row=>row.Included));
         _editTables.Enabled=!_packing;
         _nest.ToolTip=_packing?"Stop searching and retain the best valid nest reached so far":table||_liveTables.Count>0?
           "Fresh nest of working tables pooled by material; release old positions and angles while keeping grain and rotation rules":
           "Pack included parts; retain fixed positions, manual angles and grain settings";
       }
       private void NestAction()
-      {if(_packing)StopPacking();else if(SelectedNestTables is {Length:>0} tables)ReNestSelectedTables(tables);
+      {if(!NestActionAvailable(_packing,_stopping,_rows.Any(row=>row.Included)))return;
+        if(_packing)StopPacking();else if(SelectedNestTables is {Length:>0} tables)ReNestSelectedTables(tables);
         else if(_liveTables.Count>0)ReNestSelectedTables(Enumerable.Range(0,_result.Tables).ToArray());else ReNest();}
+      internal static bool NestActionAvailable(bool packing,bool stopping,bool hasIncludedParts)=>!stopping&&(packing||hasIncludedParts);
 
       private void StopPacking()
       {
@@ -4687,6 +4756,8 @@ namespace vTools.Commands
       private sealed record RulerTick(Point3d Point,double Inches,bool Major);
       private sealed record TableRulerData(Plane Frame,double Width,double Length,double Inch,RulerTick[] AlongLength,RulerTick[] AcrossWidth,Line[] Grid);
       private readonly Dictionary<int,TableRulerData> _tableRulers=[];
+      private readonly Dictionary<Guid,TableRulerData> _placedTableRulers=[];
+      private bool _placedRulersDirty=true; // true refreshes placed-table frames once at the next command-free idle, never during viewport redraw.
       private (int Table,double X,double Y,bool AlongLength,bool AcrossWidth,Guid Viewport)? _tableCursor;
       private long _tableCursorTick;
       private static double ModelInch(UnitSystem units)=>units is UnitSystem.None or UnitSystem.CustomUnits?1:RhinoMath.UnitScale(UnitSystem.Inches,units);
@@ -4698,7 +4769,7 @@ namespace vTools.Commands
           double total=size/inch;
           int step=total<=MaximumRulerTicks?1:RulerFootInches*Math.Max(1,(int)Math.Ceiling(total/MaximumRulerTicks/RulerFootInches));
           return Enumerable.Range(0,(int)Math.Min(MaximumRulerTicks,Math.Floor(total/step))+1).Select(index=>
-          {double value=(double)index*step;return new RulerTick(alongLength?frame.PointAt(width,value*inch):frame.PointAt(width-value*inch,length),value,(index*step)%RulerFootInches==0);}).ToArray();
+          {double value=(double)index*step;return new RulerTick(alongLength?frame.PointAt(width,value*inch):frame.PointAt(width-value*inch,0),value,(index*step)%RulerFootInches==0);}).ToArray();
         }
         int count=(int)Math.Min(MaximumRulerTicks,Math.Max(0,Math.Ceiling(length/(TableGridInches*inch))-1));
         var grid=Enumerable.Range(1,count).Select(index=>new Line(frame.PointAt(0,index*TableGridInches*inch),frame.PointAt(width,index*TableGridInches*inch))).ToArray();
@@ -4710,12 +4781,25 @@ namespace vTools.Commands
         if(_tableRulers.TryGetValue(table,out var cached)&&cached.Frame==frame&&cached.Width==width&&cached.Length==length&&cached.Inch==inch)return cached;
         return _tableRulers[table]=CreateTableRulers(frame,width,length,inch);
       }
+      private void RefreshPlacedRulers()
+      {
+        _placedRulersDirty=false;var tables=new List<LiveTable>();
+        try
+        {
+          tables=ReadPlacedTables();_placedTableRulers.Clear();double inch=ModelInch(_doc.ModelUnitSystem);
+          foreach(var table in tables)
+            _placedTableRulers[table.Border]=CreateTableRulers(table.Frame,table.Material.Width,table.Length,inch);
+        }
+        catch(Exception ex){Log.Write("vNest","placed-table rulers could not refresh: {0}",ex);}
+        finally{foreach(var table in tables)table.Dispose();}
+        _doc.Views.Redraw();
+      }
       private static (double X,double Y,bool AlongLength,bool AcrossWidth) TableCursorCoordinates(Plane frame,double width,double length,Point3d point)
       {
         frame.ClosestParameter(point,out double across,out double along);
         if(Math.Abs(across)<=RulerCoordinateTolerance)across=0;else if(Math.Abs(across-width)<=RulerCoordinateTolerance)across=width;
         if(Math.Abs(along)<=RulerCoordinateTolerance)along=0;else if(Math.Abs(along-length)<=RulerCoordinateTolerance)along=length;
-        return(along,width-across,along>=0&&along<=length,across>=0&&across<=width);
+        return(Math.Max(0,along),Math.Max(0,width-across),along>=0&&along<=length,across>=0&&across<=width);
       }
       private void UpdateTableCursor(MouseCallbackEventArgs e)
       {
@@ -4734,13 +4818,16 @@ namespace vTools.Commands
       private void ClearTableCursor(){_tableCursor=null;_cursorReadout.Text=EmptyCursorStatus;}
       private void DrawTableRulers(DrawEventArgs e)
       {
-        for(int table=0;table<VisibleResult.Tables;table++)
+        var working=_liveTables.Select(table=>table.Border).ToHashSet();
+        var tables=Enumerable.Range(0,PreviewTableCount(VisibleResult.Tables,_locationPicking)).Select(RulersForTable)
+          .Concat(_placedTableRulers.Where(pair=>!working.Contains(pair.Key)&&_doc.Objects.FindId(pair.Key) is {Visible:true}).Select(pair=>pair.Value));
+        foreach(var data in tables)
         {
-          var data=RulersForTable(table);var center=data.Frame.PointAt(data.Width/2,data.Length/2);
+          var center=data.Frame.PointAt(data.Width/2,data.Length/2);
           if(!e.Viewport.IsVisible(new Rectangle3d(data.Frame,data.Width,data.Length).BoundingBox))continue;
           if(!e.Viewport.GetWorldToScreenScale(center,out double scale)||!double.IsFinite(scale)||scale<=0)continue;
           if(ShowTableGrid)e.Display.DrawLines(data.Grid,TableGridColor,RulerStrokeWidth);
-          void DrawTicks(RulerTick[] ticks,Vector3d outward)
+          void DrawTicks(RulerTick[] ticks,Vector3d outward,Vector3d offset,bool alongLength)
           {
             double inchPixels=data.Inch*scale;
             if(inchPixels<RulerMinimumTickPixels/MaximumRulerTicks)return;
@@ -4751,29 +4838,52 @@ namespace vTools.Commands
             {
               if(tick.Inches%step!=0)continue;
               double pixels=tick.Major?RulerMajorPixels:RulerMinorPixels;
-              lines.Add(new(tick.Point,tick.Point+outward*(pixels/scale)));
-              if(tick.Major&&tick.Inches%labelStep==0)
-              {var point=e.Viewport.WorldToClient(tick.Point+outward*((RulerMajorPixels+RulerTextPaddingPixels)/scale));e.Display.Draw2dText(tick.Inches.ToString("0",System.Globalization.CultureInfo.InvariantCulture),RulerColor,point,true,RulerTextSize);}
+              var anchor=tick.Point+offset;
+              lines.Add(new(anchor,anchor+outward*(pixels/scale)));
+              bool nearCursor=_tableCursor is {} cursor&&cursor.Viewport==e.Viewport.Id&&CursorTable is {} table&&
+                RulersForTable(table).Frame==data.Frame&&(alongLength?cursor.AlongLength:cursor.AcrossWidth)&&
+                Math.Abs(tick.Inches-(alongLength?cursor.X:cursor.Y)/data.Inch)*inchPixels<RulerMinimumLabelPixels;
+              if(tick.Major&&tick.Inches%labelStep==0&&!nearCursor)
+              {
+                var point=e.Viewport.WorldToClient(anchor+outward*((RulerMajorPixels+RulerTextPaddingPixels)/scale));
+                DrawRulerCoordinates(e,point,tick.Inches,false);
+              }
             }
             e.Display.DrawLines(lines,RulerColor,RulerStrokeWidth);
           }
-          DrawTicks(data.AlongLength,data.Frame.XAxis);DrawTicks(data.AcrossWidth,data.Frame.YAxis);
+          DrawTicks(data.AlongLength,data.Frame.XAxis,Vector3d.Zero,true);
+          DrawTicks(data.AlongLength,-data.Frame.XAxis,-data.Frame.XAxis*data.Width,true);
+          DrawTicks(data.AcrossWidth,-data.Frame.YAxis,Vector3d.Zero,false);
+          DrawTicks(data.AcrossWidth,data.Frame.YAxis,data.Frame.YAxis*data.Length,false);
         }
+      }
+      internal static (string Inches,string Yards) RulerCoordinateLabels(double inches,bool cursor)=>
+        (inches.ToString(cursor?"0.000":"0",System.Globalization.CultureInfo.InvariantCulture),
+          (inches/(RulerFootInches*3.0)).ToString("0.00",System.Globalization.CultureInfo.InvariantCulture)+" yd");
+      private static void DrawRulerCoordinates(DrawEventArgs e,Point2d point,double inches,bool cursor)
+      {
+        var labels=RulerCoordinateLabels(inches,cursor);
+        e.Display.Draw2dText(labels.Inches,RulerColor,point,true,RulerTextSize);
+        e.Display.Draw2dText(labels.Yards,RulerColor,new Point2d(point.X,point.Y+RulerTextLineSpacing),true,RulerTextSize);
       }
       private void DrawTableCursor(DrawEventArgs e)
       {
         if(_tableCursor is not {} cursor||cursor.Viewport!=e.Viewport.Id||cursor.Table!=CursorTable||cursor.Table>=VisibleResult.Tables)return;
         var frame=DisplayTablePlane(cursor.Table);double width=TableMaterial(cursor.Table).Width,length=TableLength(cursor.Table);
-        void Arrow(Point3d point,Vector3d outward)
+        void Arrow(Point3d point,Vector3d outward,double coordinate)
         {
           var tip=e.Viewport.WorldToClient(point);var normal=e.Viewport.WorldToClient(point+outward)-tip;if(!normal.Unitize())return;
           var side=new Vector2d(-normal.Y,normal.X);var tail=tip+normal*RulerCursorPixels;
           var first=tip+normal*(RulerCursorPixels/2)+side*(RulerCursorPixels/3);var second=tip+normal*(RulerCursorPixels/2)-side*(RulerCursorPixels/3);
           for(int pass=0;pass<2;pass++)foreach(var end in new[]{tail,first,second})
             e.Display.Draw2dLine(new System.Drawing.PointF((float)tip.X,(float)tip.Y),new System.Drawing.PointF((float)end.X,(float)end.Y),pass==0?SDColor.White:SDColor.Black,pass==0?MirrorCueHalo:MirrorCueStroke);
+          var label=tip+normal*(RulerCursorPixels+RulerTextPaddingPixels);
+          DrawRulerCoordinates(e,new Point2d(label.X,label.Y),coordinate/ModelInch(_doc.ModelUnitSystem),true);
         }
-        if(cursor.AlongLength)Arrow(frame.PointAt(width,cursor.X),frame.XAxis);
-        if(cursor.AcrossWidth)Arrow(frame.PointAt(width-cursor.Y,length),frame.YAxis);
+        if(cursor.AlongLength)
+        {Arrow(frame.PointAt(width,cursor.X),frame.XAxis,cursor.X);Arrow(frame.PointAt(0,cursor.X),-frame.XAxis,cursor.X);}
+        if(cursor.AcrossWidth)
+        {Arrow(frame.PointAt(width-cursor.Y,0),-frame.YAxis,cursor.Y);Arrow(frame.PointAt(width-cursor.Y,length),frame.YAxis,cursor.Y);}
       }
 
       private sealed class Preview(NestWindow window) : DisplayConduit
@@ -6140,6 +6250,7 @@ namespace vTools.Commands
     internal Guid[]? FocusMembers=>_completingClick&&!_dragged&&_interiorSelect?_interiorMembers:null;
     internal Func<IEnumerable<Guid>>? RetainedSelection { get; set; }
     internal event Action<Guid[],bool>? PartClicked;
+    internal event Action<Guid>? GeometryChanged;
     internal Func<MouseCallbackEventArgs,bool>? PreviewMouseDown,PreviewMouseMove,PreviewMouseUp;
     internal Func<RhinoView,System.Drawing.Point,System.Drawing.Point,bool,bool,bool>? PreviewWindowSelection;
     internal Func<bool>? PreviewGestureActive;
@@ -6367,13 +6478,22 @@ namespace vTools.Commands
     }
 
     private void ObjectChanged(object? sender,RhinoObjectEventArgs e)
-    { if(e.TheObject.Document?.RuntimeSerialNumber==_doc.RuntimeSerialNumber||_boundaries.Any(boundary=>boundary.Members.Contains(e.ObjectId))) _boundariesDirty=true; }
-    private void ObjectReplaced(object? sender,RhinoReplaceObjectEventArgs e) { if(e.Document.RuntimeSerialNumber==_doc.RuntimeSerialNumber) _boundariesDirty=true; }
+    {
+      if(e.TheObject.Document?.RuntimeSerialNumber!=_doc.RuntimeSerialNumber&&!_boundaries.Any(boundary=>boundary.Members.Contains(e.ObjectId)))return;
+      _boundariesDirty=true;GeometryChanged?.Invoke(e.ObjectId);
+    }
+    private void ObjectReplaced(object? sender,RhinoReplaceObjectEventArgs e)
+    {
+      if(e.Document.RuntimeSerialNumber!=_doc.RuntimeSerialNumber)return;
+      _boundariesDirty=true;
+      if(e.OldRhinoObject is {} previous)GeometryChanged?.Invoke(previous.Id);
+      if(e.NewRhinoObject is {} next&&next.Id!=e.OldRhinoObject?.Id)GeometryChanged?.Invoke(next.Id);
+    }
     private void AttributesChanged(object? sender,RhinoModifyObjectAttributesEventArgs e) { if(e.Document.RuntimeSerialNumber==_doc.RuntimeSerialNumber) _boundariesDirty=true; }
 
     public void Dispose()
     {
-      _blankSelection=null; _interiorMembers=null; RetainedSelection=null; PartClicked=null;PreviewMouseDown=null;PreviewMouseMove=null;PreviewMouseUp=null;PreviewWindowSelection=null;PreviewGestureActive=null;SelectionSuppressed=null;PreviewCancelled=null; Enabled=false;
+      _blankSelection=null; _interiorMembers=null; RetainedSelection=null; PartClicked=null;GeometryChanged=null;PreviewMouseDown=null;PreviewMouseMove=null;PreviewMouseUp=null;PreviewWindowSelection=null;PreviewGestureActive=null;SelectionSuppressed=null;PreviewCancelled=null; Enabled=false;
       _selectionBox.Enabled=false;RhinoApp.EscapeKeyPressed-=CancelGesture;
       RhinoDoc.AddRhinoObject-=ObjectChanged; RhinoDoc.DeleteRhinoObject-=ObjectChanged; RhinoDoc.UndeleteRhinoObject-=ObjectChanged;
       RhinoDoc.ReplaceRhinoObject-=ObjectReplaced; RhinoDoc.ModifyObjectAttributes-=AttributesChanged;

@@ -7,6 +7,7 @@ namespace vTools.Commands;
 
 /// <summary>
 /// Gives every visible vTools command a Rhino Help topic with its description and workflow.
+/// Identifies the loaded build in the shared help footer.
 /// </summary>
 public abstract class vToolsCommand : Command
 {
@@ -35,7 +36,8 @@ internal static class CommandHelpUrl
         string.IsNullOrWhiteSpace(commandName))
       return string.Empty;
 
-    return documentUrl + BuildThemeQuery() + "#" +
+    var version = typeof(vToolsCommand).Assembly.GetName().Version?.ToString() ?? string.Empty;
+    return documentUrl + BuildThemeQuery() + "&version=" + Uri.EscapeDataString(version) + "#" +
       Uri.EscapeDataString(commandName.Trim().ToLowerInvariant());
   }
 

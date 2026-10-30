@@ -52,6 +52,12 @@ namespace vTools.Commands
     private const int SelectionDebounceMilliseconds = 24; // Curve-selection settling delay, in milliseconds.
     private const int HistoryPreviewIntervalMilliseconds = 50; // Minimum interval between live history preview starts, in milliseconds; rebuild time counts toward the interval.
     private const double HistoryPreviewToleranceFactor = 0.000001; // Fraction of document absolute tolerance used to ignore preview-position jitter; positive and much smaller than 1.
+    private const bool QuietPlacementNativeOutput = true; // true removes routine native history/mesh/preview-undo progress; false retains it during placement.
+    private static readonly System.Text.RegularExpressions.Regex NativeHistoryProgress = new(
+      @"^History updated \d+ objects?\.$",
+      System.Text.RegularExpressions.RegexOptions.CultureInvariant); // Exact English history update count; other warnings/errors remain visible.
+    private const string NativeMeshProgress = "Creating meshes... Press Esc to cancel"; // Exact English routine meshing progress emitted by preview redraws.
+    private const string NativePreviewUndoProgress = "Undoing vSetPt preview"; // Exact native Undo description belonging only to this command's temporary record.
 
     private const string Tag = "vSetPt";
     private const string OptionsSectionName = "vSetPt";
@@ -824,7 +830,7 @@ namespace vTools.Commands
     private static Result PlaceSelectedGrips(RhinoDoc doc, PendingCurvePick[] picks)
     {
       UnselectObjectsAndGrips(doc);
-      EnableEditPointsForHiddenEndpointPicks(doc, picks);
+      EnableGripsForHiddenEndpointPicks(doc, picks);
 
       // Enable grips for each target curve and select the requested grips.
       int selectedCount = 0;
@@ -918,14 +924,14 @@ namespace vTools.Commands
       {
         Log.Write(Tag, $"  placement ended without changes; preview restored; result={placementResult}");
         UnselectObjectsAndGrips(doc);
-        RestoreGripStates(doc, picks);
-        SelectUsedGrips(doc, picks, includeDetectedEndpoints: false);
+        EnableGripsForHiddenEndpointPicks(doc, picks);
+        SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
         doc.Views.Redraw();
         return placementResult;
       }
 
       UnselectObjectsAndGrips(doc);
-      EnableEditPointsForHiddenEndpointPicks(doc, picks);
+      EnableGripsForHiddenEndpointPicks(doc, picks);
       SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
       Log.Write(Tag, $"  committing -SetPt with {selectedCount} grip(s) selected");
 
@@ -984,8 +990,9 @@ namespace vTools.Commands
           $"  -SetPt result={setPtResult?.ToString() ?? "Unknown"}" +
           $" moved={moved} completed={completed}");
         UnselectObjectsAndGrips(doc);
-        if (completed)
+        if (completed || setPtResult == Result.Cancel)
         {
+          EnableGripsForHiddenEndpointPicks(doc, picks);
           SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
         }
         else
@@ -1014,7 +1021,7 @@ namespace vTools.Commands
       doc.Objects.UnselectAll();
     }
 
-    private static void EnableEditPointsForHiddenEndpointPicks(
+    private static void EnableGripsForHiddenEndpointPicks(
       RhinoDoc doc,
       IEnumerable<PendingCurvePick> picks)
     {
@@ -1027,15 +1034,12 @@ namespace vTools.Commands
         return;
 
       foreach (var id in objectIds)
-        doc.Objects.FindId(id)?.Select(true);
-
-      var editPointsOn = RhinoApp.RunScript("_EditPtOn", false);
-      Log.Write(Tag,
-        $"  edit points for hidden endpoint picks: objects={objectIds.Length}" +
-        $" result={editPointsOn}");
-
-      foreach (var id in objectIds)
-        doc.Objects.FindId(id)?.Select(false);
+      {
+        var obj = doc.Objects.FindId(id);
+        if (obj != null) obj.GripsOn = true;
+      }
+      // A queued EditPtOn can steal the placement getter and its preview undo record.
+      Log.Write(Tag, $"  grips enabled directly for hidden endpoint picks: objects={objectIds.Length}");
     }
 
     private static void SelectUsedGrips(
@@ -1170,6 +1174,7 @@ namespace vTools.Commands
       RhinoDoc doc, PendingCurvePick[] picks, out Result commandResult)
     {
       commandResult = Result.Success;
+      using var output = CommandHistoryCleanup.Begin(Tag, QuietPlacementNativeOutput, IsRoutinePlacementOutput);
       using var session = new LivePlacementPreview(doc, picks);
       using var get = new GetPoint();
       get.SetCommandPrompt("Location for selected points");
@@ -1247,33 +1252,85 @@ namespace vTools.Commands
         throw new InvalidOperationException("Preview rollback must run after native point input has exited.");
 
       uint undoneRecord = 0;
-      Result? undoResult = null;
+      var inverseRecord = doc.NextUndoRecordSerialNumber;
       EventHandler<UndoRedoEventArgs> onUndo = (_, e) =>
       {
         if (e.IsEndUndo) undoneRecord = e.UndoSerialNumber;
       };
-      EventHandler<CommandEventArgs> onEnded = (_, e) =>
-      {
-        if (e.Document == doc && e.CommandEnglishName.Equals("Undo", StringComparison.OrdinalIgnoreCase))
-          undoResult = e.CommandResult;
-      };
-
       Command.UndoRedo += onUndo;
-      Command.EndCommand += onEnded;
       try
       {
-        // doc.Undo() alone leaves its inverse on the undo stack in a ScriptRunner command.
-        // Let Rhino's Undo command finish recording and route that inverse to the redo stack.
-        _ = RhinoApp.RunScript("_Undo", false);
+        // Escape can abort a nested _Undo script. Finish the direct API's inverse record explicitly.
+        var accepted = doc.Undo();
+        var inverseOwned = doc.CurrentUndoRecordSerialNumber == inverseRecord;
+        var ended = inverseOwned && doc.EndUndoRecord(inverseRecord);
+        Log.Write(Tag,
+          $"  preview rollback expected={expectedRecord} undone={undoneRecord}" +
+          $" accepted={accepted} inverse={inverseRecord} owned={inverseOwned} ended={ended}");
+        if (!accepted || undoneRecord != expectedRecord || !ended ||
+            doc.UndoActive || doc.UndoRecordingIsActive)
+          throw new InvalidOperationException("Rhino did not finish the preview rollback undo record.");
+        // This overload removes only the inverse just created, never the user's older records.
+        doc.ClearUndoRecords(inverseRecord, false);
       }
       finally
       {
-        Command.EndCommand -= onEnded;
         Command.UndoRedo -= onUndo;
       }
-      if (undoneRecord != expectedRecord || undoResult != Result.Success ||
-          doc.UndoActive || doc.UndoRecordingIsActive)
-        throw new InvalidOperationException("Rhino did not finish the preview rollback undo command.");
+    }
+
+    private static bool IsRoutinePlacementOutput(string line)
+    {
+      var text = line.Trim();
+      return NativeHistoryProgress.IsMatch(text) ||
+        text.Equals(NativeMeshProgress, StringComparison.Ordinal) ||
+        text.Equals(NativePreviewUndoProgress, StringComparison.Ordinal);
+    }
+
+    private sealed class OriginalGeometryConduit : Rhino.Display.DisplayConduit
+    {
+      private readonly RhinoDoc _doc;
+      private readonly IReadOnlyDictionary<Guid, GeometryBase> _geometry;
+      private readonly Dictionary<Guid, System.Drawing.Color> _colors = new();
+
+      internal OriginalGeometryConduit(RhinoDoc doc, IReadOnlyDictionary<Guid, GeometryBase> geometry)
+      {
+        _doc = doc;
+        _geometry = geometry;
+        foreach (var id in geometry.Keys)
+        {
+          var obj = doc.Objects.FindId(id);
+          if (obj?.Visible == true)
+            _colors[id] = obj.Attributes.DrawColor(doc);
+        }
+      }
+
+      protected override void CalculateBoundingBox(Rhino.Display.CalculateBoundingBoxEventArgs e)
+      {
+        if (e.RhinoDoc != _doc) return;
+        foreach (var id in _colors.Keys)
+          e.IncludeBoundingBox(_geometry[id].GetBoundingBox(false));
+      }
+
+      protected override void PostDrawObjects(Rhino.Display.DrawEventArgs e)
+      {
+        if (e.RhinoDoc != _doc) return;
+        foreach (var pair in _colors)
+        {
+          switch (_geometry[pair.Key])
+          {
+            case Curve curve:
+              PreviewDisplay.DrawCurve(e.Display, curve, pair.Value);
+              break;
+            case Brep brep:
+              PreviewDisplay.DrawBrepWires(e.Display, brep, pair.Value);
+              break;
+            case Mesh mesh:
+              PreviewDisplay.DrawMeshWires(e.Display, mesh, pair.Value);
+              break;
+          }
+        }
+      }
     }
 
     private sealed class LivePlacementPreview : IDisposable
@@ -1288,6 +1345,7 @@ namespace vTools.Commands
       private readonly List<Source> _sources = new();
       private readonly HashSet<Guid> _children = new();
       private readonly Dictionary<Guid, GeometryBase> _originalGeometry = new();
+      private readonly OriginalGeometryConduit _originals;
       private readonly EndpointPreviewConduit _temporary = new();
       private readonly System.Windows.Forms.Timer _timer;
       private readonly bool _canEditOriginals;
@@ -1352,6 +1410,7 @@ namespace vTools.Commands
           var geometry = doc.Objects.FindId(id)?.Geometry.Duplicate();
           if (geometry != null) _originalGeometry.Add(id, geometry);
         }
+        _originals = new OriginalGeometryConduit(doc, _originalGeometry);
 
         _timer = new System.Windows.Forms.Timer { Interval = HistoryPreviewIntervalMilliseconds };
         _timer.Tick += (_, _) =>
@@ -1461,6 +1520,7 @@ namespace vTools.Commands
       internal void Refresh()
       {
         if (_refreshing || !_pending || !_hasTarget || _previewMode == PreviewMode.Off) return;
+        using var output = CommandHistoryCleanup.Begin(Tag, QuietPlacementNativeOutput, IsRoutinePlacementOutput);
         _pending = false;
         var locations = GetPlacementLocations();
         if (PreviewPositionsEqual(_previewLocations, locations, _positionTolerance)) return;
@@ -1540,6 +1600,7 @@ namespace vTools.Commands
               throw new InvalidOperationException("Could not update a preview curve.");
             }
             _changed = true;
+            _originals.Enabled = true;
             sourcesChanged = true;
             if (updated.Id != source.Id)
               throw new InvalidOperationException("A preview curve changed its identity.");
@@ -1603,6 +1664,7 @@ namespace vTools.Commands
             throw new InvalidOperationException("Preview rollback did not restore all original geometry.");
         }
         _changed = false;
+        _originals.Enabled = false;
         HistorySettings.UpdateEnabled = _historyUpdateWasEnabled;
         SelectPreviewGrips();
         _doc.Views.Redraw();
@@ -1613,6 +1675,8 @@ namespace vTools.Commands
         Stop();
         _timer.Dispose();
         _temporary.Enabled = false;
+        _originals.Enabled = false;
+        using var output = CommandHistoryCleanup.Begin(Tag, QuietPlacementNativeOutput, IsRoutinePlacementOutput);
         try
         {
           Rollback();

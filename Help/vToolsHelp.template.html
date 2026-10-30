@@ -54,6 +54,7 @@ body {
   background: var(--page-background);
 }
 main { width: 100%; margin: 0; padding: 0; }
+.build-version { color: var(--muted-color); font-size: 0.85em; margin-top: 12px; margin-bottom: 0; }
 .help-topic { display: none; }
 .help-topic.active { display: block; }
 h1 {
@@ -254,9 +255,16 @@ a:active { text-decoration: none; }
 <p><a href="#vhelp">vHelp</a></p>
 </article>
 <!-- GENERATED_TOPICS_END -->
+<footer id="build-version" class="build-version" hidden></footer>
 </main>
 <script>
 (function () {
+  const version = new URLSearchParams(location.search).get('version');
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(version || '')) {
+    const label = document.getElementById('build-version');
+    label.textContent = 'vTools ' + version;
+    label.hidden = false;
+  }
   const topics = Array.from(document.querySelectorAll('.help-topic'));
   function showTopic() {
     const requested = decodeURIComponent(location.hash.slice(1)).toLowerCase();

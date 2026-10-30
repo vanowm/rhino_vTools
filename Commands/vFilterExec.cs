@@ -15,12 +15,14 @@ namespace vTools.Commands;
 /// <summary>
 /// Runs a delegated command with a temporary selection filter and optional current layer.
 /// </summary>
-[CommandStyle(Style.Transparent)]
+[CommandStyle(Style.Transparent | Style.ScriptRunner | Style.NotUndoable)]
 public sealed class vFilterExec : vToolsCommand
 {
   // Defaults
   private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.
   private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Existing full layer path; *Current*, . or * leaves the current layer unchanged.
+  private const int InvocationHistoryTailCharacters = 4096; // Maximum trailing history characters inspected for the alias typed at an interrupted prompt.
+  private static readonly string[] BackgroundRepeatObservers = ["vHelp", "vPerpGumballProxy"]; // Known non-repeatable automatic updates allowed before alias registration; other new commands cancel it.
 
   private const string Tag = "vFilterExec";
 
@@ -47,16 +49,15 @@ public sealed class vFilterExec : vToolsCommand
 
   private static readonly Dictionary<string, FilterDefinition> FilterLookup = BuildFilterLookup();
 
-  private static PendingLaunch? _pendingLaunch;
   private static PendingLaunch? _lastLaunch;
   private static ActiveExecution? _activeExecution;
-  private static EventHandler? _launchIdleHandler;
-  private static EventHandler? _startIdleHandler;
-  private static EventHandler? _repeatIdleHandler;
-  private static bool _registeringRepeat;
   private static string? _repeatHelpUrl;
+  private static RepeatInvocation? _pendingRepeat;
+  private static RepeatInvocation? _registeringAlias;
 
   public override string EnglishName => "vFilterExec";
+
+  protected override string CommandContextHelpUrl => RepeatCommandHelpUrl;
 
   internal static string RepeatCommandHelpUrl =>
     string.IsNullOrWhiteSpace(_repeatHelpUrl)
@@ -65,8 +66,12 @@ public sealed class vFilterExec : vToolsCommand
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    CancelPendingLaunch();
-    CancelRepeatRegistration();
+    var registration = _registeringAlias;
+    if (registration != null) _registeringAlias = null;
+    using var quiet = CommandHistoryCleanup.Begin(Tag, registration != null, IsRegistrationHistoryLine);
+    var alias = registration == null ? CaptureInvokingAlias() : null;
+    Log.Write(Tag, "invocation alias={0} registration={1}", alias?.Name ?? "<not recorded>", registration != null);
+    if (registration == null) _repeatHelpUrl = null;
 
     var layerName = DefaultLayer;
     if (!TryGetCommand(doc, ref layerName, out var command, out var commandResult))
@@ -75,34 +80,144 @@ public sealed class vFilterExec : vToolsCommand
     if (!TryGetFilter(doc, ref layerName, out var filter, out var filterResult))
       return filterResult;
 
-    QueueLaunch(new PendingLaunch(command, filter, layerName, doc.RuntimeSerialNumber));
-    return Result.Success;
+    var launch = new PendingLaunch(command, filter, layerName, doc.RuntimeSerialNumber);
+    if (registration != null)
+    {
+      registration.Consumed = registration.Launch == launch;
+      Log.Write(Tag, "alias repeat consumed alias={0} matched={1}", registration.Alias.Name, registration.Consumed);
+      return registration.Consumed ? Result.Success : Result.Failure;
+    }
+    return Launch(launch, alias);
   }
 
   internal static void StopPending()
   {
-    CancelPendingLaunch();
     CancelRepeatRegistration();
-    CompleteActiveExecution(false, "plug-in shutdown");
-    _registeringRepeat = false;
+    _registeringAlias = null;
+    CompleteActiveExecution("plug-in shutdown");
   }
 
   internal static Result RepeatLast()
   {
-    if (_registeringRepeat)
-      return Result.Success;
-
     var launch = _lastLaunch;
     var doc = RhinoDoc.ActiveDoc;
     if (launch == null || doc == null)
       return Result.Nothing;
 
-    CancelPendingLaunch();
-    CancelRepeatRegistration();
     Log.Write(Tag,
       $"repeat command={launch.Command} filter={launch.Filter.CanonicalSpec} layer={launch.LayerName}");
-    QueueLaunch(launch with { DocumentSerialNumber = doc.RuntimeSerialNumber });
-    return Result.Success;
+    return Launch(launch with { DocumentSerialNumber = doc.RuntimeSerialNumber });
+  }
+
+  private static AliasInvocation? CaptureInvokingAlias()
+  {
+    try
+    {
+      string history = RhinoApp.CommandHistoryWindowText ?? string.Empty;
+      string tail = history[Math.Max(0, history.Length - InvocationHistoryTailCharacters)..].TrimEnd('\r', '\n');
+      string line = tail[(tail.LastIndexOf('\n') + 1)..].Trim();
+      int separator = line.LastIndexOf(':');
+      if (separator < 0) return null;
+      string name = line[(separator + 1)..].Trim();
+      if (name.Length == 0 || name.Any(char.IsWhiteSpace) || !CommandAliasList.IsAlias(name)) return null;
+      string macro = CommandAliasList.GetMacro(name);
+      return TryParseStandaloneAlias(macro, out _, out _, out _) ? new(name, macro) : null;
+    }
+    catch (Exception ex) { Log.Write(Tag, "alias repeat context unavailable: {0}", ex.Message); return null; }
+  }
+
+  private static bool TryParseStandaloneAlias(string macro, out string layer, out string command, out FilterSelection filter)
+  {
+    layer = DefaultLayer; command = string.Empty; filter = default;
+    var tokens = new List<string>();
+    for (int index = 0; index < macro.Length;)
+    {
+      while (index < macro.Length && char.IsWhiteSpace(macro[index])) index++;
+      if (index == macro.Length) break;
+      bool quoted = macro[index] == '"'; int start = quoted ? ++index : index;
+      while (index < macro.Length && (quoted ? macro[index] != '"' : !char.IsWhiteSpace(macro[index]) && macro[index] != '"')) index++;
+      if (quoted && index == macro.Length || !quoted && index < macro.Length && macro[index] == '"') return false;
+      tokens.Add(macro[start..index]); if (quoted) index++;
+      if (index < macro.Length && !char.IsWhiteSpace(macro[index])) return false;
+    }
+    int next = 0;
+    if (tokens.Count > 0 && tokens[0].TrimStart('_').Equals("NoEcho", StringComparison.OrdinalIgnoreCase)) next++;
+    while (next < tokens.Count && tokens[next] == "!") next++;
+    if (next >= tokens.Count || !tokens[next++].TrimStart('!', '_', '-', '\'').Equals(Tag, StringComparison.OrdinalIgnoreCase)) return false;
+    bool ReadLayer(out string? requested)
+    {
+      requested = null;
+      if (next >= tokens.Count || !tokens[next].TrimStart('_').Equals("Layer", StringComparison.OrdinalIgnoreCase)) return true;
+      if (++next >= tokens.Count) return false;
+      requested = NormalizeLayer(tokens[next++]);
+      return true;
+    }
+    if (!ReadLayer(out var firstLayer)) return false;
+    if (firstLayer != null) layer = firstLayer;
+    if (next >= tokens.Count) return false;
+    command = tokens[next++];
+    if (!ReadLayer(out var secondLayer)) return false;
+    if (secondLayer != null) layer = secondLayer;
+    return next == tokens.Count - 1 && TryParseFilter(tokens[next], out filter, out _);
+  }
+
+  private static string NormalizeLayer(string value) => value is "." or "*" ? DefaultLayer : value;
+  private static bool AliasMatches(AliasInvocation alias, PendingLaunch launch) =>
+    TryParseStandaloneAlias(alias.Macro, out var layer, out var command, out var filter) &&
+    command.Equals(launch.Command, StringComparison.Ordinal) && filter == launch.Filter &&
+    layer.Equals(launch.LayerName, StringComparison.OrdinalIgnoreCase);
+
+  private static bool IsRegistrationHistoryLine(string line) =>
+    line.TrimStart().StartsWith("Command to execute (", StringComparison.Ordinal) ||
+    line.TrimStart().StartsWith("Selection filter <", StringComparison.Ordinal) ||
+    line.TrimStart().StartsWith("Temporary layer name (", StringComparison.Ordinal);
+
+  private static void QueueRepeatRegistration(AliasInvocation alias, PendingLaunch launch)
+  {
+    CancelRepeatRegistration();
+    _pendingRepeat = new(alias, launch);
+    Command.BeginCommand += CancelRepeatForNewCommand;
+    RhinoApp.Idle += RegisterAliasOnIdle;
+  }
+
+  private static void CancelRepeatForNewCommand(object? sender, CommandEventArgs e)
+  {
+    if (BackgroundRepeatObservers.Contains(e.CommandEnglishName, StringComparer.OrdinalIgnoreCase)) return;
+    Log.Write(Tag, "alias repeat registration abandoned for newer command={0}", e.CommandEnglishName);
+    CancelRepeatRegistration();
+  }
+  private static void CancelRepeatRegistration()
+  {
+    RhinoApp.Idle -= RegisterAliasOnIdle;
+    Command.BeginCommand -= CancelRepeatForNewCommand;
+    _pendingRepeat = null;
+  }
+
+  private static void RegisterAliasOnIdle(object? sender, EventArgs e)
+  {
+    if (_pendingRepeat is not {} pending || Command.InCommand() || Command.InScriptRunnerCommand()) return;
+    CancelRepeatRegistration();
+    try
+    {
+      var doc = RhinoDoc.ActiveDoc;
+      if (doc?.RuntimeSerialNumber != pending.Launch.DocumentSerialNumber ||
+        !CommandAliasList.IsAlias(pending.Alias.Name) || CommandAliasList.GetMacro(pending.Alias.Name) != pending.Alias.Macro ||
+        pending.Launch.LayerName != DefaultLayer && doc.Layers.FindByFullPath(pending.Launch.LayerName, RhinoMath.UnsetIntIndex) < 0)
+      {Log.Write(Tag, "alias repeat registration abandoned: document, alias or layer changed alias={0}", pending.Alias.Name);return;}
+      // No enclosing command may finish after this macro and replace its MRU entry.
+      // Outside a ScriptRunner, RunScript queues the alias; retain the one-shot guard
+      // until the public command consumes it, rather than clearing it on return.
+      _registeringAlias = pending;
+      bool queued = RhinoApp.RunScript(doc.RuntimeSerialNumber,
+        pending.Alias.Name, pending.Alias.Name, false);
+      if (!queued && ReferenceEquals(_registeringAlias, pending)) _registeringAlias = null;
+      Log.Write(Tag, "alias repeat queued alias={0} accepted={1} consumed={2}", pending.Alias.Name, queued, pending.Consumed);
+    }
+    catch (Exception ex)
+    {
+      _registeringAlias = null;
+      Log.Write(Tag, "alias repeat registration failed: {0}", ex);
+    }
   }
 
   private static bool TryGetCommand(
@@ -312,32 +427,13 @@ public sealed class vFilterExec : vToolsCommand
     return value;
   }
 
-  private static void QueueLaunch(PendingLaunch launch)
+  private static Result Launch(PendingLaunch launch, AliasInvocation? alias = null)
   {
     _lastLaunch = launch;
-    _pendingLaunch = launch;
-    _launchIdleHandler = OnLaunchOnIdle;
-    RhinoApp.Idle += _launchIdleHandler;
-  }
-
-  private static void CancelPendingLaunch()
-  {
-    if (_launchIdleHandler != null)
-      RhinoApp.Idle -= _launchIdleHandler;
-    _launchIdleHandler = null;
-    _pendingLaunch = null;
-  }
-
-  private static void OnLaunchOnIdle(object? sender, EventArgs e)
-  {
-    var launch = _pendingLaunch;
-    CancelPendingLaunch();
-    if (launch == null)
-      return;
-
+    ActiveExecution? execution = null;
     try
     {
-      CompleteActiveExecution(false, "replaced by another launch");
+      CompleteActiveExecution("replaced by another launch");
       var doc = RhinoDoc.FromRuntimeSerialNumber(launch.DocumentSerialNumber);
       if (doc == null)
         throw new InvalidOperationException("The command's document is no longer open.");
@@ -348,45 +444,34 @@ public sealed class vFilterExec : vToolsCommand
       temporaryState.OneShotGeometryFilter = ObjectType.None;
       temporaryState.Enabled = true;
       temporaryState.SubObjectSelect = launch.Filter.RequiresSubObjects;
-      _activeExecution = new ActiveExecution(previousState, doc.RuntimeSerialNumber);
-      ApplyLayer(doc, launch.LayerName, _activeExecution);
+      execution = new ActiveExecution(previousState, doc.RuntimeSerialNumber);
+      _activeExecution = execution;
+      ApplyLayer(doc, launch.LayerName, execution);
       SelectionFilterSettings.UpdateFromState(temporaryState);
 
       Command.BeginCommand += OnDelegatedCommandBegin;
       Command.EndCommand += OnDelegatedCommandEnd;
 
       Log.Write(Tag, $"launch command={launch.Command} filter={launch.Filter.CanonicalSpec} layer={launch.LayerName}");
+      // Stay inside the caller's alias/macro until the delegate finishes; Rhino owns its repeat entry.
       var accepted = RhinoApp.RunScript(doc.RuntimeSerialNumber, launch.Command, false);
-
-      // Idle launches can return before BeginCommand; keep the temporary state until EndCommand.
-      if (_activeExecution is { HasStarted: false })
-      {
-        if (!accepted)
-          CompleteActiveExecution(true, "delegated command rejected");
-        else
-        {
-          _startIdleHandler = OnCheckDelegatedStartOnIdle;
-          RhinoApp.Idle += _startIdleHandler;
-        }
-      }
+      return execution.Result ?? (accepted && !execution.HasStarted ? Result.Nothing : Result.Failure);
     }
     catch (Exception ex)
     {
       Log.Write(Tag, $"launch failed: {ex.Message}");
       RhinoApp.WriteLine($"vFilterExec: {ex.Message}");
-      if (_activeExecution != null)
-        CompleteActiveExecution(true, "launch failed");
-      else
-        QueueRepeatRegistration();
+      return Result.Failure;
     }
-  }
-
-  private static void OnCheckDelegatedStartOnIdle(object? sender, EventArgs e)
-  {
-    if (Command.InCommand())
-      return;
-
-    CompleteActiveExecution(true, "delegated command did not start");
+    finally
+    {
+      if (ReferenceEquals(_activeExecution, execution))
+        CompleteActiveExecution("delegated call finished");
+      if (execution?.HasStarted == true && alias != null && AliasMatches(alias, launch))
+        QueueRepeatRegistration(alias, launch);
+      else if (alias != null)
+        Log.Write(Tag, "alias repeat registration skipped: invocation did not match alias={0}", alias.Name);
+    }
   }
 
   private static void OnDelegatedCommandBegin(object? sender, CommandEventArgs e)
@@ -413,21 +498,17 @@ public sealed class vFilterExec : vToolsCommand
       return;
     }
 
-    CompleteActiveExecution(
-      true,
-      $"delegated end command={e.CommandEnglishName} result={e.CommandResult}");
+    execution.Result = e.CommandResult;
+    CompleteActiveExecution($"delegated end command={e.CommandEnglishName} result={e.CommandResult}");
   }
 
-  private static void CompleteActiveExecution(bool queueRepeat, string reason)
+  private static void CompleteActiveExecution(string reason)
   {
     var execution = _activeExecution;
     if (execution == null)
       return;
 
     _activeExecution = null;
-    if (_startIdleHandler != null)
-      RhinoApp.Idle -= _startIdleHandler;
-    _startIdleHandler = null;
     Command.BeginCommand -= OnDelegatedCommandBegin;
     Command.EndCommand -= OnDelegatedCommandEnd;
     RestoreLayer(execution);
@@ -451,8 +532,6 @@ public sealed class vFilterExec : vToolsCommand
       }
     }
 
-    if (queueRepeat)
-      QueueRepeatRegistration();
   }
 
   private static void RestoreFilter(SelectionFilterSettingsState state)
@@ -596,37 +675,6 @@ public sealed class vFilterExec : vToolsCommand
     }
   }
 
-  private static void QueueRepeatRegistration()
-  {
-    CancelRepeatRegistration();
-    _repeatIdleHandler = OnRegisterRepeatOnIdle;
-    RhinoApp.Idle += _repeatIdleHandler;
-  }
-
-  private static void CancelRepeatRegistration()
-  {
-    if (_repeatIdleHandler != null)
-      RhinoApp.Idle -= _repeatIdleHandler;
-    _repeatIdleHandler = null;
-  }
-
-  private static void OnRegisterRepeatOnIdle(object? sender, EventArgs e)
-  {
-    if (Command.InCommand())
-      return;
-
-    CancelRepeatRegistration();
-    _registeringRepeat = true;
-    try
-    {
-      _ = RhinoApp.RunScript("_vFilterExecRepeat", false);
-    }
-    finally
-    {
-      _registeringRepeat = false;
-    }
-  }
-
   private sealed record FilterDefinition(
     string Name,
     ObjectType Mask,
@@ -638,6 +686,12 @@ public sealed class vFilterExec : vToolsCommand
     FilterSelection Filter,
     string LayerName,
     uint DocumentSerialNumber);
+
+  private sealed record AliasInvocation(string Name, string Macro);
+  private sealed record RepeatInvocation(AliasInvocation Alias, PendingLaunch Launch)
+  {
+    internal bool Consumed { get; set; } // true only after the registration pass consumes the exact original invocation; false never launches its delegate.
+  }
 
   private readonly record struct LayerLockState(Guid LayerId, bool IsLocked, bool PersistentLocking);
   private readonly record struct SelectedPanel(Guid PanelId, Guid DockBarId);
@@ -654,6 +708,7 @@ public sealed class vFilterExec : vToolsCommand
     public SelectedPanel[] SelectedPanels { get; } = CaptureSelectedPanels();
     public bool HasStarted { get; set; }
     public Guid CommandId { get; set; }
+    public Result? Result { get; set; }
     public uint DocumentSerialNumber { get; }
     public Guid PreviousLayerId { get; set; }
     public List<LayerLockState> LayerLocks { get; } = new();
@@ -665,7 +720,7 @@ public sealed class vFilterExec : vToolsCommand
     string CanonicalSpec);
 }
 
-[CommandStyle(Style.Hidden | Style.Transparent | Style.NotUndoable)]
+[CommandStyle(Style.Hidden | Style.Transparent | Style.ScriptRunner | Style.DoNotRepeat | Style.NotUndoable)]
 public sealed class vFilterExecRepeat : Command
 {
   public override string EnglishName => "vFilterExecRepeat";

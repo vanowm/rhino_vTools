@@ -7,6 +7,10 @@ namespace vTools;
 internal static class PlanarPartSplitter
 {
   // Planner defaults and customizable limits
+  private const int ScorePrecision = 6; // Decimal places retained by polygon clipping for approximate disconnected-panel scoring; zero through eight.
+  [global::vTools.CommandDefault("PlanarPartSplitter", "vTools.PlanarPartSplitter.EvenBalanceWeight", "Nonnegative weight for balancing longest panel dimensions in Even mode; zero scores material length only.")]
+  private const double EvenBalanceWeight = 1.0; // Model-unit length-imbalance penalty multiplier; zero disables physical-length balancing.
+  private static readonly double ConfiguredEvenBalanceWeight = global::vTools.CommandDefaults.Get("PlanarPartSplitter", "vTools.PlanarPartSplitter.EvenBalanceWeight", EvenBalanceWeight); // Resolved nonnegative imbalance multiplier; restart Rhino after advanced changes.
   internal const double DefaultAngleStep = 5.0; // Degrees between automatic orientation candidates; greater than zero through 90.
   internal const int DefaultSamples = 256; // Boundary subdivisions for approximate material-length scoring; three or greater.
   internal const int DefaultMaxParts = 32; // Maximum number of automatically proposed bands; positive integer.
@@ -14,9 +18,13 @@ internal static class PlanarPartSplitter
   internal const int DefaultRefinementPasses = 3; // Number of seam-position optimization passes; zero or greater.
   internal const double DefaultGap = 1.0; // Model-unit space between laid-out copies; zero or greater.
   internal const double DefaultReserve = 0.0; // Additional unused material width in model units; zero or greater.
-  internal const SpacingMode DefaultSpacing = SpacingMode.Optimize; // Optimize minimizes estimated material length; Even spreads cuts evenly; MaxWidth fills each available band.
-  internal const SplitDirection DefaultDirection = SplitDirection.Start; // Start/End fills from one end; Inward fills from both ends; Outward fills from the center.
-  private const double ProbePadding = 1.0; // Minimum model-unit extension beyond a boundary's bounding box for clipping probes.
+  internal const SpacingMode DefaultSpacing = SpacingMode.Optimize; // Optimize minimizes estimated material length; Even balances physical piece lengths; MaxWidth fills each available band.
+  [global::vTools.CommandDefault("PlanarPartSplitter", "vTools.PlanarPartSplitter.DefaultDirection", "Start/End fills from one end; Inward fills from both ends; Outward fills from the center.")] internal const SplitDirection DefaultDirection = SplitDirection.Start; // Start/End fills from one end; Inward fills from both ends; Outward fills from the center.
+
+  internal static readonly SplitDirection ConfiguredDefaultDirection = global::vTools.CommandDefaults.Get("PlanarPartSplitter", "vTools.PlanarPartSplitter.DefaultDirection", DefaultDirection); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarPartSplitter", "vTools.PlanarPartSplitter.ProbePadding", "Minimum model-unit extension beyond a boundary's bounding box for clipping probes.")] private const double ProbePadding = 1.0; // Minimum model-unit extension beyond a boundary's bounding box for clipping probes.
+
+  private static readonly double ConfiguredProbePadding = global::vTools.CommandDefaults.Get("PlanarPartSplitter", "vTools.PlanarPartSplitter.ProbePadding", ProbePadding); // Resolved once from advanced defaults; restart Rhino after changes.
 
   internal enum SpacingMode { Optimize, Even, MaxWidth }
   internal enum SplitDirection { Start, End, Inward, Outward }
@@ -25,7 +33,7 @@ internal static class PlanarPartSplitter
     int MaxParts = DefaultMaxParts, int RefinementSteps = DefaultRefinementSteps,
     int RefinementPasses = DefaultRefinementPasses, SpacingMode Spacing = DefaultSpacing)
   {
-    internal SplitDirection Direction { get; init; } = DefaultDirection;
+    internal SplitDirection Direction { get; init; } = ConfiguredDefaultDirection;
   }
   internal sealed record Proposal(Plane Frame, double MinY, double MaxY, List<double> Seams, double MaterialLength);
 
@@ -78,15 +86,15 @@ internal static class PlanarPartSplitter
         var seams = SegmentSeams(bounds.Min.Y, bounds.Max.Y, count, settings, false);
         var test = new Proposal(frame, bounds.Min.Y, bounds.Max.Y, seams, 0);
         if (!Valid(test, settings, RhinoMath.ZeroTolerance)) continue;
-        var score = EstimateLength(xy, test, settings);
+        var score = CandidateScore(xy, test, settings, out double materialLength);
         if (score >= bestScore) continue;
         bestScore = score;
-        proposal = test with { MaterialLength = score };
+        proposal = test with { MaterialLength = materialLength };
         bestPoints = xy;
       }
     }
     if (bestPoints == null || !double.IsFinite(bestScore)) return false;
-    if (settings.Spacing == SpacingMode.Optimize) proposal = Refine(bestPoints, proposal, settings);
+    if (settings.Spacing != SpacingMode.MaxWidth) proposal = Refine(bestPoints, proposal, settings);
     return true;
   }
 
@@ -203,14 +211,45 @@ internal static class PlanarPartSplitter
 
   internal static double EstimateLength(IReadOnlyList<(double X, double Y)> points, Proposal proposal, Settings settings)
   {
+    EmbeddedDependencies.EnsurePolygons();
+    return EstimateLengthLoaded(points, proposal, settings, out _);
+  }
+
+  private static double CandidateScore(IReadOnlyList<(double X, double Y)> points, Proposal proposal, Settings settings, out double materialLength)
+  {
+    EmbeddedDependencies.EnsurePolygons();
+    materialLength = EstimateLengthLoaded(points, proposal, settings, out double imbalance);
+    return materialLength + (settings.Spacing == SpacingMode.Even ? imbalance * ConfiguredEvenBalanceWeight : 0);
+  }
+
+  [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+  private static double EstimateLengthLoaded(IReadOnlyList<(double X, double Y)> points, Proposal proposal, Settings settings, out double imbalance)
+  {
+    imbalance = 0;
+    if (points.Count < 3) return double.PositiveInfinity;
     double length = 0;
+    int panels = 0;
+    var lengths = new List<double>();
+    var path = new Clipper2Lib.PathD(points.Select(point => new Clipper2Lib.PointD(point.X, point.Y)));
+    double left = points.Min(point => point.X) - ConfiguredProbePadding;
+    double right = points.Max(point => point.X) + ConfiguredProbePadding;
     for (int index = 0; index <= proposal.Seams.Count; index++)
     {
       var (lower, upper) = Band(proposal, index, settings.Allowance);
-      if (!BandBounds(points, lower, upper, out double minX, out double maxX)) return double.PositiveInfinity;
-      length += maxX - minX + (index == 0 ? 0 : settings.Gap);
+      var strip = new Clipper2Lib.PathD { new(left, lower), new(right, lower), new(right, upper), new(left, upper) };
+      var pieces = Clipper2Lib.Clipper.Intersect(new Clipper2Lib.PathsD { path }, new Clipper2Lib.PathsD { strip }, Clipper2Lib.FillRule.NonZero, ScorePrecision);
+      if (pieces.Count == 0) return double.PositiveInfinity;
+      // A concave band's disconnected arms become separate parts, not one bounding box spanning their empty gap.
+      foreach (var piece in pieces)
+      {
+        double span = piece.Max(point => point.x) - piece.Min(point => point.x);
+        if (span <= RhinoMath.ZeroTolerance) continue;
+        length += span + (panels++ == 0 ? 0 : settings.Gap);
+        lengths.Add(Math.Max(span, piece.Max(point => point.y) - piece.Min(point => point.y)));
+      }
     }
-    return length;
+    if (lengths.Count > 0) { double average = lengths.Average(); imbalance = lengths.Sum(value => Math.Abs(value - average)); }
+    return panels > 0 && panels <= settings.MaxParts ? length : double.PositiveInfinity;
   }
 
   internal static Proposal Refine(IReadOnlyList<(double X, double Y)> points, Proposal proposal, Settings settings)
@@ -221,15 +260,16 @@ internal static class PlanarPartSplitter
         double lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
         double upper = index == proposal.Seams.Count - 1 ? proposal.MaxY : proposal.Seams[index + 1];
         var best = proposal;
+        double bestScore = CandidateScore(points, best, settings, out _);
         for (int step = 1; step < settings.RefinementSteps; step++)
         {
           var seams = proposal.Seams.ToList();
           seams[index] = lower + (upper - lower) * step / settings.RefinementSteps;
           var candidate = proposal with { Seams = seams };
           if (!Valid(candidate, settings, RhinoMath.ZeroTolerance)) continue;
-          double length = EstimateLength(points, candidate, settings);
-          if (length + RhinoMath.ZeroTolerance < best.MaterialLength)
-            best = candidate with { MaterialLength = length };
+          double score = CandidateScore(points, candidate, settings, out double length);
+          if (score + RhinoMath.ZeroTolerance < bestScore)
+          { best = candidate with { MaterialLength = length }; bestScore = score; }
         }
         proposal = best;
       }
@@ -267,7 +307,7 @@ internal static class PlanarPartSplitter
   internal static Curve[] ClipBand(Curve source, Plane frame, double lower, double upper, double tolerance)
   {
     var bounds = source.GetBoundingBox(frame);
-    var padding = Math.Max(ProbePadding, bounds.Diagonal.Length);
+    var padding = Math.Max(ConfiguredProbePadding, bounds.Diagonal.Length);
     // Keep the clipping rectangle away from tangent contacts at the source extrema.
     if(lower<=bounds.Min.Y) lower=bounds.Min.Y-padding;
     if(upper>=bounds.Max.Y) upper=bounds.Max.Y+padding;
@@ -281,7 +321,7 @@ internal static class PlanarPartSplitter
   internal static Curve? Seam(Curve source, Plane frame, double y, double tolerance)
   {
     var bounds = source.GetBoundingBox(frame);
-    var padding = Math.Max(ProbePadding, bounds.Diagonal.Length);
+    var padding = Math.Max(ConfiguredProbePadding, bounds.Diagonal.Length);
     using var probe = new LineCurve(frame.PointAt(bounds.Min.X-padding, y), frame.PointAt(bounds.Max.X+padding, y));
     using var hits = Intersection.CurveCurve(source, probe, tolerance, tolerance);
     var parameters = hits?.Where(hit => hit.IsPoint).Select(hit => hit.ParameterB).OrderBy(t => t).ToArray() ?? [];

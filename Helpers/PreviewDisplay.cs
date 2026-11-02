@@ -10,27 +10,48 @@ namespace vTools;
 internal static class PreviewDisplay
 {
   // Thickness values are pixel increments above Rhino's current default curve thickness.
-  private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
-  private const bool DefaultHighlightRedrawOnChange = true; // true redraws after each highlight update; false lets the caller batch updates and redraw once.
-  private const bool DefaultHighlightDrawOnTop = false; // true draws highlighted curves and annotations over scene depth; false retains normal depth testing.
-  private const bool DefaultAutomaticForegroundDrawing = true; // true draws through this conduit; false lets a caller coordinate several highlight layers explicitly.
-  private const bool DefaultAutomaticShadedDrawing = true; // true draws shaded bodies in this conduit; false lets a caller draw fills before its own wires.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.MinimumCurveThickness", "Minimum preview stroke width in display pixels; one or greater.")] private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
+
+  private static readonly int ConfiguredMinimumCurveThickness = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.MinimumCurveThickness", MinimumCurveThickness); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.DefaultHighlightRedrawOnChange", "true redraws after each highlight update; false lets the caller batch updates and redraw once.")] private const bool DefaultHighlightRedrawOnChange = true; // true redraws after each highlight update; false lets the caller batch updates and redraw once.
+
+  private static readonly bool ConfiguredDefaultHighlightRedrawOnChange = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.DefaultHighlightRedrawOnChange", DefaultHighlightRedrawOnChange); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.DefaultHighlightDrawOnTop", "true draws highlighted curves and annotations over scene depth; false retains normal depth testing.")] private const bool DefaultHighlightDrawOnTop = false; // true draws highlighted curves and annotations over scene depth; false retains normal depth testing.
+
+  private static readonly bool ConfiguredDefaultHighlightDrawOnTop = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.DefaultHighlightDrawOnTop", DefaultHighlightDrawOnTop); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.DefaultAutomaticForegroundDrawing", "true draws through this conduit; false lets a caller coordinate several highlight layers explicitly.")] private const bool DefaultAutomaticForegroundDrawing = true; // true draws through this conduit; false lets a caller coordinate several highlight layers explicitly.
+
+  private static readonly bool ConfiguredDefaultAutomaticForegroundDrawing = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.DefaultAutomaticForegroundDrawing", DefaultAutomaticForegroundDrawing); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.DefaultAutomaticShadedDrawing", "true draws shaded bodies in this conduit; false lets a caller draw fills before its own wires.")] private const bool DefaultAutomaticShadedDrawing = true; // true draws shaded bodies in this conduit; false lets a caller draw fills before its own wires.
+
+  private static readonly bool ConfiguredDefaultAutomaticShadedDrawing = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.DefaultAutomaticShadedDrawing", DefaultAutomaticShadedDrawing); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.DefaultUseObjectCurveColor", "true uses each curve's resolved object/layer/viewport color; false uses the supplied highlight color.")] private const bool DefaultUseObjectCurveColor = false; // true uses each curve's resolved object/layer/viewport color; false uses the supplied highlight color.
+
+  private static readonly bool ConfiguredDefaultUseObjectCurveColor = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.DefaultUseObjectCurveColor", DefaultUseObjectCurveColor); // Resolved once from advanced defaults; restart Rhino after changes.
 
   // Generic object highlighting is deliberately cyan with a dark outline so it cannot be
   // confused with Rhino's yellow selected-object display.
-  private static readonly Color ObjectHighlightColor = Color.FromArgb(0, 220, 255); // RGB body/wire color for temporary object highlighting.
-  private static readonly Color ObjectHighlightOutlineColor = Color.FromArgb(0, 55, 72); // RGB outline color around temporarily highlighted geometry.
-  private static readonly Color ObjectHighlightDotBackground = Color.FromArgb(0, 120, 145); // RGB background color for highlighted text dots.
-  private const double ObjectHighlightTransparency = 0.55; // Shaded-object transparency from 0.0 opaque through 1.0 invisible.
-  private const int ObjectHighlightStrokeEmphasis = 1; // Cyan stroke pixels added to Rhino's current curve thickness.
-  private const int ObjectHighlightOutlineEmphasis = 3; // Dark outline pixels added to Rhino's current curve thickness.
-  private const int ObjectHighlightPointSize = 7; // Cyan point-marker diameter in display pixels; one or greater.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightColor", "RGB body/wire color for temporary object highlighting.", "#FF00DCFF")] private static readonly Color ObjectHighlightColor = global::vTools.CommandDefaults.GetColor("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightColor", Color.FromArgb(0, 220, 255)); // RGB body/wire color for temporary object highlighting.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightOutlineColor", "RGB outline color around temporarily highlighted geometry.", "#FF003748")] private static readonly Color ObjectHighlightOutlineColor = global::vTools.CommandDefaults.GetColor("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightOutlineColor", Color.FromArgb(0, 55, 72)); // RGB outline color around temporarily highlighted geometry.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightDotBackground", "RGB background color for highlighted text dots.", "#FF007891")] private static readonly Color ObjectHighlightDotBackground = global::vTools.CommandDefaults.GetColor("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightDotBackground", Color.FromArgb(0, 120, 145)); // RGB background color for highlighted text dots.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightTransparency", "Shaded-object transparency from 0.0 opaque through 1.0 invisible.")] private const double ObjectHighlightTransparency = 0.55; // Shaded-object transparency from 0.0 opaque through 1.0 invisible.
+
+  private static readonly double ConfiguredObjectHighlightTransparency = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightTransparency", ObjectHighlightTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightStrokeEmphasis", "Cyan stroke pixels added to Rhino's current curve thickness.")] private const int ObjectHighlightStrokeEmphasis = 1; // Cyan stroke pixels added to Rhino's current curve thickness.
+
+  private static readonly int ConfiguredObjectHighlightStrokeEmphasis = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightStrokeEmphasis", ObjectHighlightStrokeEmphasis); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightOutlineEmphasis", "Dark outline pixels added to Rhino's current curve thickness.")] private const int ObjectHighlightOutlineEmphasis = 3; // Dark outline pixels added to Rhino's current curve thickness.
+
+  private static readonly int ConfiguredObjectHighlightOutlineEmphasis = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightOutlineEmphasis", ObjectHighlightOutlineEmphasis); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightPointSize", "Cyan point-marker diameter in display pixels; one or greater.")] private const int ObjectHighlightPointSize = 7; // Cyan point-marker diameter in display pixels; one or greater.
+
+  private static readonly int ConfiguredObjectHighlightPointSize = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.ObjectHighlightPointSize", ObjectHighlightPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int ObjectHighlightPointOutlineExtra = 2; // Dark point-outline pixels added beyond the cyan marker body.
   private const float ObjectHighlightSubDStrokeWidth = 2.0f; // Cyan SubD wire width in display pixels; positive float.
   private const float ObjectHighlightSubDOutlineWidth = 4.0f; // Dark SubD outline width in display pixels; greater than the cyan width.
 
   private static readonly ObjectHighlightStyle DefaultObjectStyle = new( // Generic RGB body, outline, dot background, and 0-1 shading transparency; preserves the cyan style.
-    ObjectHighlightColor, ObjectHighlightOutlineColor, ObjectHighlightDotBackground, ObjectHighlightTransparency);
+    ObjectHighlightColor, ObjectHighlightOutlineColor, ObjectHighlightDotBackground, ConfiguredObjectHighlightTransparency);
   internal static readonly ObjectHighlightStyle WireOnlyObjectStyle = DefaultObjectStyle with { Transparency=1.0 }; // Fully transparent body skips surface meshing; retains the shared cyan/dark outlined wires for batch feedback.
   internal static readonly ObjectHighlightStyle HistoryWarningStyle = new( // Original vSplit warning palette; used only for history feedback.
     BodyColor: Color.FromArgb(255, 128, 0), // RGB orange body/wire color for history-affected objects.
@@ -62,14 +83,16 @@ internal static class PreviewDisplay
     OutlineEmphasis: 3);
 
   // Generic outlined curves use these defaults unless the caller supplies different thickness values.
-  private static readonly Color OutlinedCurveOutlineColor = Color.Black; // Default outline color for emphasized source curves.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.OutlinedCurveOutlineColor", "Default outline color for emphasized source curves.", "#FF000000")] private static readonly Color OutlinedCurveOutlineColor = global::vTools.CommandDefaults.GetColor("PreviewDisplay", "vTools.PreviewDisplay.OutlinedCurveOutlineColor", Color.Black); // Default outline color for emphasized source curves.
   private const int OutlinedCurveStrokeEmphasis = 1; // Colored-stroke pixels added to Rhino's curve thickness.
   private const int OutlinedCurveOutlineExtra = 2; // Outline pixels added beyond the colored stroke.
 
   // Highlight point markers use their curve style's colors and these pixel-size settings.
   private const PointStyle HighlightPointStyle = PointStyle.RoundSimple; // Rhino point marker style used by shared previews.
   private const int HighlightPointMinimumSize = 4; // Minimum point diameter in display pixels; one or greater.
-  private const int HighlightPointThicknessEmphasis = 2; // Point-size pixels added to current curve thickness.
+  [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.HighlightPointThicknessEmphasis", "Point-size pixels added to current curve thickness.")] private const int HighlightPointThicknessEmphasis = 2; // Point-size pixels added to current curve thickness.
+
+  private static readonly int ConfiguredHighlightPointThicknessEmphasis = global::vTools.CommandDefaults.Get("PreviewDisplay", "vTools.PreviewDisplay.HighlightPointThicknessEmphasis", HighlightPointThicknessEmphasis); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int HighlightPointOutlineExtra = 2; // Outline pixels added beyond the colored point body.
 
   private readonly record struct CurveHighlightStyle(
@@ -84,12 +107,13 @@ internal static class PreviewDisplay
     Color DotBackground,
     double Transparency)
   {
-    internal int StrokeEmphasis { get; init; } = ObjectHighlightStrokeEmphasis; // Pixels added to Rhino's curve width; zero keeps normal-width highlighted curves.
-    internal int OutlineEmphasis { get; init; } = ObjectHighlightOutlineEmphasis; // Total outline emphasis in pixels; at or below StrokeEmphasis omits the outline.
+    internal int StrokeEmphasis { get; init; } = ConfiguredObjectHighlightStrokeEmphasis; // Pixels added to Rhino's curve width; zero keeps normal-width highlighted curves.
+    internal int OutlineEmphasis { get; init; } = ConfiguredObjectHighlightOutlineEmphasis; // Total outline emphasis in pixels; at or below StrokeEmphasis omits the outline.
+    internal bool UseObjectCurveColor { get; init; } = ConfiguredDefaultUseObjectCurveColor; // true preserves source curve colors; false uses BodyColor.
   }
 
   public static int Thickness(DisplayPipeline display, int emphasis = 0) =>
-    Math.Max(MinimumCurveThickness, display.DefaultCurveThickness + emphasis);
+    Math.Max(ConfiguredMinimumCurveThickness, display.DefaultCurveThickness + emphasis);
 
   public static void DrawCurve(
     DisplayPipeline display,
@@ -205,7 +229,7 @@ internal static class PreviewDisplay
   {
     var size = Math.Max(
       HighlightPointMinimumSize,
-      Thickness(display, HighlightPointThicknessEmphasis));
+      Thickness(display, ConfiguredHighlightPointThicknessEmphasis));
     DrawHighlightPoint(display, point, style, size);
   }
 
@@ -215,7 +239,7 @@ internal static class PreviewDisplay
     CurveHighlightStyle style,
     int size)
   {
-    size = Math.Max(MinimumCurveThickness, size);
+    size = Math.Max(ConfiguredMinimumCurveThickness, size);
     display.DrawPoint(
       point,
       HighlightPointStyle,
@@ -250,10 +274,10 @@ internal static class PreviewDisplay
   /// </summary>
   internal sealed class ObjectHighlighter : DisplayConduit, IDisposable
   {
-    internal bool RedrawOnChange { get; set; } = DefaultHighlightRedrawOnChange;
-    internal bool DrawOnTop { get; set; } = DefaultHighlightDrawOnTop;
-    internal bool AutomaticForegroundDrawing { get; set; } = DefaultAutomaticForegroundDrawing;
-    internal bool AutomaticShadedDrawing { get; set; } = DefaultAutomaticShadedDrawing;
+    internal bool RedrawOnChange { get; set; } = ConfiguredDefaultHighlightRedrawOnChange;
+    internal bool DrawOnTop { get; set; } = ConfiguredDefaultHighlightDrawOnTop;
+    internal bool AutomaticForegroundDrawing { get; set; } = ConfiguredDefaultAutomaticForegroundDrawing;
+    internal bool AutomaticShadedDrawing { get; set; } = ConfiguredDefaultAutomaticShadedDrawing;
     private readonly RhinoDoc _doc;
     private readonly HashSet<Guid> _objectIds = [];
     private readonly Dictionary<Guid, GeometryBase> _fallbackGeometry = [];
@@ -363,7 +387,10 @@ internal static class PreviewDisplay
         switch (geometry)
         {
           case Curve curve:
-            DrawObjectHighlightCurve(e.Display, curve, _style);
+            var curveStyle = _style.UseObjectCurveColor && _doc.Objects.FindId(objectId) is { } obj
+              ? _style with { BodyColor = obj.Attributes.DrawColor(_doc, e.Viewport.Id) }
+              : _style;
+            DrawObjectHighlightCurve(e.Display, curve, curveStyle);
             break;
           case Brep brep:
             DrawObjectHighlightBrep(e.Display, brep, _style);
@@ -386,11 +413,11 @@ internal static class PreviewDisplay
             e.Display.DrawMeshWires(
               mesh,
               _style.OutlineColor,
-              Thickness(e.Display, ObjectHighlightOutlineEmphasis));
+              Thickness(e.Display, ConfiguredObjectHighlightOutlineEmphasis));
             e.Display.DrawMeshWires(
               mesh,
               _style.BodyColor,
-              Thickness(e.Display, ObjectHighlightStrokeEmphasis));
+              Thickness(e.Display, ConfiguredObjectHighlightStrokeEmphasis));
             break;
           case SubD subD:
             e.Display.DrawSubDWires(
@@ -406,22 +433,22 @@ internal static class PreviewDisplay
             e.Display.DrawPoint(
               point.Location,
               PointStyle.RoundSimple,
-              ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
+              ConfiguredObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
               _style.OutlineColor);
             e.Display.DrawPoint(
               point.Location,
               PointStyle.RoundSimple,
-              ObjectHighlightPointSize,
+              ConfiguredObjectHighlightPointSize,
               _style.BodyColor);
             break;
           case PointCloud pointCloud:
             e.Display.DrawPointCloud(
               pointCloud,
-              ObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
+              ConfiguredObjectHighlightPointSize + ObjectHighlightPointOutlineExtra,
               _style.OutlineColor);
             e.Display.DrawPointCloud(
               pointCloud,
-              ObjectHighlightPointSize,
+              ConfiguredObjectHighlightPointSize,
               _style.BodyColor);
             break;
           case TextEntity text:
@@ -447,7 +474,7 @@ internal static class PreviewDisplay
             e.Display.DrawBox(
               other.GetBoundingBox(true),
               _style.BodyColor,
-              Thickness(e.Display, ObjectHighlightStrokeEmphasis));
+              Thickness(e.Display, ConfiguredObjectHighlightStrokeEmphasis));
             break;
         }
       }

@@ -31,18 +31,28 @@ public sealed class vRectangle : vToolsCommand
   private const string LastBrZKey = "lastBrZ";
 
   // Option defaults
-  private const double DefaultWidth = 10.0; // Rectangle width in model units; greater than zero.
-  private const double DefaultHeight = 5.0; // Rectangle height in model units; greater than zero.
-  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
-  private const bool DefaultLabel = false; // true creates a fitted dimension label; false creates only the rectangle.
-  private const string LabelLayerName = "Reference"; // Rhino layer name used for rectangle dimension labels.
-  private const double LabelPaddingFraction = 0.1; // Empty inset on each rectangle side as a fraction from zero through less than 0.5.
-  private static readonly Color DefaultLabelLayerColor = Color.White; // Color assigned when the Reference label layer must be created.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultWidth", "Rectangle width in model units; greater than zero.")] private const double DefaultWidth = 10.0; // Rectangle width in model units; greater than zero.
 
-  private static double _width = DefaultWidth;
-  private static double _height = DefaultHeight;
-  private static string _layer = DefaultLayer;
-  private static bool _label = DefaultLabel;
+  private static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultHeight", "Rectangle height in model units; greater than zero.")] private const double DefaultHeight = 5.0; // Rectangle height in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLabel", "true creates a fitted dimension label; false creates only the rectangle.")] private const bool DefaultLabel = false; // true creates a fitted dimension label; false creates only the rectangle.
+
+  private static readonly bool ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  private const string LabelLayerName = "Reference"; // Rhino layer name used for rectangle dimension labels.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.LabelPaddingFraction", "Empty inset on each rectangle side as a fraction from zero through less than 0.5.")] private const double LabelPaddingFraction = 0.1; // Empty inset on each rectangle side as a fraction from zero through less than 0.5.
+
+  private static readonly double ConfiguredLabelPaddingFraction = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.LabelPaddingFraction", LabelPaddingFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLabelLayerColor", "Color assigned when the Reference label layer must be created.", "#FFFFFFFF")] private static readonly Color DefaultLabelLayerColor = global::vTools.CommandDefaults.GetColor("vRectangle", "vTools.Commands.vRectangle.DefaultLabelLayerColor", Color.White); // Color assigned when the Reference label layer must be created.
+
+  private static double _width = ConfiguredDefaultWidth;
+  private static double _height = ConfiguredDefaultHeight;
+  private static string _layer = ConfiguredDefaultLayer;
+  private static bool _label = ConfiguredDefaultLabel;
   private static Point3d? _lastBottomLeft;
   private static Point3d? _lastBottomRight;
 
@@ -310,8 +320,8 @@ public sealed class vRectangle : vToolsCommand
     double width,
     double height)
   {
-    var availableWidth = width * (1.0 - 2.0 * LabelPaddingFraction);
-    var availableHeight = height * (1.0 - 2.0 * LabelPaddingFraction);
+    var availableWidth = width * (1.0 - 2.0 * ConfiguredLabelPaddingFraction);
+    var availableHeight = height * (1.0 - 2.0 * ConfiguredLabelPaddingFraction);
     var center = new Point3d(
       bottomLeft.X + width * 0.5,
       bottomLeft.Y + height * 0.5,

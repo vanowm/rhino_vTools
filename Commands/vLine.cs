@@ -21,11 +21,11 @@ namespace vTools.Commands
     // Defaults and customizable constants
     private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves output to Rhino's current layer.
 
-    private static readonly string[] ChainModeValues = { "Single", "Multiple", "Chained", "Polyline" }; // Command option names in chain-mode index order.
-    private static readonly string[] PriorityValues = { "Closest", "PerpFirst", "TanFirst", "KeepCurrent" }; // Constraint-solution priorities in persisted index order.
-    private static readonly string[] ConstraintSpaceValues = ["CPlane", "3D"]; // Explicit endpoint constraint spaces, in saved-index order.
-    private static readonly Color SourceFeedbackColor = Color.Orange; // Highlight color for a locked source curve.
-    private static readonly Color HoverFeedbackColor = Color.Orange; // Highlight color for a candidate curve under the cursor.
+    [global::vTools.CommandChoicesAttribute("vLine", "chainMode", true, "Single", "Multiple", "Chained", "Polyline")] private static readonly string[] ChainModeValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vLine), nameof(ChainModeValues)); // Command option names in chain-mode index order.
+    [global::vTools.CommandChoicesAttribute("vLine", "priority", true, "Closest", "PerpFirst", "TanFirst", "KeepCurrent")] private static readonly string[] PriorityValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vLine), nameof(PriorityValues)); // Constraint-solution priorities in persisted index order.
+    [global::vTools.CommandChoicesAttribute("vLine", "constraintSpace", true, "CPlane", "3D")] private static readonly string[] ConstraintSpaceValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vLine), nameof(ConstraintSpaceValues)); // Explicit endpoint constraint spaces, in saved-index order.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.SourceFeedbackColor", "Highlight color for a locked source curve.", "#FFFFA500")] private static readonly Color SourceFeedbackColor = global::vTools.CommandDefaults.GetColor("vLine", "vTools.Commands.vLine.SourceFeedbackColor", Color.Orange); // Highlight color for a locked source curve.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.HoverFeedbackColor", "Highlight color for a candidate curve under the cursor.", "#FFFFA500")] private static readonly Color HoverFeedbackColor = global::vTools.CommandDefaults.GetColor("vLine", "vTools.Commands.vLine.HoverFeedbackColor", Color.Orange); // Highlight color for a candidate curve under the cursor.
 
     private const int ModeSingle = 0; // Persisted index for one independent line.
     private const int ModeMultiple = 1; // Persisted index for repeated independent lines.
@@ -38,17 +38,35 @@ namespace vTools.Commands
     private const int PriorityKeepCurrent = 3; // Persisted index preferring the current solution branch.
 
     // Option defaults
-    private const int DefaultChainMode = ModeSingle; // Mode constant: Single, Multiple, Chained, or Polyline.
-    private const int DefaultPriority = PriorityClosest; // Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.
-    private const bool DefaultPersistConstraint = false; // true carries the active constraint to the next line; false resets it.
-    private const double DefaultLength = 0.0; // Model units; zero leaves line length unlocked.
-    private const double DefaultAngle = 0.0; // Angle in degrees.
-    private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
-    private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultChainMode", "Mode constant: Single, Multiple, Chained, or Polyline.")] private const int DefaultChainMode = ModeSingle; // Mode constant: Single, Multiple, Chained, or Polyline.
+
+    private static readonly int ConfiguredDefaultChainMode = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultChainMode", DefaultChainMode); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPriority", "Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.")] private const int DefaultPriority = PriorityClosest; // Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.
+
+    private static readonly int ConfiguredDefaultPriority = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultPriority", DefaultPriority); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPersistConstraint", "true carries the active constraint to the next line; false resets it.")] private const bool DefaultPersistConstraint = false; // true carries the active constraint to the next line; false resets it.
+
+    private static readonly bool ConfiguredDefaultPersistConstraint = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultPersistConstraint", DefaultPersistConstraint); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLength", "Model units; zero leaves line length unlocked.")] private const double DefaultLength = 0.0; // Model units; zero leaves line length unlocked.
+
+    private static readonly double ConfiguredDefaultLength = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultLength", DefaultLength); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngle", "Angle in degrees.")] private const double DefaultAngle = 0.0; // Angle in degrees.
+
+    private static readonly double ConfiguredDefaultAngle = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultAngle", DefaultAngle); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngleRelative", "true measures angle from the prior direction; false uses the CPlane axis.")] private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
+
+    private static readonly bool ConfiguredDefaultAngleRelative = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultAngleRelative", DefaultAngleRelative); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLayer", "Rhino layer path or *Current*.")] private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+
+    private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ConstraintSpace3D = 1; // Saved option index for true spatial endpoint tangency/perpendicularity; index zero is CPlane.
-    private const int DefaultConstraintSpace = 0; // CPlane by default; one selects true 3D for explicit endpoint modes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultConstraintSpace", "CPlane by default; one selects true 3D for explicit endpoint modes.")] private const int DefaultConstraintSpace = 0; // CPlane by default; one selects true 3D for explicit endpoint modes.
+
+    private static readonly int ConfiguredDefaultConstraintSpace = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultConstraintSpace", DefaultConstraintSpace); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool DefaultSolveIn3D = false; // false retains legacy CPlane solver calls; true evaluates full spatial directions.
-    private const double AcceptedConstraintDistanceFactor = 4.0; // Positive multiplier of document absolute tolerance for validating final curve contact.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.AcceptedConstraintDistanceFactor", "Positive multiplier of document absolute tolerance for validating final curve contact.")] private const double AcceptedConstraintDistanceFactor = 4.0; // Positive multiplier of document absolute tolerance for validating final curve contact.
+
+    private static readonly double ConfiguredAcceptedConstraintDistanceFactor = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.AcceptedConstraintDistanceFactor", AcceptedConstraintDistanceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private static readonly (string Name, OsnapModes Mode)[] OneShotSnapOptions =
     [
       ("NearSnap", OsnapModes.Near),
@@ -77,14 +95,14 @@ namespace vTools.Commands
     private const string ConstraintSpaceKey = "constraintSpace";
     private const string UndoSessionMarkerKey = "vTools.vLine.UndoSession";
 
-    private static int _chainMode = DefaultChainMode;
-    private static int _priority = DefaultPriority;
-    private static bool _persistConstraint = DefaultPersistConstraint;
-    private static double _length = DefaultLength;
-    private static double _angle = DefaultAngle;
-    private static bool   _angleRelative = DefaultAngleRelative;
-    private static string _layer = DefaultLayer;
-    private static int _constraintSpace = DefaultConstraintSpace;
+    private static int _chainMode = ConfiguredDefaultChainMode;
+    private static int _priority = ConfiguredDefaultPriority;
+    private static bool _persistConstraint = ConfiguredDefaultPersistConstraint;
+    private static double _length = ConfiguredDefaultLength;
+    private static double _angle = ConfiguredDefaultAngle;
+    private static bool   _angleRelative = ConfiguredDefaultAngleRelative;
+    private static string _layer = ConfiguredDefaultLayer;
+    private static int _constraintSpace = ConfiguredDefaultConstraintSpace;
 
     private static bool _debugMode = false;
 
@@ -628,7 +646,7 @@ namespace vTools.Commands
           var angle = _angle;
           var angleRelative = _angleRelative;
           var layer = _layer;
-          var constraintSpace = DefaultConstraintSpace;
+          var constraintSpace = ConfiguredDefaultConstraintSpace;
 
           if (ToolsOptionStore.TryGetDouble(section, ChainModeKey, out var persistedChain))
             chainMode = ClampIndex((int)Math.Round(persistedChain, MidpointRounding.AwayFromZero), ChainModeValues.Length);
@@ -4446,7 +4464,7 @@ namespace vTools.Commands
     {
       var contact = atStart ? line.From : line.To;
       return line.IsValid && constraint.Curve.ClosestPoint(contact, out var parameter) &&
-             contact.DistanceTo(constraint.Curve.PointAt(parameter)) <= Math.Max(tolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
+             contact.DistanceTo(constraint.Curve.PointAt(parameter)) <= Math.Max(tolerance * ConfiguredAcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
              DirectionMatchesConstraintAtParameter(constraint, parameter, line.Direction);
     }
 
@@ -4456,7 +4474,7 @@ namespace vTools.Commands
       if (!curve.ClosestPoint(solvedEnd, out var parameter))
         return null;
       // An extended segment's foot can be nearer a different edge of the joined curve.
-      if (solvedEnd.DistanceTo(curve.PointAt(parameter)) > Math.Max(tolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
+      if (solvedEnd.DistanceTo(curve.PointAt(parameter)) > Math.Max(tolerance * ConfiguredAcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon) &&
           !curve.ClosestPoint(hint, out parameter))
         return null;
       return new EndpointConstraint(curve, parameter, hint, kind);
@@ -4555,7 +4573,7 @@ namespace vTools.Commands
       Point3d point)
     {
       if (!constraint.Curve.ClosestPoint(point, out var parameter) ||
-          point.DistanceTo(constraint.Curve.PointAt(parameter)) > Math.Max(doc.ModelAbsoluteTolerance * AcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon))
+          point.DistanceTo(constraint.Curve.PointAt(parameter)) > Math.Max(doc.ModelAbsoluteTolerance * ConfiguredAcceptedConstraintDistanceFactor, RhinoMath.SqrtEpsilon))
         parameter = constraint.SeedParameter;
 
       var tangent = constraint.Curve.TangentAt(parameter);
@@ -5313,17 +5331,23 @@ namespace vTools.Commands
   public sealed partial class vLine
   {
     // 3Point solver defaults and interaction limits.
-    private const int ThreePointPreviewSamples = 9; // Parameter samples per unconstrained curve during live preview; at least 2.
-    private const int ThreePointFinalSamples = 17; // Parameter samples per unconstrained curve on click; at least 2.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.ThreePointPreviewSamples", "Parameter samples per unconstrained curve during live preview; at least 2.")] private const int ThreePointPreviewSamples = 9; // Parameter samples per unconstrained curve during live preview; at least 2.
+
+    private static readonly int ConfiguredThreePointPreviewSamples = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.ThreePointPreviewSamples", ThreePointPreviewSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.ThreePointFinalSamples", "Parameter samples per unconstrained curve on click; at least 2.")] private const int ThreePointFinalSamples = 17; // Parameter samples per unconstrained curve on click; at least 2.
+
+    private static readonly int ConfiguredThreePointFinalSamples = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.ThreePointFinalSamples", ThreePointFinalSamples); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ThreePointPreviewSeeds = 3; // Distinct low-error seeds refined during preview; one or greater.
     private const int ThreePointFinalSeeds = 9; // Distinct low-error seeds refined on click; one or greater.
     private const int ThreePointPreviewLevels = 12; // Successive local step halvings during preview; one or greater.
     private const int ThreePointFinalLevels = 16; // Successive local step halvings on click; one or greater.
     private const int ThreePointPreviewIntervalMs = 45; // Minimum interval between cursor-dependent numeric preview solves, in milliseconds.
-    private const double ThreePointMinimumTolerance = 1e-6; // Model-unit floor for 3D line/curve contact validation.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.ThreePointMinimumTolerance", "Model-unit floor for 3D line/curve contact validation.")] private const double ThreePointMinimumTolerance = 1e-6; // Model-unit floor for 3D line/curve contact validation.
+
+    private static readonly double ConfiguredThreePointMinimumTolerance = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.ThreePointMinimumTolerance", ThreePointMinimumTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double ThreePointSeedSeparation = 0.07; // Minimum normalized parameter separation for independent refinement seeds.
-    private static readonly Color ThreePointLinePreviewColor = Color.FromArgb(255, 255, 205, 65); // Temporary solved-line color.
-    private static readonly Color ThreePointContactPreviewColor = Color.White; // Temporary 3D crossing point color.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.ThreePointLinePreviewColor", "Temporary solved-line color.", "#FFFFCD41")] private static readonly Color ThreePointLinePreviewColor = global::vTools.CommandDefaults.GetColor("vLine", "vTools.Commands.vLine.ThreePointLinePreviewColor", Color.FromArgb(255, 255, 205, 65)); // Temporary solved-line color.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.ThreePointContactPreviewColor", "Temporary 3D crossing point color.", "#FFFFFFFF")] private static readonly Color ThreePointContactPreviewColor = global::vTools.CommandDefaults.GetColor("vLine", "vTools.Commands.vLine.ThreePointContactPreviewColor", Color.White); // Temporary 3D crossing point color.
 
     private readonly record struct ThreePointConstraint(
       Curve? Curve,
@@ -5389,7 +5413,7 @@ namespace vTools.Commands
             selected[0], selected[1], selected[2], cursor, preview: false);
         if (!solution.HasValue ||
             solution.Value.Start.DistanceTo(solution.Value.End) <=
-              Math.Max(doc.ModelAbsoluteTolerance, ThreePointMinimumTolerance))
+              Math.Max(doc.ModelAbsoluteTolerance, ConfiguredThreePointMinimumTolerance))
         {
           RhinoApp.WriteLine("vLine: no valid 3D line satisfies those three constraints.");
           return false;
@@ -5614,7 +5638,7 @@ namespace vTools.Commands
       bool preview)
     {
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance,
-        ThreePointMinimumTolerance);
+        ConfiguredThreePointMinimumTolerance);
       if (!start.IsCurve && !end.IsCurve)
       {
         if (touch.Curve == null)
@@ -5755,7 +5779,7 @@ namespace vTools.Commands
       ThreePointConstraint end, Point3d through, Point3d directionPoint)
     {
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance,
-        ThreePointMinimumTolerance);
+        ConfiguredThreePointMinimumTolerance);
       if (through.DistanceTo(directionPoint) <= tolerance)
         return null;
       var line = new Line(through, directionPoint);
@@ -5810,7 +5834,7 @@ namespace vTools.Commands
     {
       var solutions = new List<ThreePointSolution>();
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance,
-        ThreePointMinimumTolerance);
+        ConfiguredThreePointMinimumTolerance);
       using var fan = Surface.CreateExtrusionToPoint(endCurve, fixedPoint);
       if (fan == null)
         return solutions;
@@ -5872,9 +5896,9 @@ namespace vTools.Commands
       bool preview)
     {
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance,
-        ThreePointMinimumTolerance);
+        ConfiguredThreePointMinimumTolerance);
       var sampleCount = preview
-        ? ThreePointPreviewSamples : ThreePointFinalSamples;
+        ? ConfiguredThreePointPreviewSamples : ConfiguredThreePointFinalSamples;
       var starts = ThreePointSampleRatios(start, sampleCount, start.PickPoint);
       var ends = ThreePointSampleRatios(end, sampleCount, end.PickPoint);
       var touches = ThreePointSampleRatios(touch, sampleCount, cursor);

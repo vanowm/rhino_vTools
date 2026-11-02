@@ -19,29 +19,71 @@ namespace vTools.Commands;
 public sealed class vTrim : vToolsCommand
 {
   // Defaults and customizable constants
-  private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
-  private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
-  private const double MinimumHoverPickRadiusPixels = 6.0; // Minimum screen-space radius, in pixels, for retaining the curve under the cursor.
-  private const double HoverPickRadiusPaddingPixels = 2.0; // Extra pixels added to Rhino's configured mouse pickbox radius.
-  private const double HoverCandidateSwitchAdvantageSquaredPixels = 4.0; // Squared-pixel advantage a new overlapping curve needs before replacing the retained hover.
-  private const int HoverCurveSampleCount = 64; // Initial screen-space samples used to locate the cursor along a non-linear curve; 2 or greater.
-  private const int HoverCurveRefinementIterations = 10; // Ternary refinements applied around the best sampled curve parameter; zero or greater.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultExtendAsLine", "true extends with a tangent line; false extends the native curve form.")] private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
+
+  private static readonly bool ConfiguredDefaultExtendAsLine = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.DefaultExtendAsLine", DefaultExtendAsLine); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultJoinAfterTrim", "true joins touching trim results; false keeps them separate.")] private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
+
+  private static readonly bool ConfiguredDefaultJoinAfterTrim = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.DefaultJoinAfterTrim", DefaultJoinAfterTrim); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.MinimumHoverPickRadiusPixels", "Minimum screen-space radius, in pixels, for retaining the curve under the cursor.")] private const double MinimumHoverPickRadiusPixels = 6.0; // Minimum screen-space radius, in pixels, for retaining the curve under the cursor.
+
+  private static readonly double ConfiguredMinimumHoverPickRadiusPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.MinimumHoverPickRadiusPixels", MinimumHoverPickRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.HoverPickRadiusPaddingPixels", "Extra pixels added to Rhino's configured mouse pickbox radius.")] private const double HoverPickRadiusPaddingPixels = 2.0; // Extra pixels added to Rhino's configured mouse pickbox radius.
+
+  private static readonly double ConfiguredHoverPickRadiusPaddingPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.HoverPickRadiusPaddingPixels", HoverPickRadiusPaddingPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.HoverCandidateSwitchAdvantageSquaredPixels", "Squared-pixel advantage a new overlapping curve needs before replacing the retained hover.")] private const double HoverCandidateSwitchAdvantageSquaredPixels = 4.0; // Squared-pixel advantage a new overlapping curve needs before replacing the retained hover.
+
+  private static readonly double ConfiguredHoverCandidateSwitchAdvantageSquaredPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.HoverCandidateSwitchAdvantageSquaredPixels", HoverCandidateSwitchAdvantageSquaredPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.HoverCurveSampleCount", "Initial screen-space samples used to locate the cursor along a non-linear curve; 2 or greater.")] private const int HoverCurveSampleCount = 64; // Initial screen-space samples used to locate the cursor along a non-linear curve; 2 or greater.
+
+  private static readonly int ConfiguredHoverCurveSampleCount = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.HoverCurveSampleCount", HoverCurveSampleCount); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.HoverCurveRefinementIterations", "Ternary refinements applied around the best sampled curve parameter; zero or greater.")] private const int HoverCurveRefinementIterations = 10; // Ternary refinements applied around the best sampled curve parameter; zero or greater.
+
+  private static readonly int ConfiguredHoverCurveRefinementIterations = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.HoverCurveRefinementIterations", HoverCurveRefinementIterations); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double HoverCurveFallbackSpanDivisor = 192.0; // Domain divisor used when neighbouring screen-pick samples collapse; greater than zero.
-  private const double MinApproximateCrossingAngleDegrees = 5.0; // Minimum tangent angle, in degrees, for accepting a world or projected near-contact outside the strict tolerance.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.MinApproximateCrossingAngleDegrees", "Minimum tangent angle, in degrees, for accepting a world or projected near-contact outside the strict tolerance.")] private const double MinApproximateCrossingAngleDegrees = 5.0; // Minimum tangent angle, in degrees, for accepting a world or projected near-contact outside the strict tolerance.
+
+  private static readonly double ConfiguredMinApproximateCrossingAngleDegrees = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.MinApproximateCrossingAngleDegrees", MinApproximateCrossingAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int FailedAutoTrimDiagnosticCount = 3; // Number of nearest 3-D curve gaps recorded when a clicked AutoClosest trim has no preview.
-  private const int BoxDragThresholdPixels = 4; // Minimum screen-pixel drag before selecting trim sections instead of accepting a hover click.
-  private const int BoxLineThicknessPixels = 1; // Screen-pixel selection rectangle stroke; positive.
-  private const int BoxMinimumSidePixels = 1; // Minimum rectangle side in screen pixels; prevents singular pick transforms for straight horizontal/vertical drags.
-  private const int BoxPreviewIntervalMilliseconds = 80; // Minimum milliseconds between box-plan previews; release always evaluates the final rectangle.
-  private const float BoxBoundsPaddingPixels = 2.0f; // Screen-pixel padding for conservative target/cutter bounding-box rejection during box preview.
-  private static readonly Color BoxColor = Color.DodgerBlue; // RGB box-preview color; removed sections retain the shared removal-preview style.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxDragThresholdPixels", "Minimum screen-pixel drag before selecting trim sections instead of accepting a hover click.")] private const int BoxDragThresholdPixels = 4; // Minimum screen-pixel drag before selecting trim sections instead of accepting a hover click.
+
+  private static readonly int ConfiguredBoxDragThresholdPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.BoxDragThresholdPixels", BoxDragThresholdPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxLineThicknessPixels", "Screen-pixel selection rectangle stroke; positive.")] private const int BoxLineThicknessPixels = 1; // Screen-pixel selection rectangle stroke; positive.
+
+  private static readonly int ConfiguredBoxLineThicknessPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.BoxLineThicknessPixels", BoxLineThicknessPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxMinimumSidePixels", "Minimum rectangle side in screen pixels; prevents singular pick transforms for straight horizontal/vertical drags.")] private const int BoxMinimumSidePixels = 1; // Minimum rectangle side in screen pixels; prevents singular pick transforms for straight horizontal/vertical drags.
+
+  private static readonly int ConfiguredBoxMinimumSidePixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.BoxMinimumSidePixels", BoxMinimumSidePixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxPreviewIntervalMilliseconds", "Minimum milliseconds between box-plan previews; release always evaluates the final rectangle.")] private const int BoxPreviewIntervalMilliseconds = 80; // Minimum milliseconds between box-plan previews; release always evaluates the final rectangle.
+
+  private static readonly int ConfiguredBoxPreviewIntervalMilliseconds = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.BoxPreviewIntervalMilliseconds", BoxPreviewIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxBoundsPaddingPixels", "Screen-pixel padding for conservative target/cutter bounding-box rejection during box preview.")] private const float BoxBoundsPaddingPixels = 2.0f; // Screen-pixel padding for conservative target/cutter bounding-box rejection during box preview.
+
+  private static readonly float ConfiguredBoxBoundsPaddingPixels = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.BoxBoundsPaddingPixels", BoxBoundsPaddingPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.BoxColor", "RGB box-preview color; removed sections retain the shared removal-preview style.", "#FF1E90FF")] private static readonly Color BoxColor = global::vTools.CommandDefaults.GetColor("vTrim", "vTools.Commands.vTrim.BoxColor", Color.DodgerBlue); // RGB box-preview color; removed sections retain the shared removal-preview style.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.OverlapParameterToleranceFraction", "Curve-domain fraction used to merge coincident overlap endpoints; positive and less than one.")] private const double OverlapParameterToleranceFraction = 1e-10; // Curve-domain fraction used to merge coincident overlap endpoints; positive and less than one.
+
+  private static readonly double ConfiguredOverlapParameterToleranceFraction = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.OverlapParameterToleranceFraction", OverlapParameterToleranceFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+  private const int ControlVirtualKey = 0x11; // Windows VK_CONTROL code; reads the physical modifier state independently of Rhino's input-message queue.
+  private const int TabVirtualKey = 0x09; // Windows VK_TAB code; cycles hover candidates only in the active quick-trim picker.
+  private const int AltVirtualKey = 0x12; // Windows VK_MENU code; Alt+Tab remains an operating-system shortcut.
+  private const int TabHookGetMessage = 3; // Windows WH_GETMESSAGE hook type; scoped to Rhino's UI thread, not a global keyboard hook.
+  private const int TabMessageRemoved = 1; // Windows PM_REMOVE flag; inspect messages only when removed from the queue.
+  private const uint TabKeyDownMessage = 0x0100; // Windows WM_KEYDOWN message; consumes handled Tab presses before Rhino receives them.
+  private const uint TabKeyUpMessage = 0x0101; // Windows WM_KEYUP message; releases the handled Tab state.
+  private const uint TabCharacterMessage = 0x0102; // Windows WM_CHAR message; prevents a handled Tab from reaching command-line text.
+  private const uint TabRootAncestor = 2; // Windows GA_ROOT flag; excludes dialogs and unrelated application windows.
+  private const long TabPreviousKeyState = 1L << 30; // Windows key-message bit 30; held-key autorepeat must not queue extra cycles.
+  private static readonly PreviewDisplay.ObjectHighlightStyle TargetHighlightStyle = new(
+    Color.Gray, Color.Transparent, Color.Transparent, 1.0)
+    { StrokeEmphasis = 2, OutlineEmphasis = 0, UseObjectCurveColor = true }; // Source-colored wires, two pixels bolder, no outline/fill; red/green trim/extend previews remain on top.
 
   private const string OptionsSectionName = "vTrim";
   private const string ExtendAsLineKey = "extendAsLine";
   private const string JoinAfterTrimKey = "joinAfterTrim";
 
-  private static bool _extendAsLine = DefaultExtendAsLine;
-  private static bool _joinAfterTrim = DefaultJoinAfterTrim;
+  private static bool _extendAsLine = ConfiguredDefaultExtendAsLine;
+  private static bool _joinAfterTrim = ConfiguredDefaultJoinAfterTrim;
   private static bool _restartingAfterTrimDelegate;
   private static EventHandler? _nativeTrimLaunchIdleHandler;
   private static Guid[]? _pendingNativeTrimCutters;
@@ -63,6 +105,7 @@ public sealed class vTrim : vToolsCommand
     LoadPersistedOptions();
 
     var history = new SessionHistory();
+    var hoverPreference = new TrimHoverPreference();
 
     var cutters = PickCutters(doc);
     if (cutters.State == PickerState.Cancel)
@@ -82,7 +125,7 @@ public sealed class vTrim : vToolsCommand
 
     while (true)
     {
-      var pick = PickTarget(doc, cutters.AutoMode, cutters.CutterIds, _extendAsLine, _joinAfterTrim, allowDone: true);
+      var pick = PickTarget(doc, cutters.AutoMode, cutters.CutterIds, _extendAsLine, _joinAfterTrim, allowDone: true, hoverPreference: hoverPreference);
       if (pick.State == PickerState.Cancel)
       {
         SavePersistedOptions();
@@ -122,7 +165,7 @@ public sealed class vTrim : vToolsCommand
         using(box)
         {
           if(ApplyBoxTrimSelection(doc,box,out var boxRecord)&&boxRecord!=null)history.Push(boxRecord);
-          else RhinoApp.WriteLine("vTrim: box edit could not be applied; previous curves restored.");
+          else RhinoApp.WriteLine("vTrim: multi-curve edit could not be applied; previous curves restored.");
         }
         doc.Objects.UnselectAll();doc.Views.Redraw();continue;
       }
@@ -425,7 +468,8 @@ public sealed class vTrim : vToolsCommand
   private sealed class ActionRecord
   {
     public required CurveSnapshot BeforeTarget { get; init; }
-    public required CurveSnapshot AfterTarget { get; init; }
+    public required CurveSnapshot? AfterTarget { get; init; }
+    public uint DeletedTargetSerial { get; set; }
     public List<CurveSnapshot> AddedCurves { get; } = new();
     public List<Guid> ActiveAddedIds { get; } = new();
     public List<ActionRecord> BatchRecords { get; } = new();
@@ -448,15 +492,161 @@ public sealed class vTrim : vToolsCommand
       foreach(var curve in curves)curve.Dispose();Actions.Clear();
     }
   }
+
+  private static BoxTrimSelection CopyTrimSelection(BoxTrimSelection selection) => new(
+    selection.Actions.Select(action =>
+    {
+      var removed = action.Removed.Select(curve => curve.DuplicateCurve()).ToArray();
+      return new BoxTrimAction(action.ObjectId, new TrimPlan
+        { RemovedPiece = removed[0], Output = action.Plan.Output.Select(curve => curve.DuplicateCurve()).ToList() }, removed);
+    }).ToList()) { ExtendMode = selection.ExtendMode };
+
+  private static BoxTrimSelection? BuildOverlapSelection(
+    RhinoDoc doc, RhinoObject target, Curve targetCurve, Point3d pickPoint, TrimPlan? plan, bool join)
+  {
+    var actions = new List<BoxTrimAction>();
+    try
+    {
+      var candidates = EnumerateDocCurves(doc).Where(item => item.Obj.Id != target.Id && !item.Obj.IsReference &&
+        !item.Obj.IsLocked && item.Obj.IsSelectable(true, false, false, false)).ToArray();
+      if (plan != null)
+      {
+        var removed = plan.RemovedPiece.DuplicateCurve();
+        actions.Add(new(target.Id, new TrimPlan
+          { RemovedPiece = removed, Output = plan.Output.Select(curve => curve.DuplicateCurve()).ToList() }, new[] { removed }));
+      }
+      else
+      {
+        // Coincident curves can supply their own trim limits when no separate
+        // cutter exists, including a duplicate covered over its full length.
+        foreach (var (_, curve) in candidates)
+        {
+          if (!curve.ClosestPoint(pickPoint, out double parameter) || curve.PointAt(parameter).DistanceTo(pickPoint) > doc.ModelAbsoluteTolerance) continue;
+          if (BuildOverlapTrimAction(target.Id, targetCurve, new[] { curve }, pickPoint, doc.ModelAbsoluteTolerance, join) is not {} primary) continue;
+          actions.Add(primary);
+          break;
+        }
+        if (actions.Count == 0) return null;
+      }
+      var primaryRemoved = actions[0].Removed;
+      var bounds = primaryRemoved[0].GetBoundingBox(false);
+      foreach (var piece in primaryRemoved.Skip(1)) bounds.Union(piece.GetBoundingBox(false));
+      bounds.Inflate(doc.ModelAbsoluteTolerance);
+      foreach (var (obj, curve) in candidates)
+      {
+        if (!BoundingBox.Intersection(bounds, curve.GetBoundingBox(false)).IsValid) continue;
+        if (BuildOverlapTrimAction(obj.Id, curve, primaryRemoved, pickPoint, doc.ModelAbsoluteTolerance, join) is {} action)
+          actions.Add(action);
+      }
+      return new(actions);
+    }
+    catch (Exception ex)
+    {
+      new BoxTrimSelection(actions).Dispose();
+      Log.Write("vTrim", "overlap preview failed target={0}: {1}", target.Id, ex.Message);
+      return null;
+    }
+  }
+
+  private static List<Interval> MergeTrimOverlapIntervals(Interval domain, IEnumerable<Interval> intervals)
+  {
+    double epsilon = Math.Abs(domain.Length) * ConfiguredOverlapParameterToleranceFraction;
+    var merged = new List<Interval>();
+    foreach (var interval in intervals.Select(value => new Interval(
+        Math.Max(domain.T0, Math.Min(value.T0, value.T1)), Math.Min(domain.T1, Math.Max(value.T0, value.T1))))
+      .Where(value => value.Length > epsilon).OrderBy(value => value.T0))
+    {
+      if (merged.Count == 0 || interval.T0 > merged[^1].T1 + epsilon) merged.Add(interval);
+      else merged[^1] = new Interval(merged[^1].T0, Math.Max(merged[^1].T1, interval.T1));
+    }
+    return merged;
+  }
+
+  private static BoxTrimAction? BuildOverlapTrimAction(
+    Guid objectId, Curve curve, IReadOnlyList<Curve> removedPieces, Point3d pickPoint, double tolerance, bool join)
+  {
+    if (!curve.ClosestPoint(pickPoint, out double pickedParameter) || curve.PointAt(pickedParameter).DistanceTo(pickPoint) > tolerance)
+      return null;
+    var overlaps = new List<Interval>();
+    foreach (var removedPiece in removedPieces)
+    {
+      using var intersections = Rhino.Geometry.Intersect.Intersection.CurveCurve(curve, removedPiece, tolerance, tolerance);
+      if (intersections != null) overlaps.AddRange(intersections.Where(item => item.IsOverlap).Select(item => item.OverlapA));
+    }
+    var intervals = NormalizeTrimOverlapIntervals(curve, overlaps, tolerance);
+    double epsilon = Math.Abs(curve.Domain.Length) * ConfiguredOverlapParameterToleranceFraction;
+    if (!intervals.Any(interval => pickedParameter >= interval.T0 - epsilon && pickedParameter <= interval.T1 + epsilon))
+      return null;
+    var removed = new List<Curve>();
+    var kept = new List<Curve>();
+    try
+    {
+      Curve Piece(double start, double end)
+      {
+        var piece = start <= curve.Domain.T0 + epsilon && end >= curve.Domain.T1 - epsilon
+          ? curve.DuplicateCurve() : curve.Trim(start, end);
+        if (piece == null || !piece.IsValid)
+        {
+          piece?.Dispose();
+          throw new InvalidOperationException($"Cannot split a coincident trim section: {curve.GetType().Name} domain={curve.Domain.T0:G17},{curve.Domain.T1:G17} interval={start:G17},{end:G17}.");
+        }
+        return piece;
+      }
+      double start = curve.Domain.T0;
+      foreach (var interval in intervals)
+      {
+        if (interval.T0 > start + epsilon) kept.Add(Piece(start, interval.T0));
+        var piece = Piece(interval.T0, interval.T1);
+        if (piece.GetLength() <= RhinoMath.ZeroTolerance)
+        { piece.Dispose(); throw new InvalidOperationException("Degenerate coincident trim section."); }
+        removed.Add(piece);
+        start = interval.T1;
+      }
+      if (removed.Count == 0) { foreach (var piece in kept) piece.Dispose(); return null; }
+      if (start < curve.Domain.T1 - epsilon) kept.Add(Piece(start, curve.Domain.T1));
+      if (join && kept.Count > 1)
+      {
+        var joined = Curve.JoinCurves(kept, tolerance);
+        if (joined is { Length: > 0 })
+        {
+          foreach (var piece in kept) piece.Dispose();
+          kept = joined.ToList();
+        }
+      }
+      return new(objectId, new TrimPlan { RemovedPiece = removed[0], Output = kept }, removed.ToArray());
+    }
+    catch
+    {
+      foreach (var piece in removed.Concat(kept)) piece.Dispose();
+      throw;
+    }
+  }
+
+  private static List<Interval> NormalizeTrimOverlapIntervals(Curve curve, IEnumerable<Interval> overlaps, double tolerance)
+  {
+    var normalized = new List<Interval>();
+    var domain = curve.Domain;
+    foreach (var overlap in MergeTrimOverlapIntervals(domain, overlaps))
+    {
+      double start = overlap.T0, end = overlap.T1;
+      if (start > domain.T0 && curve.GetLength(new Interval(domain.T0, start)) <= tolerance) start = domain.T0;
+      if (end < domain.T1 && curve.GetLength(new Interval(end, domain.T1)) <= tolerance) end = domain.T1;
+      if (normalized.Count > 0 && (start <= normalized[^1].T1 ||
+          curve.GetLength(new Interval(normalized[^1].T1, start)) <= tolerance))
+        normalized[^1] = new Interval(normalized[^1].T0, Math.Max(normalized[^1].T1, end));
+      else normalized.Add(new Interval(start, end));
+    }
+    return normalized;
+  }
   private static Rectangle TrimBoxRectangle(System.Drawing.Point start,System.Drawing.Point end)=>
-    new(Math.Min(start.X,end.X),Math.Min(start.Y,end.Y),Math.Max(BoxMinimumSidePixels,Math.Abs(end.X-start.X)),Math.Max(BoxMinimumSidePixels,Math.Abs(end.Y-start.Y)));
+    new(Math.Min(start.X,end.X),Math.Min(start.Y,end.Y),Math.Max(ConfiguredBoxMinimumSidePixels,Math.Abs(end.X-start.X)),Math.Max(ConfiguredBoxMinimumSidePixels,Math.Abs(end.Y-start.Y)));
   private static RectangleF? BoxCurveBounds(Curve curve,Rhino.Display.RhinoViewport viewport)
   {
     var points=curve.GetBoundingBox(false).GetCorners().Select(viewport.WorldToClient).ToArray();
     if(points.Length==0||points.Any(point=>!point.IsValid))return null;
     var bounds=RectangleF.FromLTRB((float)points.Min(point=>point.X),(float)points.Min(point=>point.Y),
       (float)points.Max(point=>point.X),(float)points.Max(point=>point.Y));
-    bounds.Inflate(BoxBoundsPaddingPixels,BoxBoundsPaddingPixels);return bounds;
+    bounds.Inflate(ConfiguredBoxBoundsPaddingPixels,ConfiguredBoxBoundsPaddingPixels);return bounds;
   }
   private sealed class BoxSelectionCache : IDisposable
   {
@@ -567,7 +757,7 @@ public sealed class vTrim : vToolsCommand
       if(doc.Objects.FindId(action.ObjectId) is not {IsLocked:false,IsReference:false,Geometry:Curve} target||
         !TrimCurveObject(doc,target,action.Plan,out var record)||record==null){success=false;break;}
       records.Add(record);
-      if(record.AddedCurves.Count!=action.Plan.Output.Count-1){success=false;break;}
+      if(record.AddedCurves.Count!=Math.Max(0,action.Plan.Output.Count-1)){success=false;break;}
     }
     if(success&&records.Count>0){records[0].BatchRecords.AddRange(records.Skip(1));actionRecord=records[0];}
     else foreach(var record in records.AsEnumerable().Reverse())ApplyRecordState(doc,record,false);
@@ -677,6 +867,15 @@ public sealed class vTrim : vToolsCommand
   {
     if (redo)
     {
+      if (record.AfterTarget == null)
+      {
+        var target = doc.Objects.FindId(record.BeforeTarget.ObjectId);
+        if (target == null) return false;
+        uint serial = target.RuntimeSerialNumber;
+        if (!doc.Objects.Delete(target.Id, true)) return false;
+        record.DeletedTargetSerial = serial;
+        return true;
+      }
       if (!RestoreTargetSnapshot(doc, record.AfterTarget))
         return false;
 
@@ -698,11 +897,17 @@ public sealed class vTrim : vToolsCommand
     }
 
     record.ActiveAddedIds.Clear();
-    return RestoreTargetSnapshot(doc, record.BeforeTarget);
+    return RestoreTargetSnapshot(doc, record.BeforeTarget, record.DeletedTargetSerial);
   }
 
-  private static bool RestoreTargetSnapshot(RhinoDoc doc, CurveSnapshot snapshot)
+  private static bool RestoreTargetSnapshot(RhinoDoc doc, CurveSnapshot snapshot, uint deletedSerial = 0)
   {
+    if (doc.Objects.FindId(snapshot.ObjectId) == null && deletedSerial != 0)
+    {
+      var deleted = doc.Objects.Find(deletedSerial);
+      if (deleted == null || deleted.Id != snapshot.ObjectId || !deleted.IsDeleted ||
+          !doc.Objects.Undelete(deletedSerial)) return false;
+    }
     if (!doc.Objects.Replace(snapshot.ObjectId, snapshot.Curve.DuplicateCurve()))
       return false;
 
@@ -795,7 +1000,8 @@ public sealed class vTrim : vToolsCommand
     IReadOnlyList<Guid> cutterIds,
     bool extendAsLine,
     bool joinAfterTrim,
-    bool allowDone)
+    bool allowDone,
+    TrimHoverPreference hoverPreference)
   {
     var pick = new TargetPick
     {
@@ -824,18 +1030,20 @@ public sealed class vTrim : vToolsCommand
       go.AddOptionToggle("Extend", ref extendToggle);
       go.AddOptionToggle("Join", ref joinToggle);
 
-      var preview = new TrimPreviewConduit(doc, autoMode, cutterIds, extendAsLine, joinAfterTrim)
+      using var preview = new TrimPreviewConduit(doc, autoMode, cutterIds, extendAsLine, joinAfterTrim)
       {
         Enabled = true
       };
 
-      var hover = new TrimHoverMouseCallback(doc, preview)
+      var hover = new TrimHoverMouseCallback(doc, preview, hoverPreference)
       {
         Enabled = true
       };
+      using var tabKeys = new TrimTabKeySession(hover.QueueNextCurve);
 
       var lastShiftState = ShiftPressed();
       preview.SetExtendMode(lastShiftState);
+      preview.SetOverlapMode(ControlPressed());
       var modeLocked = false;
       var lockedExtendMode = lastShiftState;
       var shiftReleaseTicks = 0;
@@ -849,7 +1057,8 @@ public sealed class vTrim : vToolsCommand
 
         var prompt = modeLocked
           ? $"Select curve to trim; mode locked: {modeLabel}; Enter when done"
-          : $"Click a curve or drag a box (hold Shift to extend curve ends; current: {modeLabel}); Enter when done";
+          : $"Click a curve or drag a box (Shift: extend; Ctrl: overlaps; Tab: choose curve; current: {modeLabel}); Enter when done";
+        if (hover.CycleCaption.Length > 0) prompt += "; " + hover.CycleCaption;
 
         if (string.Equals(prompt, lastPrompt, StringComparison.Ordinal))
           return;
@@ -864,6 +1073,8 @@ public sealed class vTrim : vToolsCommand
 
       void OnIdleShiftRefresh(object? _sender, EventArgs _args)
       {
+        if (!modeLocked && hover.ApplyPendingCycles()) { RefreshPrompt(); doc.Views.Redraw(); }
+        if (!modeLocked && preview.SetOverlapMode(ControlPressed())) doc.Views.Redraw();
         var clickCapture = hover.LastClick;
         if (clickCapture.HasCapture && !modeLocked)
         {
@@ -972,6 +1183,7 @@ public sealed class vTrim : vToolsCommand
         RhinoApp.Idle -= OnIdleShiftRefresh;
         doc.Objects.UnselectAll();
         hover.Enabled = false;
+        hover.ClearPendingOverlap();
         preview.ClearBox();
         preview.Enabled = false;
         doc.Views.Redraw();
@@ -1140,6 +1352,8 @@ public sealed class vTrim : vToolsCommand
       pick.PreviewTrimPlan = trimPlan;
       pick.PreviewExtendPlan = extendPlan;
       pick.PreviewFailure = previewFailure;
+      if (!pickedExtendMode && preview.CurrentOverlapSelection is {} overlapSelection)
+        pick.BoxSelection = CopyTrimSelection(overlapSelection);
       return pick;
     }
   }
@@ -1156,6 +1370,15 @@ public sealed class vTrim : vToolsCommand
     }
   }
 
+  private static bool ControlPressed()
+  {
+    try { return (GetAsyncKeyState(ControlVirtualKey) & 0x8000) != 0; }
+    catch { return (System.Windows.Forms.Control.ModifierKeys & System.Windows.Forms.Keys.Control) != 0; }
+  }
+
+  [System.Runtime.InteropServices.DllImport("user32.dll")]
+  private static extern short GetAsyncKeyState(int virtualKey);
+
   private readonly struct HoverClickCapture
   {
     public bool HasCapture { get; init; }
@@ -1171,18 +1394,127 @@ public sealed class vTrim : vToolsCommand
       (ExtendMode ? ExtendPlan != null : TrimPlan != null);
   }
 
-  private sealed class TrimPreviewConduit : Rhino.Display.DisplayConduit
+  private sealed class TrimHoverPreference
+  {
+    public Guid? PreferredId { get; private set; }
+
+    public Guid? PreferredAmong(IEnumerable<Guid> available) =>
+      PreferredId.HasValue && available.Contains(PreferredId.Value) ? PreferredId : null;
+
+    public Guid? Cycle(IEnumerable<Guid> available, Guid? current)
+    {
+      var ids = available.Where(id => id != Guid.Empty).Distinct().OrderBy(id => id).ToArray();
+      if (ids.Length < 2) return null;
+      int index = Array.IndexOf(ids, current ?? Guid.Empty);
+      PreferredId = ids[(index + 1) % ids.Length];
+      return PreferredId;
+    }
+  }
+
+  private sealed class TrimTabMessageState
+  {
+    private bool _captured;
+    public bool Handle(uint message, int key, long flags, bool control, bool alt, Func<bool> queueCycle)
+    {
+      if (key != TabVirtualKey) return false;
+      if (message == TabKeyUpMessage && _captured) { _captured = false; return true; }
+      if (message == TabCharacterMessage) return _captured;
+      if (message != TabKeyDownMessage || control || alt) return false;
+      if ((flags & TabPreviousKeyState) != 0) return _captured;
+      if (!queueCycle()) return false;
+      _captured = true;
+      return true;
+    }
+  }
+
+  private sealed class TrimTabKeySession : IDisposable
+  {
+    private readonly Func<bool> _queueCycle;
+    private readonly TrimTabMessageState _state = new();
+    private readonly HookProc _callback;
+    private readonly IntPtr _mainWindow;
+    private IntPtr _hook;
+
+    public TrimTabKeySession(Func<bool> queueCycle)
+    {
+      _queueCycle = queueCycle;
+      _callback = ReadMessage;
+      _mainWindow = RhinoApp.MainWindowHandle();
+      if (!OperatingSystem.IsWindows() || _mainWindow == IntPtr.Zero) return;
+      uint thread = GetWindowThreadProcessId(_mainWindow, out _);
+      if (thread != 0) _hook = SetWindowsHookEx(TabHookGetMessage, _callback, IntPtr.Zero, thread);
+      if (_hook == IntPtr.Zero) Log.Write("vTrim", "Could not install picker-local Tab routing.");
+    }
+
+    private IntPtr ReadMessage(int code, IntPtr removed, IntPtr pointer)
+    {
+      try
+      {
+        if (code >= 0 && removed.ToInt64() == TabMessageRemoved && pointer != IntPtr.Zero)
+        {
+          var message = System.Runtime.InteropServices.Marshal.PtrToStructure<NativeMessage>(pointer);
+          bool rhinoWindow = message.Window != IntPtr.Zero &&
+            (message.Window == _mainWindow || GetAncestor(message.Window, TabRootAncestor) == _mainWindow);
+          if (rhinoWindow && _state.Handle(message.Message, unchecked((int)message.WParam.ToUInt64()), message.LParam.ToInt64(),
+                (GetKeyState(ControlVirtualKey) & 0x8000) != 0, (GetKeyState(AltVirtualKey) & 0x8000) != 0, _queueCycle))
+            System.Runtime.InteropServices.Marshal.WriteInt32(pointer, IntPtr.Size, 0);
+        }
+      }
+      catch (Exception ex) { Log.Write("vTrim", "Picker-local Tab routing failed: {0}", ex.Message); }
+      return CallNextHookEx(_hook, code, removed, pointer);
+    }
+
+    public void Dispose()
+    {
+      if (_hook == IntPtr.Zero) return;
+      UnhookWindowsHookEx(_hook);
+      _hook = IntPtr.Zero;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private readonly struct NativePoint { public readonly int X, Y; }
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private readonly struct NativeMessage
+    {
+      public readonly IntPtr Window;
+      public readonly uint Message;
+      public readonly UIntPtr WParam;
+      public readonly IntPtr LParam;
+      public readonly uint Time;
+      public readonly NativePoint Point;
+      public readonly uint Private;
+    }
+    private delegate IntPtr HookProc(int code, IntPtr removed, IntPtr pointer);
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int type, HookProc callback, IntPtr module, uint thread);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr CallNextHookEx(IntPtr hook, int code, IntPtr removed, IntPtr pointer);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr window, uint flags);
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern short GetKeyState(int key);
+  }
+
+  private sealed class TrimPreviewConduit : Rhino.Display.DisplayConduit, IDisposable
   {
     private readonly RhinoDoc _doc;
     private readonly bool _autoMode;
     private readonly IReadOnlyList<Guid> _cutterIds;
+    private readonly PreviewDisplay.ObjectHighlighter _targetHighlight;
+    private bool _overlapMode;
+    private TrimPlan? _baseTrimPlan;
+    public BoxTrimSelection? CurrentOverlapSelection { get; private set; }
     private Rectangle? _box;
     private Guid _boxViewport;
     private BoxTrimSelection? _boxSelection;
     private BoxSelectionCache? _boxCache;
     private Transform _boxView;
     private bool _boxExtendAsLine;
-    public void ClearBox(){_boxSelection?.Dispose();_boxSelection=null;_boxCache?.Dispose();_boxCache=null;_box=null;}
+    public void ClearBox(){_boxSelection?.Dispose();_boxSelection=null;_boxCache?.Dispose();_boxCache=null;_box=null;_targetHighlight.SetObjects([]);}
     public void SetBox(Rhino.Display.RhinoViewport viewport,Rectangle rectangle,bool crossing,bool extend=false)
     {
       var view=viewport.GetTransform(Rhino.DocObjects.CoordinateSystem.World,Rhino.DocObjects.CoordinateSystem.Screen);
@@ -1190,6 +1522,7 @@ public sealed class vTrim : vToolsCommand
       {_boxCache?.Dispose();_boxCache=new(_doc,viewport,ExtendAsLine);_boxView=view;_boxExtendAsLine=ExtendAsLine;}
       _boxSelection?.Dispose();_box=rectangle;_boxViewport=viewport.Id;
       _boxSelection=_boxCache.Build(rectangle,crossing,JoinAfterTrim,extend);
+      _targetHighlight.SetObjects(_boxSelection.Actions.Select(action => action.ObjectId));
     }
     public BoxTrimSelection? TakeBoxSelection(){var result=_boxSelection;_boxSelection=null;_box=null;return result;}
 
@@ -1198,8 +1531,28 @@ public sealed class vTrim : vToolsCommand
       _doc = doc;
       _autoMode = autoMode;
       _cutterIds = cutterIds;
+      _targetHighlight = new PreviewDisplay.ObjectHighlighter(doc, TargetHighlightStyle)
+        { RedrawOnChange = false, DrawOnTop = true, AutomaticForegroundDrawing = false, AutomaticShadedDrawing = false };
       ExtendAsLine = extendAsLine;
       JoinAfterTrim = joinAfterTrim;
+    }
+
+    public bool SetOverlapMode(bool enabled)
+    {
+      enabled &= _autoMode;
+      if (_overlapMode == enabled) return false;
+      _overlapMode = enabled;
+      RefreshOverlapPreview();
+      return true;
+    }
+
+    public void Dispose()
+    {
+      Enabled = false;
+      ClearBox();
+      CurrentOverlapSelection?.Dispose();
+      CurrentOverlapSelection = null;
+      _targetHighlight.Dispose();
     }
 
     public Guid? HoverObjectId { get; private set; }
@@ -1224,6 +1577,7 @@ public sealed class vTrim : vToolsCommand
     {
       HasValidActionPreview = false;
       CurrentTrimPlan = null;
+      _baseTrimPlan = null;
       CurrentExtendPlan = null;
       CurrentPreviewFailure = string.Empty;
       HoverObject = obj;
@@ -1244,6 +1598,9 @@ public sealed class vTrim : vToolsCommand
 
     public void ResolveCurrentAction(bool extendMode)
     {
+      CurrentOverlapSelection?.Dispose();
+      CurrentOverlapSelection = null;
+      _targetHighlight.SetObjects([]);
       HoverExtendMode = extendMode;
       HasValidActionPreview = false;
       CurrentTrimPlan = null;
@@ -1272,11 +1629,13 @@ public sealed class vTrim : vToolsCommand
           HasValidActionPreview = true;
           CurrentExtendPlan = extendPlan;
           CacheCurrentAction();
+          UpdateTargetHighlight();
         }
         else
         {
           CurrentPreviewFailure = extendFailure;
           RestoreCachedActionIfApplicable();
+          UpdateTargetHighlight();
         }
 
         return;
@@ -1310,7 +1669,40 @@ public sealed class vTrim : vToolsCommand
         CurrentPreviewFailure = trimFailure;
         RestoreCachedActionIfApplicable();
       }
+      _baseTrimPlan = CurrentTrimPlan;
+      RefreshOverlapPreview();
     }
+
+    private void RefreshOverlapPreview()
+    {
+      CurrentOverlapSelection?.Dispose();
+      CurrentOverlapSelection = null;
+      if (HoverExtendMode) { UpdateTargetHighlight(); return; }
+      CurrentTrimPlan = _baseTrimPlan;
+      HasValidActionPreview = CurrentTrimPlan != null;
+      if (_overlapMode && HoverObject != null && HoverCurve != null && HoverPoint.IsValid)
+      {
+        CurrentOverlapSelection = BuildOverlapSelection(_doc, HoverObject, HoverCurve, HoverPoint, _baseTrimPlan, JoinAfterTrim);
+        if (CurrentOverlapSelection == null)
+        {
+          HasValidActionPreview = false;
+          CurrentPreviewFailure = "coincident trim preview could not be built";
+        }
+        else
+        {
+          HasValidActionPreview = true;
+          CurrentTrimPlan = CurrentOverlapSelection.Actions[0].Plan;
+          CurrentPreviewFailure = string.Empty;
+        }
+      }
+      else if (HasValidActionPreview) CurrentPreviewFailure = string.Empty;
+      UpdateTargetHighlight();
+    }
+
+    private void UpdateTargetHighlight() => _targetHighlight.SetObjects(
+      CurrentTrimPlan == null && CurrentExtendPlan == null ? [] : CurrentOverlapSelection != null
+        ? CurrentOverlapSelection.Actions.Select(action => action.ObjectId)
+        : HoverObjectId.HasValue ? new[] { HoverObjectId.Value } : []);
 
     private void CacheCurrentAction()
     {
@@ -1364,11 +1756,13 @@ public sealed class vTrim : vToolsCommand
 
     protected override void DrawOverlay(Rhino.Display.DrawEventArgs e)
     {
+      if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber) return;
+      _targetHighlight.DrawForegroundHighlights(e);
       if(_box is {} rectangle)
       {
         if(e.Viewport.Id==_boxViewport)
         {
-          e.Display.Draw2dRectangle(rectangle,BoxColor,BoxLineThicknessPixels,Color.Transparent);
+          e.Display.Draw2dRectangle(rectangle,BoxColor,ConfiguredBoxLineThicknessPixels,Color.Transparent);
           foreach(var action in _boxSelection?.Actions??[])
             foreach(var piece in action.Removed)
               if(_boxSelection!.ExtendMode)PreviewDisplay.DrawAddedCurve(e.Display,piece);else PreviewDisplay.DrawRemovedCurve(e.Display,piece);
@@ -1404,7 +1798,13 @@ public sealed class vTrim : vToolsCommand
       }
       else
       {
-        if (CurrentTrimPlan != null)
+        if (CurrentOverlapSelection != null)
+        {
+          foreach (var action in CurrentOverlapSelection.Actions)
+            foreach (var removed in action.Removed)
+              PreviewDisplay.DrawRemovedCurve(e.Display, removed);
+        }
+        else if (CurrentTrimPlan != null)
         {
           PreviewDisplay.DrawRemovedCurve(e.Display, CurrentTrimPlan.RemovedPiece);
           if (NeedsEndpointCue(e.Viewport, e.Display, CurrentTrimPlan.RemovedPiece))
@@ -1467,6 +1867,12 @@ public sealed class vTrim : vToolsCommand
   {
     private readonly RhinoDoc _doc;
     private readonly TrimPreviewConduit _preview;
+    private readonly TrimHoverPreference _preference;
+    private readonly int _commandDepth;
+    private List<HoverCurveCandidate> _candidates = new();
+    private Rhino.Display.RhinoViewport? _hoverViewport;
+    private int _pendingCycles;
+    public string CycleCaption { get; private set; } = string.Empty;
     private RhinoObject? _lastHoverObject;
     private Curve? _lastHoverCurve;
     private Guid? _lastHoverObjectId;
@@ -1475,11 +1881,62 @@ public sealed class vTrim : vToolsCommand
     private bool _dragging;
     private long _boxPreviewTick;
     private HoverClickCapture _pendingClick;
+    private BoxTrimSelection? _pendingOverlap;
+    public void ClearPendingOverlap() { _pendingOverlap?.Dispose(); _pendingOverlap = null; _pendingCycles = 0; }
 
-    public TrimHoverMouseCallback(RhinoDoc doc, TrimPreviewConduit preview)
+    public TrimHoverMouseCallback(RhinoDoc doc, TrimPreviewConduit preview, TrimHoverPreference preference)
     {
       _doc = doc;
       _preview = preview;
+      _preference = preference;
+      _commandDepth = doc.InCommand(false);
+    }
+
+    public bool QueueNextCurve()
+    {
+      if (!Enabled || _doc.InCommand(false) != _commandDepth || _dragStart.HasValue || _candidates.Count < 2 || _hoverViewport?.ParentView is not {} view ||
+          RhinoDoc.ActiveDoc?.RuntimeSerialNumber != _doc.RuntimeSerialNumber ||
+          !view.ScreenRectangle.Contains(System.Windows.Forms.Cursor.Position)) return false;
+      _pendingCycles++;
+      return true;
+    }
+
+    public bool ApplyPendingCycles()
+    {
+      int cycles = _pendingCycles;
+      _pendingCycles = 0;
+      if (cycles == 0 || !Enabled || _doc.InCommand(false) != _commandDepth || _dragStart.HasValue || _hoverViewport?.ParentView is not {} view ||
+          RhinoDoc.ActiveDoc?.RuntimeSerialNumber != _doc.RuntimeSerialNumber ||
+          !view.ScreenRectangle.Contains(System.Windows.Forms.Cursor.Position)) return false;
+      var point = view.ScreenToClient(System.Windows.Forms.Cursor.Position);
+      var candidates = PickCurveCandidates(_doc, _hoverViewport, point);
+      EnsurePreferredCandidate(_hoverViewport, point, candidates);
+      Guid? chosen = _preview.HoverObjectId;
+      for (int index = 0; index < cycles; index++) chosen = _preference.Cycle(candidates.Select(item => item.Object.Id), chosen);
+      var target = candidates.FirstOrDefault(item => item.Object.Id == chosen);
+      if (target == null) return false;
+      _candidates = candidates;
+      _lastHoverObject = target.Object; _lastHoverCurve = target.Curve; _lastHoverObjectId = target.Object.Id;
+      _doc.Views.ActiveView = view;
+      _preview.SetHover(target.Object, target.Curve, target.Point, _preview.HoverExtendMode);
+      string layer = _doc.Layers.FindIndex(target.Object.Attributes.LayerIndex)?.FullPath ?? string.Empty;
+      var name = target.Object.Attributes.Name;
+      int position = Array.IndexOf(candidates.Select(item => item.Object.Id).OrderBy(id => id).ToArray(), target.Object.Id) + 1;
+      CycleCaption = $"preferred curve {position}/{candidates.Count}: {layer}" + (string.IsNullOrWhiteSpace(name) ? string.Empty : " / " + name);
+      Log.Write("vTrim", "Tab hover target={0} candidates={1}; preference retained", target.Object.Id, candidates.Count);
+      return true;
+    }
+
+    private void EnsurePreferredCandidate(Rhino.Display.RhinoViewport viewport, System.Drawing.Point screenPoint, List<HoverCurveCandidate> candidates)
+    {
+      if (_preference.PreferredId is not {} id || candidates.Any(item => item.Object.Id == id) ||
+          _doc.Objects.FindId(id) is not { Geometry: Curve curve } obj || !obj.IsSelectable(true, false, false, false)) return;
+      var cursor = new Point2d(screenPoint.X, screenPoint.Y);
+      double radius = PickboxRadiusPixels();
+      if (!CurveBboxNearCursor(curve, viewport, cursor, radius)) return;
+      var sample = CurveBestScreenPick(curve, viewport, cursor);
+      if (sample.Point.IsValid && sample.DistanceSquared.HasValue && sample.DistanceSquared.Value <= radius * radius)
+        candidates.Add(new(obj, curve, sample.Point, sample.DistanceSquared.Value));
     }
 
     public HoverClickCapture LastClick { get; private set; }
@@ -1489,6 +1946,7 @@ public sealed class vTrim : vToolsCommand
       // Only capture left-click; middle/right are pan/zoom and must not trigger modeLocked.
       try { if (e.MouseButton != Rhino.UI.MouseButton.Left) { base.OnMouseDown(e); return; } } catch { }
       if(e.View is {} view)_doc.Views.ActiveView=view;
+      ApplyPendingCycles();
 
       var shiftDown = ShiftPressed();
       try
@@ -1500,6 +1958,10 @@ public sealed class vTrim : vToolsCommand
       }
 
       _preview.SetExtendMode(shiftDown);
+      _preview.SetOverlapMode(ControlPressed());
+      ClearPendingOverlap();
+      if (!shiftDown && _preview.CurrentOverlapSelection is {} overlap)
+        _pendingOverlap = CopyTrimSelection(overlap);
 
       var trimPlan = shiftDown ? null : _preview.CurrentTrimPlan;
       var extendPlan = shiftDown ? _preview.CurrentExtendPlan : null;
@@ -1510,7 +1972,7 @@ public sealed class vTrim : vToolsCommand
         ObjectId = _preview.HoverObjectId,
         Point = _preview.HoverPoint,
         ExtendMode = shiftDown,
-        HadValidPreview = trimPlan != null || extendPlan != null,
+        HadValidPreview = _preview.HasValidActionPreview && (trimPlan != null || extendPlan != null),
         TrimPlan = trimPlan,
         ExtendPlan = extendPlan,
         PreviewFailure = _preview.CurrentPreviewFailure
@@ -1525,6 +1987,7 @@ public sealed class vTrim : vToolsCommand
       e.Cancel=true;_dragStart=null;
       if(_dragging)
       {
+        ClearPendingOverlap();
         if(e.View?.ActiveViewport is {} viewport&&viewport.Id==_dragViewport)
         {
           _preview.SetBox(viewport,TrimBoxRectangle(start,e.ViewportPoint),e.ViewportPoint.X<start.X,_pendingClick.ExtendMode);
@@ -1534,7 +1997,12 @@ public sealed class vTrim : vToolsCommand
         _preview.ClearBox();_doc.Views.Redraw();
       }
       else
-      {LastClick=_pendingClick;if(LastClick.CanAccept)GetBaseClass.PostCustomMessage(LastClick);}
+      {
+        LastClick=_pendingClick;
+        if (_pendingOverlap is {} overlap)
+        { _pendingOverlap = null; GetBaseClass.PostCustomMessage(overlap); }
+        else if(LastClick.CanAccept)GetBaseClass.PostCustomMessage(LastClick);
+      }
       base.OnMouseUp(e);
     }
 
@@ -1550,11 +2018,11 @@ public sealed class vTrim : vToolsCommand
       }
       if(_dragStart is {} start&&viewport.Id==_dragViewport)
       {
-        _dragging|=Math.Abs(vpClient.X-start.X)>=BoxDragThresholdPixels||Math.Abs(vpClient.Y-start.Y)>=BoxDragThresholdPixels;
+        _dragging|=Math.Abs(vpClient.X-start.X)>=ConfiguredBoxDragThresholdPixels||Math.Abs(vpClient.Y-start.Y)>=ConfiguredBoxDragThresholdPixels;
         if(_dragging)
         {
           e.Cancel=true;
-          if(System.Environment.TickCount64-_boxPreviewTick>=BoxPreviewIntervalMilliseconds)
+          if(System.Environment.TickCount64-_boxPreviewTick>=ConfiguredBoxPreviewIntervalMilliseconds)
           {_preview.SetBox(viewport,TrimBoxRectangle(start,vpClient),vpClient.X<start.X,_pendingClick.ExtendMode);_boxPreviewTick=System.Environment.TickCount64;_doc.Views.Redraw();}
           base.OnMouseMove(e);return;
         }
@@ -1563,15 +2031,17 @@ public sealed class vTrim : vToolsCommand
       var screenPoint = new System.Drawing.Point(
         (int)Math.Round((double)vpClient.X),
         (int)Math.Round((double)vpClient.Y));
-      TryPickCurveWithRhino(
-        _doc,
-        viewport,
-        screenPoint,
-        out var hoverObj,
-        out var hoverCurve,
-        out var hoverPoint);
+      _hoverViewport = viewport;
+      _candidates = PickCurveCandidates(_doc, viewport, screenPoint);
+      EnsurePreferredCandidate(viewport, screenPoint, _candidates);
+      Guid? preferredId = _preference.PreferredAmong(_candidates.Select(item => item.Object.Id));
+      var preferred = _candidates.FirstOrDefault(item => item.Object.Id == preferredId);
+      var candidate = preferred ?? _candidates.OrderBy(item => item.DistanceSquared).ThenBy(item => item.Object.Id).FirstOrDefault();
+      var hoverObj = candidate?.Object;
+      var hoverCurve = candidate?.Curve;
+      var hoverPoint = candidate?.Point ?? Point3d.Unset;
 
-      if (_lastHoverObject != null && _lastHoverCurve != null)
+      if (preferred == null && _lastHoverObject != null && _lastHoverCurve != null)
       {
         var viewportPoint = new Point2d(screenPoint.X, screenPoint.Y);
         var previousSample = CurveBestScreenPick(_lastHoverCurve, viewport, viewportPoint);
@@ -1587,7 +2057,7 @@ public sealed class vTrim : vToolsCommand
            hoverObj.Id == _lastHoverObject.Id ||
            !pickedDistance.HasValue ||
            previousSample.DistanceSquared!.Value <=
-             pickedDistance.Value + HoverCandidateSwitchAdvantageSquaredPixels);
+             pickedDistance.Value + ConfiguredHoverCandidateSwitchAdvantageSquaredPixels);
 
         if (previousIsPreferred)
         {
@@ -1615,22 +2085,19 @@ public sealed class vTrim : vToolsCommand
       base.OnMouseMove(e);
     }
 
-    private static bool TryPickCurveWithRhino(
+    private sealed record HoverCurveCandidate(RhinoObject Object, Curve Curve, Point3d Point, double DistanceSquared);
+
+    private static List<HoverCurveCandidate> PickCurveCandidates(
       RhinoDoc doc,
       Rhino.Display.RhinoViewport viewport,
-      System.Drawing.Point screenPoint,
-      out RhinoObject? pickedObject,
-      out Curve? pickedCurve,
-      out Point3d pickedPoint)
+      System.Drawing.Point screenPoint)
     {
-      pickedObject = null;
-      pickedCurve = null;
-      pickedPoint = Point3d.Unset;
+      var candidates = new List<HoverCurveCandidate>();
 
       var view = viewport.ParentView;
       if (view == null ||
           !viewport.GetFrustumLine(screenPoint.X, screenPoint.Y, out var pickLine))
-        return false;
+        return candidates;
 
       using var pickContext = new PickContext
       {
@@ -1646,16 +2113,16 @@ public sealed class vTrim : vToolsCommand
 
       var picked = doc.Objects.PickObjects(pickContext);
       if (picked == null)
-        return false;
+        return candidates;
 
       var cursorPoint = new Point2d(screenPoint.X, screenPoint.Y);
-      var bestDistanceSquared = double.PositiveInfinity;
-
+      double radius = PickboxRadiusPixels();
+      try
+      {
       foreach (var objRef in picked)
       {
         var obj = objRef.Object();
-        var curve = objRef.Curve();
-        if (obj == null || curve == null || obj.Geometry is not Curve)
+        if (obj?.Geometry is not Curve curve || obj.IsReference || !obj.IsSelectable(true, false, false, false) || candidates.Any(item => item.Object.Id == obj.Id))
           continue;
 
         var sample = CurveBestScreenPick(curve, viewport, cursorPoint);
@@ -1674,16 +2141,14 @@ public sealed class vTrim : vToolsCommand
         }
 
         if (!point.IsValid || !distanceSquared.HasValue ||
-            distanceSquared.Value >= bestDistanceSquared)
+            distanceSquared.Value > radius * radius)
           continue;
 
-        pickedObject = obj;
-        pickedCurve = curve;
-        pickedPoint = point;
-        bestDistanceSquared = distanceSquared.Value;
+        candidates.Add(new(obj, curve, point, distanceSquared.Value));
       }
-
-      return pickedObject != null;
+      }
+      finally { foreach (var objRef in picked) objRef.Dispose(); }
+      return candidates;
     }
 
     private static double PickboxRadiusPixels()
@@ -1691,13 +2156,13 @@ public sealed class vTrim : vToolsCommand
       try
       {
         return Math.Max(
-          MinimumHoverPickRadiusPixels,
+          ConfiguredMinimumHoverPickRadiusPixels,
           Rhino.ApplicationSettings.ModelAidSettings.MousePickboxRadius +
-            HoverPickRadiusPaddingPixels);
+            ConfiguredHoverPickRadiusPaddingPixels);
       }
       catch
       {
-        return MinimumHoverPickRadiusPixels;
+        return ConfiguredMinimumHoverPickRadiusPixels;
       }
     }
   }
@@ -1720,7 +2185,7 @@ public sealed class vTrim : vToolsCommand
     var parameters = new List<double>();
     try
     {
-      var div = curve.DivideByCount(HoverCurveSampleCount, true);
+      var div = curve.DivideByCount(ConfiguredHoverCurveSampleCount, true);
       if (div != null)
         parameters.AddRange(div.Select(v => (double)v));
     }
@@ -1730,9 +2195,9 @@ public sealed class vTrim : vToolsCommand
 
     if (parameters.Count == 0)
     {
-      for (var i = 0; i <= HoverCurveSampleCount; i++)
+      for (var i = 0; i <= ConfiguredHoverCurveSampleCount; i++)
       {
-        var t = d0 + ((d1 - d0) * (i / (double)HoverCurveSampleCount));
+        var t = d0 + ((d1 - d0) * (i / (double)ConfiguredHoverCurveSampleCount));
         parameters.Add(t);
       }
     }
@@ -1769,7 +2234,7 @@ public sealed class vTrim : vToolsCommand
       right = Math.Min(d1, bestT + ((d1 - d0) / HoverCurveFallbackSpanDivisor));
     }
 
-    for (var i = 0; i < HoverCurveRefinementIterations; i++)
+    for (var i = 0; i < ConfiguredHoverCurveRefinementIterations; i++)
     {
       var t1 = left + ((right - left) / 3.0);
       var t2 = right - ((right - left) / 3.0);
@@ -2197,7 +2662,7 @@ public sealed class vTrim : vToolsCommand
         double angle = Vector3d.VectorAngle(targetTangent, cutterTangent);
         angle = Math.Min(angle, Math.PI - angle);
         if (gap <= strictTolerance ||
-            angle >= RhinoMath.ToRadians(MinApproximateCrossingAngleDegrees))
+            angle >= RhinoMath.ToRadians(ConfiguredMinApproximateCrossingAngleDegrees))
           parameters.Add(parameter);
       }
     }
@@ -2797,6 +3262,14 @@ public sealed class vTrim : vToolsCommand
     }
 
     var attr = targetObj.Attributes.Duplicate();
+    if (plan.Output.Count == 0)
+    {
+      uint serial = targetObj.RuntimeSerialNumber;
+      if (!doc.Objects.Delete(targetObj.Id, true)) return false;
+      actionRecord = new ActionRecord { BeforeTarget = beforeTarget, AfterTarget = null, DeletedTargetSerial = serial };
+      Log.Write("vTrim", "trim applied target={0} output=0; coincident section covered entire curve", targetObj.Id);
+      return true;
+    }
     if (!doc.Objects.Replace(targetObj.Id, plan.Output[0]))
     {
       RhinoApp.WriteLine("vTrim: failed to replace target curve.");

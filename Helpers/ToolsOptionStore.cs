@@ -45,6 +45,76 @@ internal static class ToolsOptionStore
 
 internal static string LastError { get; private set; } = "";
 
+  internal static bool TrySnapshot(out JsonObject root)
+  {
+    lock (Sync)
+    {
+      try { LastError = ""; root = LoadRoot(); return true; }
+      catch (Exception ex) { LastError = ex.Message; root = new JsonObject(); return false; }
+    }
+  }
+
+  internal sealed record Change(string[] Path, bool Existed, JsonNode? Before, JsonNode? After);
+
+  internal static bool SameValue(JsonNode? left, JsonNode? right)
+  {
+    if (ReferenceEquals(left, right) || left?.ToJsonString() == right?.ToJsonString()) return true;
+    if (left is JsonValue && right is JsonValue &&
+      decimal.TryParse(left.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var first) &&
+      decimal.TryParse(right.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var second)) return first == second;
+    if (left is JsonObject a && right is JsonObject b)
+      return a.Count == b.Count && a.All(pair => b.ContainsKey(pair.Key) && SameValue(pair.Value, b[pair.Key]));
+    if (left is JsonArray x && right is JsonArray y)
+      return x.Count == y.Count && x.Zip(y).All(pair => SameValue(pair.First, pair.Second));
+    return false;
+  }
+
+  internal static JsonNode? Clone(JsonNode? value) => value == null ? null : JsonNode.Parse(value.ToJsonString());
+
+  // Apply only edited leaves to the latest profile, never a stale full-document snapshot.
+  internal static bool ApplyChanges(IReadOnlyList<Change> changes)
+  {
+    lock (Sync)
+    {
+      try
+      {
+        LastError = "";
+        var root = LoadRoot();
+        foreach (var change in changes)
+        {
+          if (change.Path.Length < 2) throw new InvalidDataException("A setting requires a section and key.");
+          JsonObject? parent = root;
+          foreach (var segment in change.Path[..^1])
+          {
+            if (parent == null) break;
+            if (parent[segment] is JsonObject child) parent = child;
+            else if (!parent.ContainsKey(segment)) parent = null;
+            else throw new InvalidDataException($"Setting structure changed: {string.Join(" / ", change.Path)}. Reopen vSettings.");
+          }
+          bool exists = parent?.ContainsKey(change.Path[^1]) == true;
+          var current = parent?[change.Path[^1]];
+          if ((exists != change.Existed || !SameValue(current, change.Before)) && !SameValue(current, change.After))
+            throw new InvalidDataException($"Setting changed since opening: {string.Join(" / ", change.Path)}. Reopen vSettings.");
+        }
+        foreach (var change in changes)
+        {
+          var parent = root;
+          foreach (var segment in change.Path[..^1])
+          {
+            if (parent[segment] is not JsonObject child) parent[segment] = child = new JsonObject();
+            parent = child;
+          }
+          parent[change.Path[^1]] = Clone(change.After);
+        }
+        if (changes.Count == 0) return true;
+        if (!SaveRoot(root)) return false;
+        CommandDefaults.Reload();
+        return true;
+      }
+      catch (Exception ex) { LastError = ex.Message; return false; }
+    }
+  }
+
   /// <summary>
   /// Updates one command section and saves the shared config.
   /// </summary>
@@ -216,10 +286,16 @@ internal static bool Update(string sectionName, Action<JsonObject> updater)
       if (!string.IsNullOrWhiteSpace(parent))
         Directory.CreateDirectory(parent);
 
-      var tmp = path + ".tmp";
-      File.WriteAllText(tmp, root.ToJsonString(JsonOptions));
-      File.Copy(tmp, path, true);
-      File.Delete(tmp);
+      var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+      try
+      {
+        File.WriteAllText(tmp, root.ToJsonString(JsonOptions));
+        File.Move(tmp, path, true);
+      }
+      finally
+      {
+        if (File.Exists(tmp)) File.Delete(tmp);
+      }
       return true;
     }
     catch (Exception ex)

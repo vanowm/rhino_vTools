@@ -20,11 +20,15 @@ public sealed class vDupEdge : vToolsCommand
   private const string LayerKey = "layer";
 
   // Option defaults
-  private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
-  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vDupEdge", "vTools.Commands.vDupEdge.DefaultGroupIfNone", "true groups output with an ungrouped source; false leaves both ungrouped.")] private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
 
-  private static bool _groupIfNone = DefaultGroupIfNone;
-  private static string _layer = DefaultLayer;
+  private static readonly bool ConfiguredDefaultGroupIfNone = global::vTools.CommandDefaults.Get("vDupEdge", "vTools.Commands.vDupEdge.DefaultGroupIfNone", DefaultGroupIfNone); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDupEdge", "vTools.Commands.vDupEdge.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vDupEdge", "vTools.Commands.vDupEdge.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static bool _groupIfNone = ConfiguredDefaultGroupIfNone;
+  private static string _layer = ConfiguredDefaultLayer;
 
   private readonly record struct EdgeCopy(Guid SourceId, Curve Curve);
 

@@ -17,23 +17,43 @@ namespace vTools.Commands;
 public sealed class vTitle : vToolsCommand
 {
   // Option defaults
-  private const string DefaultText = ""; // Plain title text; empty prompts for text.
-  private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
-  private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
-  private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
-  private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
-  private const double DefaultDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultText", "Plain title text; empty prompts for text.")] private const string DefaultText = ""; // Plain title text; empty prompts for text.
+
+  private static readonly string ConfiguredDefaultText = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultText", DefaultText); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultSize", "Text height in model units; greater than zero.")] private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultPadding", "Box padding as a percentage of text height; zero or greater.")] private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
+
+  private static readonly double ConfiguredDefaultPadding = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultPadding", DefaultPadding); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultBox", "true draws a padded title box; false creates text only.")] private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
+
+  private static readonly bool ConfiguredDefaultBox = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultBox", DefaultBox); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultLayer", "Rhino layer name or full layer path.")] private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultDimensionScale", "Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.")] private const double DefaultDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.
+
+  private static readonly double ConfiguredDefaultDimensionScale = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultDimensionScale", DefaultDimensionScale); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double ApproxTextWidthPerCharacter = 0.75; // Positive model-space width multiplier per character relative to text height.
-  private const double ApproxTextLineHeightFactor = 1.4; // Positive model-space line-height multiplier relative to text height.
-  private const double TextOutlineSmallCapsScale = 1.0; // Relative lower-case small-caps size passed to Rhino's text-outline generator; positive multiplier.
-  private const double TextOutlineToleranceFactor = 0.0001; // Curve-outline tolerance relative to requested text height; positive multiplier.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.ApproxTextLineHeightFactor", "Positive model-space line-height multiplier relative to text height.")] private const double ApproxTextLineHeightFactor = 1.4; // Positive model-space line-height multiplier relative to text height.
+
+  private static readonly double ConfiguredApproxTextLineHeightFactor = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.ApproxTextLineHeightFactor", ApproxTextLineHeightFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.TextOutlineSmallCapsScale", "Relative lower-case small-caps size passed to Rhino's text-outline generator; positive multiplier.")] private const double TextOutlineSmallCapsScale = 1.0; // Relative lower-case small-caps size passed to Rhino's text-outline generator; positive multiplier.
+
+  private static readonly double ConfiguredTextOutlineSmallCapsScale = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.TextOutlineSmallCapsScale", TextOutlineSmallCapsScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.TextOutlineToleranceFactor", "Curve-outline tolerance relative to requested text height; positive multiplier.")] private const double TextOutlineToleranceFactor = 0.0001; // Curve-outline tolerance relative to requested text height; positive multiplier.
+
+  private static readonly double ConfiguredTextOutlineToleranceFactor = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.TextOutlineToleranceFactor", TextOutlineToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string CurrentLayerOption = "*Current*"; // Sentinel that resolves title output to Rhino's current layer.
-  private static readonly Color PreviewTextColor = Color.FromArgb(220, 255, 255, 80); // ARGB color for live title text previews.
-  private static readonly Color PreviewFallbackBackgroundColor = Color.FromArgb(200, 60, 60, 60); // ARGB background for dot-based preview fallback.
-  private static readonly Color PreviewBoxColor = Color.FromArgb(180, 180, 220, 60); // ARGB color for live title-frame previews.
-  private static readonly Color HoverHighlightColor = Color.FromArgb(220, 255, 220, 40); // ARGB color for hovered existing-title frames.
-  private static readonly Color PreviewFallbackTextColor = Color.Yellow; // ARGB foreground for text and dot preview fallbacks.
-  private const int PreviewLineThicknessOffset = 1; // Relative display thickness offset used for frame and hover lines; integer zero or greater.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.PreviewTextColor", "ARGB color for live title text previews.", "#DCFFFF50")] private static readonly Color PreviewTextColor = global::vTools.CommandDefaults.GetColor("vTitle", "vTools.Commands.vTitle.PreviewTextColor", Color.FromArgb(220, 255, 255, 80)); // ARGB color for live title text previews.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.PreviewFallbackBackgroundColor", "ARGB background for dot-based preview fallback.", "#C83C3C3C")] private static readonly Color PreviewFallbackBackgroundColor = global::vTools.CommandDefaults.GetColor("vTitle", "vTools.Commands.vTitle.PreviewFallbackBackgroundColor", Color.FromArgb(200, 60, 60, 60)); // ARGB background for dot-based preview fallback.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.PreviewBoxColor", "ARGB color for live title-frame previews.", "#B4B4DC3C")] private static readonly Color PreviewBoxColor = global::vTools.CommandDefaults.GetColor("vTitle", "vTools.Commands.vTitle.PreviewBoxColor", Color.FromArgb(180, 180, 220, 60)); // ARGB color for live title-frame previews.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.HoverHighlightColor", "ARGB color for hovered existing-title frames.", "#DCFFDC28")] private static readonly Color HoverHighlightColor = global::vTools.CommandDefaults.GetColor("vTitle", "vTools.Commands.vTitle.HoverHighlightColor", Color.FromArgb(220, 255, 220, 40)); // ARGB color for hovered existing-title frames.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.PreviewFallbackTextColor", "ARGB foreground for text and dot preview fallbacks.", "#FFFFFF00")] private static readonly Color PreviewFallbackTextColor = global::vTools.CommandDefaults.GetColor("vTitle", "vTools.Commands.vTitle.PreviewFallbackTextColor", Color.Yellow); // ARGB foreground for text and dot preview fallbacks.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.PreviewLineThicknessOffset", "Relative display thickness offset used for frame and hover lines; integer zero or greater.")] private const int PreviewLineThicknessOffset = 1; // Relative display thickness offset used for frame and hover lines; integer zero or greater.
+
+  private static readonly int ConfiguredPreviewLineThicknessOffset = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.PreviewLineThicknessOffset", PreviewLineThicknessOffset); // Resolved once from advanced defaults; restart Rhino after changes.
   internal const string TitleFlagKey = "vTitle"; // User-string key identifying title annotations; non-empty text.
   internal const string TitleFlagValue = "1"; // User-string value identifying title annotations; non-empty text.
   internal const string PaddingUserStringKey = "vTitlePadding"; // User-string key storing padding percentage; non-empty text.
@@ -47,11 +67,11 @@ public sealed class vTitle : vToolsCommand
   private const string KeyBox     = "box";
   private const string KeyLayer   = "layer";
 
-  private static string _text = DefaultText;
-  private static double _size = DefaultSize;
-  private static double _padding = DefaultPadding; // percent per side
-  private static bool _box = DefaultBox;
-  private static string _layer = DefaultLayer;
+  private static string _text = ConfiguredDefaultText;
+  private static double _size = ConfiguredDefaultSize;
+  private static double _padding = ConfiguredDefaultPadding; // percent per side
+  private static bool _box = ConfiguredDefaultBox;
+  private static string _layer = ConfiguredDefaultLayer;
 
   // ── Active placement tracking (for live update) ───────────────────────
   private static Guid _activeTextId  = Guid.Empty;
@@ -250,7 +270,7 @@ public sealed class vTitle : vToolsCommand
       TextHeight = size,
       Justification = TextJustification.MiddleCenter,
       DimensionStyleId = doc.DimStyles.Current.Id,
-      DimensionScale = DefaultDimensionScale,
+      DimensionScale = ConfiguredDefaultDimensionScale,
     };
 
     if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
@@ -258,7 +278,7 @@ public sealed class vTitle : vToolsCommand
           te,
           e.Viewport,
           size,
-          DefaultDimensionScale))
+          ConfiguredDefaultDimensionScale))
     {
       Log.Write(
         "vTitle",
@@ -300,7 +320,7 @@ public sealed class vTitle : vToolsCommand
       e.Display,
       frame,
       PreviewBoxColor,
-      PreviewLineThicknessOffset);
+      ConfiguredPreviewLineThicknessOffset);
   }
 
   private static void PlaceTitle(RhinoDoc doc, Point3d center,
@@ -319,14 +339,14 @@ public sealed class vTitle : vToolsCommand
       TextHeight     = size,
       Justification  = TextJustification.MiddleCenter,
       DimensionStyleId = doc.DimStyles.Current.Id,
-      DimensionScale = DefaultDimensionScale,
+      DimensionScale = ConfiguredDefaultDimensionScale,
     };
     if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
           doc,
           te,
           vp,
           size,
-          DefaultDimensionScale))
+          ConfiguredDefaultDimensionScale))
     {
       Log.Write(
         "vTitle",
@@ -505,10 +525,10 @@ public sealed class vTitle : vToolsCommand
       var o  = te.Plane.Origin;
       var xa = te.Plane.XAxis;
       var ya = te.Plane.YAxis;
-      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), HoverHighlightColor, PreviewLineThicknessOffset);
-      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), HoverHighlightColor, PreviewLineThicknessOffset);
-      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), HoverHighlightColor, PreviewLineThicknessOffset);
-      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), HoverHighlightColor, PreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*(-hh), o + xa*(hw) + ya*(-hh), HoverHighlightColor, ConfiguredPreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*(-hh), o + xa*(hw) + ya*( hh), HoverHighlightColor, ConfiguredPreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*( hw) + ya*( hh), o + xa*(-hw) + ya*( hh), HoverHighlightColor, ConfiguredPreviewLineThicknessOffset);
+      PreviewDisplay.DrawLine(e.Display, o + xa*(-hw) + ya*( hh), o + xa*(-hw) + ya*(-hh), HoverHighlightColor, ConfiguredPreviewLineThicknessOffset);
     }
   }
 
@@ -715,7 +735,7 @@ public sealed class vTitle : vToolsCommand
           newTe,
           doc.Views.ActiveView?.ActiveViewport,
           _size,
-          DefaultDimensionScale))
+          ConfiguredDefaultDimensionScale))
     {
       Log.Write(
         "vTitle",
@@ -853,7 +873,7 @@ public sealed class vTitle : vToolsCommand
       TextHeight = sourceText.TextHeight,
       Justification = sourceText.Justification,
       DimensionStyleId = sourceText.DimensionStyleId,
-      DimensionScale = DefaultDimensionScale,
+      DimensionScale = ConfiguredDefaultDimensionScale,
     };
 
     try { freshText.DrawForward = sourceText.DrawForward; }
@@ -868,7 +888,7 @@ public sealed class vTitle : vToolsCommand
           freshText,
           doc.Views.ActiveView?.ActiveViewport,
           sourceText.TextHeight,
-          DefaultDimensionScale))
+          ConfiguredDefaultDimensionScale))
     {
       Log.Write(
         "vTitle",
@@ -887,7 +907,7 @@ public sealed class vTitle : vToolsCommand
     double.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var padding) &&
     double.IsFinite(padding) && padding >= 0.0
       ? padding
-      : DefaultPadding;
+      : ConfiguredDefaultPadding;
 
   private static TextEntity CreateDisplayText(
     RhinoObject titleObject,
@@ -900,7 +920,7 @@ public sealed class vTitle : vToolsCommand
       TextHeight = sourceText.TextHeight,
       Justification = sourceText.Justification,
       DimensionStyleId = sourceText.DimensionStyleId,
-      DimensionScale = DefaultDimensionScale,
+      DimensionScale = ConfiguredDefaultDimensionScale,
     };
     ApplyDisplayDimensionScale(titleObject, displayText);
     return displayText;
@@ -932,7 +952,7 @@ public sealed class vTitle : vToolsCommand
   private static double ValidDimensionScale(double scale) =>
     double.IsFinite(scale) && scale > RhinoMath.ZeroTolerance
       ? scale
-      : DefaultDimensionScale;
+      : ConfiguredDefaultDimensionScale;
 
   /// <summary>
   /// Creates a scale-stable rectangle from the requested model-space text
@@ -1001,9 +1021,9 @@ public sealed class vTitle : vToolsCommand
         fontStyle,
         !font.IsSingleStrokeFont,
         Plane.WorldXY,
-        TextOutlineSmallCapsScale,
+        ConfiguredTextOutlineSmallCapsScale,
         Math.Max(
-          displayHeight * TextOutlineToleranceFactor,
+          displayHeight * ConfiguredTextOutlineToleranceFactor,
           RhinoMath.ZeroTolerance));
       if (outlines == null || outlines.Length == 0)
         return false;
@@ -1084,7 +1104,7 @@ public sealed class vTitle : vToolsCommand
     var longestLine = lines.Length == 0
       ? 0
       : lines.Max(line => line.Length);
-    double h = Math.Max(lines.Length, 1) * size * ApproxTextLineHeightFactor;
+    double h = Math.Max(lines.Length, 1) * size * ConfiguredApproxTextLineHeightFactor;
     double w = Math.Max(
       longestLine * size * ApproxTextWidthPerCharacter,
       size);

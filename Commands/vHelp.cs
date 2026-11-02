@@ -14,9 +14,15 @@ public sealed class vHelp : vToolsCommand
   // Defaults and customizable constants
   private const string Tag = "vHelp"; // Command and diagnostic-log name.
   private const string DeferredHelpNavigationMacro = "_vHelp"; // Silent command replay used to restore active command-help context after opening the panel.
-  private const int HelpPanelPollIntervalMilliseconds = 25; // Milliseconds between checks while the Command Help panel is being created.
-  private const int HelpNavigationRetryIntervalMilliseconds = 100; // Milliseconds between Rhino Command Help FindCommand navigation attempts.
-  private const int HelpNavigationTimeoutMilliseconds = 1500; // Maximum milliseconds before falling back to a silent active-command replay.
+  [global::vTools.CommandDefault("vHelp", "vTools.Commands.vHelp.HelpPanelPollIntervalMilliseconds", "Milliseconds between checks while the Command Help panel is being created.")] private const int HelpPanelPollIntervalMilliseconds = 25; // Milliseconds between checks while the Command Help panel is being created.
+
+  private static readonly int ConfiguredHelpPanelPollIntervalMilliseconds = global::vTools.CommandDefaults.Get("vHelp", "vTools.Commands.vHelp.HelpPanelPollIntervalMilliseconds", HelpPanelPollIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vHelp", "vTools.Commands.vHelp.HelpNavigationRetryIntervalMilliseconds", "Milliseconds between Rhino Command Help FindCommand navigation attempts.")] private const int HelpNavigationRetryIntervalMilliseconds = 100; // Milliseconds between Rhino Command Help FindCommand navigation attempts.
+
+  private static readonly int ConfiguredHelpNavigationRetryIntervalMilliseconds = global::vTools.CommandDefaults.Get("vHelp", "vTools.Commands.vHelp.HelpNavigationRetryIntervalMilliseconds", HelpNavigationRetryIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vHelp", "vTools.Commands.vHelp.HelpNavigationTimeoutMilliseconds", "Maximum milliseconds before falling back to a silent active-command replay.")] private const int HelpNavigationTimeoutMilliseconds = 1500; // Maximum milliseconds before falling back to a silent active-command replay.
+
+  private static readonly int ConfiguredHelpNavigationTimeoutMilliseconds = global::vTools.CommandDefaults.Get("vHelp", "vTools.Commands.vHelp.HelpNavigationTimeoutMilliseconds", HelpNavigationTimeoutMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private static bool _isDeferredNavigation; // True only while the internally replayed vHelp invocation is pending.
   private static EventHandler? _navigationIdleHandler; // Current panel-readiness watcher, or null when no navigation is pending.
@@ -64,7 +70,7 @@ public sealed class vHelp : vToolsCommand
   {
     StopPendingNavigation();
     var deadlineUtc = startedUtc.AddMilliseconds(
-      HelpNavigationTimeoutMilliseconds);
+      ConfiguredHelpNavigationTimeoutMilliseconds);
     var nextCheckUtc = DateTime.UtcNow;
 
     _navigationIdleHandler = (_, _) =>
@@ -101,12 +107,12 @@ public sealed class vHelp : vToolsCommand
         }
 
         nextCheckUtc = nowUtc.AddMilliseconds(
-          HelpNavigationRetryIntervalMilliseconds);
+          ConfiguredHelpNavigationRetryIntervalMilliseconds);
       }
       else
       {
         nextCheckUtc = nowUtc.AddMilliseconds(
-          HelpPanelPollIntervalMilliseconds);
+          ConfiguredHelpPanelPollIntervalMilliseconds);
       }
 
       if (nowUtc < deadlineUtc)

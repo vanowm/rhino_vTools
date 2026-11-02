@@ -11,7 +11,9 @@ namespace vTools.Commands
   public sealed class vFPS : vToolsCommand
   {
     // Option defaults
-    internal const bool DefaultEnabled = false; // true shows the FPS overlay at startup; false keeps it hidden.
+    [global::vTools.CommandDefault("vFPS", "vTools.Commands.vFPS.DefaultEnabled", "true shows the FPS overlay at startup; false keeps it hidden.")] internal const bool DefaultEnabled = false; // true shows the FPS overlay at startup; false keeps it hidden.
+
+    internal static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("vFPS", "vTools.Commands.vFPS.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
 
     public override string EnglishName => "vFPS";
 
@@ -50,7 +52,7 @@ namespace vTools
     private static bool _samplingRedraw;
     private static Guid _sampleViewportId;
     private static bool _settingsLoaded;
-    private static bool _configuredEnabled = vFPS.DefaultEnabled;
+    private static bool _configuredEnabled = vFPS.ConfiguredDefaultEnabled;
 
     internal static void Start()
     {
@@ -113,7 +115,7 @@ namespace vTools
         SettingsSection,
         section => ToolsOptionStore.TryGetBool(section, EnabledKey, out var enabled)
           ? enabled
-          : vFPS.DefaultEnabled);
+          : vFPS.ConfiguredDefaultEnabled);
       _settingsLoaded = true;
     }
 
@@ -169,12 +171,20 @@ namespace vTools
 
     private sealed class FpsDisplayConduit : DisplayConduit
     {
-      private const double SampleWindowSeconds = 0.5; // Rolling FPS measurement window in seconds; greater than zero.
-      private const double RefreshSeconds = 0.2; // Minimum overlay refresh interval in seconds; greater than zero.
-      private const double NaturalFrameGapSeconds = 0.1; // Largest render gap treated as continuous motion, in seconds.
+      [global::vTools.CommandDefault("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.SampleWindowSeconds", "Rolling FPS measurement window in seconds; greater than zero.")] private const double SampleWindowSeconds = 0.5; // Rolling FPS measurement window in seconds; greater than zero.
+
+      private static readonly double ConfiguredSampleWindowSeconds = global::vTools.CommandDefaults.Get("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.SampleWindowSeconds", SampleWindowSeconds); // Resolved once from advanced defaults; restart Rhino after changes.
+      [global::vTools.CommandDefault("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.RefreshSeconds", "Minimum overlay refresh interval in seconds; greater than zero.")] private const double RefreshSeconds = 0.2; // Minimum overlay refresh interval in seconds; greater than zero.
+
+      private static readonly double ConfiguredRefreshSeconds = global::vTools.CommandDefaults.Get("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.RefreshSeconds", RefreshSeconds); // Resolved once from advanced defaults; restart Rhino after changes.
+      [global::vTools.CommandDefault("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.NaturalFrameGapSeconds", "Largest render gap treated as continuous motion, in seconds.")] private const double NaturalFrameGapSeconds = 0.1; // Largest render gap treated as continuous motion, in seconds.
+
+      private static readonly double ConfiguredNaturalFrameGapSeconds = global::vTools.CommandDefaults.Get("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.NaturalFrameGapSeconds", NaturalFrameGapSeconds); // Resolved once from advanced defaults; restart Rhino after changes.
       private const int FontSize = 12; // FPS label font height in display pixels; greater than zero.
       private const double TopBaseline = 6.0; // Label offset below the viewport title, in display pixels.
-      private const double RightMargin = 6.0; // Label inset from the right viewport edge, in display pixels.
+      [global::vTools.CommandDefault("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.RightMargin", "Label inset from the right viewport edge, in display pixels.")] private const double RightMargin = 6.0; // Label inset from the right viewport edge, in display pixels.
+
+      private static readonly double ConfiguredRightMargin = global::vTools.CommandDefaults.Get("vFPS", "vTools.FpsDisplay.FpsDisplayConduit.RightMargin", RightMargin); // Resolved once from advanced defaults; restart Rhino after changes.
       private const string MaximumLabel = "999"; // Widest reserved three-character FPS label.
       private const string FontFace = "Consolas"; // Installed font family used for the stationary-width FPS label.
 
@@ -233,7 +243,7 @@ namespace vTools
           0.0,
           FontSize,
           FontFace);
-        var x = Math.Max(RightMargin, e.Viewport.Size.Width - measured.Width - RightMargin);
+        var x = Math.Max(ConfiguredRightMargin, e.Viewport.Size.Width - measured.Width - ConfiguredRightMargin);
         var textPosition = new Point2d(x, TopBaseline);
 
         for (var dx = -1; dx <= 1; dx++)
@@ -269,12 +279,12 @@ namespace vTools
 
         internal double? RecordFrame(long now, bool activelySampling)
         {
-          var sampleTicks = (long)(SampleWindowSeconds * Stopwatch.Frequency);
+          var sampleTicks = (long)(ConfiguredSampleWindowSeconds * Stopwatch.Frequency);
           if (!activelySampling)
           {
             var previousFrame = _lastObservedFrame;
             _lastObservedFrame = now;
-            var naturalGapTicks = (long)(NaturalFrameGapSeconds * Stopwatch.Frequency);
+            var naturalGapTicks = (long)(ConfiguredNaturalFrameGapSeconds * Stopwatch.Frequency);
             if (previousFrame == 0 || now - previousFrame > naturalGapTicks)
             {
               _naturalSequence = false;
@@ -303,7 +313,7 @@ namespace vTools
           if (_frames.Count < 2)
             return _displayedRate;
 
-          var refreshTicks = (long)(RefreshSeconds * Stopwatch.Frequency);
+          var refreshTicks = (long)(ConfiguredRefreshSeconds * Stopwatch.Frequency);
           if (_displayedRate.HasValue && now - _lastDisplayUpdate < refreshTicks)
             return _displayedRate;
 

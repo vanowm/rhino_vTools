@@ -26,25 +26,51 @@ namespace vTools.Commands
   public sealed partial class vExportDXF : vToolsCommand
   {
     // Defaults and output conventions
-    private const NotchTrimMode DefaultNotchTrim = NotchTrimMode.Trim; // No keeps touched export curves; Split moves between-leg pieces; Trim omits them.
-    private const string DefaultNotchSplitLayer = "Reference"; // Rhino layer path for between-leg export pieces in Split mode.
-    private const ExportExplodeMode DefaultExplode = ExportExplodeMode.Full; // No preserves curves; SplitAtCorners splits tangent discontinuities; Full separates all curve components.
-    private static readonly string[] ExplodeNames = ["No", "SplitAtCorners", "Full"]; // Command-line values for temporary export-curve decomposition.
-    private const double ExportSplitParameterTolerance = 1e-10; // Relative domain tolerance for progressing past a reported curve discontinuity.
-    private const bool DefaultNotchJoin = true; // true joins matching V/U notches into line/polyline export curves; false exports notch components separately.
-    private const bool DefaultTextBreak = true; // true exports each multiline text row separately; false keeps multiline text objects intact.
-    private const bool DefaultRemoveGrain = true; // true omits open GRAIN-named/layered curves from export; false includes them without changing source geometry.
-    private const bool DefaultMoveOrigin = true; // true moves export copies to the world origin; false preserves source drawing coordinates.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchTrim", "No keeps touched export curves; Split moves between-leg pieces; Trim omits them.")] private const NotchTrimMode DefaultNotchTrim = NotchTrimMode.Trim; // No keeps touched export curves; Split moves between-leg pieces; Trim omits them.
+
+    private static readonly NotchTrimMode ConfiguredDefaultNotchTrim = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchTrim", DefaultNotchTrim); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchSplitLayer", "Rhino layer path for between-leg export pieces in Split mode.")] private const string DefaultNotchSplitLayer = "Reference"; // Rhino layer path for between-leg export pieces in Split mode.
+
+    private static readonly string ConfiguredDefaultNotchSplitLayer = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchSplitLayer", DefaultNotchSplitLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultExplode", "No preserves curves; SplitAtCorners splits tangent discontinuities; Full separates all curve components.")] private const ExportExplodeMode DefaultExplode = ExportExplodeMode.Full; // No preserves curves; SplitAtCorners splits tangent discontinuities; Full separates all curve components.
+
+    private static readonly ExportExplodeMode ConfiguredDefaultExplode = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultExplode", DefaultExplode); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vExportDXF", "explode", false, "No", "SplitAtCorners", "Full")] private static readonly string[] ExplodeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vExportDXF), nameof(ExplodeNames)); // Command-line values for temporary export-curve decomposition.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.ExportSplitParameterTolerance", "Relative domain tolerance for progressing past a reported curve discontinuity.")] private const double ExportSplitParameterTolerance = 1e-10; // Relative domain tolerance for progressing past a reported curve discontinuity.
+
+    private static readonly double ConfiguredExportSplitParameterTolerance = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.ExportSplitParameterTolerance", ExportSplitParameterTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchJoin", "true joins matching V/U notches into line/polyline export curves; false exports notch components separately.")] private const bool DefaultNotchJoin = true; // true joins matching V/U notches into line/polyline export curves; false exports notch components separately.
+
+    private static readonly bool ConfiguredDefaultNotchJoin = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultNotchJoin", DefaultNotchJoin); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultTextBreak", "true exports each multiline text row separately; false keeps multiline text objects intact.")] private const bool DefaultTextBreak = true; // true exports each multiline text row separately; false keeps multiline text objects intact.
+
+    private static readonly bool ConfiguredDefaultTextBreak = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultTextBreak", DefaultTextBreak); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultRemoveGrain", "true omits open GRAIN-named/layered curves from export; false includes them without changing source geometry.")] private const bool DefaultRemoveGrain = true; // true omits open GRAIN-named/layered curves from export; false includes them without changing source geometry.
+
+    private static readonly bool ConfiguredDefaultRemoveGrain = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultRemoveGrain", DefaultRemoveGrain); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultMoveOrigin", "true moves export copies to the world origin; false preserves source drawing coordinates.")] private const bool DefaultMoveOrigin = true; // true moves export copies to the world origin; false preserves source drawing coordinates.
+
+    private static readonly bool ConfiguredDefaultMoveOrigin = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultMoveOrigin", DefaultMoveOrigin); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string GrainIdentifier = "GRAIN"; // Case-insensitive object name or leaf layer name identifying an open grain guide.
     private const string NestMetadataPrefix = "vNest."; // Internal nesting bookkeeping omitted from export-copy user text; originals retain all provenance.
     private static readonly Regex NativeSkippedCounts = new(@"^[^:\r\n]+:\s*\d+\s+written,\s*(\d+)\s+skipped[^\S\r\n]*\r?$",RegexOptions.Multiline|RegexOptions.CultureInvariant|RegexOptions.IgnoreCase); // English native export totals; a nonzero skipped count rejects the temporary file.
-    private const bool DefaultOptimize = true; // true runs vCleanup before export; false leaves the source document untouched.
-    private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.
-    private static readonly string[] CleanupActionNames = ["Ask", "Delete", "Ignore"]; // Saved export-only cleanup behavior; independent of vCleanup's own deletion setting.
-    private const bool DefaultSaveDefaults = false; // true persists scripted option changes; false applies them to this export only.
-    private static readonly string[] NotchTrimNames = ["No", "Split", "Trim"]; // Rhino option order matching NotchTrimMode.
-    private const double NotchContactToleranceScale = 2.0; // Document absolute-tolerance multiplier for notch leg contact.
-    private const double NotchContactZeroToleranceScale = 10.0; // Minimum Rhino zero-tolerance multiplier for contact.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", "true runs vCleanup before export; false leaves the source document untouched.")] private const bool DefaultOptimize = true; // true runs vCleanup before export; false leaves the source document untouched.
+
+    private static readonly bool ConfiguredDefaultOptimize = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", DefaultOptimize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultCleanupAction", "Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.")] private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.
+
+    private static readonly vCleanup.ExportCleanupAction ConfiguredDefaultCleanupAction = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultCleanupAction", DefaultCleanupAction); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vExportDXF", "cleanup_action", false, "Ask", "Delete", "Ignore")] private static readonly string[] CleanupActionNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vExportDXF), nameof(CleanupActionNames)); // Saved export-only cleanup behavior; independent of vCleanup's own deletion setting.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultSaveDefaults", "true persists scripted option changes; false applies them to this export only.")] private const bool DefaultSaveDefaults = false; // true persists scripted option changes; false applies them to this export only.
+
+    private static readonly bool ConfiguredDefaultSaveDefaults = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultSaveDefaults", DefaultSaveDefaults); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vExportDXF", "notch_trim", false, "No", "Split", "Trim")] private static readonly string[] NotchTrimNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vExportDXF), nameof(NotchTrimNames)); // Rhino option order matching NotchTrimMode.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.NotchContactToleranceScale", "Document absolute-tolerance multiplier for notch leg contact.")] private const double NotchContactToleranceScale = 2.0; // Document absolute-tolerance multiplier for notch leg contact.
+
+    private static readonly double ConfiguredNotchContactToleranceScale = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.NotchContactToleranceScale", NotchContactToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.NotchContactZeroToleranceScale", "Minimum Rhino zero-tolerance multiplier for contact.")] private const double NotchContactZeroToleranceScale = 10.0; // Minimum Rhino zero-tolerance multiplier for contact.
+
+    private static readonly double ConfiguredNotchContactZeroToleranceScale = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.NotchContactZeroToleranceScale", NotchContactZeroToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string NotchMetadataPrefix = "notch."; // Metadata prefix stored on vNotches geometry.
     private const string NotchRole = "notch"; // Role value that distinguishes notch components from labels and source curves.
     private const string OpenVNotchType = "\\/"; // Two-component V notch type in vNotches metadata.
@@ -65,18 +91,32 @@ namespace vTools.Commands
     private const string LegacyOptimizeEntry = "vExportOptions.Optimize"; // Previous document key read for migration.
     private const string LastPathKey = ".DXF_export.LastPath"; // Document user-text key compatible with the Python exporter.
     private const string BlockInsertLayer = "Reference"; // Layer for temporary group-block inserts.
-    private const string DefaultFileStem = "untitled"; // Suggested filename stem for an unsaved Rhino document.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultFileStem", "Suggested filename stem for an unsaved Rhino document.")] private const string DefaultFileStem = "untitled"; // Suggested filename stem for an unsaved Rhino document.
+
+    private static readonly string ConfiguredDefaultFileStem = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultFileStem", DefaultFileStem); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string UnnamedGroupPrefix = "Group_"; // Export block name prefix followed by a zero-based index for unnamed Rhino groups.
     private const string DxfExtension = ".dxf"; // Required output filename extension.
-    private const int ExportWaitMilliseconds = 2000; // Maximum wait for Rhino to finish writing the temporary file.
-    private const int ExportPollMilliseconds = 50; // File-existence polling interval in milliseconds.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.ExportWaitMilliseconds", "Maximum wait for Rhino to finish writing the temporary file.")] private const int ExportWaitMilliseconds = 2000; // Maximum wait for Rhino to finish writing the temporary file.
+
+    private static readonly int ConfiguredExportWaitMilliseconds = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.ExportWaitMilliseconds", ExportWaitMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.ExportPollMilliseconds", "File-existence polling interval in milliseconds.")] private const int ExportPollMilliseconds = 50; // File-existence polling interval in milliseconds.
+
+    private static readonly int ConfiguredExportPollMilliseconds = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.ExportPollMilliseconds", ExportPollMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ExportCopyBufferSize = 1024 * 1024; // Byte buffer for in-place destination overwriting; matches the original exporter without renaming existing files.
     private const int MaximumTemporaryNameAttempts = 100; // Collision attempts for temporary files and block names.
     private const int MaximumBlockNameLength = 48; // Maximum ASCII characters retained from a source group name.
-    private const double TableLabelFramePaddingFraction = 0.1; // Fallback frame padding as a fraction of annotation height when only table text is selected.
-    private const double TableAnnotationPaddingFraction = 0.2; // Export-label inset as a fraction of measured glyph height; matches the nest label area's padding.
-    private const double TableExportTextScale = 1.0; // Fixed visible annotation scale for fresh title-style table text; independent of model-space annotation scaling.
-    private const double TableExportLineHeightFactor = 1.25; // Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableLabelFramePaddingFraction", "Fallback frame padding as a fraction of annotation height when only table text is selected.")] private const double TableLabelFramePaddingFraction = 0.1; // Fallback frame padding as a fraction of annotation height when only table text is selected.
+
+    private static readonly double ConfiguredTableLabelFramePaddingFraction = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TableLabelFramePaddingFraction", TableLabelFramePaddingFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableAnnotationPaddingFraction", "Export-label inset as a fraction of measured glyph height; matches the nest label area's padding.")] private const double TableAnnotationPaddingFraction = 0.2; // Export-label inset as a fraction of measured glyph height; matches the nest label area's padding.
+
+    private static readonly double ConfiguredTableAnnotationPaddingFraction = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TableAnnotationPaddingFraction", TableAnnotationPaddingFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableExportTextScale", "Fixed visible annotation scale for fresh title-style table text; independent of model-space annotation scaling.")] private const double TableExportTextScale = 1.0; // Fixed visible annotation scale for fresh title-style table text; independent of model-space annotation scaling.
+
+    private static readonly double ConfiguredTableExportTextScale = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TableExportTextScale", TableExportTextScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableExportLineHeightFactor", "Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.")] private const double TableExportLineHeightFactor = 1.25; // Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.
+
+    private static readonly double ConfiguredTableExportLineHeightFactor = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TableExportLineHeightFactor", TableExportLineHeightFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double TableLabelExportGapInches = 10.0; // Export-only outward displacement of the label block from its table, in inches converted to document units.
     private const int DxfMiddleCenterAttachment = 5; // DXF MTEXT attachment code: middle-centre, matching working notch/title insertion anchors.
     private const int BlockNamePrefixLength = 39; // Maximum retained stem before an eight-character collision suffix.
@@ -264,11 +304,11 @@ namespace vTools.Commands
     {
       var legacy = ToolsOptionStore.Read(LegacySettingsSection, section =>
         new ExportSettings(
-          ReadTrim(section, DefaultNotchTrim),
-          ReadLayer(section, DefaultNotchSplitLayer),
-          DefaultNotchJoin,
-          DefaultTextBreak,
-          ReadOptimize(section, DefaultOptimize),DefaultExplode));
+          ReadTrim(section, ConfiguredDefaultNotchTrim),
+          ReadLayer(section, ConfiguredDefaultNotchSplitLayer),
+          ConfiguredDefaultNotchJoin,
+          ConfiguredDefaultTextBreak,
+          ReadOptimize(section, ConfiguredDefaultOptimize),ConfiguredDefaultExplode));
       var current = ToolsOptionStore.Read(SettingsSection, section =>
         new ExportSettings(
           ReadTrim(section, legacy.NotchTrim),
@@ -276,9 +316,9 @@ namespace vTools.Commands
           ReadJoin(section, legacy.NotchJoin),
           ReadTextBreak(section, legacy.TextBreak),
           ReadOptimize(section, legacy.Optimize),ReadExplode(section,legacy.Explode),
-          ReadCleanupAction(section, DefaultCleanupAction),
-          ToolsOptionStore.TryGetBool(section, "remove_grain", out bool removeGrain) ? removeGrain : DefaultRemoveGrain,
-          ToolsOptionStore.TryGetBool(section, "move_origin", out bool moveOrigin) ? moveOrigin : DefaultMoveOrigin));
+          ReadCleanupAction(section, ConfiguredDefaultCleanupAction),
+          ToolsOptionStore.TryGetBool(section, "remove_grain", out bool removeGrain) ? removeGrain : ConfiguredDefaultRemoveGrain,
+          ToolsOptionStore.TryGetBool(section, "move_origin", out bool moveOrigin) ? moveOrigin : ConfiguredDefaultMoveOrigin));
       try
       {
         var trim = doc.Strings.GetValue(DocumentSection, NotchTrimEntry)
@@ -354,7 +394,7 @@ namespace vTools.Commands
 
     private static Result GetRunOptions(RhinoDoc doc, ref ExportSettings settings)
     {
-      bool saveDefaults = DefaultSaveDefaults;
+      bool saveDefaults = ConfiguredDefaultSaveDefaults;
       while (true)
       {
         using var getter = new GetOption();
@@ -460,7 +500,7 @@ namespace vTools.Commands
       string filename = !string.IsNullOrWhiteSpace(previous)
         ? Path.GetFileName(previous)
         : (Path.GetFileNameWithoutExtension(doc.Name) is { Length: > 0 } stem
-          ? stem : DefaultFileStem) + DxfExtension;
+          ? stem : ConfiguredDefaultFileStem) + DxfExtension;
       var dialog = new SaveFileDialog
       {
         Title = "Export DXF",
@@ -503,11 +543,11 @@ namespace vTools.Commands
     private static bool WaitForFile(string path)
     {
       var watch = Stopwatch.StartNew();
-      while (watch.ElapsedMilliseconds < ExportWaitMilliseconds)
+      while (watch.ElapsedMilliseconds < ConfiguredExportWaitMilliseconds)
       {
         if (File.Exists(path) && new FileInfo(path).Length > 0)
           return true;
-        Thread.Sleep(ExportPollMilliseconds);
+        Thread.Sleep(ConfiguredExportPollMilliseconds);
       }
       return File.Exists(path) && new FileInfo(path).Length > 0;
     }
@@ -567,7 +607,7 @@ namespace vTools.Commands
           }
           if (!bounds.IsValid)
             throw new InvalidOperationException("Could not frame table annotations for export.");
-          double padding = Math.Max(doc.ModelAbsoluteTolerance, height * TableLabelFramePaddingFraction);
+          double padding = Math.Max(doc.ModelAbsoluteTolerance, height * ConfiguredTableLabelFramePaddingFraction);
           bounds.Inflate(padding);
           var texts = members.Select(obj => obj.Geometry).OfType<TextEntity>().ToArray();
           if (texts.Length > 0 && TryGetTableAnnotationArea(layoutMembers, texts[0].Plane, out var tabPlane, out var tabArea))
@@ -972,7 +1012,7 @@ namespace vTools.Commands
     private static List<double> ExportCorners(Curve curve)
     {
       var result=new List<double>(); var domain=curve.Domain;
-      double start=domain.T0,epsilon=Math.Max(Math.Abs(domain.Length)*ExportSplitParameterTolerance,RhinoMath.ZeroTolerance);
+      double start=domain.T0,epsilon=Math.Max(Math.Abs(domain.Length)*ConfiguredExportSplitParameterTolerance,RhinoMath.ZeroTolerance);
       while(curve.GetNextDiscontinuity(Continuity.G1_continuous,start,domain.T1,out double parameter))
       {
         if(parameter<=start||parameter>=domain.T1) break;
@@ -1026,8 +1066,8 @@ namespace vTools.Commands
         return overrides;
 
       double tolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * NotchContactToleranceScale,
-        RhinoMath.ZeroTolerance * NotchContactZeroToleranceScale);
+        doc.ModelAbsoluteTolerance * ConfiguredNotchContactToleranceScale,
+        RhinoMath.ZeroTolerance * ConfiguredNotchContactZeroToleranceScale);
       var curves = targets.Where(obj => obj.Geometry is Curve &&
         obj.Attributes.GetUserString(NotchMetadataPrefix + "object_role") != NotchRole)
         .ToArray();
@@ -1457,9 +1497,13 @@ namespace vTools.Commands
   public sealed partial class vExportDXF
   {
     // Text layout measurement defaults
-    private const double TextBreakSmallCapsScale = 1.0; // Unitless glyph scale; 1 keeps the source character sizes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TextBreakSmallCapsScale", "Unitless glyph scale; 1 keeps the source character sizes.")] private const double TextBreakSmallCapsScale = 1.0; // Unitless glyph scale; 1 keeps the source character sizes.
+
+    private static readonly double ConfiguredTextBreakSmallCapsScale = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TextBreakSmallCapsScale", TextBreakSmallCapsScale); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double TextBreakGlyphSpacing = 0.0; // Additional model-space glyph spacing; 0 preserves native kerning.
-    private const double TextBreakLayoutTolerance = 1e-6; // Relative glyph-position tolerance when checking that a row was not wrapped or reformatted.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TextBreakLayoutTolerance", "Relative glyph-position tolerance when checking that a row was not wrapped or reformatted.")] private const double TextBreakLayoutTolerance = 1e-6; // Relative glyph-position tolerance when checking that a row was not wrapped or reformatted.
+
+    private static readonly double ConfiguredTextBreakLayoutTolerance = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TextBreakLayoutTolerance", TextBreakLayoutTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
 
     private static Dictionary<Guid, List<TextEntity>> BuildTextBreakOverrides(
       RhinoDoc doc, IReadOnlyList<RhinoObject> targets, bool enabled)
@@ -1492,8 +1536,8 @@ namespace vTools.Commands
       double height = source.TextHeight * AnnotationTextTransform.ResolveDisplayDimensionScale(doc, source, doc.Views.ActiveView?.ActiveViewport);
       var text = new TextEntity { Plane = source.Plane, PlainText = source.PlainText, TextHeight = height,
         Justification = TextJustification.MiddleCenter, DimensionStyleId = source.DimensionStyleId,
-        DimensionScale = TableExportTextScale, DrawForward = source.DrawForward, TextOrientation = source.TextOrientation };
-      if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(doc, text, doc.Views.ActiveView?.ActiveViewport, height, TableExportTextScale))
+        DimensionScale = ConfiguredTableExportTextScale, DrawForward = source.DrawForward, TextOrientation = source.TextOrientation };
+      if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(doc, text, doc.Views.ActiveView?.ActiveViewport, height, ConfiguredTableExportTextScale))
       { text.Dispose(); throw new InvalidOperationException("Could not create title-style table text for export."); }
       text.ParentDimensionStyle = doc.DimStyles.FindId(source.DimensionStyleId) ?? doc.DimStyles.Current;
       text.TextHorizontalAlignment = TextHorizontalAlignment.Center;
@@ -1580,8 +1624,8 @@ namespace vTools.Commands
         if (bounds.Any(box => !box.IsValid))
           throw new InvalidOperationException("Could not measure table annotations for export.");
         var heights = texts.Select((text, index) => Math.Max(bounds[index].Diagonal.Y,
-          text.TextHeight * TableExportLineHeightFactor)).ToArray();
-        double padding = Math.Max(doc.ModelAbsoluteTolerance, heights.Max() * TableAnnotationPaddingFraction);
+          text.TextHeight * ConfiguredTableExportLineHeightFactor)).ToArray();
+        double padding = Math.Max(doc.ModelAbsoluteTolerance, heights.Max() * ConfiguredTableAnnotationPaddingFraction);
         double available = area.Diagonal.X - 2 * padding;
         double availableHeight = area.Diagonal.Y - 2 * padding;
         if (available <= RhinoMath.ZeroTolerance || availableHeight <= RhinoMath.ZeroTolerance)
@@ -1639,7 +1683,7 @@ namespace vTools.Commands
       measurement.ParentDimensionStyle = parent;
       measurement.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(doc, text, doc.Views.ActiveView?.ActiveViewport);
       using var style = measurement.GetDimensionStyle(parent);
-      var curves = measurement.CreateCurves(style ?? parent, true, TextBreakSmallCapsScale, TextBreakGlyphSpacing);
+      var curves = measurement.CreateCurves(style ?? parent, true, ConfiguredTextBreakSmallCapsScale, TextBreakGlyphSpacing);
       var bounds = BoundingBox.Empty;
       foreach (var curve in curves ?? [])
       {
@@ -1672,7 +1716,7 @@ namespace vTools.Commands
           doc, source, doc.Views.ActiveView?.ActiveViewport);
         using var style = measurement.DimensionStyle;
         sourceGlyphs = measurement.CreateCurvesGrouped(
-          style, true, TextBreakSmallCapsScale, TextBreakGlyphSpacing);
+          style, true, ConfiguredTextBreakSmallCapsScale, TextBreakGlyphSpacing);
         int glyphIndex = 0;
         int start = 0;
         while (start < content.Length)
@@ -1694,7 +1738,7 @@ namespace vTools.Commands
               line.PlainText = content.Substring(start, length);
             line.TextIsWrapped = false;
             var glyphs = line.CreateCurvesGrouped(
-              style, true, TextBreakSmallCapsScale, TextBreakGlyphSpacing);
+              style, true, ConfiguredTextBreakSmallCapsScale, TextBreakGlyphSpacing);
             try
             {
               if (glyphs.Count == 0 || glyphIndex + glyphs.Count > sourceGlyphs.Count)
@@ -1703,7 +1747,7 @@ namespace vTools.Commands
               var from = TextGlyphBounds(glyphs[0]);
               var to = TextGlyphBounds(sourceGlyphs[glyphIndex]);
               var translation = to.Center - from.Center;
-              double tolerance = TextBreakLayoutTolerance * Math.Max(1.0, source.TextHeight * measurement.DimensionScale);
+              double tolerance = ConfiguredTextBreakLayoutTolerance * Math.Max(1.0, source.TextHeight * measurement.DimensionScale);
               for (int index = 0; index < glyphs.Count; index++)
               {
                 var actual = TextGlyphBounds(glyphs[index]);

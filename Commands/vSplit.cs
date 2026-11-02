@@ -19,14 +19,18 @@ namespace vTools.Commands;
 public sealed class vSplit : vToolsCommand
 {
   // Defaults and customizable constants
-  private const int DefaultPointRadius = 5; // Split-point marker radius in pixels; greater than zero.
-  private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.DefaultPointRadius", "Split-point marker radius in pixels; greater than zero.")] private const int DefaultPointRadius = 5; // Split-point marker radius in pixels; greater than zero.
+
+  private static readonly int ConfiguredDefaultPointRadius = global::vTools.CommandDefaults.Get("vSplit", "vTools.Commands.vSplit.DefaultPointRadius", DefaultPointRadius); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.DefaultPointDisplayMode", "PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.")] private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
+
+  private static readonly PointDisplayMode ConfiguredDefaultPointDisplayMode = global::vTools.CommandDefaults.Get("vSplit", "vTools.Commands.vSplit.DefaultPointDisplayMode", DefaultPointDisplayMode); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int PointOutlineWidth = 1; // Split-point outline width in display pixels; zero or greater.
 
-  private static readonly string[] PointDisplayModeNames = ["Default", "ControlPoints", "EditPoints", "Hidden"]; // Command option names in display-mode index order.
-  private static readonly Color SetPointColor = Color.Red; // Body color for points that will split curves.
-  private static readonly Color RemovePointColor = Color.Cyan; // Body color for points selected for removal.
-  private static readonly Color PointOutlineColor = Color.Pink; // Outline color around split-point bodies.
+  [global::vTools.CommandChoicesAttribute("vSplit", "pointDisplay", false, "Default", "ControlPoints", "EditPoints", "Hidden")] private static readonly string[] PointDisplayModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vSplit), nameof(PointDisplayModeNames)); // Command option names in display-mode index order.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.SetPointColor", "Body color for points that will split curves.", "#FFFF0000")] private static readonly Color SetPointColor = global::vTools.CommandDefaults.GetColor("vSplit", "vTools.Commands.vSplit.SetPointColor", Color.Red); // Body color for points that will split curves.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.RemovePointColor", "Body color for points selected for removal.", "#FF00FFFF")] private static readonly Color RemovePointColor = global::vTools.CommandDefaults.GetColor("vSplit", "vTools.Commands.vSplit.RemovePointColor", Color.Cyan); // Body color for points selected for removal.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.PointOutlineColor", "Outline color around split-point bodies.", "#FFFFC0CB")] private static readonly Color PointOutlineColor = global::vTools.CommandDefaults.GetColor("vSplit", "vTools.Commands.vSplit.PointOutlineColor", Color.Pink); // Outline color around split-point bodies.
 
   private const string OptionsSectionName = "vSplit";
   private const string PointDisplayKey = "pointDisplay";
@@ -78,7 +82,7 @@ public sealed class vSplit : vToolsCommand
           return pointDisplayMode;
         }
 
-        return DefaultPointDisplayMode;
+        return ConfiguredDefaultPointDisplayMode;
       });
   }
 
@@ -204,7 +208,7 @@ public sealed class vSplit : vToolsCommand
 
   private static (int OutlineRadius, int FillRadius) DisplayPointRadii(DisplayPipeline display)
   {
-    var radius = DefaultPointRadius;
+    var radius = ConfiguredDefaultPointRadius;
     try
     {
       var attributes = display.DisplayPipelineAttributes;

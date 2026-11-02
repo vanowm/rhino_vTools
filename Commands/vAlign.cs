@@ -16,21 +16,41 @@ namespace vTools.Commands;
 public sealed class vAlign : vToolsCommand
 {
   // Defaults and customizable constants
-  private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
-  private const bool DefaultLoop = true; // true repeats object/reference/target selection after each alignment; false completes one alignment.
-  private const bool DefaultSaveDefaults = true; // true saves accepted option changes; false uses temporary values for this run only.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultDistance", "Separation in model units; zero or greater, or None at the prompt.")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
+
+  private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultLoop", "true repeats object/reference/target selection after each alignment; false completes one alignment.")] private const bool DefaultLoop = true; // true repeats object/reference/target selection after each alignment; false completes one alignment.
+
+  private static readonly bool ConfiguredDefaultLoop = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.DefaultLoop", DefaultLoop); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultSaveDefaults", "true saves accepted option changes; false uses temporary values for this run only.")] private const bool DefaultSaveDefaults = true; // true saves accepted option changes; false uses temporary values for this run only.
+
+  private static readonly bool ConfiguredDefaultSaveDefaults = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.DefaultSaveDefaults", DefaultSaveDefaults); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double KinkAngleRadians = Math.PI / 6.0; // Minimum selectable kink angle in radians; PI/6 equals 30 degrees.
-  private const int TargetCurveSampleCount = 32; // Coarse hover samples per target curve; two or greater.
-  private const int TargetCurveRefinementIterations = 8; // Local closest-point refinement passes; zero or greater.
-  private const double MinimumPickRadiusPixels = 6.0; // Minimum target hover radius in display pixels; greater than zero.
-  private const double CursorSideDeadZoneToleranceScale = 2.0; // World XY side dead zone as a multiple of document tolerance.
-  private const double OrthoCueCurveLengthScale = 0.25; // Fraction of hovered target length used for the World Ortho direction cue.
-  private const double OrthoCueToleranceScale = 20.0; // Minimum Ortho cue length as a multiple of document tolerance.
-  private const double PreviewTransparency = 0.65; // Faded-object transparency from zero opaque through one invisible.
-  private static readonly Color ReferenceColor = Color.Cyan; // Highlight color for the stationary reference segment.
-  private static readonly Color TargetColor = Color.Orange; // Highlight color for the hovered rotating target segment.
-  private static readonly Color CueColor = Color.LightGray; // Color of the point-to-point alignment cue.
-  private static readonly Color FadedPreviewColor = Color.FromArgb(100, 100, 100); // Neutral preview material color.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.TargetCurveSampleCount", "Coarse hover samples per target curve; two or greater.")] private const int TargetCurveSampleCount = 32; // Coarse hover samples per target curve; two or greater.
+
+  private static readonly int ConfiguredTargetCurveSampleCount = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.TargetCurveSampleCount", TargetCurveSampleCount); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.TargetCurveRefinementIterations", "Local closest-point refinement passes; zero or greater.")] private const int TargetCurveRefinementIterations = 8; // Local closest-point refinement passes; zero or greater.
+
+  private static readonly int ConfiguredTargetCurveRefinementIterations = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.TargetCurveRefinementIterations", TargetCurveRefinementIterations); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.MinimumPickRadiusPixels", "Minimum target hover radius in display pixels; greater than zero.")] private const double MinimumPickRadiusPixels = 6.0; // Minimum target hover radius in display pixels; greater than zero.
+
+  private static readonly double ConfiguredMinimumPickRadiusPixels = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.MinimumPickRadiusPixels", MinimumPickRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.CursorSideDeadZoneToleranceScale", "World XY side dead zone as a multiple of document tolerance.")] private const double CursorSideDeadZoneToleranceScale = 2.0; // World XY side dead zone as a multiple of document tolerance.
+
+  private static readonly double ConfiguredCursorSideDeadZoneToleranceScale = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.CursorSideDeadZoneToleranceScale", CursorSideDeadZoneToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.OrthoCueCurveLengthScale", "Fraction of hovered target length used for the World Ortho direction cue.")] private const double OrthoCueCurveLengthScale = 0.25; // Fraction of hovered target length used for the World Ortho direction cue.
+
+  private static readonly double ConfiguredOrthoCueCurveLengthScale = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.OrthoCueCurveLengthScale", OrthoCueCurveLengthScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.OrthoCueToleranceScale", "Minimum Ortho cue length as a multiple of document tolerance.")] private const double OrthoCueToleranceScale = 20.0; // Minimum Ortho cue length as a multiple of document tolerance.
+
+  private static readonly double ConfiguredOrthoCueToleranceScale = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.OrthoCueToleranceScale", OrthoCueToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.PreviewTransparency", "Faded-object transparency from zero opaque through one invisible.")] private const double PreviewTransparency = 0.65; // Faded-object transparency from zero opaque through one invisible.
+
+  private static readonly double ConfiguredPreviewTransparency = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.PreviewTransparency", PreviewTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.ReferenceColor", "Highlight color for the stationary reference segment.", "#FF00FFFF")] private static readonly Color ReferenceColor = global::vTools.CommandDefaults.GetColor("vAlign", "vTools.Commands.vAlign.ReferenceColor", Color.Cyan); // Highlight color for the stationary reference segment.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.TargetColor", "Highlight color for the hovered rotating target segment.", "#FFFFA500")] private static readonly Color TargetColor = global::vTools.CommandDefaults.GetColor("vAlign", "vTools.Commands.vAlign.TargetColor", Color.Orange); // Highlight color for the hovered rotating target segment.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.CueColor", "Color of the point-to-point alignment cue.", "#FFD3D3D3")] private static readonly Color CueColor = global::vTools.CommandDefaults.GetColor("vAlign", "vTools.Commands.vAlign.CueColor", Color.LightGray); // Color of the point-to-point alignment cue.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.FadedPreviewColor", "Neutral preview material color.", "#FF646464")] private static readonly Color FadedPreviewColor = global::vTools.CommandDefaults.GetColor("vAlign", "vTools.Commands.vAlign.FadedPreviewColor", Color.FromArgb(100, 100, 100)); // Neutral preview material color.
 
   private const string OptionsSectionName = "vAlign";
   private const string DistanceKey = "distance"; // Non-negative model-unit distance; JSON null represents None.
@@ -42,7 +62,7 @@ public sealed class vAlign : vToolsCommand
   {
     var distance = LoadPersistedDistance();
     var loop = LoadPersistedLoop();
-    var saveDefaults = DefaultSaveDefaults;
+    var saveDefaults = ConfiguredDefaultSaveDefaults;
     var completed = false;
     var allowPreselection = true;
     while (true)
@@ -701,7 +721,7 @@ public sealed class vAlign : vToolsCommand
 
   private static bool LoadPersistedLoop() =>
     ToolsOptionStore.Read(OptionsSectionName, section =>
-      ToolsOptionStore.TryGetBool(section, LoopKey, out var value) ? value : DefaultLoop);
+      ToolsOptionStore.TryGetBool(section, LoopKey, out var value) ? value : ConfiguredDefaultLoop);
 
   private static bool HandleLoopOption(
     GetBaseClass getter,
@@ -746,7 +766,7 @@ public sealed class vAlign : vToolsCommand
       if (ToolsOptionStore.TryGetString(section, DistanceKey, out var text) &&
           TryParseDistance(text, out var parsed))
         return parsed;
-      return DefaultDistance;
+      return ConfiguredDefaultDistance;
     });
 
   private static void SavePersistedOptions(double? distance, bool loop, bool saveDefaults)
@@ -1278,7 +1298,7 @@ public sealed class vAlign : vToolsCommand
       (direction.Y * cursorVector.X);
     double deadZone = Math.Max(
       RhinoMath.ZeroTolerance,
-      documentTolerance * CursorSideDeadZoneToleranceScale);
+      documentTolerance * ConfiguredCursorSideDeadZoneToleranceScale);
     if (Math.Abs(cross) <= deadZone)
       return fallback;
     return cross < 0.0 ? 1 : -1;
@@ -1745,10 +1765,10 @@ public sealed class vAlign : vToolsCommand
     {
       Parent = parent;
       Curve = curve;
-      _parameters = curve.DivideByCount(TargetCurveSampleCount, true) ??
-        Enumerable.Range(0, TargetCurveSampleCount + 1)
+      _parameters = curve.DivideByCount(ConfiguredTargetCurveSampleCount, true) ??
+        Enumerable.Range(0, ConfiguredTargetCurveSampleCount + 1)
           .Select(index =>
-            curve.Domain.ParameterAt(index / (double)TargetCurveSampleCount))
+            curve.Domain.ParameterAt(index / (double)ConfiguredTargetCurveSampleCount))
           .ToArray();
       if (_parameters.Length < 2)
         _parameters = [curve.Domain.T0, curve.Domain.T1];
@@ -1807,7 +1827,7 @@ public sealed class vAlign : vToolsCommand
       double right = _parameters[Math.Min(_parameters.Length - 1, bestIndex + 1)];
       double bestParameter = _parameters[bestIndex];
       for (int iteration = 0;
-           iteration < TargetCurveRefinementIterations && right > left;
+           iteration < ConfiguredTargetCurveRefinementIterations && right > left;
            iteration++)
       {
         double t1 = left + ((right - left) / 3.0);
@@ -1866,12 +1886,12 @@ public sealed class vAlign : vToolsCommand
     try
     {
       return Math.Max(
-        MinimumPickRadiusPixels,
+        ConfiguredMinimumPickRadiusPixels,
         Rhino.ApplicationSettings.ModelAidSettings.MousePickboxRadius + 2.0);
     }
     catch
     {
-      return MinimumPickRadiusPixels;
+      return ConfiguredMinimumPickRadiusPixels;
     }
   }
 
@@ -1883,8 +1903,8 @@ public sealed class vAlign : vToolsCommand
     private EdgePick? _reference;
     private readonly DisplayMaterial _previewMaterial = new(FadedPreviewColor)
     {
-      Transparency = PreviewTransparency,
-      BackTransparency = PreviewTransparency
+      Transparency = ConfiguredPreviewTransparency,
+      BackTransparency = ConfiguredPreviewTransparency
     };
     private readonly List<GeometryBase> _previewGeometry = [];
     private readonly List<PreviewInstance> _previewInstances = [];
@@ -2015,8 +2035,8 @@ public sealed class vAlign : vToolsCommand
           if (direction.Unitize())
           {
             double halfLength = Math.Max(
-              _target.Curve.GetLength() * OrthoCueCurveLengthScale * 0.5,
-              _doc.ModelAbsoluteTolerance * OrthoCueToleranceScale * 0.5);
+              _target.Curve.GetLength() * ConfiguredOrthoCueCurveLengthScale * 0.5,
+              _doc.ModelAbsoluteTolerance * ConfiguredOrthoCueToleranceScale * 0.5);
             PreviewDisplay.DrawLine(
               e.Display,
               _target.PickPoint - (direction * halfLength),

@@ -25,35 +25,77 @@ namespace vTools.Commands
   public sealed partial class vShade : vToolsCommand
   {
     // Option defaults and customizable output settings
-    private const double DefaultOffset = 4.0; // Bisector length in model units; zero or greater.
-    private const double DefaultChamfer = 1.0; // Perpendicular chamfer width in model units; zero or greater.
-    private const double DefaultReinforcement = 6.0; // Arc radius in model units; zero disables reinforcement arcs.
-    private const bool DefaultScallop = false; // true replaces perimeter connector lines with inward arcs; false keeps straight connectors.
-    private const bool DefaultUseCurve = true; // true trims nonlinear source sides in place and extends caps to meet them; false generates straight/scalloped connectors. Linear sources always use Scallop.
-    private const double SourceCapExtensionFactor = 2.0; // Positive multiplier on source bounding-box distance when intersecting the infinite corner-cap line.
-    private const double DefaultScallopSize = 5.0; // Positive midpoint bulge: model units, or percent of connector span when DefaultScallopPercent is true.
-    private const bool DefaultScallopPercent = true; // true interprets scallop size as percent of each connector span; false uses model units.
-    private const double DefaultCutOffset = 1.5; // Outward cut distance in model units; zero omits the cut curve.
-    private const string DefaultCutLayer = "CUT1"; // Existing or new Rhino layer path for the outward cut curve.
-    private const bool DefaultCreateReinf = false; // true creates detached finished-size reinforcement parts; false keeps reinforcement arcs only on the shade.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultOffset", "Bisector length in model units; zero or greater.")] private const double DefaultOffset = 4.0; // Bisector length in model units; zero or greater.
+
+    private static readonly double ConfiguredDefaultOffset = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultOffset", DefaultOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultChamfer", "Perpendicular chamfer width in model units; zero or greater.")] private const double DefaultChamfer = 1.0; // Perpendicular chamfer width in model units; zero or greater.
+
+    private static readonly double ConfiguredDefaultChamfer = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultChamfer", DefaultChamfer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultReinforcement", "Arc radius in model units; zero disables reinforcement arcs.")] private const double DefaultReinforcement = 6.0; // Arc radius in model units; zero disables reinforcement arcs.
+
+    private static readonly double ConfiguredDefaultReinforcement = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultReinforcement", DefaultReinforcement); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultScallop", "true replaces perimeter connector lines with inward arcs; false keeps straight connectors.")] private const bool DefaultScallop = false; // true replaces perimeter connector lines with inward arcs; false keeps straight connectors.
+
+    private static readonly bool ConfiguredDefaultScallop = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultScallop", DefaultScallop); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultUseCurve", "true trims nonlinear source sides in place and extends caps to meet them; false generates straight/scalloped connectors. Linear sources always use Scallop.")] private const bool DefaultUseCurve = true; // true trims nonlinear source sides in place and extends caps to meet them; false generates straight/scalloped connectors. Linear sources always use Scallop.
+
+    private static readonly bool ConfiguredDefaultUseCurve = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultUseCurve", DefaultUseCurve); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SourceCapExtensionFactor", "Positive multiplier on source bounding-box distance when intersecting the infinite corner-cap line.")] private const double SourceCapExtensionFactor = 2.0; // Positive multiplier on source bounding-box distance when intersecting the infinite corner-cap line.
+
+    private static readonly double ConfiguredSourceCapExtensionFactor = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SourceCapExtensionFactor", SourceCapExtensionFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultScallopSize", "Positive midpoint bulge: model units, or percent of connector span when DefaultScallopPercent is true.")] private const double DefaultScallopSize = 5.0; // Positive midpoint bulge: model units, or percent of connector span when DefaultScallopPercent is true.
+
+    private static readonly double ConfiguredDefaultScallopSize = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultScallopSize", DefaultScallopSize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultScallopPercent", "true interprets scallop size as percent of each connector span; false uses model units.")] private const bool DefaultScallopPercent = true; // true interprets scallop size as percent of each connector span; false uses model units.
+
+    private static readonly bool ConfiguredDefaultScallopPercent = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultScallopPercent", DefaultScallopPercent); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultCutOffset", "Outward cut distance in model units; zero omits the cut curve.")] private const double DefaultCutOffset = 1.5; // Outward cut distance in model units; zero omits the cut curve.
+
+    private static readonly double ConfiguredDefaultCutOffset = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultCutOffset", DefaultCutOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultCutLayer", "Existing or new Rhino layer path for the outward cut curve.")] private const string DefaultCutLayer = "CUT1"; // Existing or new Rhino layer path for the outward cut curve.
+
+    private static readonly string ConfiguredDefaultCutLayer = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultCutLayer", DefaultCutLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultCreateReinf", "true creates detached finished-size reinforcement parts; false keeps reinforcement arcs only on the shade.")] private const bool DefaultCreateReinf = false; // true creates detached finished-size reinforcement parts; false keeps reinforcement arcs only on the shade.
+
+    private static readonly bool ConfiguredDefaultCreateReinf = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultCreateReinf", DefaultCreateReinf); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double ReinforcementPartGapInches = 2.0; // Minimum physical clearance in inches between each detached part and the outer cut outline.
     private const int ReinforcementPartPlacementPasses = 24; // Binary-search passes for outward placement at the requested clearance; positive integer.
     private const string ReinforcementPartObjectName = "ShadeReinforcementPart"; // Object name for detached finished-size reinforcement cutting outlines.
     private const string ReinforcementPartLabelName = "ShadeReinforcementPartLabel"; // Object name for detached copies of corner-identifying labels.
     private const string ReinforcementPartGroupPrefix = "vShade_Reinf_"; // Separate output group prefix followed by session and corner identifiers.
-    private const double TunePickRadiusPixels = 14.0; // Maximum screen-space distance in pixels for picking a connector or corner.
-    private const double DefaultLabelHeight = 0.5; // Reinforcement label height in model units; positive.
-    private const double DefaultLabelDimensionScale = 1.0; // Positive annotation display scale for fixed-height labels.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.TunePickRadiusPixels", "Maximum screen-space distance in pixels for picking a connector or corner.")] private const double TunePickRadiusPixels = 14.0; // Maximum screen-space distance in pixels for picking a connector or corner.
+
+    private static readonly double ConfiguredTunePickRadiusPixels = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.TunePickRadiusPixels", TunePickRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultLabelHeight", "Reinforcement label height in model units; positive.")] private const double DefaultLabelHeight = 0.5; // Reinforcement label height in model units; positive.
+
+    private static readonly double ConfiguredDefaultLabelHeight = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultLabelHeight", DefaultLabelHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultLabelDimensionScale", "Positive annotation display scale for fixed-height labels.")] private const double DefaultLabelDimensionScale = 1.0; // Positive annotation display scale for fixed-height labels.
+
+    private static readonly double ConfiguredDefaultLabelDimensionScale = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultLabelDimensionScale", DefaultLabelDimensionScale); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double LabelRadialPosition = 0.5; // Fraction from cap midpoint toward reinforcement arc midpoint; zero to one.
-    private const string DefaultLabel = "1"; // Document-local next label; numeric or alphabetic suffix advances after each corner, empty disables labels.
-    private const string DefaultLabelPrefix = ""; // Literal text prepended to new corner labels; empty leaves the incrementing value unprefixed.
-    private const bool DefaultConnect = true; // true grows non-crossing boundaries between consecutive perpendiculars; false leaves perpendiculars separate.
-    private const bool DefaultJoin = true; // true outputs each connected boundary as one curve; false keeps its segments separate.
-    private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultLabel", "Document-local next label; numeric or alphabetic suffix advances after each corner, empty disables labels.")] private const string DefaultLabel = "1"; // Document-local next label; numeric or alphabetic suffix advances after each corner, empty disables labels.
+
+    private static readonly string ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultLabelPrefix", "Literal text prepended to new corner labels; empty leaves the incrementing value unprefixed.")] private const string DefaultLabelPrefix = ""; // Literal text prepended to new corner labels; empty leaves the incrementing value unprefixed.
+
+    private static readonly string ConfiguredDefaultLabelPrefix = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultLabelPrefix", DefaultLabelPrefix); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultConnect", "true grows non-crossing boundaries between consecutive perpendiculars; false leaves perpendiculars separate.")] private const bool DefaultConnect = true; // true grows non-crossing boundaries between consecutive perpendiculars; false leaves perpendiculars separate.
+
+    private static readonly bool ConfiguredDefaultConnect = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultConnect", DefaultConnect); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultJoin", "true outputs each connected boundary as one curve; false keeps its segments separate.")] private const bool DefaultJoin = true; // true outputs each connected boundary as one curve; false keeps its segments separate.
+
+    private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+    private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string ReferenceLayerName = "Reference"; // Rhino layer name used for every bisector line.
-    private static readonly Color ReferenceLayerColor = Color.White; // RGB color assigned when the Reference layer must be created.
-    private const double EndpointCoincidenceToleranceFactor = 4.0; // Model absolute-tolerance multiplier used to treat clicked endpoints as one corner.
-    private const double DirectionToleranceFactor = 10.0; // Rhino zero-tolerance multiplier used for projected directions and intersection tests.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.ReferenceLayerColor", "RGB color assigned when the Reference layer must be created.", "#FFFFFFFF")] private static readonly Color ReferenceLayerColor = global::vTools.CommandDefaults.GetColor("vShade", "vTools.Commands.vShade.ReferenceLayerColor", Color.White); // RGB color assigned when the Reference layer must be created.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.EndpointCoincidenceToleranceFactor", "Model absolute-tolerance multiplier used to treat clicked endpoints as one corner.")] private const double EndpointCoincidenceToleranceFactor = 4.0; // Model absolute-tolerance multiplier used to treat clicked endpoints as one corner.
+
+    private static readonly double ConfiguredEndpointCoincidenceToleranceFactor = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.EndpointCoincidenceToleranceFactor", EndpointCoincidenceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DirectionToleranceFactor", "Rhino zero-tolerance multiplier used for projected directions and intersection tests.")] private const double DirectionToleranceFactor = 10.0; // Rhino zero-tolerance multiplier used for projected directions and intersection tests.
+
+    private static readonly double ConfiguredDirectionToleranceFactor = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DirectionToleranceFactor", DirectionToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string BisectorObjectName = "ShadeBisector"; // Rhino object name assigned to angle-bisector reference lines.
     private const string PerpendicularObjectName = "ShadePerpendicular"; // Rhino object name assigned to perpendicular end-cap lines.
     private const string ConnectionObjectName = "ShadeConnection"; // Rhino object name assigned to connected-boundary side lines.
@@ -67,20 +109,38 @@ namespace vTools.Commands
     private const string SessionStateSection = "vShade.sessions"; // Document-string section containing resumable shade snapshots keyed by session GUID.
     private const string ShadeGroupPrefix = "vShade_"; // Prefix for the output group name; the session GUID follows it.
     private const int OutputDrawOrderStep = 1; // Positive draw-order increment placing new shade output above existing document objects; never changes geometry or Z.
-    private const double DefaultSplitWidth = 63.0; // Material width in model units; must exceed twice the 0.5-unit joint overlap.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultSplitWidth", "Material width in model units; must exceed twice the 0.5-unit joint overlap.")] private const double DefaultSplitWidth = 63.0; // Material width in model units; must exceed twice the 0.5-unit joint overlap.
+
+    private static readonly double ConfiguredDefaultSplitWidth = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultSplitWidth", DefaultSplitWidth); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double SplitJointOverlap = 0.5; // Total overlap across each split in model units; each part extends 0.25 past the seam.
     private const double SplitLayoutGap = 1.0; // Empty model-unit spacing between laid-out copies.
-    private const double SplitAngleStepDegrees = 5.0; // Angular sampling interval in degrees for initial material-length search.
-    private const int SplitBoundarySamples = 256; // Boundary samples for inexpensive initial layout scoring; positive integer.
-    private const int WholeFitRefinementPasses = 16; // Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitAngleStepDegrees", "Angular sampling interval in degrees for initial material-length search.")] private const double SplitAngleStepDegrees = 5.0; // Angular sampling interval in degrees for initial material-length search.
+
+    private static readonly double ConfiguredSplitAngleStepDegrees = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitAngleStepDegrees", SplitAngleStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitBoundarySamples", "Boundary samples for inexpensive initial layout scoring; positive integer.")] private const int SplitBoundarySamples = 256; // Boundary samples for inexpensive initial layout scoring; positive integer.
+
+    private static readonly int ConfiguredSplitBoundarySamples = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitBoundarySamples", SplitBoundarySamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.WholeFitRefinementPasses", "Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.")] private const int WholeFitRefinementPasses = 16; // Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.
+
+    private static readonly int ConfiguredWholeFitRefinementPasses = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.WholeFitRefinementPasses", WholeFitRefinementPasses); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int SplitMaxParts = 16; // Maximum number of panel parts proposed automatically; positive integer.
-    private const int SplitSeamRefinementSteps = 16; // Candidate positions evaluated per seam on each optimization pass; positive integer.
-    private const int SplitSeamRefinementPasses = 3; // Coordinate-descent passes over all proposed seams; positive integer.
-    private const int SplitDragRefreshMilliseconds = 90; // Minimum interval in milliseconds between expensive Boolean preview rebuilds while dragging.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamRefinementSteps", "Candidate positions evaluated per seam on each optimization pass; positive integer.")] private const int SplitSeamRefinementSteps = 16; // Candidate positions evaluated per seam on each optimization pass; positive integer.
+
+    private static readonly int ConfiguredSplitSeamRefinementSteps = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitSeamRefinementSteps", SplitSeamRefinementSteps); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamRefinementPasses", "Coordinate-descent passes over all proposed seams; positive integer.")] private const int SplitSeamRefinementPasses = 3; // Coordinate-descent passes over all proposed seams; positive integer.
+
+    private static readonly int ConfiguredSplitSeamRefinementPasses = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitSeamRefinementPasses", SplitSeamRefinementPasses); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitDragRefreshMilliseconds", "Minimum interval in milliseconds between expensive Boolean preview rebuilds while dragging.")] private const int SplitDragRefreshMilliseconds = 90; // Minimum interval in milliseconds between expensive Boolean preview rebuilds while dragging.
+
+    private static readonly int ConfiguredSplitDragRefreshMilliseconds = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitDragRefreshMilliseconds", SplitDragRefreshMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool AllowSplitDragObjectSnaps = true; // true uses Rhino object snaps and their cursor cues while pivoting cuts; false uses free cursor points.
-    private const int SplitPreviewAlpha = 200; // Alpha channel from 0 (invisible) to 255 (opaque) for destination-colored preview strokes.
-    private const double SplitGhostTransparency = 0.4; // Panel-preview transparency from 0 (opaque) to 1 (invisible).
-    private static readonly Color SplitSeamColor = Color.Orange; // RGB preview color for movable source-shade seam lines.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitPreviewAlpha", "Alpha channel from 0 (invisible) to 255 (opaque) for destination-colored preview strokes.")] private const int SplitPreviewAlpha = 200; // Alpha channel from 0 (invisible) to 255 (opaque) for destination-colored preview strokes.
+
+    private static readonly int ConfiguredSplitPreviewAlpha = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitPreviewAlpha", SplitPreviewAlpha); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitGhostTransparency", "Panel-preview transparency from 0 (opaque) to 1 (invisible).")] private const double SplitGhostTransparency = 0.4; // Panel-preview transparency from 0 (opaque) to 1 (invisible).
+
+    private static readonly double ConfiguredSplitGhostTransparency = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitGhostTransparency", SplitGhostTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamColor", "RGB preview color for movable source-shade seam lines.", "#FFFFA500")] private static readonly Color SplitSeamColor = global::vTools.CommandDefaults.GetColor("vShade", "vTools.Commands.vShade.SplitSeamColor", Color.Orange); // RGB preview color for movable source-shade seam lines.
     private const string SplitPartObjectName = "ShadeSplitPart"; // Name of laid-out, clipped panel curves.
     private const string SplitSeamObjectName = "ShadeSplitCut"; // Name of Reference-layer seam lines on the source shade.
     private const string SplitOverlapLayerName = "PLOT"; // Existing or new Rhino layer for part-to-part overlap marks and digits.
@@ -88,10 +148,16 @@ namespace vTools.Commands
     private const string SplitOverlapLineObjectName = "ShadeOverlapLine"; // Name of each part's line marking the adjacent part's overlapping edge.
     private const string SplitOverlapLabelObjectName = "ShadeOverlapLabel"; // Name of each digit identifying the adjacent split part.
     private const double SplitOverlapLabelHeight = 0.4; // Common seam digit height in model units; fits within the 0.5-unit overlap.
-    private const double SplitOverlapLabelMargin = 0.04; // Minimum model-unit clearance from cut and plot edges around a seam digit.
-    private const double SplitLabelGlyphScale = 1.0; // Positive glyph-outline scale; 1 preserves the label's fixed text height.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitOverlapLabelMargin", "Minimum model-unit clearance from cut and plot edges around a seam digit.")] private const double SplitOverlapLabelMargin = 0.04; // Minimum model-unit clearance from cut and plot edges around a seam digit.
+
+    private static readonly double ConfiguredSplitOverlapLabelMargin = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitOverlapLabelMargin", SplitOverlapLabelMargin); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitLabelGlyphScale", "Positive glyph-outline scale; 1 preserves the label's fixed text height.")] private const double SplitLabelGlyphScale = 1.0; // Positive glyph-outline scale; 1 preserves the label's fixed text height.
+
+    private static readonly double ConfiguredSplitLabelGlyphScale = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitLabelGlyphScale", SplitLabelGlyphScale); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double SplitLabelGlyphSpacing = 0.0; // Additional model-unit glyph spacing; zero preserves native kerning.
-    private const double SplitCoincidentBoundaryToleranceMultiplier = 2.0; // Model-tolerance multiplier for omitting boundary detail exactly coincident with the cut outline.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitCoincidentBoundaryToleranceMultiplier", "Model-tolerance multiplier for omitting boundary detail exactly coincident with the cut outline.")] private const double SplitCoincidentBoundaryToleranceMultiplier = 2.0; // Model-tolerance multiplier for omitting boundary detail exactly coincident with the cut outline.
+
+    private static readonly double ConfiguredSplitCoincidentBoundaryToleranceMultiplier = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitCoincidentBoundaryToleranceMultiplier", SplitCoincidentBoundaryToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
 
     private const string OptionsSectionName = "vShade";
     private const string OffsetKey = "offset";
@@ -115,22 +181,22 @@ namespace vTools.Commands
     private const string LabelPrefixKey = "labelPrefix";
     private const string SplitWidthKey = "splitWidth";
 
-    private static double _offset = DefaultOffset;
-    private static double _chamfer = DefaultChamfer;
-    private static double _reinforcement = DefaultReinforcement;
-    private static bool _scallop = DefaultScallop;
-    private static bool _useCurve = DefaultUseCurve;
-    private static string _labelPrefix = DefaultLabelPrefix;
-    private static double _scallopSize = DefaultScallopSize;
-    private static bool _scallopPercent = DefaultScallopPercent;
-    private static double _cutOffset = DefaultCutOffset;
-    private static string _cutLayer = DefaultCutLayer;
-    private static bool _createReinf = DefaultCreateReinf;
-    private static bool _connect = DefaultConnect;
-    private static bool _join = DefaultJoin;
-    private static string _layer = DefaultLayer;
-    private static double _splitWidth = DefaultSplitWidth;
-    private static ScallopSize _tuneScallopSize = new(DefaultScallopSize, DefaultScallopPercent); // Per-command click-to-apply scallop bulge; zero selects a line.
+    private static double _offset = ConfiguredDefaultOffset;
+    private static double _chamfer = ConfiguredDefaultChamfer;
+    private static double _reinforcement = ConfiguredDefaultReinforcement;
+    private static bool _scallop = ConfiguredDefaultScallop;
+    private static bool _useCurve = ConfiguredDefaultUseCurve;
+    private static string _labelPrefix = ConfiguredDefaultLabelPrefix;
+    private static double _scallopSize = ConfiguredDefaultScallopSize;
+    private static bool _scallopPercent = ConfiguredDefaultScallopPercent;
+    private static double _cutOffset = ConfiguredDefaultCutOffset;
+    private static string _cutLayer = ConfiguredDefaultCutLayer;
+    private static bool _createReinf = ConfiguredDefaultCreateReinf;
+    private static bool _connect = ConfiguredDefaultConnect;
+    private static bool _join = ConfiguredDefaultJoin;
+    private static string _layer = ConfiguredDefaultLayer;
+    private static double _splitWidth = ConfiguredDefaultSplitWidth;
+    private static ScallopSize _tuneScallopSize = new(ConfiguredDefaultScallopSize, ConfiguredDefaultScallopPercent); // Per-command click-to-apply scallop bulge; zero selects a line.
 
     private sealed record CurvePick(
       Guid ObjectId,
@@ -179,7 +245,7 @@ namespace vTools.Commands
       string LabelText,
       string NextLabel)
     {
-      public string LabelPrefix { get; init; } = DefaultLabelPrefix;
+      public string LabelPrefix { get; init; } = ConfiguredDefaultLabelPrefix;
     }
 
     private sealed record ShadeHistoryState(
@@ -202,15 +268,15 @@ namespace vTools.Commands
       public List<PlacementSnapshot> Placements { get; set; } = [];
       public List<ScallopSnapshot> Scallops { get; set; } = [];
       public bool Scallop { get; set; }
-      public bool UseCurve { get; set; } = DefaultUseCurve;
-      public string LabelPrefix { get; set; } = DefaultLabelPrefix;
+      public bool UseCurve { get; set; } = ConfiguredDefaultUseCurve;
+      public string LabelPrefix { get; set; } = ConfiguredDefaultLabelPrefix;
       public double ScallopSize { get; set; }
       public bool ScallopPercent { get; set; }
       public bool Join { get; set; }
       public double CutOffset { get; set; }
-      public string CutLayer { get; set; } = DefaultCutLayer;
+      public string CutLayer { get; set; } = ConfiguredDefaultCutLayer;
       public string LayerOption { get; set; } = string.Empty;
-      public bool CreateReinf { get; set; } = DefaultCreateReinf;
+      public bool CreateReinf { get; set; } = ConfiguredDefaultCreateReinf;
     }
 
     private sealed class PlacementSnapshot
@@ -231,7 +297,7 @@ namespace vTools.Commands
       public bool Connect { get; set; }
       public double Reinforcement { get; set; }
       public string LabelText { get; set; } = string.Empty;
-      public string LabelPrefix { get; set; } = DefaultLabelPrefix;
+      public string LabelPrefix { get; set; } = ConfiguredDefaultLabelPrefix;
       public string NextLabel { get; set; } = string.Empty;
     }
 
@@ -293,7 +359,7 @@ namespace vTools.Commands
       var placements = new List<ShadePlacement>();
       var outputIds = new List<Guid>();
       var scallopSizes = new Dictionary<(int From, int To), ScallopSize>();
-      var labelValue = doc.Strings.GetValue(OptionsSectionName, LabelKey) ?? DefaultLabel;
+      var labelValue = doc.Strings.GetValue(OptionsSectionName, LabelKey) ?? ConfiguredDefaultLabel;
       var selectedShadeIds = doc.Objects.GetSelectedObjects(false, false)
         .Select(obj => obj.Attributes.GetUserString(MetadataPrefix + "session"))
         .Where(value => Guid.TryParse(value, out _))
@@ -319,7 +385,7 @@ namespace vTools.Commands
         _reinforcement = last.Reinforcement;
         _connect = last.Connect;
         _layer = string.IsNullOrEmpty(restoredLayerOption)
-          ? doc.Layers[last.OutputLayerIndex]?.FullPath ?? DefaultLayer
+          ? doc.Layers[last.OutputLayerIndex]?.FullPath ?? ConfiguredDefaultLayer
           : DuplicateCommandSupport.NormalizeLayerOption(restoredLayerOption);
         labelValue = last.NextLabel;
         RhinoApp.WriteLine($"vShade: continuing shade with {placements.Count} corners.");
@@ -867,7 +933,7 @@ namespace vTools.Commands
       var p2 = ProjectPoint(cplane, second.Endpoint, out var height2);
       var d1 = ProjectVector(cplane, first.AwayTangent);
       var d2 = ProjectVector(cplane, second.AwayTangent);
-      var directionTolerance = RhinoMath.ZeroTolerance * DirectionToleranceFactor;
+      var directionTolerance = RhinoMath.ZeroTolerance * ConfiguredDirectionToleranceFactor;
 
       if (!Unitize(ref d1, directionTolerance) || !Unitize(ref d2, directionTolerance))
       {
@@ -876,7 +942,7 @@ namespace vTools.Commands
       }
 
       var endpointTolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * EndpointCoincidenceToleranceFactor,
+        doc.ModelAbsoluteTolerance * ConfiguredEndpointCoincidenceToleranceFactor,
         directionTolerance);
       Point2d corner2d;
 
@@ -971,8 +1037,8 @@ namespace vTools.Commands
       Guid secondSourceId)
     {
       var tolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * EndpointCoincidenceToleranceFactor,
-        RhinoMath.ZeroTolerance * DirectionToleranceFactor);
+        doc.ModelAbsoluteTolerance * ConfiguredEndpointCoincidenceToleranceFactor,
+        RhinoMath.ZeroTolerance * ConfiguredDirectionToleranceFactor);
       var bestIndex = -1;
       var bestSourceMatch = -1;
       var bestDistance = double.PositiveInfinity;
@@ -1825,7 +1891,7 @@ namespace vTools.Commands
       if (!viewport.GetFrustumLine(windowX, windowY, out var ray))
         return -1;
 
-      var nearest = TunePickRadiusPixels * TunePickRadiusPixels;
+      var nearest = ConfiguredTunePickRadiusPixels * ConfiguredTunePickRadiusPixels;
       var picked = -1;
       for (var index = 0; index < curves.Count; index++)
       {
@@ -2073,7 +2139,7 @@ namespace vTools.Commands
             return CapEnd(placement, end);
           var center = cap.PointAt(0.5); var direction = cap.Direction;
           if (!direction.Unitize()) throw new InvalidOperationException("corner cap has no direction");
-          double extent = source.GetBoundingBox(true).GetCorners().Max(point => point.DistanceTo(center)) * SourceCapExtensionFactor + tolerance;
+          double extent = source.GetBoundingBox(true).GetCorners().Max(point => point.DistanceTo(center)) * ConfiguredSourceCapExtensionFactor + tolerance;
           using var extended = new LineCurve(center - direction * extent, center + direction * extent);
           using var intersections = Intersection.CurveCurve(source, extended, tolerance, tolerance);
           var hits = intersections?.Where(hit => hit.IsPoint).Select(hit => hit.PointA)
@@ -2281,17 +2347,17 @@ namespace vTools.Commands
       {
         Plane = new Plane(origin, xAxis, yAxis),
         PlainText = FormatCornerLabel(placement.LabelPrefix, placement.LabelText),
-        TextHeight = DefaultLabelHeight,
+        TextHeight = ConfiguredDefaultLabelHeight,
         Justification = TextJustification.MiddleCenter,
         DimensionStyleId = doc.DimStyles.Current.Id,
-        DimensionScale = DefaultLabelDimensionScale,
+        DimensionScale = ConfiguredDefaultLabelDimensionScale,
       };
       if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
             doc,
             text,
             doc.Views.ActiveView?.ActiveViewport,
-            DefaultLabelHeight,
-            DefaultLabelDimensionScale))
+            ConfiguredDefaultLabelHeight,
+            ConfiguredDefaultLabelDimensionScale))
         Log.Write("vShade", $"could not fix label height sequence={placement.Sequence}");
 
       var attributes = CreateIdentifiedAttributes(
@@ -2419,7 +2485,7 @@ namespace vTools.Commands
                LayerSelector.TrySelect(
                  doc,
                  _cutLayer,
-                 DefaultCutLayer,
+                 ConfiguredDefaultCutLayer,
                  "vShade cut layer",
                  mode,
                  allowNewLayer: true,
@@ -2449,7 +2515,7 @@ namespace vTools.Commands
         textGetter.AcceptNothing(true);
         var result = textGetter.Get();
         if (result == GetResult.String || result == GetResult.Nothing)
-          _labelPrefix = result == GetResult.String ? textGetter.StringResult().Trim() : DefaultLabelPrefix;
+          _labelPrefix = result == GetResult.String ? textGetter.StringResult().Trim() : ConfiguredDefaultLabelPrefix;
       }
       SaveOptions();
     }
@@ -2517,7 +2583,7 @@ namespace vTools.Commands
       return true;
     }
 
-    private static string IncrementLabelValue(string text) => LabelSequences.Increment(text, DefaultLabel);
+    private static string IncrementLabelValue(string text) => LabelSequences.Increment(text, ConfiguredDefaultLabel);
 
     private static string FormatCornerLabel(string prefix, string value) => string.IsNullOrWhiteSpace(value)
       ? string.Empty : LabelSequences.FormatDisplayLabel(prefix + value);
@@ -2552,10 +2618,10 @@ namespace vTools.Commands
           var offset = _offset;
           var chamfer = _chamfer;
           var reinforcement = _reinforcement;
-          var createReinf = DefaultCreateReinf;
+          var createReinf = ConfiguredDefaultCreateReinf;
           var scallop = _scallop;
-          var useCurve = DefaultUseCurve;
-          var labelPrefix = DefaultLabelPrefix;
+          var useCurve = ConfiguredDefaultUseCurve;
+          var labelPrefix = ConfiguredDefaultLabelPrefix;
           var scallopSize = _scallopSize;
           var scallopPercent = _scallopPercent;
           var tuneScallopSize = _tuneScallopSize.Value;
@@ -2994,7 +3060,7 @@ namespace vTools.Commands
             // DynamicDraw receives the point after Rhino resolves object snaps.
             var now = System.Environment.TickCount64;
             if (dragging && e.CurrentPoint.IsValid &&
-                now - lastDragRefresh >= SplitDragRefreshMilliseconds)
+                now - lastDragRefresh >= ConfiguredSplitDragRefreshMilliseconds)
             {
               lastDragRefresh = now;
               UpdateDrag(e.CurrentPoint);
@@ -3156,8 +3222,8 @@ namespace vTools.Commands
     }
 
     private static PlanarPartSplitter.Settings SplitPlannerSettings(double width) => new(
-      width, SplitJointOverlap / 2, SplitJointOverlap, SplitLayoutGap, SplitAngleStepDegrees,
-      SplitBoundarySamples, SplitMaxParts, SplitSeamRefinementSteps, SplitSeamRefinementPasses);
+      width, SplitJointOverlap / 2, SplitJointOverlap, SplitLayoutGap, ConfiguredSplitAngleStepDegrees,
+      ConfiguredSplitBoundarySamples, SplitMaxParts, ConfiguredSplitSeamRefinementSteps, ConfiguredSplitSeamRefinementPasses);
 
     private static PlanarPartSplitter.Proposal SharedSplitProposal(SplitProposal proposal) =>
       new(proposal.Frame, proposal.MinY, proposal.MaxY, proposal.Seams, proposal.MaterialLength);
@@ -3187,10 +3253,10 @@ namespace vTools.Commands
     {
       proposal=null!;
       if(!double.IsFinite(width)||width<=0)return false;
-      var parameters=source.DivideByCount(SplitBoundarySamples,true);
+      var parameters=source.DivideByCount(ConfiguredSplitBoundarySamples,true);
       if(parameters==null||parameters.Length<3)return false;
       var points=source.TryGetPolyline(out var polyline)?polyline.ToArray():parameters.Select(source.PointAt).ToArray();
-      var angles=Enumerable.Range(0,(int)Math.Ceiling(180/SplitAngleStepDegrees)).Select(index=>RhinoMath.ToRadians(index*SplitAngleStepDegrees))
+      var angles=Enumerable.Range(0,(int)Math.Ceiling(180/ConfiguredSplitAngleStepDegrees)).Select(index=>RhinoMath.ToRadians(index*ConfiguredSplitAngleStepDegrees))
         .Concat(points.Zip(points.Skip(1),(a,b)=>PlaneAngle(plane,b-a))).Distinct();
       SplitProposal? whole=null;double bestWidth=double.PositiveInfinity,bestAngle=0;
       void Test(double angle)
@@ -3203,8 +3269,8 @@ namespace vTools.Commands
           whole=new(frame,bounds.Min.Y,bounds.Max.Y,[],bounds.Diagonal.X);
       }
       foreach(double angle in angles)Test(angle);
-      double step=RhinoMath.ToRadians(SplitAngleStepDegrees)/2;
-      for(int pass=0;whole==null&&pass<WholeFitRefinementPasses;pass++,step/=2)
+      double step=RhinoMath.ToRadians(ConfiguredSplitAngleStepDegrees)/2;
+      for(int pass=0;whole==null&&pass<ConfiguredWholeFitRefinementPasses;pass++,step/=2)
       {double center=bestAngle;Test(center-step);Test(center+step);}
       if(whole==null)return false;
       proposal=whole;return true;
@@ -3407,7 +3473,7 @@ namespace vTools.Commands
       var bounds = source.GetBoundingBox(proposal.Frame);
       if (cursorX < bounds.Min.X || cursorX > bounds.Max.X)
         return -1;
-      var nearest = TunePickRadiusPixels;
+      var nearest = ConfiguredTunePickRadiusPixels;
       var result = -1;
       for (var index = 0; index < proposal.Seams.Count; index++)
       {
@@ -3473,8 +3539,8 @@ namespace vTools.Commands
       var xOffset = 0.0;
       using var ghostMaterial = new Rhino.Display.DisplayMaterial(sourceColor)
       {
-        Transparency = SplitGhostTransparency,
-        BackTransparency = SplitGhostTransparency
+        Transparency = ConfiguredSplitGhostTransparency,
+        BackTransparency = ConfiguredSplitGhostTransparency
       };
       for (var panelIndex = 0; panelIndex < panels.Count; panelIndex++)
       {
@@ -3523,7 +3589,7 @@ namespace vTools.Commands
     }
 
     private static Color FadedSplitColor(Color color) =>
-      Color.FromArgb(SplitPreviewAlpha, color.R, color.G, color.B);
+      Color.FromArgb(ConfiguredSplitPreviewAlpha, color.R, color.G, color.B);
 
     private static Curve? BuildSplitSeam(Curve source, Plane frame, double y, double tolerance) =>
       PlanarPartSplitter.Seam(source, frame, y, tolerance);
@@ -3559,14 +3625,14 @@ namespace vTools.Commands
         Plane = new Plane(origin, frame.XAxis, frame.YAxis),
         TextHeight = SplitOverlapLabelHeight,
         Justification = TextJustification.BottomLeft,
-        DimensionScale = DefaultLabelDimensionScale,
+        DimensionScale = ConfiguredDefaultLabelDimensionScale,
         TextOrientation = TextOrientation.InPlane,
         DrawForward = false,
         PlainText = LabelSequences.FormatDisplayLabel(seamNumber.ToString(CultureInfo.InvariantCulture))
       };
       if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
         doc, text, doc.Views.ActiveView?.ActiveViewport,
-        SplitOverlapLabelHeight, DefaultLabelDimensionScale))
+        SplitOverlapLabelHeight, ConfiguredDefaultLabelDimensionScale))
         Log.Write("vShade", $"split seam text height override failed scale={doc.ModelSpaceTextScale:G17}");
       var bounds = OverlapLabelGlyphBounds(doc, text, frame);
       if (bounds.IsValid)
@@ -3587,7 +3653,7 @@ namespace vTools.Commands
         doc, text, doc.Views.ActiveView?.ActiveViewport);
       using var style = measurement.GetDimensionStyle(parentStyle);
       var outlines = measurement.CreateCurves(style ?? parentStyle, true,
-        SplitLabelGlyphScale, SplitLabelGlyphSpacing);
+        ConfiguredSplitLabelGlyphScale, SplitLabelGlyphSpacing);
       if (outlines == null || outlines.Length == 0)
         return text.GetBoundingBox(frame);
       var bounds = BoundingBox.Empty;
@@ -3636,7 +3702,7 @@ namespace vTools.Commands
       measurement.ParentDimensionStyle = parent;
       measurement.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(doc, text, doc.Views.ActiveView?.ActiveViewport);
       using var style = measurement.GetDimensionStyle(parent);
-      var glyphs = measurement.CreateCurves(style ?? parent, true, SplitLabelGlyphScale, SplitLabelGlyphSpacing) ?? [];
+      var glyphs = measurement.CreateCurves(style ?? parent, true, ConfiguredSplitLabelGlyphScale, SplitLabelGlyphSpacing) ?? [];
       try
       {
         var bounds = BoundingBox.Empty;
@@ -3761,7 +3827,7 @@ namespace vTools.Commands
               $"seam={seamIndex + 1} cutY={cutY:G17} " +
               $"plotY={overlapY:G17} height={overlapLabel.TextHeight:G6} " +
               $"glyphY=[{glyphBounds.Min.Y:G6},{glyphBounds.Max.Y:G6}] " +
-              $"clearance={clearance:G6} fits={glyphBounds.IsValid && clearance >= SplitOverlapLabelMargin} " +
+              $"clearance={clearance:G6} fits={glyphBounds.IsValid && clearance >= ConfiguredSplitOverlapLabelMargin} " +
               $"displayScale={AnnotationTextTransform.ResolveDisplayDimensionScale(doc, overlapLabel, doc.Views.ActiveView?.ActiveViewport):G6} " +
               $"modelScale={doc.ModelSpaceTextScale:G6} layer={doc.Layers[overlapLayer]?.FullPath}");
           }
@@ -3905,7 +3971,7 @@ namespace vTools.Commands
           var point = candidate.PointAtNormalizedLength(fraction);
           if (!panel.Outline.ClosestPoint(point, out double parameter) ||
               point.DistanceTo(panel.Outline.PointAt(parameter)) >
-                tolerance * SplitCoincidentBoundaryToleranceMultiplier)
+                tolerance * ConfiguredSplitCoincidentBoundaryToleranceMultiplier)
             return true;
         }
         candidate.Dispose();

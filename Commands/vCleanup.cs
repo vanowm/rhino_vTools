@@ -19,33 +19,57 @@ namespace vTools.Commands;
 public sealed class vCleanup : vToolsCommand
 {
   // Option defaults
-  private const double DefaultThreshold = 0.02; // Maximum short-geometry length in model units; zero or greater.
-  private const bool DefaultHighlightShort = false; // true draws short findings in magenta; false uses no cleanup overlay.
-  private const CleanupTargetMode DefaultPreselectMode = CleanupTargetMode.Short; // Short, Overlaps, All, or No findings selected after cleanup.
-  private const CleanupTargetMode DefaultAutoDeleteMode = CleanupTargetMode.No; // Short, Overlaps, All, or No findings deleted during cleanup.
-  private const bool DefaultSimplifyCurves = true; // true simplifies scoped curves before analysis; false preserves their existing structure.
-  private const bool DefaultFindOverlaps = true; // true runs shared vOverlaps detection before the short scan; false skips overlap detection.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultThreshold", "Maximum short-geometry length in model units; zero or greater.")] private const double DefaultThreshold = 0.02; // Maximum short-geometry length in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultThreshold = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultThreshold", DefaultThreshold); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultHighlightShort", "true draws short findings in magenta; false uses no cleanup overlay.")] private const bool DefaultHighlightShort = false; // true draws short findings in magenta; false uses no cleanup overlay.
+
+  private static readonly bool ConfiguredDefaultHighlightShort = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultHighlightShort", DefaultHighlightShort); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultPreselectMode", "Short, Overlaps, All, or No findings selected after cleanup.")] private const CleanupTargetMode DefaultPreselectMode = CleanupTargetMode.Short; // Short, Overlaps, All, or No findings selected after cleanup.
+
+  private static readonly CleanupTargetMode ConfiguredDefaultPreselectMode = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultPreselectMode", DefaultPreselectMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultAutoDeleteMode", "Short, Overlaps, All, or No findings deleted during cleanup.")] private const CleanupTargetMode DefaultAutoDeleteMode = CleanupTargetMode.No; // Short, Overlaps, All, or No findings deleted during cleanup.
+
+  private static readonly CleanupTargetMode ConfiguredDefaultAutoDeleteMode = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultAutoDeleteMode", DefaultAutoDeleteMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultSimplifyCurves", "true simplifies scoped curves before analysis; false preserves their existing structure.")] private const bool DefaultSimplifyCurves = true; // true simplifies scoped curves before analysis; false preserves their existing structure.
+
+  private static readonly bool ConfiguredDefaultSimplifyCurves = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultSimplifyCurves", DefaultSimplifyCurves); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", "true runs shared vOverlaps detection before the short scan; false skips overlap detection.")] private const bool DefaultFindOverlaps = true; // true runs shared vOverlaps detection before the short scan; false skips overlap detection.
+
+  private static readonly bool ConfiguredDefaultFindOverlaps = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", DefaultFindOverlaps); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool ProtectOpenCurveEnds = true; // true excludes open-curve endpoint segments and endpoint control points; false permits them.
   private const int MaximumExportCleanupPasses = 100; // Maximum delete/recheck passes per export; prevents looping when native deletion makes no progress.
 
   // Customizable appearance, output, limits, tolerance, and sampling
-  private static readonly Color ShortHighlightColor = Color.Magenta; // ARGB viewport color used for all short-geometry overlays.
-  private static readonly Color OverlapHighlightColor = Color.Cyan; // ARGB viewport color used for covered-curve overlap overlays.
-  private static readonly Color CandidatePointColor = Color.Lime; // ARGB object color used for unmatched control-point helpers.
-  private const int ShortHighlightThicknessPixels = 7; // Viewport pixel width for magenta short-curve overlays; integer one or greater.
-  private const int CandidatePointSizePixels = 10; // Viewport pixel diameter for control-point candidates; integer one or greater.
-  private const int ControlPointImpactSamples = 32; // Samples used to estimate curve change from candidate removal; integer four or greater.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", "ARGB viewport color used for all short-geometry overlays.", "#FFFF00FF")] private static readonly Color ShortHighlightColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", Color.Magenta); // ARGB viewport color used for all short-geometry overlays.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.OverlapHighlightColor", "ARGB viewport color used for covered-curve overlap overlays.", "#FF00FFFF")] private static readonly Color OverlapHighlightColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.OverlapHighlightColor", Color.Cyan); // ARGB viewport color used for covered-curve overlap overlays.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.CandidatePointColor", "ARGB object color used for unmatched control-point helpers.", "#FF00FF00")] private static readonly Color CandidatePointColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.CandidatePointColor", Color.Lime); // ARGB object color used for unmatched control-point helpers.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ShortHighlightThicknessPixels", "Viewport pixel width for magenta short-curve overlays; integer one or greater.")] private const int ShortHighlightThicknessPixels = 7; // Viewport pixel width for magenta short-curve overlays; integer one or greater.
+
+  private static readonly int ConfiguredShortHighlightThicknessPixels = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.ShortHighlightThicknessPixels", ShortHighlightThicknessPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.CandidatePointSizePixels", "Viewport pixel diameter for control-point candidates; integer one or greater.")] private const int CandidatePointSizePixels = 10; // Viewport pixel diameter for control-point candidates; integer one or greater.
+
+  private static readonly int ConfiguredCandidatePointSizePixels = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.CandidatePointSizePixels", CandidatePointSizePixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ControlPointImpactSamples", "Samples used to estimate curve change from candidate removal; integer four or greater.")] private const int ControlPointImpactSamples = 32; // Samples used to estimate curve change from candidate removal; integer four or greater.
+
+  private static readonly int ConfiguredControlPointImpactSamples = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.ControlPointImpactSamples", ControlPointImpactSamples); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int MaximumExactRemovalCandidates = 18; // Largest candidate count evaluated combinatorially; integer one or greater.
   private const int MaximumCombinedImpactPlans = 64; // Maximum exact plans retained for detailed impact scoring; integer one or greater.
   private const int PointKeyDecimals = 9; // Decimal places used to deduplicate geometric span keys; integer zero or greater.
-  private const double ZeroLengthTolerance = 1e-12; // Model-unit floor for zero-length geometry checks; greater than zero.
-  private const double GripMatchToleranceScale = 0.01; // Document-tolerance multiplier used when matching control points to grips; greater than zero.
-  private const double MinimumGripMatchTolerance = 1e-9; // Model-unit floor for control-point grip matching; greater than zero.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ZeroLengthTolerance", "Model-unit floor for zero-length geometry checks; greater than zero.")] private const double ZeroLengthTolerance = 1e-12; // Model-unit floor for zero-length geometry checks; greater than zero.
+
+  private static readonly double ConfiguredZeroLengthTolerance = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.ZeroLengthTolerance", ZeroLengthTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.GripMatchToleranceScale", "Document-tolerance multiplier used when matching control points to grips; greater than zero.")] private const double GripMatchToleranceScale = 0.01; // Document-tolerance multiplier used when matching control points to grips; greater than zero.
+
+  private static readonly double ConfiguredGripMatchToleranceScale = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.GripMatchToleranceScale", GripMatchToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.MinimumGripMatchTolerance", "Model-unit floor for control-point grip matching; greater than zero.")] private const double MinimumGripMatchTolerance = 1e-9; // Model-unit floor for control-point grip matching; greater than zero.
+
+  private static readonly double ConfiguredMinimumGripMatchTolerance = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.MinimumGripMatchTolerance", MinimumGripMatchTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string ShortSelectionName = "vCleanup Short geometry"; // Rhino named-selection label for short findings; non-empty text.
   private const string OverlapSelectionName = "vCleanup Overlaps"; // Rhino named-selection label for covered curves; non-empty text.
   private const string HelperName = "vCleanup control-point candidate"; // Object name for fallback helper geometry; non-empty text.
   private const string HelperFlagKey = "vCleanup.Helper"; // User-string key identifying cleanup fallback helpers; non-empty text.
-  private static readonly string[] CleanupTargetNames = ["Short", "Overlaps", "All", "No"]; // Ordered command-option labels matching CleanupTargetMode values.
+  [global::vTools.CommandChoicesAttribute("vCleanup", "preselect|autoDelete", false, "Short", "Overlaps", "All", "No")] private static readonly string[] CleanupTargetNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vCleanup), nameof(CleanupTargetNames)); // Ordered command-option labels matching CleanupTargetMode values.
 
   private const string SectionName = "vCleanup";
   private const string ThresholdKey = "threshold";
@@ -56,12 +80,12 @@ public sealed class vCleanup : vToolsCommand
   private const string SimplifyKey = "simplifyCrv";
   private const string OverlapsKey = "overlaps";
 
-  private static double _threshold = DefaultThreshold;
-  private static bool _highlightShort = DefaultHighlightShort;
-  private static CleanupTargetMode _preselectMode = DefaultPreselectMode;
-  private static CleanupTargetMode _autoDeleteMode = DefaultAutoDeleteMode;
-  private static bool _simplifyCurves = DefaultSimplifyCurves;
-  private static bool _findOverlaps = DefaultFindOverlaps;
+  private static double _threshold = ConfiguredDefaultThreshold;
+  private static bool _highlightShort = ConfiguredDefaultHighlightShort;
+  private static CleanupTargetMode _preselectMode = ConfiguredDefaultPreselectMode;
+  private static CleanupTargetMode _autoDeleteMode = ConfiguredDefaultAutoDeleteMode;
+  private static bool _simplifyCurves = ConfiguredDefaultSimplifyCurves;
+  private static bool _findOverlaps = ConfiguredDefaultFindOverlaps;
   private static ShortGeometryConduit? _activeConduit;
 
   private enum CleanupTargetMode
@@ -801,7 +825,7 @@ public sealed class vCleanup : vToolsCommand
         for (var index = 0; index < points.Count - 1; index++)
           pairs.Add((index, index + 1));
         if (scanCurve.IsClosed && points.Count > 2 &&
-            points[0].DistanceTo(points[^1]) > ZeroLengthTolerance)
+            points[0].DistanceTo(points[^1]) > ConfiguredZeroLengthTolerance)
           pairs.Add((points.Count - 1, 0));
 
         analysis.ScannedControlSpans += pairs.Count;
@@ -1063,15 +1087,15 @@ public sealed class vCleanup : vToolsCommand
 
     var maximumDeviation = 0.0;
     var squaredDeviation = 0.0;
-    for (var sample = 0; sample <= ControlPointImpactSamples; sample++)
+    for (var sample = 0; sample <= ConfiguredControlPointImpactSamples; sample++)
     {
-      var fraction = (double)sample / ControlPointImpactSamples;
+      var fraction = (double)sample / ConfiguredControlPointImpactSamples;
       var parameter = original.Domain.T0 + original.Domain.Length * fraction;
       var deviation = original.PointAt(parameter).DistanceTo(modified.PointAt(parameter));
       maximumDeviation = Math.Max(maximumDeviation, deviation);
       squaredDeviation += deviation * deviation;
     }
-    var rms = Math.Sqrt(squaredDeviation / (ControlPointImpactSamples + 1));
+    var rms = Math.Sqrt(squaredDeviation / (ConfiguredControlPointImpactSamples + 1));
     return new ImpactScore(maximumDeviation, rms, totalMovement, string.Join(",", removals));
   }
 
@@ -1122,7 +1146,7 @@ public sealed class vCleanup : vToolsCommand
   {
     var direction = segmentEnd - segmentStart;
     var lengthSquared = direction.SquareLength;
-    if (lengthSquared <= ZeroLengthTolerance)
+    if (lengthSquared <= ConfiguredZeroLengthTolerance)
       return segmentStart;
     var parameter = Vector3d.Multiply(point - segmentStart, direction) / lengthSquared;
     return segmentStart + direction * Math.Max(0.0, Math.Min(1.0, parameter));
@@ -1209,8 +1233,8 @@ public sealed class vCleanup : vToolsCommand
     source = doc.Objects.FindId(source.Id) ?? source;
     var grips = source.GetGrips() ?? [];
     var tolerance = Math.Max(
-      MinimumGripMatchTolerance,
-      doc.ModelAbsoluteTolerance * GripMatchToleranceScale);
+      ConfiguredMinimumGripMatchTolerance,
+      doc.ModelAbsoluteTolerance * ConfiguredGripMatchToleranceScale);
 
     if (hit.SegmentPath == "object" &&
         hit.GripIndex >= 0 &&
@@ -1348,12 +1372,12 @@ public sealed class vCleanup : vToolsCommand
   private static void LoadOptions() =>
     ToolsOptionStore.Read<int>(SectionName, section =>
     {
-      _threshold = DefaultThreshold;
-      _highlightShort = DefaultHighlightShort;
-      _preselectMode = DefaultPreselectMode;
-      _autoDeleteMode = DefaultAutoDeleteMode;
-      _simplifyCurves = DefaultSimplifyCurves;
-      _findOverlaps = DefaultFindOverlaps;
+      _threshold = ConfiguredDefaultThreshold;
+      _highlightShort = ConfiguredDefaultHighlightShort;
+      _preselectMode = ConfiguredDefaultPreselectMode;
+      _autoDeleteMode = ConfiguredDefaultAutoDeleteMode;
+      _simplifyCurves = ConfiguredDefaultSimplifyCurves;
+      _findOverlaps = ConfiguredDefaultFindOverlaps;
 
       if (ToolsOptionStore.TryGetDouble(section, ThresholdKey, out var threshold) && threshold >= 0.0)
         _threshold = threshold;
@@ -1417,7 +1441,7 @@ public sealed class vCleanup : vToolsCommand
         e.Display.DrawCurve(
           overlapCurve,
           OverlapHighlightColor,
-          ShortHighlightThicknessPixels);
+          ConfiguredShortHighlightThicknessPixels);
       }
 
       foreach (var hit in hits)
@@ -1427,12 +1451,12 @@ public sealed class vCleanup : vToolsCommand
         e.Display.DrawCurve(
           hit.HighlightCurve,
           ShortHighlightColor,
-          ShortHighlightThicknessPixels);
+          ConfiguredShortHighlightThicknessPixels);
         if (hit.Kind == ShortHitKind.ControlPoint)
           e.Display.DrawPoint(
             hit.CandidatePoint,
             PointStyle.ControlPoint,
-            CandidatePointSizePixels,
+            ConfiguredCandidatePointSizePixels,
             ShortHighlightColor);
       }
     }

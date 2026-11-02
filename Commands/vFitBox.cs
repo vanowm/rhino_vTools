@@ -25,22 +25,36 @@ public sealed class vFitBox : vToolsCommand
 
   private const double MinAngleStepDeg = 0.1; // Smallest accepted coarse search step in degrees.
   private const double MaxAngleStepDeg = 45.0; // Largest accepted coarse search step in degrees.
-  private const int MaxNormalSamples = 5000; // Maximum sampled surface normals used by the 3D fit search.
-  private const double MinYawRefineStepDeg = 0.01; // Final 3D yaw refinement step in degrees; greater than zero.
-  private const double Min2dFinalStepDeg = 0.001; // Final planar refinement step in degrees; greater than zero.
-  private const double PlanarityModelToleranceMultiplier = 5.0; // Multiplier applied to document tolerance for coplanarity tests; greater than zero.
-  private const double PlanarityBoundsScale = 1.0e-6; // Relative diagonal tolerance used to absorb numeric planarity noise; greater than zero.
-  private const double FlatOutputShortSideScale = 1.0e-4; // Maximum height relative to the shorter footprint side for flat polyline output; greater than zero.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.MaxNormalSamples", "Maximum sampled surface normals used by the 3D fit search.")] private const int MaxNormalSamples = 5000; // Maximum sampled surface normals used by the 3D fit search.
+
+  private static readonly int ConfiguredMaxNormalSamples = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.MaxNormalSamples", MaxNormalSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.PlanarityModelToleranceMultiplier", "Multiplier applied to document tolerance for coplanarity tests; greater than zero.")] private const double PlanarityModelToleranceMultiplier = 5.0; // Multiplier applied to document tolerance for coplanarity tests; greater than zero.
+
+  private static readonly double ConfiguredPlanarityModelToleranceMultiplier = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.PlanarityModelToleranceMultiplier", PlanarityModelToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.PlanarityBoundsScale", "Relative diagonal tolerance used to absorb numeric planarity noise; greater than zero.")] private const double PlanarityBoundsScale = 1.0e-6; // Relative diagonal tolerance used to absorb numeric planarity noise; greater than zero.
+
+  private static readonly double ConfiguredPlanarityBoundsScale = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.PlanarityBoundsScale", PlanarityBoundsScale); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.FlatOutputShortSideScale", "Maximum height relative to the shorter footprint side for flat polyline output; greater than zero.")] private const double FlatOutputShortSideScale = 1.0e-4; // Maximum height relative to the shorter footprint side for flat polyline output; greater than zero.
+
+  private static readonly double ConfiguredFlatOutputShortSideScale = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.FlatOutputShortSideScale", FlatOutputShortSideScale); // Resolved once from advanced defaults; restart Rhino after changes.
 
   // Option defaults
-  private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
-  private const bool DefaultRotate = false; // true rotates selected geometry into the fitted frame; false only creates the box.
-  private const string DefaultFitMode = "height"; // Fit mode name: height, volume, or area.
-  private const string DefaultCandidateMode = "3d"; // Internal candidate mode name: 3d or 2d.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultAngleStepDeg", "Search increment in degrees; 0.1 through 45.")] private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
 
-  private static double _angleStepDeg = DefaultAngleStepDeg;
-  private static bool _rotate = DefaultRotate;
-  private static string _fitMode = DefaultFitMode;
+  private static readonly double ConfiguredDefaultAngleStepDeg = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultAngleStepDeg", DefaultAngleStepDeg); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultRotate", "true rotates selected geometry into the fitted frame; false only creates the box.")] private const bool DefaultRotate = false; // true rotates selected geometry into the fitted frame; false only creates the box.
+
+  private static readonly bool ConfiguredDefaultRotate = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultRotate", DefaultRotate); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultFitMode", "Fit mode name: height, volume, or area.")] private const string DefaultFitMode = "height"; // Fit mode name: height, volume, or area.
+
+  private static readonly string ConfiguredDefaultFitMode = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultFitMode", DefaultFitMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultCandidateMode", "Internal candidate mode name: 3d or 2d.")] private const string DefaultCandidateMode = "3d"; // Internal candidate mode name: 3d or 2d.
+
+  private static readonly string ConfiguredDefaultCandidateMode = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultCandidateMode", DefaultCandidateMode); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static double _angleStepDeg = ConfiguredDefaultAngleStepDeg;
+  private static bool _rotate = ConfiguredDefaultRotate;
+  private static string _fitMode = ConfiguredDefaultFitMode;
 
   /// <summary>
   /// Rhino command name.
@@ -54,7 +68,10 @@ public sealed class vFitBox : vToolsCommand
   {
     size = string.Empty;
     LoadPersistedOptions();
-    var geometries = new[] { geometry };
+    using var copies = new ObjectTransformSelection.GeometryCopies();
+    copies.Geometries.Add(geometry.Duplicate());
+    ExpandTextForFit(doc, copies);
+    var geometries = copies.Geometries;
     var fit = FindBestFit(doc, geometries, ActiveBasePlane(doc), _angleStepDeg, _fitMode);
     if (fit == null)
       return false;
@@ -85,7 +102,8 @@ public sealed class vFitBox : vToolsCommand
     SavePersistedOptions();
 
     Log.Write("vFitBox", $"RunCommand: {objectIds.Count} object(s) selected, angleStep={_angleStepDeg} fitMode={_fitMode} rotate={_rotate}");
-    var geometries = CollectGeometries(doc, objectIds);
+    using var geometryCopies = CollectGeometries(doc, objectIds);
+    var geometries = geometryCopies.Geometries;
     if (geometries.Count == 0)
     {
       RhinoApp.WriteLine("vFitBox: no valid geometry found in selection.");
@@ -108,7 +126,8 @@ public sealed class vFitBox : vToolsCommand
       return Result.Failure;
     }
 
-    var outputObjectIds = new List<Guid>(objectIds);
+    var outputObjectIds = objectIds.Select(item => item.ObjectId).ToList();
+    bool selectionTransformed = false;
 
     if (rotate)
     {
@@ -127,6 +146,7 @@ public sealed class vFitBox : vToolsCommand
         }
 
         outputObjectIds = transformedObjectIds;
+        selectionTransformed = true;
 
         var transformedFitId = TransformObjectId(doc, fitId, transform);
         if (transformedFitId == Guid.Empty)
@@ -145,6 +165,16 @@ public sealed class vFitBox : vToolsCommand
       RhinoApp.WriteLine(finalSizes);
 
     SelectFitResultObjects(doc, outputObjectIds, fitId);
+    if (!selectionTransformed)
+      foreach (var item in objectIds.Where(item => !item.WholeObject))
+      {
+        var obj = doc.Objects.FindId(item.ObjectId);
+        if (obj == null) continue;
+        obj.Select(false);
+        obj.UnselectAllSubObjects();
+        foreach (int index in item.Segments)
+          obj.SelectSubObject(new ComponentIndex(ComponentIndexType.PolycurveSegment, index), true, true);
+      }
     doc.Views.Redraw();
     return Result.Success;
   }
@@ -213,7 +243,8 @@ public sealed class vFitBox : vToolsCommand
     sizes = string.Empty;
     var ids = CollectIdsFromDocSelection(doc);
     if (ids.Count == 0) { conduit.PreviewBox = Box.Unset; return; }
-    var geoms = CollectGeometries(doc, ids);
+    using var geometryCopies = CollectGeometries(doc, ids);
+    var geoms = geometryCopies.Geometries;
     if (geoms.Count == 0) { conduit.PreviewBox = Box.Unset; return; }
     var basePlane = ActiveBasePlane(doc);
     // Use a coarse step for a fast preview; result is the same fitted box, just rough.
@@ -257,8 +288,8 @@ public sealed class vFitBox : vToolsCommand
   {
     var shortSide = Math.Min(fit.Width, fit.Depth);
     var tolerance = Math.Max(
-      doc.ModelAbsoluteTolerance * PlanarityModelToleranceMultiplier,
-      shortSide * FlatOutputShortSideScale);
+      doc.ModelAbsoluteTolerance * ConfiguredPlanarityModelToleranceMultiplier,
+      shortSide * ConfiguredFlatOutputShortSideScale);
     return fit.Height <= tolerance;
   }
 
@@ -267,13 +298,13 @@ public sealed class vFitBox : vToolsCommand
   /// </summary>
   private static bool TryPickObjectsWithOptions(
     RhinoDoc doc,
-    out List<Guid> objectIds,
+    out List<ObjectTransformSelection.Item> objectIds,
     out double angleStepDeg,
     out bool rotate,
     out string fitMode,
     out string lastPreviewSizes)
   {
-    objectIds = new List<Guid>();
+    objectIds = new();
     angleStepDeg = Clamp(_angleStepDeg, MinAngleStepDeg, MaxAngleStepDeg);
     rotate = _rotate;
     fitMode = NormalizeFitMode(_fitMode);
@@ -286,7 +317,8 @@ public sealed class vFitBox : vToolsCommand
     go.AcceptNumber(true, false);
     go.EnablePreSelect(true, true);
     go.AlreadySelectedObjectSelect = true;
-    go.SubObjectSelect = false;
+    go.SubObjectSelect = true;
+    go.SetCustomGeometryFilter((_, _, component) => component.Index < 0 || component.ComponentIndexType == ComponentIndexType.PolycurveSegment);
     go.GroupSelect = true;
     go.EnableClearObjectsOnEntry(false);
     go.EnableUnselectObjectsOnExit(false);
@@ -422,50 +454,48 @@ public sealed class vFitBox : vToolsCommand
   /// <summary>
   /// Returns deduplicated object ids from current document selection.
   /// </summary>
-  private static List<Guid> CollectIdsFromDocSelection(RhinoDoc doc)
-  {
-    var ids = new List<Guid>();
-    var seen = new HashSet<Guid>();
-
-    foreach (var obj in doc.Objects.GetSelectedObjects(false, false))
-    {
-      if (obj == null)
-        continue;
-
-      var id = obj.Id;
-      if (id == Guid.Empty || !seen.Add(id))
-        continue;
-
-      ids.Add(id);
-    }
-
-    return ids;
-  }
+  private static List<ObjectTransformSelection.Item> CollectIdsFromDocSelection(RhinoDoc doc) =>
+    ObjectTransformSelection.FromDocument(doc);
 
   /// <summary>
   /// Collects geometry payload from selected object ids.
   /// </summary>
-  private static List<GeometryBase> CollectGeometries(RhinoDoc doc, IEnumerable<Guid> objectIds)
+  private static ObjectTransformSelection.GeometryCopies CollectGeometries(RhinoDoc doc, IEnumerable<ObjectTransformSelection.Item> objectIds)
   {
-    var geometries = new List<GeometryBase>();
-
-    foreach (var id in objectIds)
+    try
     {
-      if (id == Guid.Empty)
-        continue;
-
-      var obj = doc.Objects.FindId(id);
-      var geometry = obj?.Geometry;
-      if (geometry != null)
-      {
-        var bb = geometry.GetBoundingBox(true);
-        Log.Write("vFitBox", $"  geom {geometry.GetType().Name} bbox=({bb.Min.X:F3},{bb.Min.Y:F3},{bb.Min.Z:F3})-({bb.Max.X:F3},{bb.Max.Y:F3},{bb.Max.Z:F3})");
-        geometries.Add(geometry);
-      }
+      var copies = ObjectTransformSelection.CopyGeometry(doc, objectIds);
+      ExpandTextForFit(doc, copies);
+      Log.Write("vFitBox", "CollectGeometries: {0} fitting payload(s)", copies.Geometries.Count);
+      return copies;
     }
+    catch (Exception ex)
+    {
+      Log.Write("vFitBox", "Could not collect selected geometry: {0}", ex.Message);
+      return new();
+    }
+  }
 
-    Log.Write("vFitBox", $"CollectGeometries: {geometries.Count} object(s)");
-    return geometries;
+  private static void ExpandTextForFit(RhinoDoc doc, ObjectTransformSelection.GeometryCopies copies)
+  {
+    foreach (var text in copies.Geometries.OfType<TextEntity>().ToArray())
+    {
+      Curve[]? outlines;
+      try
+      {
+        text.ParentDimensionStyle = doc.DimStyles.FindId(text.DimensionStyleId) ?? doc.DimStyles.Current;
+        text.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(doc, text, doc.Views.ActiveView?.ActiveViewport);
+        outlines = text.Explode();
+      }
+      catch (Exception ex) { Log.Write("vFitBox", "Could not read label outlines: {0}", ex.Message); continue; }
+      if (outlines is not { Length: > 0 }) continue;
+      if (outlines.Any(curve => curve == null || !curve.IsValid))
+      { foreach (var curve in outlines) curve?.Dispose(); continue; }
+      // Fit the ink itself: projecting an already world-aligned text box inflates rotated labels twice.
+      copies.Geometries.Remove(text);
+      copies.Geometries.AddRange(outlines);
+      text.Dispose();
+    }
   }
 
   /// <summary>
@@ -517,7 +547,7 @@ public sealed class vFitBox : vToolsCommand
     var bbox = new BoundingBox(unique);
     var planeTolerance = Math.Max(
       tolerance,
-      bbox.IsValid ? bbox.Diagonal.Length * PlanarityBoundsScale : tolerance);
+      bbox.IsValid ? bbox.Diagonal.Length * ConfiguredPlanarityBoundsScale : tolerance);
     foreach (var point in unique)
     {
       if (Math.Abs(plane.DistanceTo(point)) > planeTolerance)
@@ -744,7 +774,7 @@ public sealed class vFitBox : vToolsCommand
 
     var (requestedStepDeg, stableStepDeg) = StabilizedStepDeg(angleStepDeg);
     var planarTolerance = Math.Max(
-      doc.ModelAbsoluteTolerance * PlanarityModelToleranceMultiplier,
+      doc.ModelAbsoluteTolerance * ConfiguredPlanarityModelToleranceMultiplier,
       RhinoMath.ZeroTolerance);
 
     if (TryFindSelectionPlane(geometries, planarTolerance, out var selectionPlane))
@@ -1092,27 +1122,11 @@ public sealed class vFitBox : vToolsCommand
   /// </summary>
   private static bool TransformSelectedObjects(
     RhinoDoc doc,
-    IEnumerable<Guid> objectIds,
+    IEnumerable<ObjectTransformSelection.Item> objectIds,
     Transform transform,
     out List<Guid> transformedObjectIds)
   {
-    transformedObjectIds = new List<Guid>();
-    var seen = new HashSet<Guid>();
-
-    foreach (var objectId in objectIds)
-    {
-      if (objectId == Guid.Empty)
-        continue;
-
-      var transformedId = TransformObjectId(doc, objectId, transform);
-      if (transformedId == Guid.Empty)
-        return false;
-
-      if (seen.Add(transformedId))
-        transformedObjectIds.Add(transformedId);
-    }
-
-    return true;
+    return ObjectTransformSelection.TryTransform(doc, objectIds.ToArray(), transform, false, out _, out transformedObjectIds);
   }
 
   /// <summary>
@@ -1335,7 +1349,7 @@ public sealed class vFitBox : vToolsCommand
       var azCount = Math.Max(1, (int)Math.Ceiling(360.0 / stable));
       var tiltCount = (int)Math.Floor(90.0 / stable) + 1;
       var approx = 1 + Math.Max(0, tiltCount - 1) * azCount;
-      if (approx <= MaxNormalSamples)
+      if (approx <= ConfiguredMaxNormalSamples)
         break;
 
       stable *= 1.2;
@@ -1492,57 +1506,7 @@ public sealed class vFitBox : vToolsCommand
   /// Gets one geometry bounding box in given plane coordinates.
   /// </summary>
   private static bool TryGeometryBBoxInPlane(GeometryBase geometry, Plane plane, out BoundingBox bbox)
-  {
-    bbox = BoundingBox.Empty;
-    if (geometry == null || !plane.IsValid)
-      return false;
-
-    // AnnotationBase (TextEntity, Leader, etc.) returns an unreliable bbox after
-    // plane transformation — the text-height/layout is recomputed in the new frame
-    // and inflates the box. Use the world bbox projection fallback for these types.
-    if (geometry is not AnnotationBase)
-    {
-    // Transform a duplicate to plane-local space and measure accurately.
-    // GetBoundingBox(Plane) uses control-point hulls for curves, which overshoots
-    // and causes the solver to minimize a different objective than the real area.
-    try
-    {
-      var toLocal = Transform.PlaneToPlane(plane, Plane.WorldXY);
-      var copy = geometry.Duplicate();
-      if (copy != null && copy.Transform(toLocal))
-      {
-        var bb = copy.GetBoundingBox(true);
-        if (bb.IsValid)
-        {
-          bbox = bb;
-          return true;
-        }
-      }
-    }
-    catch
-    {
-    }
-    } // end if (geometry is not AnnotationBase)
-
-    try
-    {
-      var world = geometry.GetBoundingBox(true);
-      if (world.IsValid)
-      {
-        var projected = WorldBBoxToPlaneBBox(world, plane);
-        if (projected.IsValid)
-        {
-          bbox = projected;
-          return true;
-        }
-      }
-    }
-    catch
-    {
-    }
-
-    return false;
-  }
+    => PlanarFit.TryBounds(geometry,plane,out bbox);
 
   /// <summary>
   /// Returns merged bounds across all geometries in one plane.
@@ -1629,7 +1593,7 @@ public sealed class vFitBox : vToolsCommand
       Area = area,
       Volume = area * height,
       Mode = "3d",
-      FitMode = DefaultFitMode
+      FitMode = ConfiguredDefaultFitMode
     };
   }
 
@@ -1646,39 +1610,6 @@ public sealed class vFitBox : vToolsCommand
       return null;
 
     return BestFromBounds(plane, NormalizeYawDeg(yawDeg), bounds);
-  }
-
-  /// <summary>
-  /// Finds local best yaw around center angle within a finite window.
-  /// </summary>
-  private static (FitCandidate? Candidate, int Tested) FindBestYawLocal(
-    IReadOnlyList<GeometryBase> geometries,
-    Plane basePlane,
-    double centerDeg,
-    double halfWindowDeg,
-    double stepDeg,
-    ScoreMode scoreMode)
-  {
-    var step = Math.Max(MinYawRefineStepDeg, stepDeg);
-    var span = Math.Max(step, halfWindowDeg);
-    var best = default(FitCandidate);
-    var tested = 0;
-
-    var offsetDeg = -span;
-    while (offsetDeg <= span + (0.5 * step))
-    {
-      var candidate = EvaluateYawCandidate(geometries, basePlane, centerDeg + offsetDeg);
-      if (candidate != null)
-      {
-        tested++;
-        if (best == null || IsCandidateBetter(candidate, best, scoreMode))
-          best = candidate;
-      }
-
-      offsetDeg += step;
-    }
-
-    return (best, tested);
   }
 
   /// <summary>
@@ -1723,38 +1654,9 @@ public sealed class vFitBox : vToolsCommand
     double stepDeg,
     ScoreMode scoreMode)
   {
-    var coarseStep = Clamp(Math.Min(stepDeg, 0.25), MinAngleStepDeg, 0.25);
-    var best = FindBestYawForPlane(geometries, basePlane, coarseStep, scoreMode);
-    if (best == null)
-      return null;
-
-    Log.Write("vFitBox", $"  coarse best: angle={best.AngleDeg:F4}° W={best.Width:F4} D={best.Depth:F4} strip={Math.Min(best.Width, best.Depth):F4} yaws={best.TestedYaws}");
-
-    var testedTotal = best.TestedYaws;
-    var refineStep = Math.Max(MinYawRefineStepDeg, Math.Min(0.25, coarseStep * 0.25));
-    var halfWindow = Math.Max(0.5, coarseStep * 1.5);
-
-    while (true)
-    {
-      var (localBest, localTested) = FindBestYawLocal(
-        geometries,
-        basePlane,
-        best.AngleDeg,
-        halfWindow,
-        refineStep,
-        scoreMode);
-
-      testedTotal += localTested;
-      if (localBest != null && IsCandidateBetter(localBest, best, scoreMode))
-        best = localBest;
-
-      if (refineStep <= Min2dFinalStepDeg + 1.0e-12)
-        break;
-
-      refineStep = Math.Max(Min2dFinalStepDeg, refineStep * 0.2);
-      halfWindow = Math.Max(refineStep * 3.0, MinYawRefineStepDeg);
-    }
-
+    var best=PlanarFit.Refine(yaw=>EvaluateYawCandidate(geometries,basePlane,yaw),
+      (candidate,current)=>IsCandidateBetter(candidate,current,scoreMode),candidate=>candidate.AngleDeg,stepDeg,out int testedTotal);
+    if(best==null)return null;
     best.TestedYaws = testedTotal;
     return best;
   }
@@ -1857,7 +1759,7 @@ public sealed class vFitBox : vToolsCommand
     public int TestedYaws { get; set; }
     public double RequestedStepDeg { get; set; }
     public double EffectiveStepDeg { get; set; }
-    public string Mode { get; set; } = DefaultCandidateMode;
-    public string FitMode { get; set; } = DefaultFitMode;
+    public string Mode { get; set; } = ConfiguredDefaultCandidateMode;
+    public string FitMode { get; set; } = ConfiguredDefaultFitMode;
   }
 }

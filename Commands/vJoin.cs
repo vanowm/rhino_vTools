@@ -17,16 +17,20 @@ namespace vTools.Commands;
 public sealed class vJoin : vToolsCommand
 {
   // Option defaults
-  private const bool DefaultCopy = true; // true joins duplicates and keeps inputs; false joins the original objects.
-  private const JoinLayerMode DefaultLayerMode = JoinLayerMode.Source; // Source inherits the first compatible input layer; Current uses Rhino's current layer.
-  private static readonly string[] LayerModeNames = ["Current", "Source"]; // Command option labels matching JoinLayerMode order.
+  [global::vTools.CommandDefault("vJoin", "vTools.Commands.vJoin.DefaultCopy", "true joins duplicates and keeps inputs; false joins the original objects.")] private const bool DefaultCopy = true; // true joins duplicates and keeps inputs; false joins the original objects.
+
+  private static readonly bool ConfiguredDefaultCopy = global::vTools.CommandDefaults.Get("vJoin", "vTools.Commands.vJoin.DefaultCopy", DefaultCopy); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vJoin", "vTools.Commands.vJoin.DefaultLayerMode", "Source inherits the first compatible input layer; Current uses Rhino's current layer.")] private const JoinLayerMode DefaultLayerMode = JoinLayerMode.Source; // Source inherits the first compatible input layer; Current uses Rhino's current layer.
+
+  private static readonly JoinLayerMode ConfiguredDefaultLayerMode = global::vTools.CommandDefaults.Get("vJoin", "vTools.Commands.vJoin.DefaultLayerMode", DefaultLayerMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandChoicesAttribute("vJoin", "layer", false, "Current", "Source")] private static readonly string[] LayerModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vJoin), nameof(LayerModeNames)); // Command option labels matching JoinLayerMode order.
 
   private const string OptionsSectionName = "vJoin";
   private const string CopyOptionKey = "copy";
   private const string LayerOptionKey = "layer";
 
-  private static bool _copy = DefaultCopy;
-  private static JoinLayerMode _layerMode = DefaultLayerMode;
+  private static bool _copy = ConfiguredDefaultCopy;
+  private static JoinLayerMode _layerMode = ConfiguredDefaultLayerMode;
 
   private enum JoinLayerMode
   {
@@ -444,8 +448,8 @@ public sealed class vJoin : vToolsCommand
 
   private static void LoadPersistedOptions()
   {
-    _copy = DefaultCopy;
-    _layerMode = DefaultLayerMode;
+    _copy = ConfiguredDefaultCopy;
+    _layerMode = ConfiguredDefaultLayerMode;
     ToolsOptionStore.Read<int>(OptionsSectionName, section =>
     {
       if (ToolsOptionStore.TryGetBool(section, CopyOptionKey, out var copy))

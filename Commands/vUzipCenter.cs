@@ -26,34 +26,56 @@ public sealed class vUzipCenter : vToolsCommand
   public override string EnglishName => "vUzipCenter";
 
   private const string SettingsSection = "vUzipCenter";
-  private const double DefaultLeft   = 2.375; // Left offset in model units; zero or greater.
-  private const double DefaultRight  = 2.375; // Right offset in model units; zero or greater.
-  private const double DefaultBottom = 1.125; // Bottom offset in model units; zero or greater.
-  private const double DefaultRadius = 12.0; // Corner radius in model units; zero or greater.
-  private const bool DefaultGlass = false; // true creates the glass offset; false omits it.
-  private const double DefaultGlassOffset = 0.25; // Glass offset in model units; signed values allowed.
-  private const string DefaultGlassLayer = "Glass"; // Rhino layer name or full layer path.
-  private const bool DefaultVis = false; // true creates the visibility offset; false omits it.
-  private const double DefaultVisOffset = 0.75; // Visibility-line offset in model units; signed values allowed.
-  private const string DefaultVisLayer = "Vis-Line"; // Rhino layer name or full layer path.
-  private const string DefaultCenterLayer = "Reference"; // Rhino layer name or full layer path.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultLeft", "Left offset in model units; zero or greater.")] private const double DefaultLeft   = 2.375; // Left offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultLeft = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultLeft", DefaultLeft); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultRight", "Right offset in model units; zero or greater.")] private const double DefaultRight  = 2.375; // Right offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultRight = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultRight", DefaultRight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultBottom", "Bottom offset in model units; zero or greater.")] private const double DefaultBottom = 1.125; // Bottom offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultBottom = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultBottom", DefaultBottom); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultRadius", "Corner radius in model units; zero or greater.")] private const double DefaultRadius = 12.0; // Corner radius in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultRadius = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultRadius", DefaultRadius); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlass", "true creates the glass offset; false omits it.")] private const bool DefaultGlass = false; // true creates the glass offset; false omits it.
+
+  private static readonly bool ConfiguredDefaultGlass = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlass", DefaultGlass); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlassOffset", "Glass offset in model units; signed values allowed.")] private const double DefaultGlassOffset = 0.25; // Glass offset in model units; signed values allowed.
+
+  private static readonly double ConfiguredDefaultGlassOffset = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlassOffset", DefaultGlassOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlassLayer", "Rhino layer name or full layer path.")] private const string DefaultGlassLayer = "Glass"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultGlassLayer = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultGlassLayer", DefaultGlassLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVis", "true creates the visibility offset; false omits it.")] private const bool DefaultVis = false; // true creates the visibility offset; false omits it.
+
+  private static readonly bool ConfiguredDefaultVis = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVis", DefaultVis); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVisOffset", "Visibility-line offset in model units; signed values allowed.")] private const double DefaultVisOffset = 0.75; // Visibility-line offset in model units; signed values allowed.
+
+  private static readonly double ConfiguredDefaultVisOffset = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVisOffset", DefaultVisOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVisLayer", "Rhino layer name or full layer path.")] private const string DefaultVisLayer = "Vis-Line"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultVisLayer = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultVisLayer", DefaultVisLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultCenterLayer", "Rhino layer name or full layer path.")] private const string DefaultCenterLayer = "Reference"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultCenterLayer = global::vTools.CommandDefaults.Get("vUzipCenter", "vTools.Commands.vUzipCenter.DefaultCenterLayer", DefaultCenterLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double ZipperValue   = DefaultLeft; // Reference zipper offset in model units used by generated geometry.
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
   private sealed class UzipCenterSettings
   {
-    public double Left   { get; set; } = DefaultLeft;
-    public double Right  { get; set; } = DefaultRight;
-    public double Bottom { get; set; } = DefaultBottom;
-    public double Radius { get; set; } = DefaultRadius;
-    public bool   Glass       { get; set; } = DefaultGlass;
-    public double GlassOffset { get; set; } = DefaultGlassOffset;
-    public string GlassLayer  { get; set; } = DefaultGlassLayer;
-    public bool   Vis         { get; set; } = DefaultVis;
-    public double VisOffset   { get; set; } = DefaultVisOffset;
-    public string VisLayer    { get; set; } = DefaultVisLayer;
-    public string CenterLayer { get; set; } = DefaultCenterLayer;
+    public double Left   { get; set; } = ConfiguredDefaultLeft;
+    public double Right  { get; set; } = ConfiguredDefaultRight;
+    public double Bottom { get; set; } = ConfiguredDefaultBottom;
+    public double Radius { get; set; } = ConfiguredDefaultRadius;
+    public bool   Glass       { get; set; } = ConfiguredDefaultGlass;
+    public double GlassOffset { get; set; } = ConfiguredDefaultGlassOffset;
+    public string GlassLayer  { get; set; } = ConfiguredDefaultGlassLayer;
+    public bool   Vis         { get; set; } = ConfiguredDefaultVis;
+    public double VisOffset   { get; set; } = ConfiguredDefaultVisOffset;
+    public string VisLayer    { get; set; } = ConfiguredDefaultVisLayer;
+    public string CenterLayer { get; set; } = ConfiguredDefaultCenterLayer;
   }
 
   private static UzipCenterSettings LoadSettings() =>

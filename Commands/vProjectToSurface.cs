@@ -427,8 +427,8 @@ public sealed class vProjectToSurface : vToolsCommand
 
   private sealed class ProjectionPreviewConduit : DisplayConduit
   {
-    private static readonly DrawingColor PreviewCurveColor = DrawingColor.FromArgb(230, 255, 165, 0); // Projected-curve preview color and alpha.
-    private static readonly DrawingColor PreviewPointColor = DrawingColor.FromArgb(230, 255, 235, 120); // Projected-point preview color and alpha.
+    [global::vTools.CommandDefault("vProjectToSurface", "vTools.Commands.vProjectToSurface.ProjectionPreviewConduit.PreviewCurveColor", "Projected-curve preview color and alpha.", "#E6FFA500")] private static readonly DrawingColor PreviewCurveColor = global::vTools.CommandDefaults.GetColor("vProjectToSurface", "vTools.Commands.vProjectToSurface.ProjectionPreviewConduit.PreviewCurveColor", DrawingColor.FromArgb(230, 255, 165, 0)); // Projected-curve preview color and alpha.
+    [global::vTools.CommandDefault("vProjectToSurface", "vTools.Commands.vProjectToSurface.ProjectionPreviewConduit.PreviewPointColor", "Projected-point preview color and alpha.", "#E6FFEB78")] private static readonly DrawingColor PreviewPointColor = global::vTools.CommandDefaults.GetColor("vProjectToSurface", "vTools.Commands.vProjectToSurface.ProjectionPreviewConduit.PreviewPointColor", DrawingColor.FromArgb(230, 255, 235, 120)); // Projected-point preview color and alpha.
 
     private readonly RhinoDoc _doc;
     private readonly IReadOnlyList<Brep> _targetBreps;

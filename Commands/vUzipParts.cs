@@ -26,9 +26,9 @@ public class vUzipParts : vToolsCommand
   /// </summary>
   public override string EnglishName => "vUzipParts";
 
-  private static string LayerCut       = DefaultLayerCutName;
-  private static string LayerPlot      = DefaultLayerPlotName;
-  private static string LayerReference = DefaultLayerReferenceName;
+  private static string LayerCut       = ConfiguredDefaultLayerCutName;
+  private static string LayerPlot      = ConfiguredDefaultLayerPlotName;
+  private static string LayerReference = ConfiguredDefaultLayerReferenceName;
 
   /// <summary>
   /// Executes vUzipParts: reads config, gathers inputs, builds parts, and updates config.
@@ -44,7 +44,7 @@ public class vUzipParts : vToolsCommand
     var ctx = new UzipLayerContext(LayerCut, LayerPlot, LayerReference);
     EnsureCommandLayers(doc, layerRuntime);
 
-    var defaultLabel = (uZipConfig.Label ?? DefaultLabel).Trim();
+    var defaultLabel = (uZipConfig.Label ?? ConfiguredDefaultLabel).Trim();
     var defaultTail = Math.Max(0.0, uZipConfig.Tail);
     uZipConfig.Label = defaultLabel;
     uZipConfig.Tail = defaultTail;
@@ -59,7 +59,7 @@ public class vUzipParts : vToolsCommand
     var selected = SelectCenterCurve(doc, defaultLabel, defaultTail);
     if (selected.CenterId == Guid.Empty)
     {
-      uZipConfig.Label = (selected.Label ?? DefaultLabel).Trim();
+      uZipConfig.Label = (selected.Label ?? ConfiguredDefaultLabel).Trim();
       uZipConfig.Tail = Math.Max(0.0, selected.Tail);
       uZipConfig.Layers = layerRuntime.ToConfig();
       SaveToolsConfig(configPath, toolsConfig);
@@ -141,7 +141,7 @@ public class vUzipParts : vToolsCommand
       RhinoApp.WriteLine($"vUzipParts rebuilt in {watch.Elapsed.TotalSeconds:F3}s");
     }
 
-    uZipConfig.Label = (currentLabel ?? DefaultLabel).Trim();
+    uZipConfig.Label = (currentLabel ?? ConfiguredDefaultLabel).Trim();
     uZipConfig.Tail = Math.Max(0.0, currentTail);
     uZipConfig.Layers = layerRuntime.ToConfig();
     uZipConfig.Parts = specs;
@@ -206,7 +206,7 @@ public class vUzipParts : vToolsCommand
           var rc = RhinoGet.GetString("Label", true, ref label);
           if (rc == Result.Cancel)
             return (Guid.Empty, label, tail);
-          label = (label ?? DefaultLabel).Trim();
+          label = (label ?? ConfiguredDefaultLabel).Trim();
         }
         continue;
       }
@@ -395,7 +395,7 @@ public class vUzipParts : vToolsCommand
           RhinoGet.GetString("Label", true, ref newLabel);
           conduit.DrawEnabled = false;
           doc.Views.Redraw();
-          var trimmedLabel = (newLabel ?? DefaultLabel).Trim();
+          var trimmedLabel = (newLabel ?? ConfiguredDefaultLabel).Trim();
           if (trimmedLabel != label)
           {
             gp.DynamicDraw -= handler;

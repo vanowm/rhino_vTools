@@ -12,8 +12,12 @@ internal static class PlanarPartSelection
 {
   // Shared selection and geometry defaults
   private const bool SelectGroups = true; // true picks group members together; false picks individual objects only.
-  private const int BoundarySamples = 17; // Samples used to identify source boundary attributes; three or greater.
-  private const double BoundaryToleranceFactor = 2.0; // Model-tolerance multiplier for coincidence and object-to-part assignment.
+  [global::vTools.CommandDefault("PlanarPartSelection", "vTools.PlanarPartSelection.BoundarySamples", "Samples used to identify source boundary attributes; three or greater.")] private const int BoundarySamples = 17; // Samples used to identify source boundary attributes; three or greater.
+
+  private static readonly int ConfiguredBoundarySamples = global::vTools.CommandDefaults.Get("PlanarPartSelection", "vTools.PlanarPartSelection.BoundarySamples", BoundarySamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarPartSelection", "vTools.PlanarPartSelection.BoundaryToleranceFactor", "Model-tolerance multiplier for coincidence and object-to-part assignment.")] private const double BoundaryToleranceFactor = 2.0; // Model-tolerance multiplier for coincidence and object-to-part assignment.
+
+  private static readonly double ConfiguredBoundaryToleranceFactor = global::vTools.CommandDefaults.Get("PlanarPartSelection", "vTools.PlanarPartSelection.BoundaryToleranceFactor", BoundaryToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool DefaultRequirePlanarDetails = true; // true requires all part curves to share the outline plane for splitting; false lets nesting carry original off-plane details.
   private const string ReferenceLayerName = "Reference"; // Leaf layer excluded from loose nesting perimeter candidates when non-reference closed curves exist.
 
@@ -54,7 +58,6 @@ internal static class PlanarPartSelection
     getter.EnableUnselectObjectsOnExit(false);
     getter.DeselectAllBeforePostSelect = false;
     getter.AcceptNothing(true);
-    bool returnedPreselection = false;
     while(true)
     {
       getter.ClearCommandOptions(); configure(getter);
@@ -62,8 +65,6 @@ internal static class PlanarPartSelection
       result = getter.CommandResult();
       if(result != Result.Success) return [];
       if(input is GetResult.Option or GetResult.Number) { handleOption(getter,input); continue; }
-      if(input == GetResult.Object && getter.ObjectsWerePreselected && !returnedPreselection)
-      { returnedPreselection=true; getter.EnablePreSelect(false,true); continue; }
       if(input is not (GetResult.Object or GetResult.Nothing)) { result=Result.Cancel; return []; }
       var selected = doc.Objects.GetSelectedObjects(false,false).Where(obj=>Supported(obj.Geometry)).Select(obj=>obj.Id).ToList();
       if(selected.Count==0 && input==GetResult.Object)
@@ -123,7 +124,7 @@ internal static class PlanarPartSelection
       bool Contains(int index,Point3d point)
       {
         var region=regions[index]; var delta=point-region.Plane.Origin;
-        double x=delta*region.Plane.XAxis,y=delta*region.Plane.YAxis,padding=tolerance*BoundaryToleranceFactor;
+        double x=delta*region.Plane.XAxis,y=delta*region.Plane.YAxis,padding=tolerance*ConfiguredBoundaryToleranceFactor;
         if(x<region.Bounds.Min.X-padding||x>region.Bounds.Max.X+padding||y<region.Bounds.Min.Y-padding||y>region.Bounds.Max.Y+padding) return false;
         return region.Outline.Contains(point,region.Plane,padding) is PointContainment.Inside or PointContainment.Coincident;
       }
@@ -182,7 +183,7 @@ internal static class PlanarPartSelection
     using var outerMass=AreaMassProperties.Compute(outer);
     using var innerMass=AreaMassProperties.Compute(inner);
     return outerMass!=null && innerMass!=null && outerMass.Area>innerMass.Area+tolerance*tolerance &&
-      Enumerable.Range(0,BoundarySamples).All(index=>outer.Contains(candidate.PointAtNormalizedLength((double)index/(BoundarySamples-1)),plane,tolerance)
+      Enumerable.Range(0,ConfiguredBoundarySamples).All(index=>outer.Contains(candidate.PointAtNormalizedLength((double)index/(ConfiguredBoundarySamples-1)),plane,tolerance)
         is PointContainment.Inside or PointContainment.Coincident);
   }
 
@@ -196,9 +197,9 @@ internal static class PlanarPartSelection
   }
 
   internal static bool Coincident(Curve curve,Curve boundary,double tolerance) =>
-    Enumerable.Range(0,BoundarySamples).All(index=>
-    { var point=curve.PointAtNormalizedLength((double)index/(BoundarySamples-1));
-      return boundary.ClosestPoint(point,out var parameter) && point.DistanceTo(boundary.PointAt(parameter))<=tolerance*BoundaryToleranceFactor; });
+    Enumerable.Range(0,ConfiguredBoundarySamples).All(index=>
+    { var point=curve.PointAtNormalizedLength((double)index/(ConfiguredBoundarySamples-1));
+      return boundary.ClosestPoint(point,out var parameter) && point.DistanceTo(boundary.PointAt(parameter))<=tolerance*ConfiguredBoundaryToleranceFactor; });
 
   internal static Point3d RepresentativePoint(GeometryBase geometry) => geometry switch
   { Rhino.Geometry.Point point=>point.Location, TextDot dot=>dot.Point, Curve curve=>curve.PointAtNormalizedLength(0.5), _=>geometry.GetBoundingBox(true).Center };

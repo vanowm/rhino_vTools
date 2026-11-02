@@ -17,9 +17,15 @@ namespace vTools;
 internal static class HistoryBreakMonitor
 {
   // Defaults and customizable constants
-  private const bool DefaultEnabled = true; // true highlights broken history; false leaves all feedback to Rhino. Read at plug-in startup.
-  private const int DoubleEscapeIntervalMilliseconds = 600; // Maximum milliseconds between two Esc presses to dismiss history highlights.
-  private const int WarningCompletionIntervalMilliseconds = 50; // UI-thread polling interval in milliseconds while a completed command's history warning may still be open; positive integer.
+  [global::vTools.CommandDefault("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.DefaultEnabled", "true highlights broken history; false leaves all feedback to Rhino. Read at plug-in startup.")] private const bool DefaultEnabled = true; // true highlights broken history; false leaves all feedback to Rhino. Read at plug-in startup.
+
+  private static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.DoubleEscapeIntervalMilliseconds", "Maximum milliseconds between two Esc presses to dismiss history highlights.")] private const int DoubleEscapeIntervalMilliseconds = 600; // Maximum milliseconds between two Esc presses to dismiss history highlights.
+
+  private static readonly int ConfiguredDoubleEscapeIntervalMilliseconds = global::vTools.CommandDefaults.Get("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.DoubleEscapeIntervalMilliseconds", DoubleEscapeIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.WarningCompletionIntervalMilliseconds", "UI-thread polling interval in milliseconds while a completed command's history warning may still be open; positive integer.")] private const int WarningCompletionIntervalMilliseconds = 50; // UI-thread polling interval in milliseconds while a completed command's history warning may still be open; positive integer.
+
+  private static readonly int ConfiguredWarningCompletionIntervalMilliseconds = global::vTools.CommandDefaults.Get("HistoryBreakMonitor", "vTools.HistoryBreakMonitor.WarningCompletionIntervalMilliseconds", WarningCompletionIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string SettingsSection = "HistoryHighlight";
   private const string Tag = "HistoryHighlight";
@@ -37,7 +43,7 @@ internal static class HistoryBreakMonitor
       return;
 
     var enabled = ToolsOptionStore.Read(SettingsSection, section =>
-      ToolsOptionStore.TryGetBool(section, "enabled", out var value) ? value : DefaultEnabled);
+      ToolsOptionStore.TryGetBool(section, "enabled", out var value) ? value : ConfiguredDefaultEnabled);
     Log.Write(Tag, $"enabled={enabled}");
     if (!enabled)
       return;
@@ -260,7 +266,7 @@ internal static class HistoryBreakMonitor
       return;
 
     var now = System.Environment.TickCount64;
-    if (_lastEscapeTick != 0 && now - _lastEscapeTick <= DoubleEscapeIntervalMilliseconds)
+    if (_lastEscapeTick != 0 && now - _lastEscapeTick <= ConfiguredDoubleEscapeIntervalMilliseconds)
       ClearHighlight();
     else
       _lastEscapeTick = now;
@@ -382,7 +388,7 @@ internal static class HistoryBreakMonitor
     if (_completionTimer != null)
       return;
 
-    _completionTimer = new System.Windows.Forms.Timer { Interval = WarningCompletionIntervalMilliseconds };
+    _completionTimer = new System.Windows.Forms.Timer { Interval = ConfiguredWarningCompletionIntervalMilliseconds };
     _completionTimer.Tick += OnCompletionTick;
     _completionTimer.Start();
   }

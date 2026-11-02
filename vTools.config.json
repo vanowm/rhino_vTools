@@ -49,7 +49,7 @@
     "overlaps": true
   },
   "vCurveToSpline": {
-    "joinMode": "Smooth"
+    "joinMode": "All"
   },
   "vDiamonds": {
     "width": 2.0,
@@ -95,6 +95,13 @@
     "angle": 0,
     "angleRelative": false,
     "layer": "*Current*"
+  },
+  "vLength": {
+    "offset": 0.2,
+    "size": 0.25,
+    "rounding": 0.0,
+    "fraction": true,
+    "rotate90": 0
   },
   "vLineLength": {
     "desiredLength": 10.0,
@@ -204,7 +211,12 @@
   },
   "vPart": {
     "group": false,
-    "joinPerim": false
+    "joinPerim": false,
+    "cleanup": true,
+    "label": false,
+    "labelText": "A",
+    "labelLayer": "Reference",
+    "labelSize": 1.0
   },
   "vRectangle": {
     "width": 10.0,
@@ -218,7 +230,13 @@
     "sizePercent": 5.0
   },
   "vSetPt": {
-    "preview": true
+    "preview": "All"
+  },
+  "vSeam": {
+    "allowance": 0.5,
+    "type": "Part",
+    "layer": "CUT1",
+    "chamfer": true
   },
   "vSmooth": {
     "strengthStart": 1.0,

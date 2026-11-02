@@ -38,20 +38,38 @@ namespace vTools.Commands
   public sealed partial class vSetPt : vToolsCommand
   {
     // Defaults and customizable constants
-    private const PreviewMode DefaultPreviewMode = PreviewMode.All; // Off hides previews; Curves previews curves only; All also updates their history results when supported.
-    private static readonly string[] PreviewValues = { "Off", "Curves", "All" }; // PreviewMode option names, in enum order.
-    private const bool DefaultSetCoordinate = true; // true aligns that coordinate to the target; false preserves each original coordinate.
-    private const bool DefaultCopy = false; // true copies the edited curves; false changes the original curves and their history children.
-    private const bool DefaultCancelPlacementOnEnter = true; // true makes empty Enter cancel placement; false requires a point or Escape.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultPreviewMode", "Off hides previews; Curves previews curves only; All also updates their history results when supported.")] private const PreviewMode DefaultPreviewMode = PreviewMode.All; // Off hides previews; Curves previews curves only; All also updates their history results when supported.
+
+    private static readonly PreviewMode ConfiguredDefaultPreviewMode = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultPreviewMode", DefaultPreviewMode); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vSetPt", "preview", false, "Off", "Curves", "All")] private static readonly string[] PreviewValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vSetPt), nameof(PreviewValues)); // PreviewMode option names, in enum order.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultSetCoordinate", "true aligns that coordinate to the target; false preserves each original coordinate.")] private const bool DefaultSetCoordinate = true; // true aligns that coordinate to the target; false preserves each original coordinate.
+
+    private static readonly bool ConfiguredDefaultSetCoordinate = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultSetCoordinate", DefaultSetCoordinate); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultCopy", "true copies the edited curves; false changes the original curves and their history children.")] private const bool DefaultCopy = false; // true copies the edited curves; false changes the original curves and their history children.
+
+    private static readonly bool ConfiguredDefaultCopy = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultCopy", DefaultCopy); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultCancelPlacementOnEnter", "true makes empty Enter cancel placement; false requires a point or Escape.")] private const bool DefaultCancelPlacementOnEnter = true; // true makes empty Enter cancel placement; false requires a point or Escape.
+
+    private static readonly bool ConfiguredDefaultCancelPlacementOnEnter = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultCancelPlacementOnEnter", DefaultCancelPlacementOnEnter); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool AllowPlacementTransparentCommands = true; // true allows native view/selection commands during placement; false blocks them.
     private const int WorldAlignment = 0; // AlignmentValues index for World coordinates.
-    private const int DefaultAlignment = WorldAlignment; // Alignment option index: 0 = World, 1 = CPlane.
-    private static readonly string[] AlignmentValues = { "World", "CPlane" }; // Native SetPt coordinate-system option names, in index order.
-    private static readonly Color CurvePreviewColor = Color.Cyan; // Color of temporary curve previews during selection and copy placement.
-    private const int PreviewIntervalMilliseconds = 24; // Minimum interval between curve-only preview refreshes, in milliseconds.
-    private const int SelectionDebounceMilliseconds = 24; // Curve-selection settling delay, in milliseconds.
-    private const int HistoryPreviewIntervalMilliseconds = 50; // Minimum interval between live history preview starts, in milliseconds; rebuild time counts toward the interval.
-    private const double HistoryPreviewToleranceFactor = 0.000001; // Fraction of document absolute tolerance used to ignore preview-position jitter; positive and much smaller than 1.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultAlignment", "Alignment option index: 0 = World, 1 = CPlane.")] private const int DefaultAlignment = WorldAlignment; // Alignment option index: 0 = World, 1 = CPlane.
+
+    private static readonly int ConfiguredDefaultAlignment = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultAlignment", DefaultAlignment); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vSetPt", "alignment", false, "World", "CPlane")] private static readonly string[] AlignmentValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vSetPt), nameof(AlignmentValues)); // Native SetPt coordinate-system option names, in index order.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.CurvePreviewColor", "Color of temporary curve previews during selection and copy placement.", "#FF00FFFF")] private static readonly Color CurvePreviewColor = global::vTools.CommandDefaults.GetColor("vSetPt", "vTools.Commands.vSetPt.CurvePreviewColor", Color.Cyan); // Color of temporary curve previews during selection and copy placement.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.PreviewIntervalMilliseconds", "Minimum interval between curve-only preview refreshes, in milliseconds.")] private const int PreviewIntervalMilliseconds = 24; // Minimum interval between curve-only preview refreshes, in milliseconds.
+
+    private static readonly int ConfiguredPreviewIntervalMilliseconds = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.PreviewIntervalMilliseconds", PreviewIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.SelectionDebounceMilliseconds", "Curve-selection settling delay, in milliseconds.")] private const int SelectionDebounceMilliseconds = 24; // Curve-selection settling delay, in milliseconds.
+
+    private static readonly int ConfiguredSelectionDebounceMilliseconds = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.SelectionDebounceMilliseconds", SelectionDebounceMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.HistoryPreviewIntervalMilliseconds", "Minimum interval between live history preview starts, in milliseconds; rebuild time counts toward the interval.")] private const int HistoryPreviewIntervalMilliseconds = 50; // Minimum interval between live history preview starts, in milliseconds; rebuild time counts toward the interval.
+
+    private static readonly int ConfiguredHistoryPreviewIntervalMilliseconds = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.HistoryPreviewIntervalMilliseconds", HistoryPreviewIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.HistoryPreviewToleranceFactor", "Fraction of document absolute tolerance used to ignore preview-position jitter; positive and much smaller than 1.")] private const double HistoryPreviewToleranceFactor = 0.000001; // Fraction of document absolute tolerance used to ignore preview-position jitter; positive and much smaller than 1.
+
+    private static readonly double ConfiguredHistoryPreviewToleranceFactor = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.HistoryPreviewToleranceFactor", HistoryPreviewToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool QuietPlacementNativeOutput = true; // true removes routine native history/mesh/preview-undo progress; false retains it during placement.
     private static readonly System.Text.RegularExpressions.Regex NativeHistoryProgress = new(
       @"^History updated \d+ objects?\.$",
@@ -89,7 +107,7 @@ namespace vTools.Commands
       PreselectedGrip[] Grips,
       bool GripsWereOn);
 
-    private static PreviewMode _previewMode = DefaultPreviewMode;
+    private static PreviewMode _previewMode = ConfiguredDefaultPreviewMode;
 
     public override string EnglishName => Tag;
 
@@ -105,7 +123,7 @@ namespace vTools.Commands
         return mode;
       if (ToolsOptionStore.TryGetBool(section, PreviewKey, out var legacyPreview))
         return legacyPreview ? PreviewMode.All : PreviewMode.Off;
-      return DefaultPreviewMode;
+      return ConfiguredDefaultPreviewMode;
     }
 
     private static void SavePersistedOptions()
@@ -308,7 +326,7 @@ namespace vTools.Commands
 
         _previewTimer = new System.Windows.Forms.Timer
         {
-          Interval = PreviewIntervalMilliseconds
+          Interval = ConfiguredPreviewIntervalMilliseconds
         };
         _previewTimer.Tick += (_, _) =>
         {
@@ -318,7 +336,7 @@ namespace vTools.Commands
 
         _selectionTimer = new System.Windows.Forms.Timer
         {
-          Interval = SelectionDebounceMilliseconds
+          Interval = ConfiguredSelectionDebounceMilliseconds
         };
         _selectionTimer.Tick += (_, _) =>
         {
@@ -466,7 +484,7 @@ namespace vTools.Commands
           return;
 
         var elapsed = System.Environment.TickCount64 - _lastPreviewMilliseconds;
-        if (elapsed >= PreviewIntervalMilliseconds)
+        if (elapsed >= ConfiguredPreviewIntervalMilliseconds)
         {
           _previewTimer.Stop();
           RefreshPreviewNow();
@@ -476,7 +494,7 @@ namespace vTools.Commands
         if (!_previewTimer.Enabled)
         {
           _previewTimer.Interval = Math.Max(
-            1, PreviewIntervalMilliseconds - (int)Math.Max(0, elapsed));
+            1, ConfiguredPreviewIntervalMilliseconds - (int)Math.Max(0, elapsed));
           _previewTimer.Start();
         }
       }
@@ -1179,14 +1197,14 @@ namespace vTools.Commands
       using var get = new GetPoint();
       get.SetCommandPrompt("Location for selected points");
       get.EnableTransparentCommands(AllowPlacementTransparentCommands);
-      get.AcceptNothing(DefaultCancelPlacementOnEnter);
+      get.AcceptNothing(ConfiguredDefaultCancelPlacementOnEnter);
       get.EnableNoRedrawOnExit(true);
 
-      var x = new OptionToggle(DefaultSetCoordinate, "No", "Yes");
-      var y = new OptionToggle(DefaultSetCoordinate, "No", "Yes");
-      var z = new OptionToggle(DefaultSetCoordinate, "No", "Yes");
-      var copy = new OptionToggle(DefaultCopy, "No", "Yes");
-      var alignment = DefaultAlignment;
+      var x = new OptionToggle(ConfiguredDefaultSetCoordinate, "No", "Yes");
+      var y = new OptionToggle(ConfiguredDefaultSetCoordinate, "No", "Yes");
+      var z = new OptionToggle(ConfiguredDefaultSetCoordinate, "No", "Yes");
+      var copy = new OptionToggle(ConfiguredDefaultCopy, "No", "Yes");
+      var alignment = ConfiguredDefaultAlignment;
       get.MouseMove += (_, e) => session.Queue(e.Point, e.Viewport.ConstructionPlane());
 
       while (true)
@@ -1361,7 +1379,7 @@ namespace vTools.Commands
       private bool _refreshing;
       private Exception? _failure;
       private bool _x, _y, _z, _copy;
-      private PreviewMode _previewMode = DefaultPreviewMode;
+      private PreviewMode _previewMode = ConfiguredDefaultPreviewMode;
       private int _alignment;
       private uint _undoRecord;
       private bool _changed;
@@ -1369,14 +1387,14 @@ namespace vTools.Commands
 
       private int RefreshInterval => _previewMode == PreviewMode.All && !_copy &&
         _canEditOriginals && _children.Count > 0
-        ? HistoryPreviewIntervalMilliseconds : PreviewIntervalMilliseconds;
+        ? ConfiguredHistoryPreviewIntervalMilliseconds : ConfiguredPreviewIntervalMilliseconds;
 
       internal LivePlacementPreview(RhinoDoc doc, PendingCurvePick[] picks)
       {
         _doc = doc;
         _historyUpdateWasEnabled = HistorySettings.UpdateEnabled;
         _positionTolerance = Math.Max(RhinoMath.ZeroTolerance,
-          doc.ModelAbsoluteTolerance * HistoryPreviewToleranceFactor);
+          doc.ModelAbsoluteTolerance * ConfiguredHistoryPreviewToleranceFactor);
         foreach (var pick in picks)
         {
           var obj = doc.Objects.FindId(pick.Id);
@@ -1412,7 +1430,7 @@ namespace vTools.Commands
         }
         _originals = new OriginalGeometryConduit(doc, _originalGeometry);
 
-        _timer = new System.Windows.Forms.Timer { Interval = HistoryPreviewIntervalMilliseconds };
+        _timer = new System.Windows.Forms.Timer { Interval = ConfiguredHistoryPreviewIntervalMilliseconds };
         _timer.Tick += (_, _) =>
         {
           _timer.Stop();

@@ -16,7 +16,9 @@ namespace vTools.Commands;
 public sealed class vToggleControlPoints : vToolsCommand
 {
   private const string Tag = "vToggleControlPoints";
-  private const double OnGeometryToleranceFactor = 0.01; // Fraction of curve scale used to distinguish edit from control points.
+  [global::vTools.CommandDefault("vToggleControlPoints", "vTools.Commands.vToggleControlPoints.OnGeometryToleranceFactor", "Fraction of curve scale used to distinguish edit from control points.")] private const double OnGeometryToleranceFactor = 0.01; // Fraction of curve scale used to distinguish edit from control points.
+
+  private static readonly double ConfiguredOnGeometryToleranceFactor = global::vTools.CommandDefaults.Get("vToggleControlPoints", "vTools.Commands.vToggleControlPoints.OnGeometryToleranceFactor", OnGeometryToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
 
   public override string EnglishName => Tag;
 
@@ -227,7 +229,7 @@ public sealed class vToggleControlPoints : vToolsCommand
 
   private static double OnGeometryTolerance(RhinoDoc doc)
   {
-    return Math.Max(doc.ModelAbsoluteTolerance * OnGeometryToleranceFactor, 1.0e-8);
+    return Math.Max(doc.ModelAbsoluteTolerance * ConfiguredOnGeometryToleranceFactor, 1.0e-8);
   }
 
   private static double? DistanceToGeometry(RhinoDoc doc, Guid objectId, Point3d point)

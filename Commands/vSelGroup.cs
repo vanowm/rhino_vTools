@@ -14,8 +14,10 @@ namespace vTools.Commands;
 public sealed class vSelGroup : vToolsCommand
 {
   // Defaults and customizable constants
-  private const SelectionMode DefaultMode = SelectionMode.Select; // Select replaces selection; Add retains other selections; Deselect removes only the picked group.
-  private static readonly string[] ModeNames = ["Select", "Add", "Deselect"]; // Command-line values in SelectionMode order.
+  [global::vTools.CommandDefault("vSelGroup", "vTools.Commands.vSelGroup.DefaultMode", "Select replaces selection; Add retains other selections; Deselect removes only the picked group.")] private const SelectionMode DefaultMode = SelectionMode.Select; // Select replaces selection; Add retains other selections; Deselect removes only the picked group.
+
+  private static readonly SelectionMode ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vSelGroup", "vTools.Commands.vSelGroup.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandChoicesAttribute("vSelGroup", "mode", false, "Select", "Add", "Deselect")] private static readonly string[] ModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vSelGroup), nameof(ModeNames)); // Command-line values in SelectionMode order.
   private const string PickPrompt = "Pick child groups. Press Enter when done"; // Repeated group-picking prompt; Enter or Esc returns to the interrupted command.
 
   internal enum SelectionMode { Select, Add, Deselect }
@@ -40,7 +42,7 @@ public sealed class vSelGroup : vToolsCommand
     point.PermitConstraintOptions(false);
     point.MouseMove += (_, e) =>
       highlight.SetObjects(targets.Pick(e.Viewport.ParentView, e.WindowPoint)?.Select(obj => obj.Id) ?? []);
-    var selectionMode = DefaultMode;
+    var selectionMode = ConfiguredDefaultMode;
     bool applied = false;
     Log.Write(EnglishName, "selection start groups={0}", targets.Count);
     while (true)

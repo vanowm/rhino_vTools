@@ -30,28 +30,71 @@ namespace vTools.Commands
     private const string SettingsSection = "vUnrollSrf";
     private const string CurrentLayerOption = "*Current*"; // Layer-selector sentinel that resolves output to Rhino's current layer.
     private const string OutputLayerAnchor = "Surface"; // Top-level layer used as the ordering anchor for default output layers.
-    private const string DefaultSurfaceLayerName = "Unrolled_surface"; // Rhino layer name for flat surfaces.
-    private const string DefaultLabelLayerName = "Unrolled_label"; // Rhino layer name for flat labels.
-    private const string DefaultDotLayerName = "Unrolled_dot"; // Rhino layer name for matching dots.
-    private const string DefaultSurfaceLayerPath = DefaultSurfaceLayerName; // Rhino layer name or full layer path.
-    private const string DefaultLabelLayerPath = DefaultLabelLayerName; // Rhino layer name or full layer path.
-    private const string DefaultDotLayerPath = DefaultDotLayerName; // Rhino layer name or full layer path.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerName", "Rhino layer name for flat surfaces.")] private const string DefaultSurfaceLayerName = "Unrolled_surface"; // Rhino layer name for flat surfaces.
+
+    private static readonly string ConfiguredDefaultSurfaceLayerName = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerName", DefaultSurfaceLayerName); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelLayerName", "Rhino layer name for flat labels.")] private const string DefaultLabelLayerName = "Unrolled_label"; // Rhino layer name for flat labels.
+
+    private static readonly string ConfiguredDefaultLabelLayerName = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelLayerName", DefaultLabelLayerName); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerName", "Rhino layer name for matching dots.")] private const string DefaultDotLayerName = "Unrolled_dot"; // Rhino layer name for matching dots.
+
+    private static readonly string ConfiguredDefaultDotLayerName = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerName", DefaultDotLayerName); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerPath", "Rhino layer name or full layer path.")] private const string DefaultSurfaceLayerPath = DefaultSurfaceLayerName; // Rhino layer name or full layer path.
+
+    private static readonly string ConfiguredDefaultSurfaceLayerPath = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerPath", DefaultSurfaceLayerPath); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelLayerPath", "Rhino layer name or full layer path.")] private const string DefaultLabelLayerPath = DefaultLabelLayerName; // Rhino layer name or full layer path.
+
+    private static readonly string ConfiguredDefaultLabelLayerPath = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelLayerPath", DefaultLabelLayerPath); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerPath", "Rhino layer name or full layer path.")] private const string DefaultDotLayerPath = DefaultDotLayerName; // Rhino layer name or full layer path.
+
+    private static readonly string ConfiguredDefaultDotLayerPath = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerPath", DefaultDotLayerPath); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultOutputLayerTransparency", "Display-color transparency, zero opaque through one invisible; applies only to built-in output layers.")] private const double DefaultOutputLayerTransparency = 0.69; // Display-color transparency, zero opaque through one invisible; applies only to built-in output layers.
+
+    private static readonly double ConfiguredDefaultOutputLayerTransparency = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultOutputLayerTransparency", DefaultOutputLayerTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerColor", "RGB for built-in flat-surface and label layers.", "#FF000000")] private static readonly System.Drawing.Color DefaultSurfaceLayerColor = global::vTools.CommandDefaults.GetColor("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSurfaceLayerColor", System.Drawing.Color.Black); // RGB for built-in flat-surface and label layers.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerColor", "RGB for the built-in matching-dot layer.", "#FFFFFFFF")] private static readonly System.Drawing.Color DefaultDotLayerColor = global::vTools.CommandDefaults.GetColor("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultDotLayerColor", System.Drawing.Color.White); // RGB for the built-in matching-dot layer.
 
     // Option defaults
-    private const LabelMode DefaultLabelMode = LabelMode.Text; // LabelMode enum: Text, Dots, or None.
-    private const bool DefaultRotateFlatParts = true; // true aligns flat parts to source orientation; false keeps unroller orientation.
-    private const bool DefaultExplode = false; // true explodes flat breps into faces; false keeps each unrolled brep joined.
-    private const bool DefaultKeepPropSurface = false; // true inherits source surface properties; false uses output-layer properties.
-    private const bool DefaultKeepPropFollowing = true; // true inherits properties for following geometry; false uses output layers.
-    private const double DefaultLayoutSpacing = 1.0; // Gap between flat parts in model units; zero or greater.
-    private const double DefaultXExtents = 0.0; // Row width in model units; zero disables row wrapping.
-    private const bool DefaultEdgeDots = true; // true creates matching shared-edge dots; false omits them.
-    private const bool DefaultSplitFaces = false; // true unrolls polysurface faces separately; false keeps polysurfaces together.
-    private const bool DefaultUV = true; // true uses native UnrollSrfUV; false uses RhinoCommon's developable Unroller without command macros.
-    private const bool DefaultQuietNative = true; // true removes recognized native progress from command history after each native call; false retains native output unchanged.
-    private const int LiveDisplayRefreshMilliseconds = 150; // Minimum milliseconds between batch viewport updates; only the first source forces an initial refresh.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelMode", "LabelMode enum: Text, Dots, or None.")] private const LabelMode DefaultLabelMode = LabelMode.Text; // LabelMode enum: Text, Dots, or None.
+
+    private static readonly LabelMode ConfiguredDefaultLabelMode = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLabelMode", DefaultLabelMode); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultRotateFlatParts", "true aligns flat parts to source orientation; false keeps unroller orientation.")] private const bool DefaultRotateFlatParts = true; // true aligns flat parts to source orientation; false keeps unroller orientation.
+
+    private static readonly bool ConfiguredDefaultRotateFlatParts = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultRotateFlatParts", DefaultRotateFlatParts); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultExplode", "true explodes flat breps into faces; false keeps each unrolled brep joined.")] private const bool DefaultExplode = false; // true explodes flat breps into faces; false keeps each unrolled brep joined.
+
+    private static readonly bool ConfiguredDefaultExplode = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultExplode", DefaultExplode); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultKeepPropSurface", "true inherits source surface properties; false uses output-layer properties.")] private const bool DefaultKeepPropSurface = false; // true inherits source surface properties; false uses output-layer properties.
+
+    private static readonly bool ConfiguredDefaultKeepPropSurface = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultKeepPropSurface", DefaultKeepPropSurface); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultKeepPropFollowing", "true inherits properties for following geometry; false uses output layers.")] private const bool DefaultKeepPropFollowing = true; // true inherits properties for following geometry; false uses output layers.
+
+    private static readonly bool ConfiguredDefaultKeepPropFollowing = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultKeepPropFollowing", DefaultKeepPropFollowing); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLayoutSpacing", "Gap between flat parts in model units; zero or greater.")] private const double DefaultLayoutSpacing = 1.0; // Gap between flat parts in model units; zero or greater.
+
+    private static readonly double ConfiguredDefaultLayoutSpacing = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultLayoutSpacing", DefaultLayoutSpacing); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultXExtents", "Row width in model units; zero disables row wrapping.")] private const double DefaultXExtents = 0.0; // Row width in model units; zero disables row wrapping.
+
+    private static readonly double ConfiguredDefaultXExtents = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultXExtents", DefaultXExtents); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultEdgeDots", "true creates matching shared-edge dots; false omits them.")] private const bool DefaultEdgeDots = true; // true creates matching shared-edge dots; false omits them.
+
+    private static readonly bool ConfiguredDefaultEdgeDots = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultEdgeDots", DefaultEdgeDots); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSplitFaces", "true unrolls polysurface faces separately; false keeps polysurfaces together.")] private const bool DefaultSplitFaces = false; // true unrolls polysurface faces separately; false keeps polysurfaces together.
+
+    private static readonly bool ConfiguredDefaultSplitFaces = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultSplitFaces", DefaultSplitFaces); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultUV", "true uses native UnrollSrfUV; false uses RhinoCommon's developable Unroller without command macros.")] private const bool DefaultUV = true; // true uses native UnrollSrfUV; false uses RhinoCommon's developable Unroller without command macros.
+
+    private static readonly bool ConfiguredDefaultUV = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultUV", DefaultUV); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultQuietNative", "true removes recognized native progress from command history after each native call; false retains native output unchanged.")] private const bool DefaultQuietNative = true; // true removes recognized native progress from command history after each native call; false retains native output unchanged.
+
+    private static readonly bool ConfiguredDefaultQuietNative = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.DefaultQuietNative", DefaultQuietNative); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.LiveDisplayRefreshMilliseconds", "Minimum milliseconds between batch viewport updates; only the first source forces an initial refresh.")] private const int LiveDisplayRefreshMilliseconds = 150; // Minimum milliseconds between batch viewport updates; only the first source forces an initial refresh.
+
+    private static readonly int ConfiguredLiveDisplayRefreshMilliseconds = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.LiveDisplayRefreshMilliseconds", LiveDisplayRefreshMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double LiveDisplayTimeFraction = 0.10; // Target display share of batch runtime, greater than zero and less than one; expensive refreshes increase the cooldown.
-    private const double SourceOrientationEpsilon = 1e-10; // Dimensionless threshold for ambiguous projected source axes or negligible planar rotation.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SourceOrientationEpsilon", "Dimensionless threshold for ambiguous projected source axes or negligible planar rotation.")] private const double SourceOrientationEpsilon = 1e-10; // Dimensionless threshold for ambiguous projected source axes or negligible planar rotation.
+
+    private static readonly double ConfiguredSourceOrientationEpsilon = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SourceOrientationEpsilon", SourceOrientationEpsilon); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string NativeUVCommandName = "_-UnrollSrfUV"; // Scriptable UV-preserving native unroll command.
     private const string NativeDevelopableCommandName = "_-UnrollSrf"; // Developable-mode identifier; routed to RhinoCommon.Unroller rather than submitted as a macro.
     private const string TextObjectName = "MultiUnroll_NumberLabel"; // Object name assigned to generated part-number labels.
@@ -69,28 +112,58 @@ namespace vTools.Commands
     private const string CurveHelperDotPrefix     = "__vTools_vUnrollSrf_CurveHelper__"; // Internal following-dot name prefix for curves.
 
     private const string TextFont = "Arial"; // Installed font family used for generated number labels and failure markers.
-    private const double TextHeightScale = 1.5; // Label-height multiplier relative to the part-derived base height.
-    private const double FlatTextLiftRatio = 0.0; // Unrolled-label normal lift as a fraction of text height; zero keeps text coplanar.
-    private const double SurfaceTextLiftRatio = 0.001; // Original-surface label normal lift as a fraction of text height; zero disables lift.
-    private const double MinimumTextLiftToleranceFactor = 2.0; // Document-tolerance multiplier used as minimum lift when the selected ratio is positive.
-    private const double TextUpStepRatio = 2.5; // Label up-direction probe distance as a fraction of text height.
-    private const int TextBoundarySamples = 7; // Samples per boundary curve used for label fitting; two or greater.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextHeightScale", "Label-height multiplier relative to the part-derived base height.")] private const double TextHeightScale = 1.5; // Label-height multiplier relative to the part-derived base height.
 
-    private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
-    private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
-    private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
-    private const double ConicalFaceSeparationFactor = 10.0; // Document-tolerance multiplier for separating developed faces before seam reconstruction; positive.
+    private static readonly double ConfiguredTextHeightScale = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextHeightScale", TextHeightScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FlatTextLiftRatio", "Unrolled-label normal lift as a fraction of text height; zero keeps text coplanar.")] private const double FlatTextLiftRatio = 0.0; // Unrolled-label normal lift as a fraction of text height; zero keeps text coplanar.
+
+    private static readonly double ConfiguredFlatTextLiftRatio = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FlatTextLiftRatio", FlatTextLiftRatio); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SurfaceTextLiftRatio", "Original-surface label normal lift as a fraction of text height; zero disables lift.")] private const double SurfaceTextLiftRatio = 0.001; // Original-surface label normal lift as a fraction of text height; zero disables lift.
+
+    private static readonly double ConfiguredSurfaceTextLiftRatio = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SurfaceTextLiftRatio", SurfaceTextLiftRatio); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.MinimumTextLiftToleranceFactor", "Document-tolerance multiplier used as minimum lift when the selected ratio is positive.")] private const double MinimumTextLiftToleranceFactor = 2.0; // Document-tolerance multiplier used as minimum lift when the selected ratio is positive.
+
+    private static readonly double ConfiguredMinimumTextLiftToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.MinimumTextLiftToleranceFactor", MinimumTextLiftToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextUpStepRatio", "Label up-direction probe distance as a fraction of text height.")] private const double TextUpStepRatio = 2.5; // Label up-direction probe distance as a fraction of text height.
+
+    private static readonly double ConfiguredTextUpStepRatio = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextUpStepRatio", TextUpStepRatio); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextBoundarySamples", "Samples per boundary curve used for label fitting; two or greater.")] private const int TextBoundarySamples = 7; // Samples per boundary curve used for label fitting; two or greater.
+
+    private static readonly int ConfiguredTextBoundarySamples = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.TextBoundarySamples", TextBoundarySamples); // Resolved once from advanced defaults; restart Rhino after changes.
+
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingTolFactor", "Document-tolerance multiplier for associating following geometry.")] private const double FollowingTolFactor = 100.0; // Document-tolerance multiplier for associating following geometry.
+
+    private static readonly double ConfiguredFollowingTolFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingTolFactor", FollowingTolFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingDiagFactor", "Geometry-diagonal fraction added to following-object tolerance.")] private const double FollowingDiagFactor = 1.0e-4; // Geometry-diagonal fraction added to following-object tolerance.
+
+    private static readonly double ConfiguredFollowingDiagFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingDiagFactor", FollowingDiagFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingCurveSamples", "Samples per following curve used for surface association; two or greater.")] private const int FollowingCurveSamples = 9; // Samples per following curve used for surface association; two or greater.
+
+    private static readonly int ConfiguredFollowingCurveSamples = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.FollowingCurveSamples", FollowingCurveSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.ConicalFaceSeparationFactor", "Document-tolerance multiplier for separating developed faces before seam reconstruction; positive.")] private const double ConicalFaceSeparationFactor = 10.0; // Document-tolerance multiplier for separating developed faces before seam reconstruction; positive.
+
+    private static readonly double ConfiguredConicalFaceSeparationFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.ConicalFaceSeparationFactor", ConicalFaceSeparationFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double FollowingSplitParameterFraction = 1e-10; // Curve-domain fraction for merging repeated face-boundary intersection parameters; positive and less than one.
-    private const double SharedPointToleranceFactor = 1.0; // Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.
-    private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native unroll labels with flat edges.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SharedPointToleranceFactor", "Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.")] private const double SharedPointToleranceFactor = 1.0; // Document-tolerance multiplier for treating projected points as the same shared edge/vertex location.
+
+    private static readonly double ConfiguredSharedPointToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.SharedPointToleranceFactor", SharedPointToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.NativeLabelEdgeToleranceFactor", "Document-tolerance multiplier for associating native unroll labels with flat edges.")] private const double NativeLabelEdgeToleranceFactor = 50.0; // Document-tolerance multiplier for associating native unroll labels with flat edges.
+
+    private static readonly double ConfiguredNativeLabelEdgeToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.NativeLabelEdgeToleranceFactor", NativeLabelEdgeToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const double NativeSeamMaxRelativeLengthError = 0.01; // Maximum 0..1 relative edge-length error accepted by source-topology fallback seam matching.
-    private const double NativeJoinedSeamToleranceFactor = 10.0; // Document-tolerance multiplier for recognizing an aligned seam as an interior edge after face joining.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.NativeJoinedSeamToleranceFactor", "Document-tolerance multiplier for recognizing an aligned seam as an interior edge after face joining.")] private const double NativeJoinedSeamToleranceFactor = 10.0; // Document-tolerance multiplier for recognizing an aligned seam as an interior edge after face joining.
+
+    private static readonly double ConfiguredNativeJoinedSeamToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.NativeJoinedSeamToleranceFactor", NativeJoinedSeamToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool NativeForceExplodePolysurfaces = true; // true temporarily separates multi-face native output for source-topology reconstruction; false honors the visible Explode option directly.
     private const bool NativeUseNoEcho = true; // true runs the internal Rhino macro with NoEcho; false relies only on RunScript's silent flag.
     private const int NativeCapturedLogLimit = 12; // Maximum captured native command lines written to the shared diagnostic log per source object; zero disables captured-line logging.
-    private const double AreaReportToleranceFactor = 1.0; // Multiplier for estimated area-measurement error and squared document tolerance before reporting an area discrepancy; positive.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.AreaReportToleranceFactor", "Multiplier for estimated area-measurement error and squared document tolerance before reporting an area discrepancy; positive.")] private const double AreaReportToleranceFactor = 1.0; // Multiplier for estimated area-measurement error and squared document tolerance before reporting an area discrepancy; positive.
+
+    private static readonly double ConfiguredAreaReportToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.AreaReportToleranceFactor", AreaReportToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string AreaDifferenceFormat = "+0.######;-0.######;0"; // Signed model-area and percentage format; up to six decimal places.
-    private const double PriorLabelFaceToleranceFactor = 1.0; // Document absolute-tolerance multiplier for assigning existing flat labels to trimmed faces; positive.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.PriorLabelFaceToleranceFactor", "Document absolute-tolerance multiplier for assigning existing flat labels to trimmed faces; positive.")] private const double PriorLabelFaceToleranceFactor = 1.0; // Document absolute-tolerance multiplier for assigning existing flat labels to trimmed faces; positive.
+
+    private static readonly double ConfiguredPriorLabelFaceToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.PriorLabelFaceToleranceFactor", PriorLabelFaceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
 
     // Edge-mate dot constants (match MultiUnroll2.py / vMatch.cs)
     private const string EdgeMateName        = vMatch.EdgeMateName; // Shared output object name for matching edge dots.
@@ -104,12 +177,20 @@ namespace vTools.Commands
     private const string TopologyEdgeMode    = "Topology"; // Stored edge-index mode for topology-derived matches.
     private const string EdgeMatePrefix      = "M"; // Prefix displayed before matching edge-dot numbers.
     private const int    EdgeMateDotSize     = 10; // Text-dot font height for edge mates in display pixels.
-    private const double EdgeMateTolFactor   = 25.0; // Document-tolerance multiplier for shared-edge matching.
-    private const double EdgeMateDiagFactor  = 1.0e-4; // Edge-length fraction added to shared-edge tolerance.
-    private const int    EdgeMateSamples     = 7; // Interior samples used to validate an edge match; two or greater.
-    private const int    LabelInteriorSamples = 17; // UV grid resolution used to find interior label positions.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateTolFactor", "Document-tolerance multiplier for shared-edge matching.")] private const double EdgeMateTolFactor   = 25.0; // Document-tolerance multiplier for shared-edge matching.
 
-    private static readonly string[] LabelModeNames = { "Text", "Dots", "None" }; // Command option names in LabelMode enum order.
+    private static readonly double ConfiguredEdgeMateTolFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateTolFactor", EdgeMateTolFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateDiagFactor", "Edge-length fraction added to shared-edge tolerance.")] private const double EdgeMateDiagFactor  = 1.0e-4; // Edge-length fraction added to shared-edge tolerance.
+
+    private static readonly double ConfiguredEdgeMateDiagFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateDiagFactor", EdgeMateDiagFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateSamples", "Interior samples used to validate an edge match; two or greater.")] private const int    EdgeMateSamples     = 7; // Interior samples used to validate an edge match; two or greater.
+
+    private static readonly int ConfiguredEdgeMateSamples = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.EdgeMateSamples", EdgeMateSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.LabelInteriorSamples", "UV grid resolution used to find interior label positions.")] private const int    LabelInteriorSamples = 17; // UV grid resolution used to find interior label positions.
+
+    private static readonly int ConfiguredLabelInteriorSamples = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.Commands.UnrollSrfCommandBase.LabelInteriorSamples", LabelInteriorSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+
+    [global::vTools.CommandChoicesAttribute("vUnrollSrf", "labelMode", false, "Text", "Dots", "None")] private static readonly string[] LabelModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.UnrollSrfCommandBase), nameof(LabelModeNames)); // Command option names in LabelMode enum order.
 
     private enum LabelMode
     {
@@ -118,20 +199,20 @@ namespace vTools.Commands
       None = 2
     }
 
-    private static LabelMode _labelMode = DefaultLabelMode;
-    private static bool _rotateFlatParts = DefaultRotateFlatParts;
-    private static bool _explode = DefaultExplode;
-    private static bool _keepPropSurface = DefaultKeepPropSurface;
-    private static bool _keepPropFollowing = DefaultKeepPropFollowing;
-    private static double _layoutSpacing = DefaultLayoutSpacing;
-    private static double _xExtents = DefaultXExtents;
-    private static bool _edgeDots = DefaultEdgeDots;
-    private static bool _splitFaces = DefaultSplitFaces;
-    private static bool _uv = DefaultUV;
-    private static bool _quietNative = DefaultQuietNative;
-    private static string _surfaceLayer = DefaultSurfaceLayerPath;
-    private static string _labelLayer = DefaultLabelLayerPath;
-    private static string _dotLayer = DefaultDotLayerPath;
+    private static LabelMode _labelMode = ConfiguredDefaultLabelMode;
+    private static bool _rotateFlatParts = ConfiguredDefaultRotateFlatParts;
+    private static bool _explode = ConfiguredDefaultExplode;
+    private static bool _keepPropSurface = ConfiguredDefaultKeepPropSurface;
+    private static bool _keepPropFollowing = ConfiguredDefaultKeepPropFollowing;
+    private static double _layoutSpacing = ConfiguredDefaultLayoutSpacing;
+    private static double _xExtents = ConfiguredDefaultXExtents;
+    private static bool _edgeDots = ConfiguredDefaultEdgeDots;
+    private static bool _splitFaces = ConfiguredDefaultSplitFaces;
+    private static bool _uv = ConfiguredDefaultUV;
+    private static bool _quietNative = ConfiguredDefaultQuietNative;
+    private static string _surfaceLayer = ConfiguredDefaultSurfaceLayerPath;
+    private static string _labelLayer = ConfiguredDefaultLabelLayerPath;
+    private static string _dotLayer = ConfiguredDefaultDotLayerPath;
 
     protected string NativeUnrollCommand => SelectNativeUnrollCommand(_uv);
 
@@ -265,7 +346,7 @@ namespace vTools.Commands
       var displayTimer = System.Diagnostics.Stopwatch.StartNew();
       long displayMilliseconds = 0;
       int displayRefreshes = 0;
-      long displayInterval = LiveDisplayRefreshMilliseconds;
+      long displayInterval = ConfiguredLiveDisplayRefreshMilliseconds;
       bool RefreshDisplay(bool force)
       {
         var started = System.Diagnostics.Stopwatch.StartNew();
@@ -672,7 +753,7 @@ namespace vTools.Commands
               // text readable while preserving the same unrolled Y/up direction.
               AddValid(unrolledLabelIds, AddFlatText(
                 doc, display, labelPoint.Value, unrolledY, Vector3d.ZAxis,
-                finalLabelHeight, FlatTextLiftRatio, src.Id, _keepPropSurface));
+                finalLabelHeight, ConfiguredFlatTextLiftRatio, src.Id, _keepPropSurface));
             }
             else if (addDots)
             {
@@ -1121,19 +1202,19 @@ namespace vTools.Commands
       {
         SelectOutputLayer(
           doc, runMode, $"{commandName} surface layer", _surfaceLayer,
-          selected => _surfaceLayer = NormalizeOutputLayer(selected, DefaultSurfaceLayerName, DefaultSurfaceLayerPath));
+          selected => _surfaceLayer = NormalizeOutputLayer(selected, ConfiguredDefaultSurfaceLayerName, ConfiguredDefaultSurfaceLayerPath));
       }
       if (option != null && option.Index == state.LabelLayerIndex)
       {
         SelectOutputLayer(
           doc, runMode, $"{commandName} label layer", _labelLayer,
-          selected => _labelLayer = NormalizeOutputLayer(selected, DefaultLabelLayerName, DefaultLabelLayerPath));
+          selected => _labelLayer = NormalizeOutputLayer(selected, ConfiguredDefaultLabelLayerName, ConfiguredDefaultLabelLayerPath));
       }
       if (option != null && option.Index == state.DotLayerIndex)
       {
         SelectOutputLayer(
           doc, runMode, $"{commandName} dot layer", _dotLayer,
-          selected => _dotLayer = NormalizeOutputLayer(selected, DefaultDotLayerName, DefaultDotLayerPath));
+          selected => _dotLayer = NormalizeOutputLayer(selected, ConfiguredDefaultDotLayerName, ConfiguredDefaultDotLayerPath));
       }
 
       if (option != null)
@@ -1521,7 +1602,7 @@ namespace vTools.Commands
     }
 
     private static long UnrollDisplayInterval(long renderMilliseconds) =>
-      Math.Max(LiveDisplayRefreshMilliseconds,(long)Math.Ceiling(renderMilliseconds*(1.0/LiveDisplayTimeFraction-1.0)));
+      Math.Max(ConfiguredLiveDisplayRefreshMilliseconds,(long)Math.Ceiling(renderMilliseconds*(1.0/LiveDisplayTimeFraction-1.0)));
 
     private static bool ShouldRefreshUnrollDisplay(long elapsedMilliseconds,bool force,long interval) =>
       force||elapsedMilliseconds>=interval;
@@ -1587,7 +1668,7 @@ namespace vTools.Commands
       }
       double difference = flatArea - original.Area;
       double tolerance = Math.Max(error, doc.ModelAbsoluteTolerance * doc.ModelAbsoluteTolerance) *
-        AreaReportToleranceFactor;
+        ConfiguredAreaReportToleranceFactor;
       Dbg(FormattableString.Invariant($"part={partNumber} area source={original.Area:G17} flat={flatArea:G17} difference={difference:G17} percent={difference / original.Area * 100.0:G17}"));
       if (Math.Abs(difference) > tolerance)
         RhinoApp.WriteLine(string.Format(CultureInfo.CurrentCulture,
@@ -1724,12 +1805,12 @@ namespace vTools.Commands
 
         var uDomain = face.Domain(0);
         var vDomain = face.Domain(1);
-        for (int uIndex = 0; uIndex < LabelInteriorSamples; uIndex++)
+        for (int uIndex = 0; uIndex < ConfiguredLabelInteriorSamples; uIndex++)
         {
-          double u = uDomain.ParameterAt((uIndex + 0.5) / LabelInteriorSamples);
-          for (int vIndex = 0; vIndex < LabelInteriorSamples; vIndex++)
+          double u = uDomain.ParameterAt((uIndex + 0.5) / ConfiguredLabelInteriorSamples);
+          for (int vIndex = 0; vIndex < ConfiguredLabelInteriorSamples; vIndex++)
           {
-            double v = vDomain.ParameterAt((vIndex + 0.5) / LabelInteriorSamples);
+            double v = vDomain.ParameterAt((vIndex + 0.5) / ConfiguredLabelInteriorSamples);
             Consider(face, u, v);
           }
         }
@@ -1787,7 +1868,7 @@ namespace vTools.Commands
       {
         pts.AddRange(brep.Vertices.Select(v => v.Location));
         foreach (var curve in brep.DuplicateEdgeCurves(true) ?? Array.Empty<Curve>())
-          pts.AddRange(CurveSamples(curve, TextBoundarySamples));
+          pts.AddRange(CurveSamples(curve, ConfiguredTextBoundarySamples));
       }
       if (pts.Count == 0)
       {
@@ -1815,7 +1896,7 @@ namespace vTools.Commands
       y = Unit(y, tol) ?? Vector3d.YAxis;
       normal = Unit(normal, tol) ?? Vector3d.ZAxis;
 
-      var step = Math.Max(height * TextUpStepRatio, tol * 20.0);
+      var step = Math.Max(height * ConfiguredTextUpStepRatio, tol * 20.0);
       if (brep != null)
       {
         double clearance = BoundaryClearance(brep, point.Value);
@@ -1967,7 +2048,7 @@ namespace vTools.Commands
     {
       var values = Unique(ids).Select(id => HeightCandidate(doc, id)).Where(v => v > doc.ModelAbsoluteTolerance).ToList();
       var baseHeight = values.Count > 0 ? values.Min() : 1.0;
-      return Math.Max(baseHeight * TextHeightScale, doc.ModelAbsoluteTolerance * 10.0);
+      return Math.Max(baseHeight * ConfiguredTextHeightScale, doc.ModelAbsoluteTolerance * 10.0);
     }
 
     private static Plane TextPlane(Point3d origin, Vector3d yDirection, Vector3d normal, double tol)
@@ -1985,7 +2066,7 @@ namespace vTools.Commands
 
       return Math.Max(
         height * liftRatio,
-        doc.ModelAbsoluteTolerance * MinimumTextLiftToleranceFactor);
+        doc.ModelAbsoluteTolerance * ConfiguredMinimumTextLiftToleranceFactor);
     }
 
     private static Guid AddFlatText(
@@ -2058,7 +2139,7 @@ namespace vTools.Commands
     private static Guid AddFailureText(RhinoDoc doc, Point3d point, Vector3d yDirection, Vector3d normal, double height, Guid sourceId)
     {
       var n = Unit(normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
-      var lift = TextLift(doc, height, SurfaceTextLiftRatio);
+      var lift = TextLift(doc, height, ConfiguredSurfaceTextLiftRatio);
       var plane = TextPlane(point + n * lift, yDirection, n, doc.ModelAbsoluteTolerance);
       var attrs = FailureMarkerAttributes(doc, sourceId);
 
@@ -2113,17 +2194,37 @@ namespace vTools.Commands
 
     private static int SurfaceOutputLayerIndex(RhinoDoc doc)
     {
-      return EnsureOutputLayer(doc, _surfaceLayer, DefaultSurfaceLayerPath);
+      return StyledOutputLayerIndex(doc, _surfaceLayer, ConfiguredDefaultSurfaceLayerPath, DefaultSurfaceLayerColor);
     }
 
     private static int LabelOutputLayerIndex(RhinoDoc doc)
     {
-      return EnsureOutputLayer(doc, _labelLayer, DefaultLabelLayerPath);
+      return StyledOutputLayerIndex(doc, _labelLayer, ConfiguredDefaultLabelLayerPath, DefaultSurfaceLayerColor);
     }
 
     private static int DotOutputLayerIndex(RhinoDoc doc)
     {
-      return EnsureOutputLayer(doc, _dotLayer, DefaultDotLayerPath);
+      return StyledOutputLayerIndex(doc, _dotLayer, ConfiguredDefaultDotLayerPath, DefaultDotLayerColor);
+    }
+
+    private static int StyledOutputLayerIndex(RhinoDoc doc, string configuredLayer, string defaultPath, System.Drawing.Color color)
+    {
+      int index = EnsureOutputLayer(doc, configuredLayer, defaultPath);
+      // Never restyle a user-selected/current layer, including the fallback after a failed layer creation.
+      if (index < 0 || !string.Equals(configuredLayer, defaultPath, StringComparison.OrdinalIgnoreCase))
+        return index;
+      var layer = doc.Layers[index];
+      if (layer == null || !string.Equals(layer.FullPath, defaultPath, StringComparison.OrdinalIgnoreCase))
+        return index;
+      var displayColor = System.Drawing.Color.FromArgb(
+        (int)Math.Round(255 * (1 - ConfiguredDefaultOutputLayerTransparency)), color);
+      if (layer.Color.ToArgb() != displayColor.ToArgb())
+      {
+        layer.Color = displayColor;
+        if (!doc.Layers.Modify(layer, index, true))
+          Dbg($"Could not update output layer appearance: {defaultPath}");
+      }
+      return index;
     }
 
     private static string NormalizeOutputLayer(
@@ -2244,9 +2345,9 @@ namespace vTools.Commands
     {
       var defaultNames = new[]
       {
-        DefaultSurfaceLayerName,
-        DefaultLabelLayerName,
-        DefaultDotLayerName
+        ConfiguredDefaultSurfaceLayerName,
+        ConfiguredDefaultLabelLayerName,
+        ConfiguredDefaultDotLayerName
       };
       if (!defaultNames.Any(name =>
             string.Equals(name, layerPath, StringComparison.OrdinalIgnoreCase)))
@@ -2309,9 +2410,9 @@ namespace vTools.Commands
 
     private static bool IsDefaultOutputLayerName(string layerPath)
     {
-      return string.Equals(layerPath, DefaultSurfaceLayerName, StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(layerPath, DefaultLabelLayerName, StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(layerPath, DefaultDotLayerName, StringComparison.OrdinalIgnoreCase);
+      return string.Equals(layerPath, ConfiguredDefaultSurfaceLayerName, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(layerPath, ConfiguredDefaultLabelLayerName, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(layerPath, ConfiguredDefaultDotLayerName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static void PutOnLayer(RhinoDoc doc, IEnumerable<Guid> ids, int layer)
@@ -2456,7 +2557,7 @@ namespace vTools.Commands
         .Select(obj => (Part: PartNumberOf(obj), Point: obj.Geometry is TextEntity text ? (Point3d?)text.Plane.Origin
           : obj.Geometry is TextDot dot ? dot.Point : null))
         .Where(label => label.Part.HasValue && label.Point.HasValue).ToArray();
-      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * PriorLabelFaceToleranceFactor, RhinoMath.ZeroTolerance);
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * ConfiguredPriorLabelFaceToleranceFactor, RhinoMath.ZeroTolerance);
       foreach (var combinedId in combinedIds)
       {
         var combined = doc.Objects.FindId(combinedId);
@@ -2841,7 +2942,7 @@ namespace vTools.Commands
         if (addText && existing?.Geometry is TextEntity)
         {
           var n = Unit(frame.Normal, doc.ModelAbsoluteTolerance) ?? Vector3d.ZAxis;
-          var lift = TextLift(doc, height, SurfaceTextLiftRatio);
+          var lift = TextLift(doc, height, ConfiguredSurfaceTextLiftRatio);
           var replacement = new TextEntity
           {
             PlainText = display,
@@ -2882,7 +2983,7 @@ namespace vTools.Commands
       if (addText)
         labelId = AddFlatText(
           doc, display, frame.Point, frame.Y, frame.Normal,
-          height, SurfaceTextLiftRatio, sourceId, transferProperties);
+          height, ConfiguredSurfaceTextLiftRatio, sourceId, transferProperties);
       else if (addDots)
         labelId = AddDot(doc, display, frame.Point, sourceId, transferProperties);
       if (!IsValidId(labelId))
@@ -3038,7 +3139,7 @@ namespace vTools.Commands
         {
           var sharedTolerance = Math.Max(
             RhinoMath.ZeroTolerance,
-            doc.ModelAbsoluteTolerance * SharedPointToleranceFactor);
+            doc.ModelAbsoluteTolerance * ConfiguredSharedPointToleranceFactor);
           var touchingCandidates = candidates
             .Where(candidate =>
               candidate.ClosestPoint.HasValue &&
@@ -3082,8 +3183,8 @@ namespace vTools.Commands
 
     private static double AssignTolerance(RhinoDoc doc, GeometryBase surfaceGeometry, GeometryBase followingGeometry)
     {
-      return Math.Max(doc.ModelAbsoluteTolerance * FollowingTolFactor,
-        Math.Max(GeometryDiagonal(surfaceGeometry), GeometryDiagonal(followingGeometry)) * FollowingDiagFactor);
+      return Math.Max(doc.ModelAbsoluteTolerance * ConfiguredFollowingTolFactor,
+        Math.Max(GeometryDiagonal(surfaceGeometry), GeometryDiagonal(followingGeometry)) * ConfiguredFollowingDiagFactor);
     }
 
     private static double GeometryDiagonal(GeometryBase geometry)
@@ -3133,7 +3234,7 @@ namespace vTools.Commands
       if (brep == null || curve == null)
         return null;
       var distances = new List<double>();
-      foreach (var p in CurveSamples(curve, FollowingCurveSamples))
+      foreach (var p in CurveSamples(curve, ConfiguredFollowingCurveSamples))
       {
         try { distances.Add(p.DistanceTo(brep.ClosestPoint(p))); }
         catch { return null; }
@@ -3175,10 +3276,10 @@ namespace vTools.Commands
       sourceRight.Z=0; sourceUp.Z=0;
       double cosine=flatRight*sourceRight+flatUp*sourceUp;
       double sine=Vector3d.CrossProduct(flatRight,sourceRight).Z+Vector3d.CrossProduct(flatUp,sourceUp).Z;
-      if(Math.Abs(cosine)+Math.Abs(sine)<=SourceOrientationEpsilon)
+      if(Math.Abs(cosine)+Math.Abs(sine)<=ConfiguredSourceOrientationEpsilon)
       {
-        var source=sourceUp.Length>SourceOrientationEpsilon?sourceUp:sourceRight;
-        var flat=sourceUp.Length>SourceOrientationEpsilon?flatUp:flatRight;
+        var source=sourceUp.Length>ConfiguredSourceOrientationEpsilon?sourceUp:sourceRight;
+        var flat=sourceUp.Length>ConfiguredSourceOrientationEpsilon?flatUp:flatRight;
         if(!source.Unitize()) return 0.0;
         cosine=flat*source; sine=Vector3d.CrossProduct(flat,source).Z;
       }
@@ -3189,7 +3290,7 @@ namespace vTools.Commands
       Vector3d flatUp,Vector3d sourceRight,Vector3d sourceUp)
     {
       var angle=SourceOrientationAngle(flatUp,sourceRight,sourceUp);
-      if(!angle.HasValue||Math.Abs(angle.Value)<=SourceOrientationEpsilon)
+      if(!angle.HasValue||Math.Abs(angle.Value)<=ConfiguredSourceOrientationEpsilon)
         return;
       TransformObjects(doc, ids, Transform.Rotation(angle.Value, Vector3d.ZAxis, center));
     }
@@ -3271,7 +3372,7 @@ namespace vTools.Commands
             var translation = Transform.Translation(nextX - box.Min.X, -box.Min.Y, 0.0);
             if (!flatBrep.Transform(translation) || !flatSurface.Transform(translation))
               throw new InvalidOperationException("Cannot position a developed conical face.");
-            nextX += box.Max.X - box.Min.X + tolerance * ConicalFaceSeparationFactor;
+            nextX += box.Max.X - box.Min.X + tolerance * ConfiguredConicalFaceSeparationFactor;
           }
         }
 
@@ -3400,14 +3501,14 @@ namespace vTools.Commands
       if (faces.Count == 1) return 0;
       int bestFace = -1;
       double bestDistance = double.PositiveInfinity;
-      double limit = Math.Max(tolerance * FollowingTolFactor,
-        curve.GetBoundingBox(true).Diagonal.Length * FollowingDiagFactor);
+      double limit = Math.Max(tolerance * ConfiguredFollowingTolFactor,
+        curve.GetBoundingBox(true).Diagonal.Length * ConfiguredFollowingDiagFactor);
       for (int faceIndex = 0; faceIndex < faces.Count; faceIndex++)
       {
         double maximumDistance = 0.0;
-        for (int sample = 0; sample < FollowingCurveSamples; sample++)
+        for (int sample = 0; sample < ConfiguredFollowingCurveSamples; sample++)
         {
-          var point = curve.PointAt(curve.Domain.ParameterAt((double)sample / (FollowingCurveSamples - 1)));
+          var point = curve.PointAt(curve.Domain.ParameterAt((double)sample / (ConfiguredFollowingCurveSamples - 1)));
           var closest = faces[faceIndex].ClosestPoint(point);
           maximumDistance = Math.Max(maximumDistance, point.DistanceTo(closest));
         }
@@ -3673,7 +3774,7 @@ namespace vTools.Commands
       double tolerance)
     {
       double maximumDistance = Math.Max(
-        tolerance * NativeJoinedSeamToleranceFactor,
+        tolerance * ConfiguredNativeJoinedSeamToleranceFactor,
         RhinoMath.ZeroTolerance);
       foreach (var edge in joinedBreps
         .Where(brep => brep != null)
@@ -4019,8 +4120,8 @@ namespace vTools.Commands
         return false;
       double scale = flatBreps[best.BrepIndex].GetBoundingBox(true).Diagonal.Length;
       double limit = Math.Max(
-        tolerance * NativeLabelEdgeToleranceFactor,
-        scale * EdgeMateDiagFactor);
+        tolerance * ConfiguredNativeLabelEdgeToleranceFactor,
+        scale * ConfiguredEdgeMateDiagFactor);
       if (distanceResult > limit)
         return false;
       edgeResult = best;
@@ -4206,12 +4307,12 @@ namespace vTools.Commands
           double clearance = BoundaryClearance(brep, pt.Value);
           double halfWidthFactor = Math.Max(0.5, display.Length * 0.65 * 0.5);
           if (clearance > tol)
-            caps.Add(clearance * 0.80 / (TextHeightScale * halfWidthFactor));
+            caps.Add(clearance * 0.80 / (ConfiguredTextHeightScale * halfWidthFactor));
         }
       }
 
       if (caps.Count > 0) height = Math.Min(height, caps.Min());
-      return Math.Max(height, tol * 8.0) * TextHeightScale;
+      return Math.Max(height, tol * 8.0) * ConfiguredTextHeightScale;
     }
 
     private static double FitFlatLabelHeight(
@@ -4882,25 +4983,25 @@ namespace vTools.Commands
       double shortLen   = Math.Min(lenA, lenB);
       double longLen    = Math.Max(lenA, lenB);
 
-      double matchTol = Math.Max(absTol * EdgeMateTolFactor,
-                                 Math.Max(longLen, shortLen) * EdgeMateDiagFactor);
+      double matchTol = Math.Max(absTol * ConfiguredEdgeMateTolFactor,
+                                 Math.Max(longLen, shortLen) * ConfiguredEdgeMateDiagFactor);
       bool full = Math.Abs(longLen - shortLen) <= matchTol * 2.0;
 
-      var distances = new List<double>(EdgeMateSamples * 2);
+      var distances = new List<double>(ConfiguredEdgeMateSamples * 2);
 
       // Sample SHORT → project onto LONG
-      for (int k = 0; k < EdgeMateSamples; k++)
+      for (int k = 0; k < ConfiguredEdgeMateSamples; k++)
       {
-        var p = shortCrv.PointAt(shortCrv.Domain.ParameterAt((k + 0.5) / EdgeMateSamples));
+        var p = shortCrv.PointAt(shortCrv.Domain.ParameterAt((k + 0.5) / ConfiguredEdgeMateSamples));
         if (!longCrv.ClosestPoint(p, out double tl)) return null;
         distances.Add(p.DistanceTo(longCrv.PointAt(tl)));
       }
       // For full-length pairs, also sample LONG → project onto SHORT
       if (full)
       {
-        for (int k = 0; k < EdgeMateSamples; k++)
+        for (int k = 0; k < ConfiguredEdgeMateSamples; k++)
         {
-          var p = longCrv.PointAt(longCrv.Domain.ParameterAt((k + 0.5) / EdgeMateSamples));
+          var p = longCrv.PointAt(longCrv.Domain.ParameterAt((k + 0.5) / ConfiguredEdgeMateSamples));
           if (!shortCrv.ClosestPoint(p, out double ts)) return null;
           distances.Add(p.DistanceTo(shortCrv.PointAt(ts)));
         }
@@ -4991,8 +5092,8 @@ namespace vTools.Commands
           _explode = boolValue;
         if (ToolsOptionStore.TryGetBool(section, "splitFaces", out boolValue))
           _splitFaces = boolValue;
-        _uv = ToolsOptionStore.TryGetBool(section, "uv", out boolValue) ? boolValue : DefaultUV;
-        _quietNative = ToolsOptionStore.TryGetBool(section, "quietNative", out boolValue) ? boolValue : DefaultQuietNative;
+        _uv = ToolsOptionStore.TryGetBool(section, "uv", out boolValue) ? boolValue : ConfiguredDefaultUV;
+        _quietNative = ToolsOptionStore.TryGetBool(section, "quietNative", out boolValue) ? boolValue : ConfiguredDefaultQuietNative;
         if (ToolsOptionStore.TryGetBool(section, "keepPropSurface", out boolValue))
           _keepPropSurface = boolValue;
         if (ToolsOptionStore.TryGetBool(section, "keepPropFollowing", out boolValue))
@@ -5002,11 +5103,11 @@ namespace vTools.Commands
         if (ToolsOptionStore.TryGetDouble(section, "xExtents", out doubleValue) && doubleValue >= 0.0)
           _xExtents = doubleValue;
         if (ToolsOptionStore.TryGetString(section, "surfaceLayer", out var layer))
-          _surfaceLayer = NormalizeOutputLayer(layer, DefaultSurfaceLayerName, DefaultSurfaceLayerPath);
+          _surfaceLayer = NormalizeOutputLayer(layer, ConfiguredDefaultSurfaceLayerName, ConfiguredDefaultSurfaceLayerPath);
         if (ToolsOptionStore.TryGetString(section, "labelLayer", out layer))
-          _labelLayer = NormalizeOutputLayer(layer, DefaultLabelLayerName, DefaultLabelLayerPath);
+          _labelLayer = NormalizeOutputLayer(layer, ConfiguredDefaultLabelLayerName, ConfiguredDefaultLabelLayerPath);
         if (ToolsOptionStore.TryGetString(section, "dotLayer", out layer))
-          _dotLayer = NormalizeOutputLayer(layer, DefaultDotLayerName, DefaultDotLayerPath);
+          _dotLayer = NormalizeOutputLayer(layer, ConfiguredDefaultDotLayerName, ConfiguredDefaultDotLayerPath);
         return 0;
       });
     }
@@ -5042,15 +5143,15 @@ namespace vTools.Commands
       public bool RotateFlatParts;
       public bool Explode;
       public bool SplitFaces;
-      public bool UV = DefaultUV;
-      public bool QuietNative = DefaultQuietNative;
+      public bool UV = ConfiguredDefaultUV;
+      public bool QuietNative = ConfiguredDefaultQuietNative;
       public bool KeepPropSurface;
       public bool KeepPropFollowing;
       public double LayoutSpacing;
       public double XExtents;
-      public string SurfaceLayer = DefaultSurfaceLayerPath;
-      public string LabelLayer = DefaultLabelLayerPath;
-      public string DotLayer = DefaultDotLayerPath;
+      public string SurfaceLayer = ConfiguredDefaultSurfaceLayerPath;
+      public string LabelLayer = ConfiguredDefaultLabelLayerPath;
+      public string DotLayer = ConfiguredDefaultDotLayerPath;
     }
 
     private class SourceSurface
@@ -5153,18 +5254,36 @@ namespace vTools
   internal static class ConicalSurfaceDevelopment
   {
     // Defaults and customizable constants
-    private const double ApexRelativeTolerance = 1.0e-10; // Maximum collapsed-row variation as a fraction of the surface diagonal; smaller is stricter.
-    private const double RulingRelativeTolerance = 1.0e-10; // Maximum straight-control-grid residual relative to surface diagonal; additionally bounded by the fitting tolerance.
-    private const double UniformWeightRelativeTolerance = 1.0e-12; // Maximum relative NURBS weight spread treated as roundoff, not a genuinely rational parameterization.
-    private const double FitToleranceFactor = 0.02; // Fraction of document absolute tolerance allowed for flat-surface fitting; positive and less than one.
-    private const double IntegrationToleranceFactor = 0.1; // Fraction of the fitting error budget allocated to angular integration; positive and less than one.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.ApexRelativeTolerance", "Maximum collapsed-row variation as a fraction of the surface diagonal; smaller is stricter.")] private const double ApexRelativeTolerance = 1.0e-10; // Maximum collapsed-row variation as a fraction of the surface diagonal; smaller is stricter.
+
+    private static readonly double ConfiguredApexRelativeTolerance = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.ApexRelativeTolerance", ApexRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.RulingRelativeTolerance", "Maximum straight-control-grid residual relative to surface diagonal; additionally bounded by the fitting tolerance.")] private const double RulingRelativeTolerance = 1.0e-10; // Maximum straight-control-grid residual relative to surface diagonal; additionally bounded by the fitting tolerance.
+
+    private static readonly double ConfiguredRulingRelativeTolerance = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.RulingRelativeTolerance", RulingRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.UniformWeightRelativeTolerance", "Maximum relative NURBS weight spread treated as roundoff, not a genuinely rational parameterization.")] private const double UniformWeightRelativeTolerance = 1.0e-12; // Maximum relative NURBS weight spread treated as roundoff, not a genuinely rational parameterization.
+
+    private static readonly double ConfiguredUniformWeightRelativeTolerance = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.UniformWeightRelativeTolerance", UniformWeightRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.FitToleranceFactor", "Fraction of document absolute tolerance allowed for flat-surface fitting; positive and less than one.")] private const double FitToleranceFactor = 0.02; // Fraction of document absolute tolerance allowed for flat-surface fitting; positive and less than one.
+
+    private static readonly double ConfiguredFitToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.FitToleranceFactor", FitToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.IntegrationToleranceFactor", "Fraction of the fitting error budget allocated to angular integration; positive and less than one.")] private const double IntegrationToleranceFactor = 0.1; // Fraction of the fitting error budget allocated to angular integration; positive and less than one.
+
+    private static readonly double ConfiguredIntegrationToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.IntegrationToleranceFactor", IntegrationToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int MinimumFitDegree = 3; // Minimum curved-direction spline degree; three permits smooth curvature without changing UV coordinates.
-    private const int SamplesPerSpan = 9; // Interior validation samples per spline span; positive values increase fitting checks.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.SamplesPerSpan", "Interior validation samples per spline span; positive values increase fitting checks.")] private const int SamplesPerSpan = 9; // Interior validation samples per spline span; positive values increase fitting checks.
+
+    private static readonly int ConfiguredSamplesPerSpan = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.SamplesPerSpan", SamplesPerSpan); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int MaximumControlPoints = 2048; // Maximum adaptive spline control points before rejecting an unconverged development.
     private const int MaximumIntegrationDepth = 20; // Maximum adaptive Simpson recursion depth; exhaustion rejects the development.
-    private const int MetricSamples = 17; // UV samples per direction used to validate the developed surface metric; two or greater.
-    private const double MetricRelativeTolerance = 1.0e-4; // Maximum fractional first-derivative metric error; 0.0001 means 0.01 percent.
-    private const double FitMetricToleranceFactor = 0.5; // Fraction of the final metric-error limit allowed during fitting; less than one reserves validation margin.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.MetricSamples", "UV samples per direction used to validate the developed surface metric; two or greater.")] private const int MetricSamples = 17; // UV samples per direction used to validate the developed surface metric; two or greater.
+
+    private static readonly int ConfiguredMetricSamples = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.MetricSamples", MetricSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.MetricRelativeTolerance", "Maximum fractional first-derivative metric error; 0.0001 means 0.01 percent.")] private const double MetricRelativeTolerance = 1.0e-4; // Maximum fractional first-derivative metric error; 0.0001 means 0.01 percent.
+
+    private static readonly double ConfiguredMetricRelativeTolerance = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.MetricRelativeTolerance", MetricRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.FitMetricToleranceFactor", "Fraction of the final metric-error limit allowed during fitting; less than one reserves validation margin.")] private const double FitMetricToleranceFactor = 0.5; // Fraction of the final metric-error limit allowed during fitting; less than one reserves validation margin.
+
+    private static readonly double ConfiguredFitMetricToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.ConicalSurfaceDevelopment.FitMetricToleranceFactor", FitMetricToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const CurveEvaluationSide DefaultDerivativeEvaluationSide = CurveEvaluationSide.Default; // CurveEvaluationSide enum for interior samples; span endpoints explicitly use their inside derivative.
 
     internal static bool TryCreate(
@@ -5186,9 +5305,9 @@ namespace vTools
           surface.IsPeriodic(1 - linearDirection))
         return false;
       double apexTolerance = Math.Max(RhinoMath.ZeroTolerance,
-        surface.GetBoundingBox(true).Diagonal.Length * ApexRelativeTolerance);
+        surface.GetBoundingBox(true).Diagonal.Length * ConfiguredApexRelativeTolerance);
 
-      double fitTolerance = Math.Max(RhinoMath.ZeroTolerance, tolerance * FitToleranceFactor);
+      double fitTolerance = Math.Max(RhinoMath.ZeroTolerance, tolerance * ConfiguredFitToleranceFactor);
       var linearDomain = surface.Domain(linearDirection);
       double baseParameter = apexSide == 0 ? linearDomain.T1 : linearDomain.T0;
       using var directrix = surface.IsoCurve(1 - linearDirection, baseParameter).ToNurbsCurve();
@@ -5198,7 +5317,7 @@ namespace vTools
 
       double angleSign = (linearDirection == 0 ? 1.0 : -1.0) * (apexSide == 0 ? 1.0 : -1.0);
       var development = new AngularDevelopment(directrix, apex,
-        fitTolerance * IntegrationToleranceFactor / maximumRadius, angleSign);
+        fitTolerance * ConfiguredIntegrationToleranceFactor / maximumRadius, angleSign);
       using var fitted = directrix.DuplicateCurve().ToNurbsCurve();
       if (fitted.Degree < MinimumFitDegree && !fitted.IncreaseDegree(MinimumFitDegree))
         throw new InvalidOperationException("Cannot elevate the conical boundary spline.");
@@ -5216,9 +5335,9 @@ namespace vTools
         {
           double spanError = 0.0;
           double spanMetricError = 0.0;
-          for (int sample = 1; sample <= SamplesPerSpan; sample++)
+          for (int sample = 1; sample <= ConfiguredSamplesPerSpan; sample++)
           {
-            double parameter = span.ParameterAt((double)sample / (SamplesPerSpan + 1));
+            double parameter = span.ParameterAt((double)sample / (ConfiguredSamplesPerSpan + 1));
             spanError = Math.Max(spanError,
               fitted.PointAt(parameter).DistanceTo(development.PointAt(parameter)));
             spanMetricError = Math.Max(spanMetricError,
@@ -5226,7 +5345,7 @@ namespace vTools
           }
           error = Math.Max(error, spanError);
           if (spanError > fitTolerance ||
-              spanMetricError > MetricRelativeTolerance * FitMetricToleranceFactor)
+              spanMetricError > ConfiguredMetricRelativeTolerance * ConfiguredFitMetricToleranceFactor)
             insertions.Add(span.Mid);
         }
         if (insertions.Count == 0)
@@ -5265,7 +5384,7 @@ namespace vTools
         }
 
       double metricError = ValidateMetric(face.UnderlyingSurface(), flatSurface);
-      if (metricError > MetricRelativeTolerance)
+      if (metricError > ConfiguredMetricRelativeTolerance)
         throw new InvalidOperationException($"Conical development metric error {metricError:G6} exceeds its limit.");
       flatBrep = source.IsSurface ? flatSurface.ToBrep() :
         Brep.CreateTrimmedSurface(face, flatSurface, tolerance);
@@ -5288,7 +5407,7 @@ namespace vTools
         {
           double current = surface.Points.GetControlPoint(u, v).Weight;
           if (!RhinoMath.IsValidDouble(current) ||
-              Math.Abs(current - weight) > Math.Abs(weight) * UniformWeightRelativeTolerance)
+              Math.Abs(current - weight) > Math.Abs(weight) * ConfiguredUniformWeightRelativeTolerance)
             return false;
         }
       return surface.MakeNonRational();
@@ -5299,9 +5418,9 @@ namespace vTools
     {
       direction = -1; apexSide = -1; apex = Point3d.Unset; fractions = Array.Empty<double>();
       double diagonal = surface.GetBoundingBox(true).Diagonal.Length;
-      double apexTolerance = Math.Max(RhinoMath.ZeroTolerance, diagonal * ApexRelativeTolerance);
+      double apexTolerance = Math.Max(RhinoMath.ZeroTolerance, diagonal * ConfiguredApexRelativeTolerance);
       double rulingTolerance = Math.Max(RhinoMath.ZeroTolerance,
-        Math.Min(diagonal * RulingRelativeTolerance, tolerance * FitToleranceFactor));
+        Math.Min(diagonal * ConfiguredRulingRelativeTolerance, tolerance * ConfiguredFitToleranceFactor));
       for (int candidateDirection = 0; candidateDirection < 2; candidateDirection++)
       {
         int linearCount = candidateDirection == 0 ? surface.Points.CountU : surface.Points.CountV;
@@ -5358,11 +5477,11 @@ namespace vTools
     private static double ValidateMetric(Surface source, Surface flat)
     {
       double error = 0.0;
-      for (int i = 1; i < MetricSamples; i++)
-        for (int j = 1; j < MetricSamples; j++)
+      for (int i = 1; i < ConfiguredMetricSamples; i++)
+        for (int j = 1; j < ConfiguredMetricSamples; j++)
         {
-          double u = source.Domain(0).ParameterAt((double)i / MetricSamples);
-          double v = source.Domain(1).ParameterAt((double)j / MetricSamples);
+          double u = source.Domain(0).ParameterAt((double)i / ConfiguredMetricSamples);
+          double v = source.Domain(1).ParameterAt((double)j / ConfiguredMetricSamples);
           if (!source.Evaluate(u, v, 1, out _, out var s) ||
               !flat.Evaluate(u, v, 1, out _, out var f))
             throw new InvalidOperationException("Cannot validate the conical development metric.");
@@ -5466,8 +5585,12 @@ namespace vTools
     // Defaults and customizable constants
     private const string MarkerPrefix = "__vTools_UnrollEdgeLength__"; // Internal following-dot prefix; markers are never added to the finished document.
     private const int ProbeCount = 5; // Ordered arc-length samples per source edge, including both ends; at least three.
-    private const double MatchingToleranceFactor = 1.0; // Document absolute-tolerance multiplier for locating transferred probes on actual flat curves.
-    private const double ReportToleranceFactor = 1.0; // Document absolute-tolerance multiplier above which individual length discrepancies are printed.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.UnrollEdgeLengths.MatchingToleranceFactor", "Document absolute-tolerance multiplier for locating transferred probes on actual flat curves.")] private const double MatchingToleranceFactor = 1.0; // Document absolute-tolerance multiplier for locating transferred probes on actual flat curves.
+
+    private static readonly double ConfiguredMatchingToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.UnrollEdgeLengths.MatchingToleranceFactor", MatchingToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vUnrollSrf", "vTools.UnrollEdgeLengths.ReportToleranceFactor", "Document absolute-tolerance multiplier above which individual length discrepancies are printed.")] private const double ReportToleranceFactor = 1.0; // Document absolute-tolerance multiplier above which individual length discrepancies are printed.
+
+    private static readonly double ConfiguredReportToleranceFactor = global::vTools.CommandDefaults.Get("vUnrollSrf", "vTools.UnrollEdgeLengths.ReportToleranceFactor", ReportToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string DifferenceFormat = "+0.######;-0.######;0"; // Signed decimal format for model-unit differences and percentages; up to six fractional digits.
 
     private sealed class SourceEdge
@@ -5511,7 +5634,7 @@ namespace vTools
     public void Report(RhinoDoc doc, int partNumber, string commandName,
       IReadOnlyList<Brep> flatBreps, IEnumerable<TextDot> flatDots)
     {
-      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * MatchingToleranceFactor, RhinoMath.ZeroTolerance);
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * ConfiguredMatchingToleranceFactor, RhinoMath.ZeroTolerance);
       var points = flatDots.Where(dot => IsMarker(dot.Text ?? string.Empty))
         .GroupBy(dot => dot.Text, StringComparer.Ordinal)
         .ToDictionary(group => group.Key, group => group.Select(dot => dot.Point).ToArray(), StringComparer.Ordinal);
@@ -5556,7 +5679,7 @@ namespace vTools
               $"part={partNumber} edge_length source_edge={edge.Index} source={edge.Length:G17} flat={length:G17} difference={difference:G17} percent={difference / edge.Length * 100.0:G17} units={doc.ModelUnitSystem}"));
           }
           double worst = lengths.OrderByDescending(length => Math.Abs(length - edge.Length)).First() - edge.Length;
-          if (Math.Abs(worst) > doc.ModelAbsoluteTolerance * ReportToleranceFactor)
+          if (Math.Abs(worst) > doc.ModelAbsoluteTolerance * ConfiguredReportToleranceFactor)
             RhinoApp.WriteLine(string.Format(CultureInfo.CurrentCulture,
               "{0}: part #{1} edge E{2} length discrepancy: {3} {4} ({5}%).",
               commandName, partNumber, edge.Index + 1,

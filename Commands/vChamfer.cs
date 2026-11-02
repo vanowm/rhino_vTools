@@ -38,16 +38,26 @@ public sealed class vChamfer : vToolsCommand
   private const string JoinKey     = "join";
 
   // Option defaults and solver settings
-  private const double DefaultLength = 1.0; // Chamfer line length in model units; zero or greater.
-  private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
-  private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
-  private const int MiddleTangentSolveSamples = 32; // Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.
-  private const int MiddleTangentSolveIterations = 48; // Bisection iterations used to refine the perpendicular-to-middle-tangent solution; positive integer.
-  private const double MiddleTangentResidualTolerance = 1.0e-7; // Maximum absolute cosine error from a perpendicular chamfer; zero or greater.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultLength", "Chamfer line length in model units; zero or greater.")] private const double DefaultLength = 1.0; // Chamfer line length in model units; zero or greater.
 
-  private static double _length = DefaultLength;
-  private static bool   _trim   = DefaultTrim; // true = trim curves; false = add line only
-  private static bool   _join   = DefaultJoin; // only used when _trim = true
+  private static readonly double ConfiguredDefaultLength = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultLength", DefaultLength); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultTrim", "true trims source curves to the chamfer; false adds only the chamfer line.")] private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
+
+  private static readonly bool ConfiguredDefaultTrim = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultTrim", DefaultTrim); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultJoin", "true joins trimmed curves with the chamfer; false keeps the results separate.")] private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
+
+  private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.MiddleTangentSolveSamples", "Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.")] private const int MiddleTangentSolveSamples = 32; // Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.
+
+  private static readonly int ConfiguredMiddleTangentSolveSamples = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.MiddleTangentSolveSamples", MiddleTangentSolveSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  private const int MiddleTangentSolveIterations = 48; // Bisection iterations used to refine the perpendicular-to-middle-tangent solution; positive integer.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.MiddleTangentResidualTolerance", "Maximum absolute cosine error from a perpendicular chamfer; zero or greater.")] private const double MiddleTangentResidualTolerance = 1.0e-7; // Maximum absolute cosine error from a perpendicular chamfer; zero or greater.
+
+  private static readonly double ConfiguredMiddleTangentResidualTolerance = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.MiddleTangentResidualTolerance", MiddleTangentResidualTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static double _length = ConfiguredDefaultLength;
+  private static bool   _trim   = ConfiguredDefaultTrim; // true = trim curves; false = add line only
+  private static bool   _join   = ConfiguredDefaultJoin; // only used when _trim = true
 
   // -- Formatting helpers ---------------------------------------------------
   private static string P(Point3d p)  => $"({p.X:F4},{p.Y:F4},{p.Z:F4})";
@@ -521,9 +531,9 @@ public sealed class vChamfer : vToolsCommand
     double previousStation = 0.0;
     double previousValue = double.NaN;
 
-    for (int i = 0; i <= MiddleTangentSolveSamples; i++)
+    for (int i = 0; i <= ConfiguredMiddleTangentSolveSamples; i++)
     {
-      double station = c2Length * i / MiddleTangentSolveSamples;
+      double station = c2Length * i / ConfiguredMiddleTangentSolveSamples;
       if (!TryEvaluate(
             station,
             out var value,
@@ -539,7 +549,7 @@ public sealed class vChamfer : vToolsCommand
         bestPoint = point;
       }
 
-      if (residual <= MiddleTangentResidualTolerance)
+      if (residual <= ConfiguredMiddleTangentResidualTolerance)
         return (ptA.DistanceTo(point), parameter, point);
 
       if (RhinoMath.IsValidDouble(previousValue) &&
@@ -570,7 +580,7 @@ public sealed class vChamfer : vToolsCommand
             bestPoint = middlePoint;
           }
 
-          if (middleResidual <= MiddleTangentResidualTolerance)
+          if (middleResidual <= ConfiguredMiddleTangentResidualTolerance)
             return (ptA.DistanceTo(middlePoint), middleParameter, middlePoint);
 
           if (Math.Sign(loValue) == Math.Sign(middleValue))
@@ -585,7 +595,7 @@ public sealed class vChamfer : vToolsCommand
         }
 
         if (bestPoint.IsValid &&
-            bestResidual <= MiddleTangentResidualTolerance)
+            bestResidual <= ConfiguredMiddleTangentResidualTolerance)
           return (ptA.DistanceTo(bestPoint), bestParameter, bestPoint);
       }
 
@@ -594,7 +604,7 @@ public sealed class vChamfer : vToolsCommand
     }
 
     return bestPoint.IsValid &&
-           bestResidual <= MiddleTangentResidualTolerance
+           bestResidual <= ConfiguredMiddleTangentResidualTolerance
       ? (ptA.DistanceTo(bestPoint), bestParameter, bestPoint)
       : (double.NaN, double.NaN, Point3d.Unset);
   }

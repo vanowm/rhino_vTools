@@ -19,8 +19,12 @@ namespace vTools.Commands;
 public sealed class vFilterExec : vToolsCommand
 {
   // Defaults
-  private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.
-  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Existing full layer path; *Current*, . or * leaves the current layer unchanged.
+  [global::vTools.CommandDefault("vFilterExec", "vTools.Commands.vFilterExec.DefaultFilter", "Canonical filter name or supported filter expression.")] private const string DefaultFilter = "Curves"; // Canonical filter name or supported filter expression.
+
+  private static readonly string ConfiguredDefaultFilter = global::vTools.CommandDefaults.Get("vFilterExec", "vTools.Commands.vFilterExec.DefaultFilter", DefaultFilter); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFilterExec", "vTools.Commands.vFilterExec.DefaultLayer", "Existing full layer path; *Current*, . or * leaves the current layer unchanged.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Existing full layer path; *Current*, . or * leaves the current layer unchanged.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vFilterExec", "vTools.Commands.vFilterExec.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int InvocationHistoryTailCharacters = 4096; // Maximum trailing history characters inspected for the alias typed at an interrupted prompt.
   private static readonly string[] BackgroundRepeatObservers = ["vHelp", "vPerpGumballProxy"]; // Known non-repeatable automatic updates allowed before alias registration; other new commands cancel it.
 
@@ -73,7 +77,7 @@ public sealed class vFilterExec : vToolsCommand
     Log.Write(Tag, "invocation alias={0} registration={1}", alias?.Name ?? "<not recorded>", registration != null);
     if (registration == null) _repeatHelpUrl = null;
 
-    var layerName = DefaultLayer;
+    var layerName = ConfiguredDefaultLayer;
     if (!TryGetCommand(doc, ref layerName, out var command, out var commandResult))
       return commandResult;
 
@@ -128,7 +132,7 @@ public sealed class vFilterExec : vToolsCommand
 
   private static bool TryParseStandaloneAlias(string macro, out string layer, out string command, out FilterSelection filter)
   {
-    layer = DefaultLayer; command = string.Empty; filter = default;
+    layer = ConfiguredDefaultLayer; command = string.Empty; filter = default;
     var tokens = new List<string>();
     for (int index = 0; index < macro.Length;)
     {
@@ -161,7 +165,7 @@ public sealed class vFilterExec : vToolsCommand
     return next == tokens.Count - 1 && TryParseFilter(tokens[next], out filter, out _);
   }
 
-  private static string NormalizeLayer(string value) => value is "." or "*" ? DefaultLayer : value;
+  private static string NormalizeLayer(string value) => value is "." or "*" ? ConfiguredDefaultLayer : value;
   private static bool AliasMatches(AliasInvocation alias, PendingLaunch launch) =>
     TryParseStandaloneAlias(alias.Macro, out var layer, out var command, out var filter) &&
     command.Equals(launch.Command, StringComparison.Ordinal) && filter == launch.Filter &&
@@ -182,6 +186,7 @@ public sealed class vFilterExec : vToolsCommand
 
   private static void CancelRepeatForNewCommand(object? sender, CommandEventArgs e)
   {
+    if(PerpGumballMonitor.IsAutomaticGumballCommand(e.CommandEnglishName))return;
     if (BackgroundRepeatObservers.Contains(e.CommandEnglishName, StringComparer.OrdinalIgnoreCase)) return;
     Log.Write(Tag, "alias repeat registration abandoned for newer command={0}", e.CommandEnglishName);
     CancelRepeatRegistration();
@@ -202,7 +207,7 @@ public sealed class vFilterExec : vToolsCommand
       var doc = RhinoDoc.ActiveDoc;
       if (doc?.RuntimeSerialNumber != pending.Launch.DocumentSerialNumber ||
         !CommandAliasList.IsAlias(pending.Alias.Name) || CommandAliasList.GetMacro(pending.Alias.Name) != pending.Alias.Macro ||
-        pending.Launch.LayerName != DefaultLayer && doc.Layers.FindByFullPath(pending.Launch.LayerName, RhinoMath.UnsetIntIndex) < 0)
+        pending.Launch.LayerName != ConfiguredDefaultLayer && doc.Layers.FindByFullPath(pending.Launch.LayerName, RhinoMath.UnsetIntIndex) < 0)
       {Log.Write(Tag, "alias repeat registration abandoned: document, alias or layer changed alias={0}", pending.Alias.Name);return;}
       // No enclosing command may finish after this macro and replace its MRU entry.
       // Outside a ScriptRunner, RunScript queues the alias; retain the one-shot guard
@@ -275,7 +280,7 @@ public sealed class vFilterExec : vToolsCommand
     getter.SetCommandPrompt("Selection filter");
     getter.AcceptNothing(true);
     getter.EnableTransparentCommands(true);
-    getter.SetDefaultString(DefaultFilter);
+    getter.SetDefaultString(ConfiguredDefaultFilter);
 
     while (true)
     {
@@ -306,7 +311,7 @@ public sealed class vFilterExec : vToolsCommand
 
       var filterSpec = result switch
       {
-        GetResult.Nothing => DefaultFilter,
+        GetResult.Nothing => ConfiguredDefaultFilter,
         GetResult.String => getter.StringResult(),
         GetResult.Option when optionFilters.TryGetValue(getter.Option().Index, out var optionFilter) => optionFilter,
         _ => string.Empty
@@ -340,7 +345,7 @@ public sealed class vFilterExec : vToolsCommand
         ? layerName
         : NormalizeInput(getter.StringResult());
       if (LayerSelector.TryResolveManualValue(
-            doc, requested, DefaultLayer, allowNewLayer: false, specialChoices: [],
+            doc, requested, ConfiguredDefaultLayer, allowNewLayer: false, specialChoices: [],
             out var selectedLayer, out var error))
       {
         layerName = selectedLayer;
@@ -588,7 +593,7 @@ public sealed class vFilterExec : vToolsCommand
 
   private static void ApplyLayer(RhinoDoc doc, string layerName, ActiveExecution execution)
   {
-    if (LayerSelector.IsCurrentLayerValue(layerName, DefaultLayer))
+    if (LayerSelector.IsCurrentLayerValue(layerName, ConfiguredDefaultLayer))
       return;
 
     var index = doc.Layers.FindByFullPath(layerName, RhinoMath.UnsetIntIndex);

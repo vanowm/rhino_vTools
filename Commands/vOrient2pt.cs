@@ -144,10 +144,15 @@ public sealed class vOrient2pt : vToolsCommand
     }
 
     var xform = Transform.PlaneToPlane(sourcePlane, targetPlane);
-    var transformedIds = OrientCommon.TransformObjects(doc, objectIds, xform, copyMode);
+    if (!ObjectTransformSelection.TryTransform(doc, objectIds, xform, copyMode, out var sourceIds, out var transformedIds))
+    {
+      RhinoApp.WriteLine("vOrient2pt: could not orient the selection; original geometry restored.");
+      OrientCommon.SaveCopyOption(copyMode);
+      return Result.Failure;
+    }
 
     if (copyMode)
-      OrientCommon.RecreateGroupsForCopiedObjects(doc, objectIds, transformedIds);
+      OrientCommon.RecreateGroupsForCopiedObjects(doc, sourceIds, transformedIds);
 
     OrientCommon.SaveCopyOption(copyMode);
     doc.Views.Redraw();

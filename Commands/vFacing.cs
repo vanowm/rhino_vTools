@@ -22,13 +22,17 @@ namespace vTools.Commands;
 public sealed class vFacing : vToolsCommand
 {
   // Option defaults
-  private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
-  private const int InteriorCurveContainmentSamples = 17; // Samples used to preserve fully contained curves before perimeter clipping; three or greater.
+  [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.DefaultSize", "Facing offset in model units; greater than zero.")] private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", "Samples used to preserve fully contained curves before perimeter clipping; three or greater.")] private const int InteriorCurveContainmentSamples = 17; // Samples used to preserve fully contained curves before perimeter clipping; three or greater.
+
+  private static readonly int ConfiguredInteriorCurveContainmentSamples = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", InteriorCurveContainmentSamples); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string SectionName = "vFacing";
   private const string SizeKey     = "size";
 
-  private static double _size = DefaultSize;
+  private static double _size = ConfiguredDefaultSize;
 
   public override string EnglishName => "vFacing";
 
@@ -1063,6 +1067,10 @@ public sealed class vFacing : vToolsCommand
   private static Curve? CreateContainmentBoundary(
     Curve[] pieces, Plane plane, double tol)
   {
+    // The CPlane may be translated away from the source. Boolean regions lie on the supplied plane.
+    if (pieces.Length == 0) return null;
+    plane.Origin = pieces[0].PointAtStart;
+    if (pieces.Any(curve => !curve.IsInPlane(plane, tol))) return null;
     using var regions = Curve.CreateBooleanRegions(
       pieces, plane, combineRegions: true, tol);
     if (regions == null)
@@ -1587,6 +1595,9 @@ public sealed class vFacing : vToolsCommand
             if (ev.IsOverlap) { splitParams.Add(ev.OverlapA.T0); splitParams.Add(ev.OverlapA.T1); }
             else              splitParams.Add(ev.ParameterA);
           }
+        // Endpoint contacts do not divide a curve. Passing only endpoints to Split can return null.
+        splitParams.RemoveWhere(t => t <= crv.Domain.T0 || t >= crv.Domain.T1 ||
+          SpanLength(crv, crv.Domain.T0, t) <= tol || SpanLength(crv, t, crv.Domain.T1) <= tol);
 
         if (splitParams.Count == 0)
         {
@@ -1605,12 +1616,13 @@ public sealed class vFacing : vToolsCommand
           var keptSegments = 0;
           foreach (var seg in segs)
           {
-            if (seg.GetLength() < tol) continue;
+            if (seg.GetLength() < tol) { seg.Dispose(); continue; }
             if (IsInsideOrOn(seg.PointAtNormalizedLength(0.5), boundary, plane, tol))
             {
               result.Add((seg, attr));
               keptSegments++;
             }
+            else seg.Dispose();
           }
           Log.Write("vFacing",
             $"    clipped interior curve id={obj.Id} type={crv.GetType().Name} " +
@@ -1632,9 +1644,9 @@ public sealed class vFacing : vToolsCommand
     Curve curve, List<Curve> boundary, Plane plane, double tol)
   {
     int divisor = curve.IsClosed
-      ? InteriorCurveContainmentSamples
-      : InteriorCurveContainmentSamples - 1;
-    int lastSample = InteriorCurveContainmentSamples - 1;
+      ? ConfiguredInteriorCurveContainmentSamples
+      : ConfiguredInteriorCurveContainmentSamples - 1;
+    int lastSample = ConfiguredInteriorCurveContainmentSamples - 1;
     for (var i = 0; i <= lastSample; i++)
     {
       double normalizedParameter = (double)i / divisor;

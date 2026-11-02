@@ -23,43 +23,67 @@ public sealed class vUzip : vToolsCommand
   public override string EnglishName => "vUzip";
 
   private const string SettingsSection            = "vUzip";
-  private const double DefaultLeft                = 2.375; // Left offset in model units; zero or greater.
-  private const double DefaultRight               = 2.375; // Right offset in model units; zero or greater.
-  private const double DefaultBottom              = 1.125; // Bottom offset in model units; zero or greater.
-  private const double DefaultRadius              = 12.0; // Corner radius in model units; zero or greater.
-  private const bool DefaultGlass                 = false; // true creates the glass offset; false omits it.
-  private const double DefaultGlassOffset         = 0.25; // Glass offset in model units; signed values allowed.
-  private const string DefaultGlassLayer          = "Glass"; // Rhino layer name or full layer path.
-  private const bool DefaultVis                   = false; // true creates the visibility offset; false omits it.
-  private const double DefaultVisOffset           = 0.75; // Visibility-line offset in model units; signed values allowed.
-  private const string DefaultVisLayer            = "Vis-Line"; // Rhino layer name or full layer path.
-  private const string DefaultCenterLayer         = "Reference"; // Rhino layer name or full layer path.
-  private const bool DefaultParts                 = false; // true creates separate part outputs; false creates only the main result.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultLeft", "Left offset in model units; zero or greater.")] private const double DefaultLeft                = 2.375; // Left offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultLeft = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultLeft", DefaultLeft); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultRight", "Right offset in model units; zero or greater.")] private const double DefaultRight               = 2.375; // Right offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultRight = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultRight", DefaultRight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultBottom", "Bottom offset in model units; zero or greater.")] private const double DefaultBottom              = 1.125; // Bottom offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultBottom = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultBottom", DefaultBottom); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultRadius", "Corner radius in model units; zero or greater.")] private const double DefaultRadius              = 12.0; // Corner radius in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultRadius = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultRadius", DefaultRadius); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultGlass", "true creates the glass offset; false omits it.")] private const bool DefaultGlass                 = false; // true creates the glass offset; false omits it.
+
+  private static readonly bool ConfiguredDefaultGlass = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultGlass", DefaultGlass); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultGlassOffset", "Glass offset in model units; signed values allowed.")] private const double DefaultGlassOffset         = 0.25; // Glass offset in model units; signed values allowed.
+
+  private static readonly double ConfiguredDefaultGlassOffset = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultGlassOffset", DefaultGlassOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultGlassLayer", "Rhino layer name or full layer path.")] private const string DefaultGlassLayer          = "Glass"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultGlassLayer = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultGlassLayer", DefaultGlassLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultVis", "true creates the visibility offset; false omits it.")] private const bool DefaultVis                   = false; // true creates the visibility offset; false omits it.
+
+  private static readonly bool ConfiguredDefaultVis = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultVis", DefaultVis); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultVisOffset", "Visibility-line offset in model units; signed values allowed.")] private const double DefaultVisOffset           = 0.75; // Visibility-line offset in model units; signed values allowed.
+
+  private static readonly double ConfiguredDefaultVisOffset = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultVisOffset", DefaultVisOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultVisLayer", "Rhino layer name or full layer path.")] private const string DefaultVisLayer            = "Vis-Line"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultVisLayer = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultVisLayer", DefaultVisLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultCenterLayer", "Rhino layer name or full layer path.")] private const string DefaultCenterLayer         = "Reference"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultCenterLayer = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultCenterLayer", DefaultCenterLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.DefaultParts", "true creates separate part outputs; false creates only the main result.")] private const bool DefaultParts                 = false; // true creates separate part outputs; false creates only the main result.
+
+  private static readonly bool ConfiguredDefaultParts = global::vTools.CommandDefaults.Get("vUzip", "vTools.Commands.vUzip.DefaultParts", DefaultParts); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double ZipperValue                = DefaultLeft; // Reference zipper offset in model units used by generated geometry.
 
-  private static string LayerCut       = DefaultLayerCutName;
-  private static string LayerPlot      = DefaultLayerPlotName;
-  private static string LayerReference = DefaultLayerReferenceName;
+  private static string LayerCut       = ConfiguredDefaultLayerCutName;
+  private static string LayerPlot      = ConfiguredDefaultLayerPlotName;
+  private static string LayerReference = ConfiguredDefaultLayerReferenceName;
 
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
   private sealed class UzipSettings
   {
-    public double Left        { get; set; } = DefaultLeft;
-    public double Right       { get; set; } = DefaultRight;
-    public double Bottom      { get; set; } = DefaultBottom;
-    public double Radius      { get; set; } = DefaultRadius;
-    public bool   Glass       { get; set; } = DefaultGlass;
-    public double GlassOffset { get; set; } = DefaultGlassOffset;
-    public string GlassLayer  { get; set; } = DefaultGlassLayer;
-    public bool   Vis         { get; set; } = DefaultVis;
-    public double VisOffset   { get; set; } = DefaultVisOffset;
-    public string VisLayer    { get; set; } = DefaultVisLayer;
-    public string CenterLayer { get; set; } = DefaultCenterLayer;
-    public bool   Parts       { get; set; } = DefaultParts;
-    public string Label       { get; set; } = DefaultLabel;
-    public double Tail        { get; set; } = DefaultTail;
+    public double Left        { get; set; } = ConfiguredDefaultLeft;
+    public double Right       { get; set; } = ConfiguredDefaultRight;
+    public double Bottom      { get; set; } = ConfiguredDefaultBottom;
+    public double Radius      { get; set; } = ConfiguredDefaultRadius;
+    public bool   Glass       { get; set; } = ConfiguredDefaultGlass;
+    public double GlassOffset { get; set; } = ConfiguredDefaultGlassOffset;
+    public string GlassLayer  { get; set; } = ConfiguredDefaultGlassLayer;
+    public bool   Vis         { get; set; } = ConfiguredDefaultVis;
+    public double VisOffset   { get; set; } = ConfiguredDefaultVisOffset;
+    public string VisLayer    { get; set; } = ConfiguredDefaultVisLayer;
+    public string CenterLayer { get; set; } = ConfiguredDefaultCenterLayer;
+    public bool   Parts       { get; set; } = ConfiguredDefaultParts;
+    public string Label       { get; set; } = ConfiguredDefaultLabel;
+    public double Tail        { get; set; } = ConfiguredDefaultTail;
   }
 
   private static UzipSettings LoadSettings() =>
@@ -609,7 +633,7 @@ public sealed class vUzip : vToolsCommand
         {
           conduit.DrawEnabled = true; doc.Views.Redraw();
           var newLabel = label; RhinoGet.GetString("Label", true, ref newLabel); conduit.DrawEnabled = false; doc.Views.Redraw();
-          var trimmed = (newLabel ?? DefaultLabel).Trim();
+          var trimmed = (newLabel ?? ConfiguredDefaultLabel).Trim();
           if (trimmed != label) { conduit.Enabled = false; return (true, trimmed, tail); }
           gp.ClearCommandOptions(); labelOptIdx = gp.AddOption("Label", label); tailOptIdx = gp.AddOption("Tail", tail.ToString("0.##"));
         }
@@ -657,7 +681,7 @@ public sealed class vUzip : vToolsCommand
     // Parts-selection highlight: curves drawn in bright yellow so they are visible
     // without relying on doc.Objects.Select (which blocks re-clicking selected objects)
     public List<Curve> PartsHighlight { get; } = new();
-    private static readonly Color PartsHighlightColor = Color.FromArgb(255, 215, 0); // Preview highlight color for generated parts.
+    [global::vTools.CommandDefault("vUzip", "vTools.Commands.vUzip.PreviewConduit.PartsHighlightColor", "Preview highlight color for generated parts.", "#FFFFD700")] private static readonly Color PartsHighlightColor = global::vTools.CommandDefaults.GetColor("vUzip", "vTools.Commands.vUzip.PreviewConduit.PartsHighlightColor", Color.FromArgb(255, 215, 0)); // Preview highlight color for generated parts.
 
     protected override void DrawOverlay(DrawEventArgs e)
     {
@@ -918,11 +942,11 @@ public sealed class vUzip : vToolsCommand
           if (need == 0) { glass = glassT.CurrentValue; vis = visT.CurrentValue; parts = partsT.CurrentValue; SaveCurrent(); break; }
           glass = glassT.CurrentValue; vis = visT.CurrentValue; parts = partsT.CurrentValue;
           var opt = go.Option()?.EnglishName ?? "";
-          if      (opt == "Left")    { var v = GetDistSubprompt("Left arm offset",  offL, DefaultLeft);    if (v == null) return Result.Cancel; offL = v.Value; }
-          else if (opt == "Right")   { var v = GetDistSubprompt("Right arm offset", offR, DefaultRight);   if (v == null) return Result.Cancel; offR = v.Value; }
-          else if (opt == "Bottom")  { var v = GetDistSubprompt("Bottom offset",    offB, DefaultBottom);  if (v == null) return Result.Cancel; offB = v.Value; }
-          else if (opt == "Radius")  { var v = GetDistSubprompt("Fillet radius",  radius, DefaultRadius); if (v == null) return Result.Cancel; radius = v.Value; }
-          else if (opt == "Label")   { var nl = currentLabel; if (RhinoGet.GetString("Label", true, ref nl) == Result.Success) currentLabel = (nl ?? DefaultLabel).Trim(); }
+          if      (opt == "Left")    { var v = GetDistSubprompt("Left arm offset",  offL, ConfiguredDefaultLeft);    if (v == null) return Result.Cancel; offL = v.Value; }
+          else if (opt == "Right")   { var v = GetDistSubprompt("Right arm offset", offR, ConfiguredDefaultRight);   if (v == null) return Result.Cancel; offR = v.Value; }
+          else if (opt == "Bottom")  { var v = GetDistSubprompt("Bottom offset",    offB, ConfiguredDefaultBottom);  if (v == null) return Result.Cancel; offB = v.Value; }
+          else if (opt == "Radius")  { var v = GetDistSubprompt("Fillet radius",  radius, ConfiguredDefaultRadius); if (v == null) return Result.Cancel; radius = v.Value; }
+          else if (opt == "Label")   { var nl = currentLabel; if (RhinoGet.GetString("Label", true, ref nl) == Result.Success) currentLabel = (nl ?? ConfiguredDefaultLabel).Trim(); }
           else if (opt == "Tail")    { var nt = currentTail;  if (RhinoGet.GetNumber("Tail length", true, ref nt) == Result.Success && nt >= 0.0) currentTail = nt; }
           else if (opt == "Options") { var dlg = new OptionsDialog(doc, s); dlg.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow); if (dlg.Result) { dlg.ApplyTo(s); offL = s.Left; offR = s.Right; offB = s.Bottom; radius = s.Radius; glass = s.Glass; vis = s.Vis; } }
           SaveCurrent();
@@ -1162,7 +1186,7 @@ public sealed class vUzip : vToolsCommand
             if (gmIds.Count > 0) partsSelectionIds = gmIds;
             // Values already captured above; handle sub-prompts for Label/Options.
             var optM = gm.Option()?.EnglishName ?? "";
-            if      (optM == "Label")   { var nl = currentLabel; if (RhinoGet.GetString("Label", true, ref nl) == Result.Success) { currentLabel = (nl ?? DefaultLabel).Trim(); SaveCurrent(); } }
+            if      (optM == "Label")   { var nl = currentLabel; if (RhinoGet.GetString("Label", true, ref nl) == Result.Success) { currentLabel = (nl ?? ConfiguredDefaultLabel).Trim(); SaveCurrent(); } }
             else if (optM == "Options") { var dlg = new OptionsDialog(doc, s); dlg.ShowModal(Rhino.UI.RhinoEtoApp.MainWindow); if (dlg.Result) { dlg.ApplyTo(s); glass = s.Glass; vis = s.Vis; SaveCurrent(); } }
             continue;
           }
@@ -1293,7 +1317,7 @@ public sealed class vUzip : vToolsCommand
         BuildAllParts(doc, stamp, currentLabel, centerItem, rebuildAllPre, rebuildTouchingIds, displayCurve, plane, insideSign, rebuildEndCrvs, specs, allPartObjectIds, createdGroups, ctx);
       }
 
-      s.Label = currentLabel ?? DefaultLabel;
+      s.Label = currentLabel ?? ConfiguredDefaultLabel;
       s.Tail  = Math.Max(0.0, currentTail);
       section.Parts = specs;
       SaveToolsConfig(configPath, configRoot);

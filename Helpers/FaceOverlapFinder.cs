@@ -6,12 +6,24 @@ namespace vTools.Commands;
 internal static class FaceOverlapFinder
 {
   // Detection defaults and customizable limits
-  private const int DefaultInteriorGridDivisions = 10; // Number of equal U/V cells sampled inside each curved face; integer >= 2.
-  private const int DefaultBoundarySamples = 16; // Samples taken around each face loop to detect narrow curved overlaps; integer >= 2.
-  private const double DefaultNormalAngleDegrees = 2.0; // Maximum angular difference between coincident face normals, in degrees from parallel or antiparallel.
-  private const double MinimumPlanarAreaToleranceFactor = 4.0; // Multiplier applied to tolerance squared when rejecting edge-only planar contact.
-  private const int PlanarBooleanRefinementLevels = 3; // Number of planar-intersection attempts from the requested tolerance toward finer tolerances; integer >= 1.
-  private const double PlanarBooleanToleranceScale = 0.1; // Tolerance multiplier applied at each planar-intersection refinement level; greater than 0.0 and less than 1.0.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultInteriorGridDivisions", "Number of equal U/V cells sampled inside each curved face; integer >= 2.")] private const int DefaultInteriorGridDivisions = 10; // Number of equal U/V cells sampled inside each curved face; integer >= 2.
+
+  private static readonly int ConfiguredDefaultInteriorGridDivisions = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultInteriorGridDivisions", DefaultInteriorGridDivisions); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultBoundarySamples", "Samples taken around each face loop to detect narrow curved overlaps; integer >= 2.")] private const int DefaultBoundarySamples = 16; // Samples taken around each face loop to detect narrow curved overlaps; integer >= 2.
+
+  private static readonly int ConfiguredDefaultBoundarySamples = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultBoundarySamples", DefaultBoundarySamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultNormalAngleDegrees", "Maximum angular difference between coincident face normals, in degrees from parallel or antiparallel.")] private const double DefaultNormalAngleDegrees = 2.0; // Maximum angular difference between coincident face normals, in degrees from parallel or antiparallel.
+
+  private static readonly double ConfiguredDefaultNormalAngleDegrees = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.DefaultNormalAngleDegrees", DefaultNormalAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.MinimumPlanarAreaToleranceFactor", "Multiplier applied to tolerance squared when rejecting edge-only planar contact.")] private const double MinimumPlanarAreaToleranceFactor = 4.0; // Multiplier applied to tolerance squared when rejecting edge-only planar contact.
+
+  private static readonly double ConfiguredMinimumPlanarAreaToleranceFactor = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.MinimumPlanarAreaToleranceFactor", MinimumPlanarAreaToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.PlanarBooleanRefinementLevels", "Number of planar-intersection attempts from the requested tolerance toward finer tolerances; integer >= 1.")] private const int PlanarBooleanRefinementLevels = 3; // Number of planar-intersection attempts from the requested tolerance toward finer tolerances; integer >= 1.
+
+  private static readonly int ConfiguredPlanarBooleanRefinementLevels = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.PlanarBooleanRefinementLevels", PlanarBooleanRefinementLevels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.PlanarBooleanToleranceScale", "Tolerance multiplier applied at each planar-intersection refinement level; greater than 0.0 and less than 1.0.")] private const double PlanarBooleanToleranceScale = 0.1; // Tolerance multiplier applied at each planar-intersection refinement level; greater than 0.0 and less than 1.0.
+
+  private static readonly double ConfiguredPlanarBooleanToleranceScale = global::vTools.CommandDefaults.Get("FaceOverlapFinder", "vTools.Commands.FaceOverlapFinder.PlanarBooleanToleranceScale", PlanarBooleanToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
 
   internal readonly record struct FaceReference(Guid ObjectId, int FaceIndex);
 
@@ -163,12 +175,12 @@ internal static class FaceOverlapFinder
     var uDomain = face.Domain(0);
     var vDomain = face.Domain(1);
 
-    for (var uIndex = 0; uIndex < DefaultInteriorGridDivisions; uIndex++)
+    for (var uIndex = 0; uIndex < ConfiguredDefaultInteriorGridDivisions; uIndex++)
     {
-      var u = uDomain.ParameterAt((uIndex + 0.5) / DefaultInteriorGridDivisions);
-      for (var vIndex = 0; vIndex < DefaultInteriorGridDivisions; vIndex++)
+      var u = uDomain.ParameterAt((uIndex + 0.5) / ConfiguredDefaultInteriorGridDivisions);
+      for (var vIndex = 0; vIndex < ConfiguredDefaultInteriorGridDivisions; vIndex++)
       {
-        var v = vDomain.ParameterAt((vIndex + 0.5) / DefaultInteriorGridDivisions);
+        var v = vDomain.ParameterAt((vIndex + 0.5) / ConfiguredDefaultInteriorGridDivisions);
         if (face.IsPointOnFace(u, v, tolerance) != PointFaceRelation.Interior)
           continue;
 
@@ -182,7 +194,7 @@ internal static class FaceOverlapFinder
       if (loopCurve == null || !loopCurve.IsValid)
         continue;
 
-      var parameters = loopCurve.DivideByCount(DefaultBoundarySamples, includeEnds: false);
+      var parameters = loopCurve.DivideByCount(ConfiguredDefaultBoundarySamples, includeEnds: false);
       if (parameters == null)
         continue;
 
@@ -290,10 +302,10 @@ internal static class FaceOverlapFinder
     var comparisonTolerance = Math.Max(
       areaTolerance * areaTolerance * 1e-3,
       RhinoMath.ZeroTolerance);
-    for (var level = 0; level < PlanarBooleanRefinementLevels; level++)
+    for (var level = 0; level < ConfiguredPlanarBooleanRefinementLevels; level++)
     {
       var booleanTolerance = Math.Max(
-        areaTolerance * Math.Pow(PlanarBooleanToleranceScale, level),
+        areaTolerance * Math.Pow(ConfiguredPlanarBooleanToleranceScale, level),
         RhinoMath.ZeroTolerance);
       var candidateAreas = TryCreatePlanarOverlapAreas(
         firstFace,
@@ -348,7 +360,7 @@ internal static class FaceOverlapFinder
       return null;
 
     var minimumArea = Math.Max(
-      tolerance * tolerance * MinimumPlanarAreaToleranceFactor,
+      tolerance * tolerance * ConfiguredMinimumPlanarAreaToleranceFactor,
       minimumReferenceArea);
     var validAreas = new List<Brep>();
     foreach (var intersection in intersections)
@@ -406,7 +418,7 @@ internal static class FaceOverlapFinder
     if (samples.Count == 0)
       return false;
 
-    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(DefaultNormalAngleDegrees));
+    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(ConfiguredDefaultNormalAngleDegrees));
     foreach (var sample in samples)
     {
       if (!target.ClosestPoint(sample.Point, out var u, out var v) ||
@@ -441,7 +453,7 @@ internal static class FaceOverlapFinder
     double coincidenceTolerance,
     double areaTolerance)
   {
-    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(DefaultNormalAngleDegrees));
+    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(ConfiguredDefaultNormalAngleDegrees));
     foreach (var sample in samples)
     {
       if (!target.ClosestPoint(sample.Point, out var u, out var v))
@@ -468,7 +480,7 @@ internal static class FaceOverlapFinder
     Plane second,
     double tolerance)
   {
-    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(DefaultNormalAngleDegrees));
+    var minimumNormalDot = Math.Cos(RhinoMath.ToRadians(ConfiguredDefaultNormalAngleDegrees));
     return Math.Abs(first.Normal * second.Normal) >= minimumNormalDot &&
            Math.Abs(first.DistanceTo(second.Origin)) <= tolerance &&
            Math.Abs(second.DistanceTo(first.Origin)) <= tolerance;

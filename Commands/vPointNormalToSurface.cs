@@ -36,9 +36,11 @@ namespace vTools.Commands
   {
     // Defaults and customizable constants
     private const string CommandName = "PointNormalToSurface"; // Diagnostic name for the shared point-placement workflow.
-    private static readonly Color PreviewLineColor = Color.FromArgb(110, 180, 180, 180); // ARGB color of the temporary projection line.
-    private static readonly Color PreviewPointColor = Color.FromArgb(210, 225, 235, 245); // ARGB color of the temporary projected-point marker.
-    private const int PreviewPointSize = 3; // Projected-point marker size in display pixels; positive integer.
+    [global::vTools.CommandDefault("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewLineColor", "ARGB color of the temporary projection line.", "#6EB4B4B4")] private static readonly Color PreviewLineColor = global::vTools.CommandDefaults.GetColor("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewLineColor", Color.FromArgb(110, 180, 180, 180)); // ARGB color of the temporary projection line.
+    [global::vTools.CommandDefault("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewPointColor", "ARGB color of the temporary projected-point marker.", "#D2E1EBF5")] private static readonly Color PreviewPointColor = global::vTools.CommandDefaults.GetColor("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewPointColor", Color.FromArgb(210, 225, 235, 245)); // ARGB color of the temporary projected-point marker.
+    [global::vTools.CommandDefault("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewPointSize", "Projected-point marker size in display pixels; positive integer.")] private const int PreviewPointSize = 3; // Projected-point marker size in display pixels; positive integer.
+
+    private static readonly int ConfiguredPreviewPointSize = global::vTools.CommandDefaults.Get("vPointNormalToSurface", "vTools.Commands.PointNormalToSurfaceWorkflow.PreviewPointSize", PreviewPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
 
     private sealed class PointRecord
     {
@@ -80,7 +82,7 @@ namespace vTools.Commands
 
           _ = previewNormal;
           PreviewDisplay.DrawLine(drawEvent.Display, drawEvent.CurrentPoint, onSurface, PreviewLineColor);
-          drawEvent.Display.DrawPoint(onSurface, Rhino.Display.PointStyle.ActivePoint, PreviewPointSize, PreviewPointColor);
+          drawEvent.Display.DrawPoint(onSurface, Rhino.Display.PointStyle.ActivePoint, ConfiguredPreviewPointSize, PreviewPointColor);
         };
 
         gp.DynamicDraw += drawPreview;

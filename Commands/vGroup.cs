@@ -18,20 +18,26 @@ namespace vTools.Commands;
 public sealed class vGroup : vToolsCommand
 {
   // Option defaults
-  private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
-  private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.DefaultStoredBoundaryTolerance", "Model units; zero selects the document-derived tolerance.")] private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
+
+  private static readonly double ConfiguredDefaultStoredBoundaryTolerance = global::vTools.CommandDefaults.Get("vGroup", "vTools.Commands.vGroup.DefaultStoredBoundaryTolerance", DefaultStoredBoundaryTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.DefaultFlattenGroups", "true replaces nested memberships with one group; false preserves existing groups.")] private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
+
+  private static readonly bool ConfiguredDefaultFlattenGroups = global::vTools.CommandDefaults.Get("vGroup", "vTools.Commands.vGroup.DefaultFlattenGroups", DefaultFlattenGroups); // Resolved once from advanced defaults; restart Rhino after changes.
 
   // Customizable boundary behavior
-  private const double ConnectivitySortTolerance = 1.0; // Maximum endpoint gap in model units used only to order source curves before boundary solving; positive value.
-  private static readonly Color BoundaryHatchColor = Color.FromArgb(199, 148, 228, 255); // Preview fill ARGB components, each in the range 0 through 255.
-  private static readonly Color BoundaryOutlineColor = Color.FromArgb(230, 255, 60, 0); // Preview outline ARGB components, each in the range 0 through 255.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.ConnectivitySortTolerance", "Maximum endpoint gap in model units used only to order source curves before boundary solving; positive value.")] private const double ConnectivitySortTolerance = 1.0; // Maximum endpoint gap in model units used only to order source curves before boundary solving; positive value.
+
+  private static readonly double ConfiguredConnectivitySortTolerance = global::vTools.CommandDefaults.Get("vGroup", "vTools.Commands.vGroup.ConnectivitySortTolerance", ConnectivitySortTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.BoundaryHatchColor", "Preview fill ARGB components, each in the range 0 through 255.", "#C794E4FF")] private static readonly Color BoundaryHatchColor = global::vTools.CommandDefaults.GetColor("vGroup", "vTools.Commands.vGroup.BoundaryHatchColor", Color.FromArgb(199, 148, 228, 255)); // Preview fill ARGB components, each in the range 0 through 255.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.BoundaryOutlineColor", "Preview outline ARGB components, each in the range 0 through 255.", "#E6FF3C00")] private static readonly Color BoundaryOutlineColor = global::vTools.CommandDefaults.GetColor("vGroup", "vTools.Commands.vGroup.BoundaryOutlineColor", Color.FromArgb(230, 255, 60, 0)); // Preview outline ARGB components, each in the range 0 through 255.
 
   private const string LogName = "vGroup";
   private const string OptionsSectionName = "vGroup";
 
   private static readonly HashSet<int> _ourGroupIndices = new();
-  private static double _boundaryTolerance = DefaultStoredBoundaryTolerance;
-  private static bool _flattenGroups = DefaultFlattenGroups;
+  private static double _boundaryTolerance = ConfiguredDefaultStoredBoundaryTolerance;
+  private static bool _flattenGroups = ConfiguredDefaultFlattenGroups;
 
   public override string EnglishName => "vGroup";
 
@@ -137,7 +143,7 @@ public sealed class vGroup : vToolsCommand
 
     // Sort by endpoint connectivity so JoinCurves always builds chains in the same order.
     curvePairs.Sort((a, b) => b.Crv.GetLength().CompareTo(a.Crv.GetLength())); // longest first as seed
-    var snapTol = ConnectivitySortTolerance;
+    var snapTol = ConfiguredConnectivitySortTolerance;
     var sorted = new List<(Curve Crv, Guid Id)>(curvePairs.Count);
     var used = new bool[curvePairs.Count];
     while (sorted.Count < curvePairs.Count)
@@ -930,7 +936,7 @@ public sealed class vGroup : vToolsCommand
       OptionsSectionName,
       section => ToolsOptionStore.TryGetBool(section, "flattenGroups", out var v)
         ? v
-        : DefaultFlattenGroups);
+        : ConfiguredDefaultFlattenGroups);
   }
 
   private static void SavePersistedOptions()

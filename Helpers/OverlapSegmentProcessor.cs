@@ -14,8 +14,12 @@ internal static class OverlapSegmentProcessor
 {
   // Customizable geometric limits
   private const double MinimumPieceLength = 1e-12; // Model-unit length below which a trimmed result is ignored; greater than zero.
-  private const double ParameterToleranceFraction = 1e-10; // Source-domain fraction used to merge equivalent cut parameters; positive and much less than one.
-  private const double PointMappingToleranceMultiplier = 2.0; // Command-tolerance multiple allowed while mapping retained overlap points back to document curves; one or greater.
+  [global::vTools.CommandDefault("OverlapSegmentProcessor", "vTools.Commands.OverlapSegmentProcessor.ParameterToleranceFraction", "Source-domain fraction used to merge equivalent cut parameters; positive and much less than one.")] private const double ParameterToleranceFraction = 1e-10; // Source-domain fraction used to merge equivalent cut parameters; positive and much less than one.
+
+  private static readonly double ConfiguredParameterToleranceFraction = global::vTools.CommandDefaults.Get("OverlapSegmentProcessor", "vTools.Commands.OverlapSegmentProcessor.ParameterToleranceFraction", ParameterToleranceFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("OverlapSegmentProcessor", "vTools.Commands.OverlapSegmentProcessor.PointMappingToleranceMultiplier", "Command-tolerance multiple allowed while mapping retained overlap points back to document curves; one or greater.")] private const double PointMappingToleranceMultiplier = 2.0; // Command-tolerance multiple allowed while mapping retained overlap points back to document curves; one or greater.
+
+  private static readonly double ConfiguredPointMappingToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapSegmentProcessor", "vTools.Commands.OverlapSegmentProcessor.PointMappingToleranceMultiplier", PointMappingToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
 
   internal sealed record Result(
     HashSet<Guid> OverlapObjectIds,
@@ -153,10 +157,10 @@ internal static class OverlapSegmentProcessor
     }
 
     var parameterTolerance = Math.Max(
-      Math.Abs(source.Domain.Length) * ParameterToleranceFraction,
+      Math.Abs(source.Domain.Length) * ConfiguredParameterToleranceFraction,
       RhinoMath.ZeroTolerance);
     var mappingTolerance = Math.Max(
-      tolerance * PointMappingToleranceMultiplier,
+      tolerance * ConfiguredPointMappingToleranceMultiplier,
       RhinoMath.ZeroTolerance);
     var parameterSpans = new List<ParameterSpan>();
     foreach (var span in sourceSpans)

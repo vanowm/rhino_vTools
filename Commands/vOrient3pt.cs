@@ -69,9 +69,10 @@ public sealed class vOrient3pt : vToolsCommand
 
     Result Finish(Transform xform)
     {
-      var transformedIds = OrientCommon.TransformObjects(doc, objectIds, xform, copyMode);
+      if (!ObjectTransformSelection.TryTransform(doc, objectIds, xform, copyMode, out var sourceIds, out var transformedIds))
+        return Failure("vOrient3pt: could not orient the selection; original geometry restored.");
       if (copyMode)
-        OrientCommon.RecreateGroupsForCopiedObjects(doc, objectIds, transformedIds);
+        OrientCommon.RecreateGroupsForCopiedObjects(doc, sourceIds, transformedIds);
       OrientCommon.SaveCopyOption(copyMode);
       doc.Views.Redraw();
       return Result.Success;

@@ -30,21 +30,33 @@ namespace vTools.Commands
   internal static class PointAlongCurveWorkflow
   {
     // Defaults and customizable constants
-    private const double DefaultDistance = 1.0; // Non-negative arc length in document units; zero places the point at the picked start.
-    private const int DefaultDirection = 1; // +1 follows the curve parameter direction; -1 travels in reverse until the cursor chooses a side.
-    private const ProjectionMode DefaultProjection = ProjectionMode.Skip; // Skip omits out-of-range points; End clamps; Straight follows the end tangent; Smooth follows a smooth curve extension.
-    private static readonly string[] ProjectionNames = ["Skip", "End", "Straight", "Smooth"]; // Command-line Project choices in ProjectionMode enum order.
-    private const double SmoothExtensionPadding = 1.01; // Factor above the missing arc length used for smooth extension before solving the exact point; must be greater than one.
-    private const int StartPointSize = 2; // Starting-position marker diameter in display pixels; positive integer.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultDistance", "Non-negative arc length in document units; zero places the point at the picked start.")] private const double DefaultDistance = 1.0; // Non-negative arc length in document units; zero places the point at the picked start.
+
+    private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultDirection", "+1 follows the curve parameter direction; -1 travels in reverse until the cursor chooses a side.")] private const int DefaultDirection = 1; // +1 follows the curve parameter direction; -1 travels in reverse until the cursor chooses a side.
+
+    private static readonly int ConfiguredDefaultDirection = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultDirection", DefaultDirection); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultProjection", "Skip omits out-of-range points; End clamps; Straight follows the end tangent; Smooth follows a smooth curve extension.")] private const ProjectionMode DefaultProjection = ProjectionMode.Skip; // Skip omits out-of-range points; End clamps; Straight follows the end tangent; Smooth follows a smooth curve extension.
+
+    private static readonly ProjectionMode ConfiguredDefaultProjection = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.DefaultProjection", DefaultProjection); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vPointAlongCurve", "project", false, "Skip", "End", "Straight", "Smooth")] private static readonly string[] ProjectionNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PointAlongCurveWorkflow), nameof(ProjectionNames)); // Command-line Project choices in ProjectionMode enum order.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.SmoothExtensionPadding", "Factor above the missing arc length used for smooth extension before solving the exact point; must be greater than one.")] private const double SmoothExtensionPadding = 1.01; // Factor above the missing arc length used for smooth extension before solving the exact point; must be greater than one.
+
+    private static readonly double ConfiguredSmoothExtensionPadding = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.SmoothExtensionPadding", SmoothExtensionPadding); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointSize", "Starting-position marker diameter in display pixels; positive integer.")] private const int StartPointSize = 2; // Starting-position marker diameter in display pixels; positive integer.
+
+    private static readonly int ConfiguredStartPointSize = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointSize", StartPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int StartPointOutlineExtra = 1; // Black outline pixels added to the starting-position marker.
-    private const int PreviewPointSize = 2; // Result-preview marker diameter in display pixels; positive integer, independent of document point display size.
-    private static readonly Color StartPointColor = Color.White; // RGB fill color of the fixed starting-position marker.
-    private static readonly Color StartPointOutlineColor = Color.Black; // RGB outline color of the fixed starting-position marker.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.PreviewPointSize", "Result-preview marker diameter in display pixels; positive integer, independent of document point display size.")] private const int PreviewPointSize = 2; // Result-preview marker diameter in display pixels; positive integer, independent of document point display size.
+
+    private static readonly int ConfiguredPreviewPointSize = global::vTools.CommandDefaults.Get("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.PreviewPointSize", PreviewPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointColor", "RGB fill color of the fixed starting-position marker.", "#FFFFFFFF")] private static readonly Color StartPointColor = global::vTools.CommandDefaults.GetColor("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointColor", Color.White); // RGB fill color of the fixed starting-position marker.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointOutlineColor", "RGB outline color of the fixed starting-position marker.", "#FF000000")] private static readonly Color StartPointOutlineColor = global::vTools.CommandDefaults.GetColor("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.StartPointOutlineColor", Color.Black); // RGB outline color of the fixed starting-position marker.
     private const int EndWarningFontSize = 12; // Endpoint-shortfall preview text height in display pixels; positive integer.
     private const int EndWarningOffset = 14; // Endpoint-shortfall text offset from the result marker in display pixels.
     private const int EndWarningHaloOffset = 1; // Endpoint-shortfall text shadow offset in display pixels; positive integer.
-    private static readonly Color EndWarningColor = Color.DarkRed; // RGB foreground color of the endpoint-shortfall preview warning.
-    private static readonly Color EndWarningHaloColor = Color.White; // RGB one-pixel shadow for readable warning text on dark viewports.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.EndWarningColor", "RGB foreground color of the endpoint-shortfall preview warning.", "#FF8B0000")] private static readonly Color EndWarningColor = global::vTools.CommandDefaults.GetColor("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.EndWarningColor", Color.DarkRed); // RGB foreground color of the endpoint-shortfall preview warning.
+    [global::vTools.CommandDefault("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.EndWarningHaloColor", "RGB one-pixel shadow for readable warning text on dark viewports.", "#FFFFFFFF")] private static readonly Color EndWarningHaloColor = global::vTools.CommandDefaults.GetColor("vPointAlongCurve", "vTools.Commands.PointAlongCurveWorkflow.EndWarningHaloColor", Color.White); // RGB one-pixel shadow for readable warning text on dark viewports.
 
     private const string Tag = "vPointAlongCurve";
     private const string DistanceKey = "distance";
@@ -57,8 +69,8 @@ namespace vTools.Commands
       var saved = ToolsOptionStore.Read(Tag, section =>
       {
         var value = ToolsOptionStore.TryGetDouble(section, DistanceKey, out var number) && ValidDistance(number)
-          ? number : DefaultDistance;
-        var projection = DefaultProjection;
+          ? number : ConfiguredDefaultDistance;
+        var projection = ConfiguredDefaultProjection;
         if (ToolsOptionStore.TryGetString(section, ProjectKey, out var text)
           && Enum.TryParse<ProjectionMode>(text, true, out var parsed) && Enum.IsDefined(typeof(ProjectionMode), parsed))
           projection = parsed;
@@ -114,19 +126,19 @@ namespace vTools.Commands
         }
 
         var position = new CurvePosition(curve, startParameter);
-        var direction = DefaultDirection;
+        var direction = ConfiguredDefaultDirection;
         using var directionPicker = new GetPoint();
         directionPicker.SetCommandPrompt("Move cursor to choose direction; click to place point");
         directionPicker.DynamicDraw += (_, e) =>
         {
           direction = position.ResolveDirection(e.CurrentPoint, distance.CurrentValue, project, direction, e.Display.Viewport);
           e.Display.DrawPoint(position.StartPoint, PointStyle.RoundSimple,
-            StartPointSize + StartPointOutlineExtra, StartPointOutlineColor);
+            ConfiguredStartPointSize + StartPointOutlineExtra, StartPointOutlineColor);
           e.Display.DrawPoint(position.StartPoint, PointStyle.RoundSimple,
-            StartPointSize, StartPointColor);
+            ConfiguredStartPointSize, StartPointColor);
           if (position.TryPoint(distance.CurrentValue, direction, project, out var previewPoint, out var actualDistance))
           {
-            PreviewDisplay.DrawAddedPoint(e.Display, previewPoint, PreviewPointSize);
+            PreviewDisplay.DrawAddedPoint(e.Display, previewPoint, ConfiguredPreviewPointSize);
             if (actualDistance < distance.CurrentValue)
               DrawEndWarning(doc, e, previewPoint, actualDistance, distance.CurrentValue);
           }
@@ -229,7 +241,7 @@ namespace vTools.Commands
       private readonly double _startLength;
       private readonly double _totalLength;
       private double _cachedDistance = double.NaN;
-      private ProjectionMode _cachedProject = DefaultProjection;
+      private ProjectionMode _cachedProject = ConfiguredDefaultProjection;
       private Point3d _forwardPoint = Point3d.Unset;
       private Point3d _backwardPoint = Point3d.Unset;
       private double _forwardDistance;
@@ -316,7 +328,7 @@ namespace vTools.Commands
           if (project == ProjectionMode.Smooth)
           {
             using var extended = _curve.Extend(direction > 0 ? CurveEnd.End : CurveEnd.Start,
-              (distance - available) * SmoothExtensionPadding, CurveExtensionStyle.Smooth);
+              (distance - available) * ConfiguredSmoothExtensionPadding, CurveExtensionStyle.Smooth);
             if (extended == null)
               return Point3d.Unset;
             var fromExtendedStart = direction > 0 ? length

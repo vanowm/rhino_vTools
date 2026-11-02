@@ -13,15 +13,25 @@ internal static class OverlapFinder
 {
   // Detection defaults and customizable limits
   private const double MinimumCurveLength = 1e-12; // Model-unit length below which a curve item is ignored; greater than zero.
-  private const double MinimumLengthTolerance = 1e-6; // Model-unit floor used when comparing duplicate lengths; greater than zero.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumLengthTolerance", "Model-unit floor used when comparing duplicate lengths; greater than zero.")] private const double MinimumLengthTolerance = 1e-6; // Model-unit floor used when comparing duplicate lengths; greater than zero.
+
+  private static readonly double ConfiguredMinimumLengthTolerance = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumLengthTolerance", MinimumLengthTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int SparseSampleMinimum = 40; // Minimum samples used for one-way coverage checks; integer four or greater.
   private const int SparseSampleMaximum = 220; // Maximum samples used for one-way coverage checks; integer at least SparseSampleMinimum.
   private const int DenseSampleMinimum = 70; // Minimum samples used for duplicate-path checks; integer four or greater.
   private const int DenseSampleMaximum = 280; // Maximum samples used for duplicate-path checks; integer at least DenseSampleMinimum.
-  private const double SparseToleranceMultiplier = 6.0; // Tolerance multiple controlling one-way sample density; greater than zero.
-  private const double DenseToleranceMultiplier = 4.0; // Tolerance multiple controlling duplicate-path sample density; greater than zero.
-  private const double CoverageLengthToleranceMultiplier = 2.0; // Command-tolerance multiple allowed as uncovered arc length when native overlap intervals cover a curve; greater than or equal to one.
-  private const double MinimumPartialOverlapToleranceMultiplier = 1.0; // Command-tolerance multiple required for a native partial-overlap interval; greater than zero.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.SparseToleranceMultiplier", "Tolerance multiple controlling one-way sample density; greater than zero.")] private const double SparseToleranceMultiplier = 6.0; // Tolerance multiple controlling one-way sample density; greater than zero.
+
+  private static readonly double ConfiguredSparseToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.SparseToleranceMultiplier", SparseToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.DenseToleranceMultiplier", "Tolerance multiple controlling duplicate-path sample density; greater than zero.")] private const double DenseToleranceMultiplier = 4.0; // Tolerance multiple controlling duplicate-path sample density; greater than zero.
+
+  private static readonly double ConfiguredDenseToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.DenseToleranceMultiplier", DenseToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.CoverageLengthToleranceMultiplier", "Command-tolerance multiple allowed as uncovered arc length when native overlap intervals cover a curve; greater than or equal to one.")] private const double CoverageLengthToleranceMultiplier = 2.0; // Command-tolerance multiple allowed as uncovered arc length when native overlap intervals cover a curve; greater than or equal to one.
+
+  private static readonly double ConfiguredCoverageLengthToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.CoverageLengthToleranceMultiplier", CoverageLengthToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumPartialOverlapToleranceMultiplier", "Command-tolerance multiple required for a native partial-overlap interval; greater than zero.")] private const double MinimumPartialOverlapToleranceMultiplier = 1.0; // Command-tolerance multiple required for a native partial-overlap interval; greater than zero.
+
+  private static readonly double ConfiguredMinimumPartialOverlapToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumPartialOverlapToleranceMultiplier", MinimumPartialOverlapToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double MinimumPartialOverlapLengthFraction = 1e-8; // Shorter-curve length fraction required for a native partial-overlap interval; positive fraction below one.
 
   private sealed record NativeOverlapResult(
@@ -271,7 +281,7 @@ internal static class OverlapFinder
     if (tolerance <= 0.0)
       return dense ? DenseSampleMinimum : SparseSampleMinimum;
 
-    var multiplier = dense ? DenseToleranceMultiplier : SparseToleranceMultiplier;
+    var multiplier = dense ? ConfiguredDenseToleranceMultiplier : ConfiguredSparseToleranceMultiplier;
     var minimum = dense ? DenseSampleMinimum : SparseSampleMinimum;
     var maximum = dense ? DenseSampleMaximum : SparseSampleMaximum;
     return Math.Max(
@@ -308,7 +318,7 @@ internal static class OverlapFinder
     double secondLength,
     double tolerance)
   {
-    if (Math.Abs(firstLength - secondLength) > Math.Max(tolerance * 2.0, MinimumLengthTolerance))
+    if (Math.Abs(firstLength - secondLength) > Math.Max(tolerance * 2.0, ConfiguredMinimumLengthTolerance))
       return false;
 
     if (GeometryBase.GeometryEquals(first, second))
@@ -352,11 +362,11 @@ internal static class OverlapFinder
     var firstOverlapLength = CoveredLength(first, firstIntervals);
     var secondOverlapLength = CoveredLength(second, secondIntervals);
     var minimumOverlapLength = Math.Max(
-      tolerance * MinimumPartialOverlapToleranceMultiplier,
+      tolerance * ConfiguredMinimumPartialOverlapToleranceMultiplier,
       Math.Min(firstLength, secondLength) * MinimumPartialOverlapLengthFraction);
     var coverageTolerance = Math.Max(
-      tolerance * CoverageLengthToleranceMultiplier,
-      MinimumLengthTolerance);
+      tolerance * ConfiguredCoverageLengthToleranceMultiplier,
+      ConfiguredMinimumLengthTolerance);
 
     return new NativeOverlapResult(
       Math.Min(firstOverlapLength, secondOverlapLength) > minimumOverlapLength,

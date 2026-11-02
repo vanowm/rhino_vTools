@@ -17,7 +17,9 @@ namespace vTools;
 public class vToolsPlugIn : PlugIn
 {
   // Defaults and customizable constants
-  private const int CommandHelpPanelRestoreTimeoutMilliseconds = 10000; // Maximum milliseconds to wait for a startup-restored Command Help panel before leaving later panel activation to Rhino.
+  [global::vTools.CommandDefault("vToolsPlugIn", "vTools.vToolsPlugIn.CommandHelpPanelRestoreTimeoutMilliseconds", "Maximum milliseconds to wait for a startup-restored Command Help panel before leaving later panel activation to Rhino.")] private const int CommandHelpPanelRestoreTimeoutMilliseconds = 10000; // Maximum milliseconds to wait for a startup-restored Command Help panel before leaving later panel activation to Rhino.
+
+  private static readonly int ConfiguredCommandHelpPanelRestoreTimeoutMilliseconds = global::vTools.CommandDefaults.Get("vToolsPlugIn", "vTools.vToolsPlugIn.CommandHelpPanelRestoreTimeoutMilliseconds", CommandHelpPanelRestoreTimeoutMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private EventHandler? _commandHelpRestoreIdleHandler;
 
@@ -90,7 +92,7 @@ public class vToolsPlugIn : PlugIn
   {
     var startedUtc = DateTime.UtcNow;
     var deadlineUtc = startedUtc.AddMilliseconds(
-      CommandHelpPanelRestoreTimeoutMilliseconds);
+      ConfiguredCommandHelpPanelRestoreTimeoutMilliseconds);
 
     _commandHelpRestoreIdleHandler = (_, _) =>
     {

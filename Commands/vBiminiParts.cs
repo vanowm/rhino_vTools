@@ -36,36 +36,90 @@ public sealed class vBiminiParts : vToolsCommand
   private const string ToolsConfigFileName = "vTools.config.json"; // Relative shared configuration filename beside the DLL.
   private const string PocketDataKey = "vBiminiPkt";
   private const string PreviousSecondaryLengthKey = "previousSecondaryPocketLength";
-  private const string DefaultPlotLayer = "PLOT"; // Rhino layer name or full layer path.
-  private const string DefaultCutLayer = "CUT1"; // Rhino layer name or full layer path.
-  private const string DefaultReferenceLayer = "Reference"; // Rhino layer name or full layer path.
-  private const string DefaultPlotLayerColorHex = "#0F8A8A"; // RGB color in #RRGGBB format.
-  private const string DefaultCutLayerColorHex = "#CC3333"; // RGB color in #RRGGBB format.
-  private const string DefaultReferenceLayerColorHex = "#00B43C"; // RGB color in #RRGGBB format.
-  private const double DefaultSeamAllowance = 0.5; // Seam allowance in model units; zero or greater.
-  private const double DefaultFacingInset = 3.0; // Facing inset in model units; zero or greater.
-  private const double DefaultSidePocketOutward = 2.5; // Side-pocket offset in model units; zero or greater.
-  private const double DefaultCornerAngleDegrees = 30.0; // Corner threshold in degrees; 0 through 180.
-  private const double DefaultFacingMoveOut = 4.0; // Facing movement in model units; zero or greater.
-  private const double DefaultPocketSeamClearance = 4.0; // Pocket clearance in model units; zero or greater.
-  private const double DefaultMainPocketDepth = 4.0; // Main-pocket depth in model units; greater than zero.
-  private const double DefaultSecondaryPocketDepth = 4.5; // Secondary-pocket depth in model units; greater than zero.
-  private const double DefaultLargeMainPocketDepth = 5.0; // Large main-pocket depth in model units; greater than zero.
-  private const double DefaultLargeSecondaryPocketDepth = 5.5; // Large secondary-pocket depth in model units; greater than zero.
-  private const double DefaultExtraRectangleHeight = 1.5; // Extra rectangle height in model units; greater than zero.
-  private const double DefaultExtraRectangleLength = 1.0; // Extra rectangle extension in model units; zero or greater.
-  private const double DefaultPipeSize = 1.0; // Pipe diameter in model units; greater than zero.
-  private const string DefaultPipeLabel = "1"; // Plain display label for the pipe preset.
-  private const double DefaultSmallPipeSize = 0.875; // Pipe diameter in model units; greater than zero.
-  private const string DefaultSmallPipeLabel = "7/8"; // Plain display label for the pipe preset.
-  private const double DefaultLargePipeSize = 1.25; // Pipe diameter in model units; greater than zero.
-  private const string DefaultLargePipeLabel = "1-1/4"; // Plain display label for the pipe preset.
-  private const double DefaultExtraLargePipeSize = 1.5; // Pipe diameter in model units; greater than zero.
-  private const string DefaultExtraLargePipeLabel = "1-1/2"; // Plain display label for the pipe preset.
-  private const int DefaultPipeSizeIndex = 1; // Zero-based index into the default pipe preset list.
-  private static readonly Color DefaultPlotLayerColor = Color.FromArgb(15, 138, 138); // RGB fallback matching DefaultPlotLayerColorHex.
-  private static readonly Color DefaultCutLayerColor = Color.FromArgb(204, 51, 51); // RGB fallback matching DefaultCutLayerColorHex.
-  private static readonly Color DefaultReferenceLayerColor = Color.FromArgb(0, 180, 60); // RGB fallback matching DefaultReferenceLayerColorHex.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayer", "Rhino layer name or full layer path.")] private const string DefaultPlotLayer = "PLOT"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultPlotLayer = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayer", DefaultPlotLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayer", "Rhino layer name or full layer path.")] private const string DefaultCutLayer = "CUT1"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultCutLayer = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayer", DefaultCutLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayer", "Rhino layer name or full layer path.")] private const string DefaultReferenceLayer = "Reference"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultReferenceLayer = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayer", DefaultReferenceLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayerColorHex", "RGB color in #RRGGBB format.")] private const string DefaultPlotLayerColorHex = "#0F8A8A"; // RGB color in #RRGGBB format.
+
+  private static readonly string ConfiguredDefaultPlotLayerColorHex = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayerColorHex", DefaultPlotLayerColorHex); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayerColorHex", "RGB color in #RRGGBB format.")] private const string DefaultCutLayerColorHex = "#CC3333"; // RGB color in #RRGGBB format.
+
+  private static readonly string ConfiguredDefaultCutLayerColorHex = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayerColorHex", DefaultCutLayerColorHex); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayerColorHex", "RGB color in #RRGGBB format.")] private const string DefaultReferenceLayerColorHex = "#00B43C"; // RGB color in #RRGGBB format.
+
+  private static readonly string ConfiguredDefaultReferenceLayerColorHex = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayerColorHex", DefaultReferenceLayerColorHex); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSeamAllowance", "Seam allowance in model units; zero or greater.")] private const double DefaultSeamAllowance = 0.5; // Seam allowance in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultSeamAllowance = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSeamAllowance", DefaultSeamAllowance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultFacingInset", "Facing inset in model units; zero or greater.")] private const double DefaultFacingInset = 3.0; // Facing inset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultFacingInset = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultFacingInset", DefaultFacingInset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSidePocketOutward", "Side-pocket offset in model units; zero or greater.")] private const double DefaultSidePocketOutward = 2.5; // Side-pocket offset in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultSidePocketOutward = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSidePocketOutward", DefaultSidePocketOutward); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCornerAngleDegrees", "Corner threshold in degrees; 0 through 180.")] private const double DefaultCornerAngleDegrees = 30.0; // Corner threshold in degrees; 0 through 180.
+
+  private static readonly double ConfiguredDefaultCornerAngleDegrees = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCornerAngleDegrees", DefaultCornerAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultFacingMoveOut", "Facing movement in model units; zero or greater.")] private const double DefaultFacingMoveOut = 4.0; // Facing movement in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultFacingMoveOut = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultFacingMoveOut", DefaultFacingMoveOut); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPocketSeamClearance", "Pocket clearance in model units; zero or greater.")] private const double DefaultPocketSeamClearance = 4.0; // Pocket clearance in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultPocketSeamClearance = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPocketSeamClearance", DefaultPocketSeamClearance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultMainPocketDepth", "Main-pocket depth in model units; greater than zero.")] private const double DefaultMainPocketDepth = 4.0; // Main-pocket depth in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultMainPocketDepth = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultMainPocketDepth", DefaultMainPocketDepth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSecondaryPocketDepth", "Secondary-pocket depth in model units; greater than zero.")] private const double DefaultSecondaryPocketDepth = 4.5; // Secondary-pocket depth in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultSecondaryPocketDepth = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSecondaryPocketDepth", DefaultSecondaryPocketDepth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargeMainPocketDepth", "Large main-pocket depth in model units; greater than zero.")] private const double DefaultLargeMainPocketDepth = 5.0; // Large main-pocket depth in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultLargeMainPocketDepth = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargeMainPocketDepth", DefaultLargeMainPocketDepth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargeSecondaryPocketDepth", "Large secondary-pocket depth in model units; greater than zero.")] private const double DefaultLargeSecondaryPocketDepth = 5.5; // Large secondary-pocket depth in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultLargeSecondaryPocketDepth = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargeSecondaryPocketDepth", DefaultLargeSecondaryPocketDepth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleHeight", "Extra rectangle height in model units; greater than zero.")] private const double DefaultExtraRectangleHeight = 1.5; // Extra rectangle height in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultExtraRectangleHeight = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleHeight", DefaultExtraRectangleHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleLength", "Extra rectangle extension in model units; zero or greater.")] private const double DefaultExtraRectangleLength = 1.0; // Extra rectangle extension in model units; zero or greater.
+
+  private static readonly double ConfiguredDefaultExtraRectangleLength = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleLength", DefaultExtraRectangleLength); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSize", "Pipe diameter in model units; greater than zero.")] private const double DefaultPipeSize = 1.0; // Pipe diameter in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultPipeSize = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSize", DefaultPipeSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeLabel", "Plain display label for the pipe preset.")] private const string DefaultPipeLabel = "1"; // Plain display label for the pipe preset.
+
+  private static readonly string ConfiguredDefaultPipeLabel = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeLabel", DefaultPipeLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSmallPipeSize", "Pipe diameter in model units; greater than zero.")] private const double DefaultSmallPipeSize = 0.875; // Pipe diameter in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultSmallPipeSize = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSmallPipeSize", DefaultSmallPipeSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSmallPipeLabel", "Plain display label for the pipe preset.")] private const string DefaultSmallPipeLabel = "7/8"; // Plain display label for the pipe preset.
+
+  private static readonly string ConfiguredDefaultSmallPipeLabel = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultSmallPipeLabel", DefaultSmallPipeLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargePipeSize", "Pipe diameter in model units; greater than zero.")] private const double DefaultLargePipeSize = 1.25; // Pipe diameter in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultLargePipeSize = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargePipeSize", DefaultLargePipeSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargePipeLabel", "Plain display label for the pipe preset.")] private const string DefaultLargePipeLabel = "1-1/4"; // Plain display label for the pipe preset.
+
+  private static readonly string ConfiguredDefaultLargePipeLabel = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultLargePipeLabel", DefaultLargePipeLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraLargePipeSize", "Pipe diameter in model units; greater than zero.")] private const double DefaultExtraLargePipeSize = 1.5; // Pipe diameter in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultExtraLargePipeSize = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraLargePipeSize", DefaultExtraLargePipeSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraLargePipeLabel", "Plain display label for the pipe preset.")] private const string DefaultExtraLargePipeLabel = "1-1/2"; // Plain display label for the pipe preset.
+
+  private static readonly string ConfiguredDefaultExtraLargePipeLabel = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraLargePipeLabel", DefaultExtraLargePipeLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSizeIndex", "Zero-based index into the default pipe preset list.")] private const int DefaultPipeSizeIndex = 1; // Zero-based index into the default pipe preset list.
+
+  private static readonly int ConfiguredDefaultPipeSizeIndex = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSizeIndex", DefaultPipeSizeIndex); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayerColor", "RGB fallback matching DefaultPlotLayerColorHex.", "#FF0F8A8A")] private static readonly Color DefaultPlotLayerColor = global::vTools.CommandDefaults.GetColor("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPlotLayerColor", Color.FromArgb(15, 138, 138)); // RGB fallback matching DefaultPlotLayerColorHex.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayerColor", "RGB fallback matching DefaultCutLayerColorHex.", "#FFCC3333")] private static readonly Color DefaultCutLayerColor = global::vTools.CommandDefaults.GetColor("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultCutLayerColor", Color.FromArgb(204, 51, 51)); // RGB fallback matching DefaultCutLayerColorHex.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayerColor", "RGB fallback matching DefaultReferenceLayerColorHex.", "#FF00B43C")] private static readonly Color DefaultReferenceLayerColor = global::vTools.CommandDefaults.GetColor("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultReferenceLayerColor", Color.FromArgb(0, 180, 60)); // RGB fallback matching DefaultReferenceLayerColorHex.
   private static readonly JsonSerializerOptions JsonOptions = new()
   {
     WriteIndented = true,
@@ -92,28 +146,28 @@ public sealed class vBiminiParts : vToolsCommand
 
   private sealed class ExtraRectConfig
   {
-    public double Height      { get; set; } = DefaultExtraRectangleHeight;
-    public double LengthExtra { get; set; } = DefaultExtraRectangleLength;
+    public double Height      { get; set; } = ConfiguredDefaultExtraRectangleHeight;
+    public double LengthExtra { get; set; } = ConfiguredDefaultExtraRectangleLength;
   }
 
   private sealed class PipeSizeConfig
   {
-    public double  Size         { get; set; } = DefaultPipeSize;
-    public string  Label        { get; set; } = DefaultPipeLabel;
-    public double  MainPktDepth { get; set; } = DefaultMainPocketDepth;
-    public double  SecPktDepth  { get; set; } = DefaultSecondaryPocketDepth;
+    public double  Size         { get; set; } = ConfiguredDefaultPipeSize;
+    public string  Label        { get; set; } = ConfiguredDefaultPipeLabel;
+    public double  MainPktDepth { get; set; } = ConfiguredDefaultMainPocketDepth;
+    public double  SecPktDepth  { get; set; } = ConfiguredDefaultSecondaryPocketDepth;
     public ExtraRectConfig? ExtraRect { get; set; }
   }
 
   private sealed class BiminiConfigSection
   {
     public BiminiLayersConfig   Layers          { get; set; } = new();
-    public double SeamAllowance    { get; set; } = DefaultSeamAllowance;
-    public double FacingInset      { get; set; } = DefaultFacingInset;
-    public double SidePktOutward   { get; set; } = DefaultSidePocketOutward;
-    public double CornerAngleDeg   { get; set; } = DefaultCornerAngleDegrees;
-    public double FacingMoveOut    { get; set; } = DefaultFacingMoveOut;
-    public double PktSeamClearance { get; set; } = DefaultPocketSeamClearance;
+    public double SeamAllowance    { get; set; } = ConfiguredDefaultSeamAllowance;
+    public double FacingInset      { get; set; } = ConfiguredDefaultFacingInset;
+    public double SidePktOutward   { get; set; } = ConfiguredDefaultSidePocketOutward;
+    public double CornerAngleDeg   { get; set; } = ConfiguredDefaultCornerAngleDegrees;
+    public double FacingMoveOut    { get; set; } = ConfiguredDefaultFacingMoveOut;
+    public double PktSeamClearance { get; set; } = ConfiguredDefaultPocketSeamClearance;
     public List<PipeSizeConfig> PipeSizes { get; set; } = new();
     [JsonExtensionData] public Dictionary<string, JsonElement>? Extra { get; set; }
   }
@@ -126,26 +180,26 @@ public sealed class vBiminiParts : vToolsCommand
 
   // ── Runtime fields (populated from config each run) ─────────────────────────
 
-  private static string _layerPlot = DefaultPlotLayer;
-  private static string _layerCut1 = DefaultCutLayer;
-  private static string _layerRef = DefaultReferenceLayer;
+  private static string _layerPlot = ConfiguredDefaultPlotLayer;
+  private static string _layerCut1 = ConfiguredDefaultCutLayer;
+  private static string _layerRef = ConfiguredDefaultReferenceLayer;
   private static Color _layerPlotColor = DefaultPlotLayerColor;
   private static Color _layerCut1Color = DefaultCutLayerColor;
   private static Color _layerRefColor = DefaultReferenceLayerColor;
 
-  private static double _seamAllowance = DefaultSeamAllowance;
-  private static double _facingInset = DefaultFacingInset;
-  private static double _sidePktOutward = DefaultSidePocketOutward;
-  private static double _cornerAngleDeg = DefaultCornerAngleDegrees;
-  private static double _facingMoveOut = DefaultFacingMoveOut;
-  private static double _pktSeamClearance = DefaultPocketSeamClearance;
-  private static double _mainPktDepth = DefaultMainPocketDepth;
-  private static double _secPktDepth = DefaultSecondaryPocketDepth;
+  private static double _seamAllowance = ConfiguredDefaultSeamAllowance;
+  private static double _facingInset = ConfiguredDefaultFacingInset;
+  private static double _sidePktOutward = ConfiguredDefaultSidePocketOutward;
+  private static double _cornerAngleDeg = ConfiguredDefaultCornerAngleDegrees;
+  private static double _facingMoveOut = ConfiguredDefaultFacingMoveOut;
+  private static double _pktSeamClearance = ConfiguredDefaultPocketSeamClearance;
+  private static double _mainPktDepth = ConfiguredDefaultMainPocketDepth;
+  private static double _secPktDepth = ConfiguredDefaultSecondaryPocketDepth;
   private static ExtraRectConfig? _extraRect;
 
   // ── Persisted state ─────────────────────────────────────────────────────────
 
-  private static int _pipeSizeIdx = DefaultPipeSizeIndex;
+  private static int _pipeSizeIdx = ConfiguredDefaultPipeSizeIndex;
 
   // ── Debug logging ──────────────────────────────────────────────────────────
 
@@ -208,14 +262,14 @@ public sealed class vBiminiParts : vToolsCommand
 
   private static List<PipeSizeConfig> DefaultPipeSizes() => new()
   {
-    new() { Size = DefaultSmallPipeSize, Label = DefaultSmallPipeLabel },
-    new() { Size = DefaultPipeSize, Label = DefaultPipeLabel },
-    new() { Size = DefaultLargePipeSize, Label = DefaultLargePipeLabel,
-            MainPktDepth = DefaultLargeMainPocketDepth,
-            SecPktDepth = DefaultLargeSecondaryPocketDepth },
-    new() { Size = DefaultExtraLargePipeSize, Label = DefaultExtraLargePipeLabel,
-            MainPktDepth = DefaultLargeMainPocketDepth,
-            SecPktDepth = DefaultLargeSecondaryPocketDepth,
+    new() { Size = ConfiguredDefaultSmallPipeSize, Label = ConfiguredDefaultSmallPipeLabel },
+    new() { Size = ConfiguredDefaultPipeSize, Label = ConfiguredDefaultPipeLabel },
+    new() { Size = ConfiguredDefaultLargePipeSize, Label = ConfiguredDefaultLargePipeLabel,
+            MainPktDepth = ConfiguredDefaultLargeMainPocketDepth,
+            SecPktDepth = ConfiguredDefaultLargeSecondaryPocketDepth },
+    new() { Size = ConfiguredDefaultExtraLargePipeSize, Label = ConfiguredDefaultExtraLargePipeLabel,
+            MainPktDepth = ConfiguredDefaultLargeMainPocketDepth,
+            SecPktDepth = ConfiguredDefaultLargeSecondaryPocketDepth,
             ExtraRect = new() },
   };
 
@@ -227,11 +281,11 @@ public sealed class vBiminiParts : vToolsCommand
       s.PipeSizes = DefaultPipeSizes();
     s.Layers ??= new BiminiLayersConfig();
     s.Layers.Plot ??= new BiminiLayerEntry
-      { Name = DefaultPlotLayer, Color = DefaultPlotLayerColorHex };
+      { Name = ConfiguredDefaultPlotLayer, Color = ConfiguredDefaultPlotLayerColorHex };
     s.Layers.Cut1 ??= new BiminiLayerEntry
-      { Name = DefaultCutLayer, Color = DefaultCutLayerColorHex };
+      { Name = ConfiguredDefaultCutLayer, Color = ConfiguredDefaultCutLayerColorHex };
     s.Layers.Reference ??= new BiminiLayerEntry
-      { Name = DefaultReferenceLayer, Color = DefaultReferenceLayerColorHex };
+      { Name = ConfiguredDefaultReferenceLayer, Color = ConfiguredDefaultReferenceLayerColorHex };
     return s;
   }
 
@@ -247,11 +301,11 @@ public sealed class vBiminiParts : vToolsCommand
   private static void ApplyConfig(BiminiConfigSection s, int idx)
   {
     _layerPlot = string.IsNullOrWhiteSpace(s.Layers?.Plot?.Name)
-      ? DefaultPlotLayer : s.Layers!.Plot!.Name!;
+      ? ConfiguredDefaultPlotLayer : s.Layers!.Plot!.Name!;
     _layerCut1 = string.IsNullOrWhiteSpace(s.Layers?.Cut1?.Name)
-      ? DefaultCutLayer : s.Layers!.Cut1!.Name!;
+      ? ConfiguredDefaultCutLayer : s.Layers!.Cut1!.Name!;
     _layerRef = string.IsNullOrWhiteSpace(s.Layers?.Reference?.Name)
-      ? DefaultReferenceLayer : s.Layers!.Reference!.Name!;
+      ? ConfiguredDefaultReferenceLayer : s.Layers!.Reference!.Name!;
     _layerPlotColor = ParseHexColor(s.Layers?.Plot?.Color, DefaultPlotLayerColor);
     _layerCut1Color = ParseHexColor(s.Layers?.Cut1?.Color, DefaultCutLayerColor);
     _layerRefColor = ParseHexColor(s.Layers?.Reference?.Color, DefaultReferenceLayerColor);

@@ -17,8 +17,12 @@ namespace vTools.Commands;
 public sealed class vToggleView : vToolsCommand
 {
   // Defaults and view conventions
-  private const ViewMode DefaultMode = ViewMode.Toggle; // Toggle follows the current tab; Projection toggles its projection only; named modes force a view.
-  private const bool DefaultNewTab = false; // true creates missing named model-view tabs; false changes an existing view instead.
+  [global::vTools.CommandDefault("vToggleView", "vTools.Commands.vToggleView.DefaultMode", "Toggle follows the current tab; Projection toggles its projection only; named modes force a view.")] private const ViewMode DefaultMode = ViewMode.Toggle; // Toggle follows the current tab; Projection toggles its projection only; named modes force a view.
+
+  private static readonly ViewMode ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vToggleView", "vTools.Commands.vToggleView.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vToggleView", "vTools.Commands.vToggleView.DefaultNewTab", "true creates missing named model-view tabs; false changes an existing view instead.")] private const bool DefaultNewTab = false; // true creates missing named model-view tabs; false changes an existing view instead.
+
+  private static readonly bool ConfiguredDefaultNewTab = global::vTools.CommandDefaults.Get("vToggleView", "vTools.Commands.vToggleView.DefaultNewTab", DefaultNewTab); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool FloatingNewView = false; // true creates a floating viewport; false creates a docked model-view tab.
   private static readonly Rectangle DefaultNewViewBounds = new(0, 0, 800, 600); // Positive pixel bounds used when the active view has no usable client rectangle.
   private const string PerspectiveViewName = "Perspective"; // View-tab name matched after trimming, without case sensitivity.
@@ -31,15 +35,15 @@ public sealed class vToggleView : vToolsCommand
   private const string NewTabKey = "newTab";
   private static readonly ConditionalWeakTable<RhinoDoc, Dictionary<Guid, double>> PerspectiveLenses = new();
   private static readonly ConditionalWeakTable<RhinoDoc, HashSet<Guid>> PlanFirstViews = new();
-  private bool _newTab = DefaultNewTab;
+  private bool _newTab = ConfiguredDefaultNewTab;
 
   public override string EnglishName => Tag;
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     _newTab = ToolsOptionStore.Read(Tag, section =>
-      ToolsOptionStore.TryGetBool(section, NewTabKey, out var value) ? value : DefaultNewTab);
-    var requested = DefaultMode;
+      ToolsOptionStore.TryGetBool(section, NewTabKey, out var value) ? value : ConfiguredDefaultNewTab);
+    var requested = ConfiguredDefaultMode;
     if (mode == RunMode.Scripted)
     {
       var result = GetRequestedMode(out requested);
@@ -135,10 +139,10 @@ public sealed class vToggleView : vToolsCommand
 
   private Result GetRequestedMode(out ViewMode requested)
   {
-    requested = DefaultMode;
+    requested = ConfiguredDefaultMode;
     using var getter = new GetOption();
     getter.SetCommandPrompt("View mode");
-    getter.SetCommandPromptDefault(DefaultMode.ToString());
+    getter.SetCommandPromptDefault(ConfiguredDefaultMode.ToString());
     getter.AcceptNothing(true);
     var options = new Dictionary<int, ViewMode>();
     foreach (var choice in Enum.GetValues<ViewMode>())

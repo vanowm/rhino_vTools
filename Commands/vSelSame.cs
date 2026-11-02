@@ -16,14 +16,20 @@ namespace vTools.Commands;
 public sealed class vSelSame : vToolsCommand
 {
   // Defaults and customizable constants
-  private const double PreviewDelaySeconds = 0.08; // Checkbox debounce in seconds; positive.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.PreviewDelaySeconds", "Checkbox debounce in seconds; positive.")] private const double PreviewDelaySeconds = 0.08; // Checkbox debounce in seconds; positive.
+
+  private static readonly double ConfiguredPreviewDelaySeconds = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.PreviewDelaySeconds", PreviewDelaySeconds); // Resolved once from advanced defaults; restart Rhino after changes.
   private const long SlowPreviewMilliseconds = 100; // Minimum elapsed milliseconds recorded in diagnostics.
   private static readonly Size InitialDialogSize = new(560, 570); // Initial filter-window dimensions in logical pixels.
   private static readonly Size MinimumDialogSize = new(430, 280); // Smallest filter-window dimensions in logical pixels.
   private static readonly Size FilterEditorSize = new(480, 350); // Initial condition-editor dimensions in logical pixels.
   private const int IconButtonWidth = 26; // Fixed logical-pixel width for condition edit/remove and value add/remove controls.
-  private const bool DefaultAddToSelection = false; // true adds matches to the existing selection; false replaces it when confirmed.
-  private const int DialogPadding = 10; // Dialog edge clearance in logical pixels.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultAddToSelection", "true adds matches to the existing selection; false replaces it when confirmed.")] private const bool DefaultAddToSelection = false; // true adds matches to the existing selection; false replaces it when confirmed.
+
+  private static readonly bool ConfiguredDefaultAddToSelection = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultAddToSelection", DefaultAddToSelection); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DialogPadding", "Dialog edge clearance in logical pixels.")] private const int DialogPadding = 10; // Dialog edge clearance in logical pixels.
+
+  private static readonly int ConfiguredDialogPadding = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DialogPadding", DialogPadding); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int RowSpacing = 5; // Vertical criterion spacing in logical pixels.
   private const int LabelWidth = 140; // Criterion checkbox column width in logical pixels.
   private const int LabelLimit = 25; // Maximum visible criterion-label characters; tooltip retains full text.
@@ -32,20 +38,42 @@ public sealed class vSelSame : vToolsCommand
   private static readonly Size CellSpacing = new(6, 0); // Criterion column spacing in logical pixels.
   private static readonly Size DialogSpacing = new(6, 8); // Dialog column/row spacing in logical pixels.
   private const int ButtonSpacing = 6; // Footer button spacing in logical pixels.
-  private const bool DefaultMatchType = true; // true initially checks Type; false starts with no checked criteria.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultMatchType", "true initially checks Type; false starts with no checked criteria.")] private const bool DefaultMatchType = true; // true initially checks Type; false starts with no checked criteria.
+
+  private static readonly bool ConfiguredDefaultMatchType = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultMatchType", DefaultMatchType); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool DefaultAllowMissingReferences = false; // true offers a criterion for any applicable reference; false requires it on every reference.
-  private const bool DefaultSelectAllValues = true; // true enables every reference value initially; false starts value checklists empty.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultSelectAllValues", "true enables every reference value initially; false starts value checklists empty.")] private const bool DefaultSelectAllValues = true; // true enables every reference value initially; false starts value checklists empty.
+
+  private static readonly bool ConfiguredDefaultSelectAllValues = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultSelectAllValues", DefaultSelectAllValues); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double ValueMenuMaximumHeight = 320; // Maximum checklist popup height in logical pixels before menu scrolling.
   private static readonly Size ValueArrowSize = new(10, 6); // Dropdown arrow bitmap dimensions in logical pixels.
-  private const double DistanceToleranceFactor = 2; // Model-tolerance multiplier for rectangle and part recognition.
-  private const double MinimumDistanceTolerance = 1e-8; // Lower recognition tolerance in document units.
-  private const double RectangleAngleDegrees = 2; // Maximum rectangle edge-angle deviation in degrees.
-  private const double PolygonRelativeTolerance = 1e-4; // Relative side-length/radius equality tolerance.
-  private const double PolygonAngleDegrees = 1.5; // Maximum regular-polygon angle deviation in degrees.
-  private const double SquareRelativeTolerance = 1e-6; // Relative square side-length equality tolerance.
-  private const double RectangleCosineTolerance = 1e-6; // Absolute adjacent-edge cosine tolerance for type names.
-  private const double OppositeEdgeToleranceFactor = 10; // Distance-tolerance multiplier for opposite rectangle edges.
-  private const double OppositeEdgeMinimumTolerance = 1e-6; // Minimum opposite-edge length tolerance in document units.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DistanceToleranceFactor", "Model-tolerance multiplier for rectangle and part recognition.")] private const double DistanceToleranceFactor = 2; // Model-tolerance multiplier for rectangle and part recognition.
+
+  private static readonly double ConfiguredDistanceToleranceFactor = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DistanceToleranceFactor", DistanceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MinimumDistanceTolerance", "Lower recognition tolerance in document units.")] private const double MinimumDistanceTolerance = 1e-8; // Lower recognition tolerance in document units.
+
+  private static readonly double ConfiguredMinimumDistanceTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MinimumDistanceTolerance", MinimumDistanceTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.RectangleAngleDegrees", "Maximum rectangle edge-angle deviation in degrees.")] private const double RectangleAngleDegrees = 2; // Maximum rectangle edge-angle deviation in degrees.
+
+  private static readonly double ConfiguredRectangleAngleDegrees = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.RectangleAngleDegrees", RectangleAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.PolygonRelativeTolerance", "Relative side-length/radius equality tolerance.")] private const double PolygonRelativeTolerance = 1e-4; // Relative side-length/radius equality tolerance.
+
+  private static readonly double ConfiguredPolygonRelativeTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.PolygonRelativeTolerance", PolygonRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.PolygonAngleDegrees", "Maximum regular-polygon angle deviation in degrees.")] private const double PolygonAngleDegrees = 1.5; // Maximum regular-polygon angle deviation in degrees.
+
+  private static readonly double ConfiguredPolygonAngleDegrees = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.PolygonAngleDegrees", PolygonAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.SquareRelativeTolerance", "Relative square side-length equality tolerance.")] private const double SquareRelativeTolerance = 1e-6; // Relative square side-length equality tolerance.
+
+  private static readonly double ConfiguredSquareRelativeTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.SquareRelativeTolerance", SquareRelativeTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.RectangleCosineTolerance", "Absolute adjacent-edge cosine tolerance for type names.")] private const double RectangleCosineTolerance = 1e-6; // Absolute adjacent-edge cosine tolerance for type names.
+
+  private static readonly double ConfiguredRectangleCosineTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.RectangleCosineTolerance", RectangleCosineTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.OppositeEdgeToleranceFactor", "Distance-tolerance multiplier for opposite rectangle edges.")] private const double OppositeEdgeToleranceFactor = 10; // Distance-tolerance multiplier for opposite rectangle edges.
+
+  private static readonly double ConfiguredOppositeEdgeToleranceFactor = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.OppositeEdgeToleranceFactor", OppositeEdgeToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.OppositeEdgeMinimumTolerance", "Minimum opposite-edge length tolerance in document units.")] private const double OppositeEdgeMinimumTolerance = 1e-6; // Minimum opposite-edge length tolerance in document units.
+
+  private static readonly double ConfiguredOppositeEdgeMinimumTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.OppositeEdgeMinimumTolerance", OppositeEdgeMinimumTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int SchemaVersion = 1; // Supported vNest JSON record version.
   private const int MaximumNestCharacters = 16384; // Maximum nesting JSON characters per identity.
   private const int MaximumCustomCharacters = 1048576; // Maximum custom-field JSON characters per identity.
@@ -54,14 +82,30 @@ public sealed class vSelSame : vToolsCommand
   private const int MaximumFieldNameCharacters = 256; // Maximum custom-field key length.
   private const int MaximumMaterialNameCharacters = 80; // Maximum normalized material-name length.
   private const int MaximumPartNameCharacters = 256; // Maximum saved display-name length.
-  private const int DefaultPartCopies = 1; // Copies for an uncustomized part; positive integer.
-  private const bool DefaultPartIncluded = true; // true includes an uncustomized part; false excludes it.
-  private const bool DefaultPartFixed = false; // true fixes table placement; false lets nesting choose it.
-  private const bool DefaultPartManualRotation = false; // true fixes the saved angle; false uses allowed rotations.
-  private const bool DefaultPartFlipped = false; // true mirrors an uncustomized part; false preserves its orientation.
-  private const double DefaultPartAngle = 0; // Initial source-relative placement angle in degrees.
-  private const int DefaultPartTable = 0; // Initial zero-based placement table index.
-  private const double DefaultPartCoordinate = 0; // Initial table-local X/Y position in document units.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartCopies", "Copies for an uncustomized part; positive integer.")] private const int DefaultPartCopies = 1; // Copies for an uncustomized part; positive integer.
+
+  private static readonly int ConfiguredDefaultPartCopies = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartCopies", DefaultPartCopies); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartIncluded", "true includes an uncustomized part; false excludes it.")] private const bool DefaultPartIncluded = true; // true includes an uncustomized part; false excludes it.
+
+  private static readonly bool ConfiguredDefaultPartIncluded = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartIncluded", DefaultPartIncluded); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartFixed", "true fixes table placement; false lets nesting choose it.")] private const bool DefaultPartFixed = false; // true fixes table placement; false lets nesting choose it.
+
+  private static readonly bool ConfiguredDefaultPartFixed = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartFixed", DefaultPartFixed); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartManualRotation", "true fixes the saved angle; false uses allowed rotations.")] private const bool DefaultPartManualRotation = false; // true fixes the saved angle; false uses allowed rotations.
+
+  private static readonly bool ConfiguredDefaultPartManualRotation = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartManualRotation", DefaultPartManualRotation); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartFlipped", "true mirrors an uncustomized part; false preserves its orientation.")] private const bool DefaultPartFlipped = false; // true mirrors an uncustomized part; false preserves its orientation.
+
+  private static readonly bool ConfiguredDefaultPartFlipped = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartFlipped", DefaultPartFlipped); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartAngle", "Initial source-relative placement angle in degrees.")] private const double DefaultPartAngle = 0; // Initial source-relative placement angle in degrees.
+
+  private static readonly double ConfiguredDefaultPartAngle = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartAngle", DefaultPartAngle); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartTable", "Initial zero-based placement table index.")] private const int DefaultPartTable = 0; // Initial zero-based placement table index.
+
+  private static readonly int ConfiguredDefaultPartTable = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartTable", DefaultPartTable); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultPartCoordinate", "Initial table-local X/Y position in document units.")] private const double DefaultPartCoordinate = 0; // Initial table-local X/Y position in document units.
+
+  private static readonly double ConfiguredDefaultPartCoordinate = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultPartCoordinate", DefaultPartCoordinate); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string NestSection = "vNest.PartSettings"; // Document-local nesting records keyed by group/boundary GUID.
   private const string CustomSection = "vObjectPropertiesPlus.PartData"; // Independent document-local part custom fields.
   private const string NamesSection = "vTools.PartNames"; // Display-name overrides; labels and group names are never edited.
@@ -75,8 +119,8 @@ public sealed class vSelSame : vToolsCommand
     var references = doc.Objects.GetSelectedObjects(false, false).Where(obj => !obj.IsDeleted).ToArray();
     var horizontal = GetHorizontalReference(doc);
     (double Width, double Height)? RectangleSize(Curve curve) =>
-      TryGetRectangleDimensions(curve, Math.Max(doc.ModelAbsoluteTolerance * DistanceToleranceFactor, MinimumDistanceTolerance),
-        RhinoMath.ToRadians(RectangleAngleDegrees), horizontal, out double width, out double height) ? (width, height) : null;
+      TryGetRectangleDimensions(curve, Math.Max(doc.ModelAbsoluteTolerance * ConfiguredDistanceToleranceFactor, ConfiguredMinimumDistanceTolerance),
+        RhinoMath.ToRadians(ConfiguredRectangleAngleDegrees), horizontal, out double width, out double height) ? (width, height) : null;
     using var highlight = new PreviewDisplay.ObjectHighlighter(doc);
     SelSameDialog? dialog = null;
     try
@@ -233,7 +277,7 @@ public sealed class vSelSame : vToolsCommand
     if (!IsParallel(edges[0], edges[2], angleToleranceRadians) || !IsParallel(edges[1], edges[3], angleToleranceRadians))
       return false;
 
-    double lengthTolerance = Math.Max(distanceTolerance * OppositeEdgeToleranceFactor, OppositeEdgeMinimumTolerance);
+    double lengthTolerance = Math.Max(distanceTolerance * ConfiguredOppositeEdgeToleranceFactor, ConfiguredOppositeEdgeMinimumTolerance);
     if (Math.Abs(lengths[0] - lengths[2]) > lengthTolerance || Math.Abs(lengths[1] - lengths[3]) > lengthTolerance)
       return false;
 
@@ -378,7 +422,7 @@ public sealed class vSelSame : vToolsCommand
       if (len1 < RhinoMath.SqrtEpsilon || len2 < RhinoMath.SqrtEpsilon)
         return false;
       double cosAngle = (v1 * v2) / (len1 * len2);
-      if (Math.Abs(cosAngle) > RectangleCosineTolerance)
+      if (Math.Abs(cosAngle) > ConfiguredRectangleCosineTolerance)
         return false;
     }
     return true;
@@ -393,7 +437,7 @@ public sealed class vSelSame : vToolsCommand
     double avg = (l0 + l1 + l2 + l3) / 4.0;
     if (avg < RhinoMath.SqrtEpsilon)
       return false;
-    double tol = avg * SquareRelativeTolerance;
+    double tol = avg * ConfiguredSquareRelativeTolerance;
     return Math.Abs(l0 - l1) < tol && Math.Abs(l1 - l2) < tol && Math.Abs(l2 - l3) < tol;
   }
 
@@ -425,7 +469,7 @@ public sealed class vSelSame : vToolsCommand
     double len0 = pl[0].DistanceTo(pl[1]);
     if (len0 < distTol)
       return false;
-    double lenTol = Math.Max(distTol, len0 * PolygonRelativeTolerance);
+    double lenTol = Math.Max(distTol, len0 * ConfiguredPolygonRelativeTolerance);
     for (int i = 1; i < n; i++)
     {
       double li = pl[i].DistanceTo(pl[(i + 1) % n]);
@@ -435,7 +479,7 @@ public sealed class vSelSame : vToolsCommand
 
     // All interior angles must equal (n-2)*180/n degrees.
     double expectedInteriorDeg = (n - 2) * 180.0 / n;
-    double angTolDeg = PolygonAngleDegrees;
+    double angTolDeg = ConfiguredPolygonAngleDegrees;
     for (int i = 0; i < n; i++)
     {
       var incoming = pl[(i + 1) % n] - pl[i];
@@ -457,7 +501,7 @@ public sealed class vSelSame : vToolsCommand
     circumRadius = center.DistanceTo(pl[0]);
     if (circumRadius < distTol)
       return false;
-    double radTol = Math.Max(distTol, circumRadius * PolygonRelativeTolerance);
+    double radTol = Math.Max(distTol, circumRadius * ConfiguredPolygonRelativeTolerance);
     for (int i = 1; i < n; i++)
     {
       if (Math.Abs(center.DistanceTo(pl[i]) - circumRadius) > radTol)
@@ -517,7 +561,7 @@ private static class SimilarObjectMatcher
         values.Add(value);
         return values.Count - 1;
       }).ToArray();
-      _selectedValues.AddRange(Enumerable.Repeat(DefaultSelectAllValues, values.Count));
+      _selectedValues.AddRange(Enumerable.Repeat(ConfiguredDefaultSelectAllValues, values.Count));
     }
 
     internal string Key { get; }
@@ -881,7 +925,7 @@ private sealed class SelSameDialog : Dialog<bool>
   private readonly List<(SimilarObjectMatcher.Criterion Criterion, CheckBox Check)> _checks = new();
   private readonly List<ContextMenu> _valueMenus = new();
   private readonly List<Bitmap> _valueImages = new();
-  private readonly UITimer _timer = new() { Interval = PreviewDelaySeconds };
+  private readonly UITimer _timer = new() { Interval = ConfiguredPreviewDelaySeconds };
   private readonly Label _status = new() { Text = "...", Wrap = WrapMode.Word };
   private readonly Button _select = new() { Text = "Select", Enabled = false };
   private readonly Button _add = new() { Text = "Add to Selection", Enabled = false };
@@ -891,7 +935,7 @@ private sealed class SelSameDialog : Dialog<bool>
 
   internal IReadOnlyList<RhinoObject> Matches { get; private set; } = Array.Empty<RhinoObject>();
   internal bool ReferenceRequested { get; private set; }
-  internal bool AddToSelection { get; private set; } = DefaultAddToSelection;
+  internal bool AddToSelection { get; private set; } = ConfiguredDefaultAddToSelection;
 
   internal SelSameDialog(RhinoDoc doc, IReadOnlyList<RhinoObject> references,
     Func<RhinoObject, string> typeName, Func<Curve, (double Width, double Height)?> rectangleSize,
@@ -903,11 +947,11 @@ private sealed class SelSameDialog : Dialog<bool>
     Resizable = true;
     ClientSize = InitialDialogSize;
     MinimumSize = MinimumDialogSize;
-    Padding = new Padding(DialogPadding);
+    Padding = new Padding(ConfiguredDialogPadding);
     var initial = references.Count == 0 ? _catalog.Where(criterion => criterion.Key is "type" or "layer" or "name" or "part:name")
       : SimilarObjectMatcher.CreateCriteria(doc, references, typeName, rectangleSize);
     RestoreFilters(initial.Select(criterion => new FilterSetting(criterion,
-      references.Count > 0 && DefaultMatchType && criterion.Key == "type")).ToList(), false);
+      references.Count > 0 && ConfiguredDefaultMatchType && criterion.Key == "type")).ToList(), false);
     var addFilter = new Button { Text = "Add Filter" };
     addFilter.Click += (_, _) => EditCondition(null);
     var reference = new Button { Text = "Pick Reference" };
@@ -1180,7 +1224,7 @@ private sealed class FilterEditor : Dialog<bool>
     _doc = doc; _references = references; _original = original;
     _catalog = catalog.Where(item => !_sources.Any(source => item.Key.StartsWith(source + ":", StringComparison.Ordinal))).ToArray();
     Title = original == null ? "Add Filter" : "Edit Filter";
-    Padding = new Padding(DialogPadding);
+    Padding = new Padding(ConfiguredDialogPadding);
     ClientSize = FilterEditorSize; Resizable = true;
     _property.DataStore = _catalog.Select(item => item.Group + ": " + item.Label)
       .Concat(new[] { "Attribute User Text", "Geometry User Text", "Part Custom Field" }).ToArray();
@@ -1378,7 +1422,7 @@ private sealed class FilterEditor : Dialog<bool>
         && curve.TryGetPlane(out _, doc.ModelAbsoluteTolerance)).ToArray();
       var cutting = outlines.Where(obj => !OnReferenceLayer(obj)).ToArray();
       if (cutting.Length > 0) outlines = cutting;
-      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * DistanceToleranceFactor, MinimumDistanceTolerance);
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance * ConfiguredDistanceToleranceFactor, ConfiguredMinimumDistanceTolerance);
       var outer = outlines.Where(obj =>
       {
         var curve = (Curve)obj.Geometry;
@@ -1481,11 +1525,11 @@ private sealed class FilterEditor : Dialog<bool>
   {
   internal static JsonObject Defaults() => new()
   {
-    ["Version"] = SchemaVersion, ["Copies"] = DefaultPartCopies, ["Included"] = DefaultPartIncluded,
-    ["Fixed"] = DefaultPartFixed, ["ManualRotation"] = DefaultPartManualRotation, ["Flipped"] = DefaultPartFlipped,
+    ["Version"] = SchemaVersion, ["Copies"] = ConfiguredDefaultPartCopies, ["Included"] = ConfiguredDefaultPartIncluded,
+    ["Fixed"] = ConfiguredDefaultPartFixed, ["ManualRotation"] = ConfiguredDefaultPartManualRotation, ["Flipped"] = ConfiguredDefaultPartFlipped,
     ["Flip"] = null, ["Grain"] = null, ["Rotation"] = null, ["Step"] = null,
     ["Obey"] = null, ["Reverse"] = null, ["Deviation"] = null,
-    ["Angle"] = DefaultPartAngle, ["Table"] = DefaultPartTable, ["X"] = DefaultPartCoordinate, ["Y"] = DefaultPartCoordinate,
+    ["Angle"] = ConfiguredDefaultPartAngle, ["Table"] = ConfiguredDefaultPartTable, ["X"] = ConfiguredDefaultPartCoordinate, ["Y"] = ConfiguredDefaultPartCoordinate,
     ["Material"] = null, ["Recipe"] = null, ["Guide"] = null,
     ["GuideFrom"] = null, ["GuideTo"] = null
   };

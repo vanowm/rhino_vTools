@@ -20,15 +20,33 @@ internal static class UzipCommon
 {
   // ── Constants ──────────────────────────────────────────────────────────────
   internal const string ToolsConfigFileName = "vTools.config.json"; // Relative shared configuration filename beside the DLL.
-  internal const string DefaultLayerCutName = "CUT1"; // Rhino layer name or full layer path.
-  internal const string DefaultLayerPlotName = "PLOT"; // Rhino layer name or full layer path.
-  internal const string DefaultLayerReferenceName = "Reference"; // Rhino layer name or full layer path.
-  internal const string DefaultLayerCutColor = "#CC3333"; // RGB color in #RRGGBB format.
-  internal const string DefaultLayerPlotColor = "#0F8A8A"; // RGB color in #RRGGBB format.
-  internal const string DefaultLayerReferenceColor = "#FFFFFF"; // RGB color in #RRGGBB format.
-  internal const string DefaultEmptyValue = ""; // Plain text; empty means unspecified.
-  internal const string DefaultLabel = ""; // Plain label text; empty disables label content.
-  internal const double DefaultTail = 0.75; // Tail length in model units; zero or greater.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerCutName", "Rhino layer name or full layer path.")] internal const string DefaultLayerCutName = "CUT1"; // Rhino layer name or full layer path.
+
+  internal static readonly string ConfiguredDefaultLayerCutName = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerCutName", DefaultLayerCutName); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerPlotName", "Rhino layer name or full layer path.")] internal const string DefaultLayerPlotName = "PLOT"; // Rhino layer name or full layer path.
+
+  internal static readonly string ConfiguredDefaultLayerPlotName = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerPlotName", DefaultLayerPlotName); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerReferenceName", "Rhino layer name or full layer path.")] internal const string DefaultLayerReferenceName = "Reference"; // Rhino layer name or full layer path.
+
+  internal static readonly string ConfiguredDefaultLayerReferenceName = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerReferenceName", DefaultLayerReferenceName); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerCutColor", "RGB color in #RRGGBB format.")] internal const string DefaultLayerCutColor = "#CC3333"; // RGB color in #RRGGBB format.
+
+  internal static readonly string ConfiguredDefaultLayerCutColor = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerCutColor", DefaultLayerCutColor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerPlotColor", "RGB color in #RRGGBB format.")] internal const string DefaultLayerPlotColor = "#0F8A8A"; // RGB color in #RRGGBB format.
+
+  internal static readonly string ConfiguredDefaultLayerPlotColor = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerPlotColor", DefaultLayerPlotColor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerReferenceColor", "RGB color in #RRGGBB format.")] internal const string DefaultLayerReferenceColor = "#FFFFFF"; // RGB color in #RRGGBB format.
+
+  internal static readonly string ConfiguredDefaultLayerReferenceColor = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLayerReferenceColor", DefaultLayerReferenceColor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultEmptyValue", "Plain text; empty means unspecified.")] internal const string DefaultEmptyValue = ""; // Plain text; empty means unspecified.
+
+  internal static readonly string ConfiguredDefaultEmptyValue = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultEmptyValue", DefaultEmptyValue); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultLabel", "Plain label text; empty disables label content.")] internal const string DefaultLabel = ""; // Plain label text; empty disables label content.
+
+  internal static readonly string ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("UzipCommon", "vTools.Commands.UzipCommon.DefaultTail", "Tail length in model units; zero or greater.")] internal const double DefaultTail = 0.75; // Tail length in model units; zero or greater.
+
+  internal static readonly double ConfiguredDefaultTail = global::vTools.CommandDefaults.Get("UzipCommon", "vTools.Commands.UzipCommon.DefaultTail", DefaultTail); // Resolved once from advanced defaults; restart Rhino after changes.
   internal const double PartGap = 0.5; // Gap between generated parts in model units; zero or greater.
   internal const double LabelOffsetAlong = 0.125; // Label shift along its reference edge in model units.
   internal const double LabelOffsetPerp = 0.125; // Label shift perpendicular to its reference edge in model units.
@@ -55,8 +73,8 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class LayerConfigEntry
   {
-    public string Name { get; set; } = DefaultEmptyValue;
-    public string Color { get; set; } = DefaultEmptyValue;
+    public string Name { get; set; } = ConfiguredDefaultEmptyValue;
+    public string Color { get; set; } = ConfiguredDefaultEmptyValue;
   }
 
   /// <summary>
@@ -74,8 +92,8 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class UZipConfigSection
   {
-    public string Label { get; set; } = DefaultLabel;
-    public double Tail { get; set; } = DefaultTail;
+    public string Label { get; set; } = ConfiguredDefaultLabel;
+    public double Tail { get; set; } = ConfiguredDefaultTail;
     public UZipLayersConfig Layers { get; set; } = new();
     public List<PartSpec> Parts { get; set; } = new();
 
@@ -108,12 +126,12 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class LayerRuntime
   {
-    public string ReferenceName { get; set; } = DefaultLayerReferenceName;
-    public string PlotName { get; set; } = DefaultLayerPlotName;
-    public string CutName { get; set; } = DefaultLayerCutName;
-    public string ReferenceColorHex { get; set; } = DefaultLayerReferenceColor;
-    public string PlotColorHex { get; set; } = DefaultLayerPlotColor;
-    public string CutColorHex { get; set; } = DefaultLayerCutColor;
+    public string ReferenceName { get; set; } = ConfiguredDefaultLayerReferenceName;
+    public string PlotName { get; set; } = ConfiguredDefaultLayerPlotName;
+    public string CutName { get; set; } = ConfiguredDefaultLayerCutName;
+    public string ReferenceColorHex { get; set; } = ConfiguredDefaultLayerReferenceColor;
+    public string PlotColorHex { get; set; } = ConfiguredDefaultLayerPlotColor;
+    public string CutColorHex { get; set; } = ConfiguredDefaultLayerCutColor;
 
     /// <summary>
     /// Converts the normalized runtime values into a serializable config block.
@@ -139,7 +157,7 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class OffsetSpec
   {
-    public string Name { get; set; } = DefaultEmptyValue;
+    public string Name { get; set; } = ConfiguredDefaultEmptyValue;
     public double Offset { get; set; }
     public string? Layer { get; set; }
   }
@@ -149,14 +167,14 @@ internal static class UzipCommon
   /// </summary>
   internal sealed class PartSpec
   {
-    public string Name { get; set; } = DefaultEmptyValue;
+    public string Name { get; set; } = ConfiguredDefaultEmptyValue;
     public string? CenterLayer { get; set; }
-    public string CenterEndMode { get; set; } = DefaultEmptyValue;
-    public string Note { get; set; } = DefaultEmptyValue;
+    public string CenterEndMode { get; set; } = ConfiguredDefaultEmptyValue;
+    public string Note { get; set; } = ConfiguredDefaultEmptyValue;
     public bool MirrorPart { get; set; }
     public List<OffsetSpec> Offsets { get; set; } = new();
-    public string BandInsideName { get; set; } = DefaultEmptyValue;
-    public string BandOutsideName { get; set; } = DefaultEmptyValue;
+    public string BandInsideName { get; set; } = ConfiguredDefaultEmptyValue;
+    public string BandOutsideName { get; set; } = ConfiguredDefaultEmptyValue;
   }
 
   // ── Config / File I/O ──────────────────────────────────────────────────────
@@ -227,8 +245,8 @@ internal static class UzipCommon
     {
       vUzipParts = new UZipConfigSection
       {
-        Label = DefaultLabel,
-        Tail = DefaultTail,
+        Label = ConfiguredDefaultLabel,
+        Tail = ConfiguredDefaultTail,
         Layers = layers.ToConfig(),
         Parts = CreateDefaultPartSpecs(layers)
       }
@@ -247,7 +265,7 @@ internal static class UzipCommon
     root.LegacyVUZIP = null;
 
     var section = root.vUzipParts!;
-    section.Label = (section.Label ?? DefaultLabel).Trim();
+    section.Label = (section.Label ?? ConfiguredDefaultLabel).Trim();
     section.Tail = Math.Max(0.0, section.Tail);
 
     if (section.Parts == null)
@@ -270,12 +288,12 @@ internal static class UzipCommon
   {
     var runtime = new LayerRuntime
     {
-      ReferenceName = NormalizeLayerName(layers?.Reference?.Name, DefaultLayerReferenceName),
-      PlotName = NormalizeLayerName(layers?.Plot?.Name, DefaultLayerPlotName),
-      CutName = NormalizeLayerName(layers?.Cut?.Name, DefaultLayerCutName),
-      ReferenceColorHex = NormalizeHexColor(layers?.Reference?.Color, DefaultLayerReferenceColor),
-      PlotColorHex = NormalizeHexColor(layers?.Plot?.Color, DefaultLayerPlotColor),
-      CutColorHex = NormalizeHexColor(layers?.Cut?.Color, DefaultLayerCutColor)
+      ReferenceName = NormalizeLayerName(layers?.Reference?.Name, ConfiguredDefaultLayerReferenceName),
+      PlotName = NormalizeLayerName(layers?.Plot?.Name, ConfiguredDefaultLayerPlotName),
+      CutName = NormalizeLayerName(layers?.Cut?.Name, ConfiguredDefaultLayerCutName),
+      ReferenceColorHex = NormalizeHexColor(layers?.Reference?.Color, ConfiguredDefaultLayerReferenceColor),
+      PlotColorHex = NormalizeHexColor(layers?.Plot?.Color, ConfiguredDefaultLayerPlotColor),
+      CutColorHex = NormalizeHexColor(layers?.Cut?.Color, ConfiguredDefaultLayerCutColor)
     };
 
     return runtime;
@@ -331,9 +349,9 @@ internal static class UzipCommon
   // ── Layer / Document helpers ───────────────────────────────────────────────
   internal static void EnsureCommandLayers(RhinoDoc doc, LayerRuntime runtime)
   {
-    EnsureLayer(doc, runtime.ReferenceName, ParseHexColorOrDefault(runtime.ReferenceColorHex, DefaultLayerReferenceColor));
-    EnsureLayer(doc, runtime.PlotName, ParseHexColorOrDefault(runtime.PlotColorHex, DefaultLayerPlotColor));
-    EnsureLayer(doc, runtime.CutName, ParseHexColorOrDefault(runtime.CutColorHex, DefaultLayerCutColor));
+    EnsureLayer(doc, runtime.ReferenceName, ParseHexColorOrDefault(runtime.ReferenceColorHex, ConfiguredDefaultLayerReferenceColor));
+    EnsureLayer(doc, runtime.PlotName, ParseHexColorOrDefault(runtime.PlotColorHex, ConfiguredDefaultLayerPlotColor));
+    EnsureLayer(doc, runtime.CutName, ParseHexColorOrDefault(runtime.CutColorHex, ConfiguredDefaultLayerCutColor));
   }
 
   internal static int EnsureLayer(RhinoDoc doc, string layerName)

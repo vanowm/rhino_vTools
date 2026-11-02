@@ -37,6 +37,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="vTools.config.json">
+      <LogicalName>vTools.Configuration.Defaults.json</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="ThirdPartyNotices.md">
       <LogicalName>vTools.ThirdPartyNotices.md</LogicalName>
     </EmbeddedResource>

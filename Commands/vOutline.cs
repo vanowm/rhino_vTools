@@ -18,13 +18,25 @@ namespace vTools.Commands;
 public sealed class vOutline : vToolsCommand
 {
   // Defaults and customizable constants
-  private const bool DefaultParts = true; // true groups each source part separately; false groups all generated outlines together.
-  private const bool DefaultInternalEdges = false; // true includes interior edges; false requests silhouettes without internal edges.
-  private const bool DefaultFlatten = false; // true projects output to the active construction plane; false preserves native 3D silhouettes.
-  private const bool DefaultCleanup = false; // true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.
-  private const bool DefaultJoin = false; // true joins touching output curves within each source part; false leaves separate native curves.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultParts", "true groups each source part separately; false groups all generated outlines together.")] private const bool DefaultParts = true; // true groups each source part separately; false groups all generated outlines together.
+
+  private static readonly bool ConfiguredDefaultParts = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultParts", DefaultParts); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultInternalEdges", "true includes interior edges; false requests silhouettes without internal edges.")] private const bool DefaultInternalEdges = false; // true includes interior edges; false requests silhouettes without internal edges.
+
+  private static readonly bool ConfiguredDefaultInternalEdges = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultInternalEdges", DefaultInternalEdges); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultFlatten", "true projects output to the active construction plane; false preserves native 3D silhouettes.")] private const bool DefaultFlatten = false; // true projects output to the active construction plane; false preserves native 3D silhouettes.
+
+  private static readonly bool ConfiguredDefaultFlatten = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultFlatten", DefaultFlatten); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultCleanup", "true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.")] private const bool DefaultCleanup = false; // true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.
+
+  private static readonly bool ConfiguredDefaultCleanup = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultCleanup", DefaultCleanup); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultJoin", "true joins touching output curves within each source part; false leaves separate native curves.")] private const bool DefaultJoin = false; // true joins touching output curves within each source part; false leaves separate native curves.
+
+  private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int MaximumCleanupPasses = 100; // Maximum overlap split/delete passes per source; positive integer guarding against stalled cleanup.
-  private const string DefaultLayer = CurrentLayer; // Current, Inherit, or a document layer's full path.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultLayer", "Current, Inherit, or a document layer's full path.")] private const string DefaultLayer = CurrentLayer; // Current, Inherit, or a document layer's full path.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string FallbackGroupName = "Outline"; // Group name for unnamed sources or a combined output with different source names.
   private const int FirstDuplicateSuffix = 2; // First numeric suffix for a group name already present in the document.
   private const int ProgressNameLimit = 64; // Maximum source-name characters shown in the single-line progress prompt.
@@ -35,12 +47,12 @@ public sealed class vOutline : vToolsCommand
   private const string CurrentLayer = "Current";
   private const string InheritLayer = "Inherit";
   private const string SectionName = "vOutline";
-  private static bool _parts = DefaultParts;
-  private static bool _internalEdges = DefaultInternalEdges;
-  private static bool _flatten = DefaultFlatten;
-  private static bool _cleanup = DefaultCleanup;
-  private static bool _join = DefaultJoin;
-  private static string _layer = DefaultLayer;
+  private static bool _parts = ConfiguredDefaultParts;
+  private static bool _internalEdges = ConfiguredDefaultInternalEdges;
+  private static bool _flatten = ConfiguredDefaultFlatten;
+  private static bool _cleanup = ConfiguredDefaultCleanup;
+  private static bool _join = ConfiguredDefaultJoin;
+  private static string _layer = ConfiguredDefaultLayer;
 
   public override string EnglishName => "vOutline";
 
@@ -420,18 +432,18 @@ public sealed class vOutline : vToolsCommand
 
   private static string NormalizeLayer(string value) =>
     string.IsNullOrWhiteSpace(value) || LayerSelector.IsCurrentLayerValue(value, CurrentLayer)
-      ? DefaultLayer : value.Trim();
+      ? ConfiguredDefaultLayer : value.Trim();
 
   private static void LoadOptions()
   {
     (_parts, _internalEdges, _layer) = ToolsOptionStore.Read(SectionName, section =>
-      (ToolsOptionStore.TryGetBool(section, "parts", out var parts) ? parts : DefaultParts,
-       ToolsOptionStore.TryGetBool(section, "internalEdges", out var edges) ? edges : DefaultInternalEdges,
-       ToolsOptionStore.TryGetString(section, "layer", out var layer) ? NormalizeLayer(layer) : DefaultLayer));
+      (ToolsOptionStore.TryGetBool(section, "parts", out var parts) ? parts : ConfiguredDefaultParts,
+       ToolsOptionStore.TryGetBool(section, "internalEdges", out var edges) ? edges : ConfiguredDefaultInternalEdges,
+       ToolsOptionStore.TryGetString(section, "layer", out var layer) ? NormalizeLayer(layer) : ConfiguredDefaultLayer));
     (_flatten, _cleanup, _join) = ToolsOptionStore.Read(SectionName, section =>
-      (ToolsOptionStore.TryGetBool(section, "flatten", out var flatten) ? flatten : DefaultFlatten,
-       ToolsOptionStore.TryGetBool(section, "cleanup", out var cleanup) ? cleanup : DefaultCleanup,
-       ToolsOptionStore.TryGetBool(section, "join", out var join) ? join : DefaultJoin));
+      (ToolsOptionStore.TryGetBool(section, "flatten", out var flatten) ? flatten : ConfiguredDefaultFlatten,
+       ToolsOptionStore.TryGetBool(section, "cleanup", out var cleanup) ? cleanup : ConfiguredDefaultCleanup,
+       ToolsOptionStore.TryGetBool(section, "join", out var join) ? join : ConfiguredDefaultJoin));
   }
 
   private static void SaveOptions()

@@ -19,7 +19,9 @@ namespace vTools;
 internal static class LayerSelector
 {
   // Defaults and customizable constants
-  private const bool DefaultAllowVirtualization = true; // true realizes visible dropdown rows only; false permits Eto's nonvirtualized list.
+  [global::vTools.CommandDefault("LayerSelector", "vTools.LayerSelector.DefaultAllowVirtualization", "true realizes visible dropdown rows only; false permits Eto's nonvirtualized list.")] private const bool DefaultAllowVirtualization = true; // true realizes visible dropdown rows only; false permits Eto's nonvirtualized list.
+
+  private static readonly bool ConfiguredDefaultAllowVirtualization = global::vTools.CommandDefaults.Get("LayerSelector", "vTools.LayerSelector.DefaultAllowVirtualization", DefaultAllowVirtualization); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int VirtualizationThreshold = 1; // Minimum item count for Eto dropdown virtualization; positive integer.
   private const int LayerIndentSpaces = 4; // Spaces added for each level of the layer hierarchy; non-negative integer.
   private const int SwatchSize = 18; // Color-swatch width and height, in pixels.
@@ -33,8 +35,12 @@ internal static class LayerSelector
   private const int LayerRowHeight = 22; // Height of a row in the searchable layer dialog, in logical pixels.
   private const int SwatchColumnWidth = 26; // Width of the layer-dialog swatch column, in logical pixels.
   private const int DialogSpacing = 8; // Spacing between dialog controls and buttons, in logical pixels.
-  private const int DialogPadding = 10; // Padding around dialog content, in logical pixels.
-  private const int SlowPopupMilliseconds = 100; // Log popup timings on the first opening and when total layout exceeds this duration.
+  [global::vTools.CommandDefault("LayerSelector", "vTools.LayerSelector.DialogPadding", "Padding around dialog content, in logical pixels.")] private const int DialogPadding = 10; // Padding around dialog content, in logical pixels.
+
+  private static readonly int ConfiguredDialogPadding = global::vTools.CommandDefaults.Get("LayerSelector", "vTools.LayerSelector.DialogPadding", DialogPadding); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("LayerSelector", "vTools.LayerSelector.SlowPopupMilliseconds", "Log popup timings on the first opening and when total layout exceeds this duration.")] private const int SlowPopupMilliseconds = 100; // Log popup timings on the first opening and when total layout exceeds this duration.
+
+  private static readonly int ConfiguredSlowPopupMilliseconds = global::vTools.CommandDefaults.Get("LayerSelector", "vTools.LayerSelector.SlowPopupMilliseconds", SlowPopupMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string Tag = "LayerSelector";
 
@@ -191,14 +197,14 @@ internal static class LayerSelector
     {
       var handler = dropDown.Handler;
       var handlerType = handler.GetType();
-      handlerType.GetProperty("AllowVirtualization")?.SetValue(handler, DefaultAllowVirtualization);
+      handlerType.GetProperty("AllowVirtualization")?.SetValue(handler, ConfiguredDefaultAllowVirtualization);
       handlerType.GetProperty("VirtualizationThreshold")?.SetValue(handler, VirtualizationThreshold);
 
       var combo = FindVisualChild<System.Windows.Controls.ComboBox>(
         dropDown.ControlObject as System.Windows.DependencyObject);
       if (combo == null) return;
       state.AttachNativeControl(combo);
-      System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(combo, DefaultAllowVirtualization);
+      System.Windows.Controls.VirtualizingPanel.SetIsVirtualizing(combo, ConfiguredDefaultAllowVirtualization);
       System.Windows.Controls.VirtualizingPanel.SetVirtualizationMode(
         combo, System.Windows.Controls.VirtualizationMode.Recycling);
       System.Windows.Controls.ScrollViewer.SetCanContentScroll(combo, true);
@@ -208,7 +214,7 @@ internal static class LayerSelector
         var itemPanel = new System.Windows.FrameworkElementFactory(
           typeof(System.Windows.Controls.VirtualizingStackPanel));
         itemPanel.SetValue(
-          System.Windows.Controls.VirtualizingPanel.IsVirtualizingProperty, DefaultAllowVirtualization);
+          System.Windows.Controls.VirtualizingPanel.IsVirtualizingProperty, ConfiguredDefaultAllowVirtualization);
         itemPanel.SetValue(
           System.Windows.Controls.VirtualizingPanel.VirtualizationModeProperty,
           System.Windows.Controls.VirtualizationMode.Recycling);
@@ -524,7 +530,7 @@ internal static class LayerSelector
       Content = new StackLayout
       {
         HorizontalContentAlignment = HorizontalAlignment.Stretch,
-        Padding = new Padding(DialogPadding),
+        Padding = new Padding(ConfiguredDialogPadding),
         Spacing = DialogSpacing,
         Items =
         {
@@ -787,7 +793,7 @@ internal static class LayerSelector
         if (!ReferenceEquals(_openTimer, timer)) return;
         timer.Stop();
         _openTimer = null;
-        if (first || timer.ElapsedMilliseconds >= SlowPopupMilliseconds)
+        if (first || timer.ElapsedMilliseconds >= ConfiguredSlowPopupMilliseconds)
           Log.Write(Tag, $"Layer popup: first={first} items={native.Items.Count} open_ms={openMs:0.0}" +
             $" total_ms={timer.Elapsed.TotalMilliseconds:0.0}" +
             $" swatch_ms={Layers.Sum(item => item.SwatchMilliseconds) + (StatusItem?.SwatchMilliseconds ?? 0.0):0.0}");

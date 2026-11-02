@@ -16,14 +16,24 @@ namespace vTools.Commands;
 public sealed class vLineLength : vToolsCommand
 {
   // Defaults and customizable constants
-  private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
-  private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
-  private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultDesiredLength", "Length in model units; greater than zero.")] private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultDesiredLength = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultDesiredLength", DefaultDesiredLength); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultExtendWithLine", "true adds straight extensions; false extends the source curve geometry.")] private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
+
+  private static readonly bool ConfiguredDefaultExtendWithLine = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultExtendWithLine", DefaultExtendWithLine); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultMode", "Mode constant: ModeTotal, ModeAdd, or ModeSubtract.")] private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+
+  private static readonly int ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int BoxDragThreshold = 4; // Screen-pixel movement distinguishing a click from an endpoint-selection drag.
-  private const int BoxLineThickness = 1; // Selection rectangle outline width in screen pixels; positive.
-  private const double CurveSnapToleranceFactor = 2.0; // Document-tolerance multiplier for snapped single-curve picking.
-  private static readonly System.Drawing.Color BoxColor = System.Drawing.Color.DodgerBlue; // RGB selection-box outline color.
-  private static readonly string[] ModeNames = { "Total", "Add", "Subtract" }; // Command option names in mode-index order.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.BoxLineThickness", "Selection rectangle outline width in screen pixels; positive.")] private const int BoxLineThickness = 1; // Selection rectangle outline width in screen pixels; positive.
+
+  private static readonly int ConfiguredBoxLineThickness = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.BoxLineThickness", BoxLineThickness); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.CurveSnapToleranceFactor", "Document-tolerance multiplier for snapped single-curve picking.")] private const double CurveSnapToleranceFactor = 2.0; // Document-tolerance multiplier for snapped single-curve picking.
+
+  private static readonly double ConfiguredCurveSnapToleranceFactor = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.CurveSnapToleranceFactor", CurveSnapToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.BoxColor", "RGB selection-box outline color.", "#FF1E90FF")] private static readonly System.Drawing.Color BoxColor = global::vTools.CommandDefaults.GetColor("vLineLength", "vTools.Commands.vLineLength.BoxColor", System.Drawing.Color.DodgerBlue); // RGB selection-box outline color.
+  [global::vTools.CommandChoicesAttribute("vLineLength", "mode", true, "Total", "Add", "Subtract")] private static readonly string[] ModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vLineLength), nameof(ModeNames)); // Command option names in mode-index order.
 
   private const int ModeTotal = 0; // Persisted mode index that sets the final total length.
   private const int ModeAdd = 1; // Persisted mode index that adds the entered length.
@@ -34,9 +44,9 @@ public sealed class vLineLength : vToolsCommand
   private const string ExtendWithLineKey = "extendWithLine";
   private const string ModeKey = "mode";
 
-  private static double _desiredLength = DefaultDesiredLength;
-  private static bool _extendWithLine = DefaultExtendWithLine;
-  private static int _mode = DefaultMode;
+  private static double _desiredLength = ConfiguredDefaultDesiredLength;
+  private static bool _extendWithLine = ConfiguredDefaultExtendWithLine;
+  private static int _mode = ConfiguredDefaultMode;
 
   /// <summary>
   /// Rhino command name.
@@ -236,7 +246,7 @@ public sealed class vLineLength : vToolsCommand
       if (dragging && boxStart.HasValue && boxViewport != null)
       {
         var rectangle = SelectionRectangle(boxStart.Value, boxEnd);
-        e.Display.Draw2dRectangle(rectangle, BoxColor, BoxLineThickness, System.Drawing.Color.Transparent);
+        e.Display.Draw2dRectangle(rectangle, BoxColor, ConfiguredBoxLineThickness, System.Drawing.Color.Transparent);
         var items = new List<CurvePreviewItem>();
         foreach (var pick in PickBoxEnds(doc, boxViewport, rectangle))
         {
@@ -493,7 +503,7 @@ public sealed class vLineLength : vToolsCommand
       return false;
 
     var bestDistance = double.MaxValue;
-    var snapTolerance = doc.ModelAbsoluteTolerance * CurveSnapToleranceFactor;
+    var snapTolerance = doc.ModelAbsoluteTolerance * ConfiguredCurveSnapToleranceFactor;
 
     var settings = new ObjectEnumeratorSettings
     {

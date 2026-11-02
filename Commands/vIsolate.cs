@@ -17,7 +17,9 @@ namespace vTools.Commands;
 public sealed class vIsolate : vToolsCommand
 {
   // Defaults and customizable constants
-  private const string DefaultHideSetName = ""; // Empty string creates an unnamed isolate; any non-empty text is a Rhino hide-set name.
+  [global::vTools.CommandDefault("vIsolate", "vTools.Commands.vIsolate.DefaultHideSetName", "Empty string creates an unnamed isolate; any non-empty text is a Rhino hide-set name.")] private const string DefaultHideSetName = ""; // Empty string creates an unnamed isolate; any non-empty text is a Rhino hide-set name.
+
+  private static readonly string ConfiguredDefaultHideSetName = global::vTools.CommandDefaults.Get("vIsolate", "vTools.Commands.vIsolate.DefaultHideSetName", DefaultHideSetName); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string Tag = "vIsolate"; // Command and diagnostic-log name.
   private const string SelectionPrompt = // Combined object-selection and optional hide-set-name prompt.
     "Select objects to isolate or type an optional set name";
@@ -139,7 +141,7 @@ public sealed class vIsolate : vToolsCommand
     out string hideSetName,
     out Result commandResult)
   {
-    hideSetName = DefaultHideSetName;
+    hideSetName = ConfiguredDefaultHideSetName;
 
     using var getter = new GetObject();
     getter.SetCommandPrompt(SelectionPrompt);
@@ -175,7 +177,7 @@ public sealed class vIsolate : vToolsCommand
         var optionIndex = getter.Option()?.Index ?? -1;
         if (optionIndex == clearNameOptionIndex)
         {
-          hideSetName = DefaultHideSetName;
+          hideSetName = ConfiguredDefaultHideSetName;
           Log.Write(Tag, "  hide-set cleared");
           continue;
         }
@@ -251,7 +253,7 @@ public sealed class vIsolate : vToolsCommand
 
     hideSetName = getResult == GetResult.String
       ? HideSetState.NormalizeInput(getter.StringResult())
-      : DefaultHideSetName;
+      : ConfiguredDefaultHideSetName;
     return true;
   }
 

@@ -23,13 +23,19 @@ public sealed class vSplitAtCorners : vToolsCommand
   private const string IgnoreNotchesKey = "ignoreNotches";
 
   // Option defaults
-  private const double DefaultAngleDeg = 45.0; // Kink threshold in degrees; greater than 0 and less than 180.
-  private const double DefaultMinLength = 0.0; // Minimum segment length in model units; zero disables filtering.
-  private const bool DefaultIgnoreNotches = true; // true skips curves named NOTCH; false evaluates them for splitting.
+  [global::vTools.CommandDefault("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultAngleDeg", "Kink threshold in degrees; greater than 0 and less than 180.")] private const double DefaultAngleDeg = 45.0; // Kink threshold in degrees; greater than 0 and less than 180.
 
-  private static double _angleDeg = DefaultAngleDeg;
-  private static double _minLength = DefaultMinLength;
-  private static bool _ignoreNotches = DefaultIgnoreNotches;
+  private static readonly double ConfiguredDefaultAngleDeg = global::vTools.CommandDefaults.Get("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultAngleDeg", DefaultAngleDeg); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultMinLength", "Minimum segment length in model units; zero disables filtering.")] private const double DefaultMinLength = 0.0; // Minimum segment length in model units; zero disables filtering.
+
+  private static readonly double ConfiguredDefaultMinLength = global::vTools.CommandDefaults.Get("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultMinLength", DefaultMinLength); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultIgnoreNotches", "true skips curves named NOTCH; false evaluates them for splitting.")] private const bool DefaultIgnoreNotches = true; // true skips curves named NOTCH; false evaluates them for splitting.
+
+  private static readonly bool ConfiguredDefaultIgnoreNotches = global::vTools.CommandDefaults.Get("vSplitAtCorners", "vTools.Commands.vSplitAtCorners.DefaultIgnoreNotches", DefaultIgnoreNotches); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static double _angleDeg = ConfiguredDefaultAngleDeg;
+  private static double _minLength = ConfiguredDefaultMinLength;
+  private static bool _ignoreNotches = ConfiguredDefaultIgnoreNotches;
 
   /// <summary>
   /// Rhino command name.

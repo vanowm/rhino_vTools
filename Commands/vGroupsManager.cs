@@ -18,12 +18,20 @@ namespace vTools.Commands
     // Defaults and customizable constants
     private const string SettingsSection = "vGroupsManager"; // JSON object name used for persistent command settings.
     private const string AutoSelectKey = "autoSelect"; // JSON boolean key controlling automatic document selection from tree rows.
-    private const bool DefaultAutoSelect = false; // true selects highlighted tree members automatically; false only highlights until Select is clicked.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultAutoSelect", "true selects highlighted tree members automatically; false only highlights until Select is clicked.")] private const bool DefaultAutoSelect = false; // true selects highlighted tree members automatically; false only highlights until Select is clicked.
+
+    private static readonly bool ConfiguredDefaultAutoSelect = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultAutoSelect", DefaultAutoSelect); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string ShowChildrenKey = "showChildrenGroups"; // Persistent JSON boolean controlling inferred child-group display for all groups.
-    private const bool DefaultShowChildren = false; // true nests strictly contained groups and their objects; false retains the flat group list.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultShowChildren", "true nests strictly contained groups and their objects; false retains the flat group list.")] private const bool DefaultShowChildren = false; // true nests strictly contained groups and their objects; false retains the flat group list.
+
+    private static readonly bool ConfiguredDefaultShowChildren = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultShowChildren", DefaultShowChildren); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string WindowTitle = "Groups Manager"; // Modeless window title shown in the native window chrome.
-    private const int DefaultWindowWidth = 680; // Initial window client width in device-independent pixels.
-    private const int DefaultWindowHeight = 460; // Initial window client height in device-independent pixels.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultWindowWidth", "Initial window client width in device-independent pixels.")] private const int DefaultWindowWidth = 680; // Initial window client width in device-independent pixels.
+
+    private static readonly int ConfiguredDefaultWindowWidth = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultWindowWidth", DefaultWindowWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultWindowHeight", "Initial window client height in device-independent pixels.")] private const int DefaultWindowHeight = 460; // Initial window client height in device-independent pixels.
+
+    private static readonly int ConfiguredDefaultWindowHeight = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultWindowHeight", DefaultWindowHeight); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int MinimumWindowWidth = 520; // Smallest allowed window width in device-independent pixels.
     private const int MinimumWindowHeight = 300; // Smallest allowed window height in device-independent pixels.
     private const int RenameWindowWidth = 420; // Rename-dialog client width in device-independent pixels.
@@ -31,11 +39,17 @@ namespace vTools.Commands
     private const int GridRowHeight = 25; // Group-tree row height in device-independent pixels.
     private const int GroupNameColumnWidth = 360; // Initial group/object-name column width in device-independent pixels.
     private const int ObjectCountColumnWidth = 110; // Initial object-count column width in device-independent pixels.
-    private const int DialogPadding = 10; // Uniform content inset in device-independent pixels.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DialogPadding", "Uniform content inset in device-independent pixels.")] private const int DialogPadding = 10; // Uniform content inset in device-independent pixels.
+
+    private static readonly int ConfiguredDialogPadding = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DialogPadding", DialogPadding); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ControlSpacing = 8; // Gap between adjacent controls in device-independent pixels.
-    private const int SelectCheckboxRightMargin = 7; // Gap after the unlabeled Auto Select checkbox in device-independent pixels.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.SelectCheckboxRightMargin", "Gap after the unlabeled Auto Select checkbox in device-independent pixels.")] private const int SelectCheckboxRightMargin = 7; // Gap after the unlabeled Auto Select checkbox in device-independent pixels.
+
+    private static readonly int ConfiguredSelectCheckboxRightMargin = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.SelectCheckboxRightMargin", SelectCheckboxRightMargin); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ObjectIdDisplayLength = 8; // Number of hexadecimal object-ID characters shown for unnamed members; 1 through 32.
-    private const double InactiveSelectionSaturationFactor = 0.72; // Unfocused tree-selection saturation from 0.0 grayscale through 1.0 matching the active selection color.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.InactiveSelectionSaturationFactor", "Unfocused tree-selection saturation from 0.0 grayscale through 1.0 matching the active selection color.")] private const double InactiveSelectionSaturationFactor = 0.72; // Unfocused tree-selection saturation from 0.0 grayscale through 1.0 matching the active selection color.
+
+    private static readonly double ConfiguredInactiveSelectionSaturationFactor = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.InactiveSelectionSaturationFactor", InactiveSelectionSaturationFactor); // Resolved once from advanced defaults; restart Rhino after changes.
 
     private static GroupsManagerWindow? ActiveWindow;
 
@@ -60,8 +74,8 @@ namespace vTools.Commands
         SettingsSection,
         section => ToolsOptionStore.TryGetBool(section, AutoSelectKey, out var saved)
           ? saved
-          : DefaultAutoSelect);
-      var children = ToolsOptionStore.Read(SettingsSection,section=>ToolsOptionStore.TryGetBool(section,ShowChildrenKey,out var saved)?saved:DefaultShowChildren);
+          : ConfiguredDefaultAutoSelect);
+      var children = ToolsOptionStore.Read(SettingsSection,section=>ToolsOptionStore.TryGetBool(section,ShowChildrenKey,out var saved)?saved:ConfiguredDefaultShowChildren);
       var window = new GroupsManagerWindow(doc, autoSelect, children)
       {
         Owner = RhinoEtoApp.MainWindow
@@ -146,7 +160,7 @@ namespace vTools.Commands
       private bool _changingSelection;
       private bool _autoSelect;
 
-      internal GroupsManagerWindow(RhinoDoc doc, bool autoSelect) : this(doc,autoSelect,DefaultShowChildren) { }
+      internal GroupsManagerWindow(RhinoDoc doc, bool autoSelect) : this(doc,autoSelect,ConfiguredDefaultShowChildren) { }
       internal GroupsManagerWindow(RhinoDoc doc, bool autoSelect,bool showChildren)
       {
         _doc = doc;
@@ -155,7 +169,7 @@ namespace vTools.Commands
         _objectHighlighter = new PreviewDisplay.ObjectHighlighter(doc);
         Title = WindowTitle;
         Resizable = true;
-        ClientSize = new Size(DefaultWindowWidth, DefaultWindowHeight);
+        ClientSize = new Size(ConfiguredDefaultWindowWidth, ConfiguredDefaultWindowHeight);
         MinimumSize = new Size(MinimumWindowWidth, MinimumWindowHeight);
 
         _tree = new TreeGridView
@@ -301,7 +315,7 @@ namespace vTools.Commands
         Content = new StackLayout
         {
           HorizontalContentAlignment = HorizontalAlignment.Stretch,
-          Padding = new Padding(DialogPadding),
+          Padding = new Padding(ConfiguredDialogPadding),
           Spacing = ControlSpacing,
           Items =
           {
@@ -935,7 +949,7 @@ namespace vTools.Commands
           active.R * 0.2126 + active.G * 0.7152 + active.B * 0.0722);
         static byte Desaturate(byte channel, byte gray) =>
           (byte)Math.Round(
-            gray + (channel - gray) * InactiveSelectionSaturationFactor);
+            gray + (channel - gray) * ConfiguredInactiveSelectionSaturationFactor);
         var brush = new System.Windows.Media.SolidColorBrush(
           System.Windows.Media.Color.FromArgb(
             active.A,
@@ -968,7 +982,7 @@ namespace vTools.Commands
         _autoSelectCheck = new System.Windows.Controls.CheckBox
         {
           IsChecked = _autoSelect,
-          Margin = new System.Windows.Thickness(0, 0, SelectCheckboxRightMargin, 0),
+          Margin = new System.Windows.Thickness(0, 0, ConfiguredSelectCheckboxRightMargin, 0),
           VerticalAlignment = System.Windows.VerticalAlignment.Center,
           ToolTip = "Automatically select highlighted tree objects; uncheck to clear that automatic selection"
         };
@@ -1284,7 +1298,7 @@ namespace vTools.Commands
 
         Content = new StackLayout
         {
-          Padding = new Padding(DialogPadding),
+          Padding = new Padding(ConfiguredDialogPadding),
           Spacing = ControlSpacing,
           Items =
           {
@@ -1322,7 +1336,7 @@ namespace vTools.Commands
   {
     private sealed partial class GroupsManagerWindow
     {
-      private bool _showChildren=DefaultShowChildren;
+      private bool _showChildren=ConfiguredDefaultShowChildren;
       private readonly Dictionary<int,int> _groupParents=[];
       private void BuildHierarchyTree()
       {

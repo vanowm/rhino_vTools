@@ -11,7 +11,27 @@ internal static class AnnotationTextTransform
   // Customizable annotation transformation constants.
   private const double HalfTurnRadians = Math.PI; // Text rotation in radians used to reverse annotation reading direction.
   private const double FullTurnRadians = Math.PI * 2.0; // Positive radians in one complete rotation, used for normalization.
-  private const double DefaultDisplayDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve a viewport scale.
+  [global::vTools.CommandDefault("AnnotationTextTransform", "vTools.AnnotationTextTransform.DefaultDisplayDimensionScale", "Positive fallback annotation display scale when Rhino cannot resolve a viewport scale.")] private const double DefaultDisplayDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve a viewport scale.
+
+  private static readonly double ConfiguredDefaultDisplayDimensionScale = global::vTools.CommandDefaults.Get("AnnotationTextTransform", "vTools.AnnotationTextTransform.DefaultDisplayDimensionScale", DefaultDisplayDimensionScale); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  internal static BoundingBox TextBounds(TextEntity text)
+  {
+    var bounds = BoundingBox.Empty;
+    if (!text.Plane.IsValid) return bounds;
+    var outlines = text.Explode();
+    try
+    {
+      foreach (var outline in outlines ?? [])
+        if (outline != null)
+        {
+          var box = outline.GetBoundingBox(text.Plane);
+          if (box.IsValid) bounds.Union(box);
+        }
+      return bounds.IsValid ? bounds : text.GetBoundingBox(text.Plane);
+    }
+    finally { foreach (var outline in outlines ?? []) outline?.Dispose(); }
+  }
 
   internal static bool FlipTextFrame(AnnotationBase annotation)
   {
@@ -500,5 +520,5 @@ internal static class AnnotationTextTransform
   private static double ValidDimensionScale(double scale) =>
     double.IsFinite(scale) && scale > RhinoMath.ZeroTolerance
       ? scale
-      : DefaultDisplayDimensionScale;
+      : ConfiguredDefaultDisplayDimensionScale;
 }

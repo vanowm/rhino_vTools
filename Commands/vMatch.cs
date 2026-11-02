@@ -23,13 +23,25 @@ namespace vTools.Commands
   public sealed partial class vMatch : vToolsCommand
   {
     // Option defaults
-    private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
-    private const AutoStartMode DefaultStartFrom = AutoStartMode.Pick; // Random chooses the first part; Pick requests a stationary center part and alternates outward sides.
-    private static readonly string[] StartFromNames = ["Random","Pick"]; // Auto start modes in AutoStartMode enum order.
-    private const int DefaultCenteredSide = 1; // Initial preferred root-axis side; +1 then -1 alternate after successful placements.
-    private const double CenteredAxisTolerance = 1e-10; // Model-unit threshold for treating root mate-dot positions as coincident.
-    private const bool DefaultRandNext = true; // In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.
-    private const int AutoLiveRefreshMilliseconds = 150; // Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultDistance", "Separation in model units; zero or greater.")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
+
+    private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultStartFrom", "Random chooses the first part; Pick requests a stationary center part and alternates outward sides.")] private const AutoStartMode DefaultStartFrom = AutoStartMode.Pick; // Random chooses the first part; Pick requests a stationary center part and alternates outward sides.
+
+    private static readonly AutoStartMode ConfiguredDefaultStartFrom = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultStartFrom", DefaultStartFrom); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vMatch", "startFrom", false, "Random", "Pick")] private static readonly string[] StartFromNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vMatch), nameof(StartFromNames)); // Auto start modes in AutoStartMode enum order.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultCenteredSide", "Initial preferred root-axis side; +1 then -1 alternate after successful placements.")] private const int DefaultCenteredSide = 1; // Initial preferred root-axis side; +1 then -1 alternate after successful placements.
+
+    private static readonly int ConfiguredDefaultCenteredSide = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultCenteredSide", DefaultCenteredSide); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.CenteredAxisTolerance", "Model-unit threshold for treating root mate-dot positions as coincident.")] private const double CenteredAxisTolerance = 1e-10; // Model-unit threshold for treating root mate-dot positions as coincident.
+
+    private static readonly double ConfiguredCenteredAxisTolerance = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.CenteredAxisTolerance", CenteredAxisTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultRandNext", "In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.")] private const bool DefaultRandNext = true; // In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.
+
+    private static readonly bool ConfiguredDefaultRandNext = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultRandNext", DefaultRandNext); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.AutoLiveRefreshMilliseconds", "Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.")] private const int AutoLiveRefreshMilliseconds = 150; // Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.
+
+    private static readonly int ConfiguredAutoLiveRefreshMilliseconds = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.AutoLiveRefreshMilliseconds", AutoLiveRefreshMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
     private static readonly PreviewDisplay.ObjectHighlightStyle MiddlePartStyle = new( // Magenta body/dark outline and 0-1 transparency distinguish the fixed middle from selection and cyan matching.
       Color.Magenta,Color.DarkMagenta,Color.White,0.45);
 
@@ -47,16 +59,20 @@ namespace vTools.Commands
     private const string KeyStartFrom = "startFrom";
     private const string KeyRandNext   = "randNext";
 
-    private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
-    private const double CursorReleaseRadiusPixels = 12.0; // Cursor travel in display pixels required before re-enabling edge snap after a match; zero or greater.
-    private static readonly Color SourceEdgeHighlightColor = Color.Orange; // Hovered source-edge highlight color.
-    private static readonly Color SourceDotHighlightColor = Color.Gold; // Chosen source-dot highlight color.
-    private static readonly Color MateDotHighlightColor = Color.Magenta; // Matching destination-dot highlight color.
-    private static readonly Color MatePartHighlightColor = Color.Cyan; // Matching destination-part highlight color.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.EdgeHoverRadiusPixels", "Maximum edge hover distance in display pixels; greater than zero.")] private const double EdgeHoverRadiusPixels = 12.0; // Maximum edge hover distance in display pixels; greater than zero.
 
-    private static double _distance   = DefaultDistance;
-    private static AutoStartMode _startFrom = DefaultStartFrom;
-    private static bool   _randNext   = DefaultRandNext;
+    private static readonly double ConfiguredEdgeHoverRadiusPixels = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.EdgeHoverRadiusPixels", EdgeHoverRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.CursorReleaseRadiusPixels", "Cursor travel in display pixels required before re-enabling edge snap after a match; zero or greater.")] private const double CursorReleaseRadiusPixels = 12.0; // Cursor travel in display pixels required before re-enabling edge snap after a match; zero or greater.
+
+    private static readonly double ConfiguredCursorReleaseRadiusPixels = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.CursorReleaseRadiusPixels", CursorReleaseRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.SourceEdgeHighlightColor", "Hovered source-edge highlight color.", "#FFFFA500")] private static readonly Color SourceEdgeHighlightColor = global::vTools.CommandDefaults.GetColor("vMatch", "vTools.Commands.vMatch.SourceEdgeHighlightColor", Color.Orange); // Hovered source-edge highlight color.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.SourceDotHighlightColor", "Chosen source-dot highlight color.", "#FFFFD700")] private static readonly Color SourceDotHighlightColor = global::vTools.CommandDefaults.GetColor("vMatch", "vTools.Commands.vMatch.SourceDotHighlightColor", Color.Gold); // Chosen source-dot highlight color.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.MateDotHighlightColor", "Matching destination-dot highlight color.", "#FFFF00FF")] private static readonly Color MateDotHighlightColor = global::vTools.CommandDefaults.GetColor("vMatch", "vTools.Commands.vMatch.MateDotHighlightColor", Color.Magenta); // Matching destination-dot highlight color.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.MatePartHighlightColor", "Matching destination-part highlight color.", "#FF00FFFF")] private static readonly Color MatePartHighlightColor = global::vTools.CommandDefaults.GetColor("vMatch", "vTools.Commands.vMatch.MatePartHighlightColor", Color.Cyan); // Matching destination-part highlight color.
+
+    private static double _distance   = ConfiguredDefaultDistance;
+    private static AutoStartMode _startFrom = ConfiguredDefaultStartFrom;
+    private static bool   _randNext   = ConfiguredDefaultRandNext;
 
     private static readonly Random _rng = new Random();
     private enum AutoStartMode { Random,Pick }
@@ -158,7 +174,7 @@ namespace vTools.Commands
         {
           double dx = e.WindowPoint.X - _releasePoint.Value.X;
           double dy = e.WindowPoint.Y - _releasePoint.Value.Y;
-          if ((dx * dx) + (dy * dy) <= CursorReleaseRadiusPixels * CursorReleaseRadiusPixels)
+          if ((dx * dx) + (dy * dy) <= ConfiguredCursorReleaseRadiusPixels * ConfiguredCursorReleaseRadiusPixels)
           {
             ReleaseSnap();
             base.OnMouseMove(e);
@@ -773,7 +789,7 @@ namespace vTools.Commands
     {
       MateEdge? bestEdge = null;
       edgePoint = Point3d.Unset;
-      double bestDistanceSquared = EdgeHoverRadiusPixels * EdgeHoverRadiusPixels;
+      double bestDistanceSquared = ConfiguredEdgeHoverRadiusPixels * ConfiguredEdgeHoverRadiusPixels;
 
       foreach (var edge in edges)
       {
@@ -1150,7 +1166,7 @@ namespace vTools.Commands
           _startFrom = rs?AutoStartMode.Random:AutoStartMode.Pick;
         else if (ToolsOptionStore.TryGetDouble(s, KeyRandStart, out var oldRs))
           _startFrom = oldRs>0.5?AutoStartMode.Random:AutoStartMode.Pick;
-        else _startFrom=DefaultStartFrom;
+        else _startFrom=ConfiguredDefaultStartFrom;
 
         if (ToolsOptionStore.TryGetBool(s, KeyRandNext, out var rn))
           _randNext = rn;
@@ -1194,7 +1210,7 @@ namespace vTools.Commands
       var result=initial.ToHashSet(); result.SymmetricExceptWith(clicked.Distinct()); return result;
     }
 
-    private static bool ShouldRefreshAutoDisplay(long elapsedMilliseconds) => elapsedMilliseconds>=AutoLiveRefreshMilliseconds;
+    private static bool ShouldRefreshAutoDisplay(long elapsedMilliseconds) => elapsedMilliseconds>=ConfiguredAutoLiveRefreshMilliseconds;
 
     private sealed record AutoFrontier(Dot Source,int Group,int Side,int Depth);
 
@@ -1242,7 +1258,7 @@ namespace vTools.Commands
           frontier.Add(new(dot,group,branch,depth));
         }
       }
-      Add(root,0,1); int desired=DefaultCenteredSide;
+      Add(root,0,1); int desired=ConfiguredDefaultCenteredSide;
       Log.Write("vMatch","auto center group={0} axis={1}",root,axis);
       while(frontier.Count>0)
       {
@@ -1267,8 +1283,8 @@ namespace vTools.Commands
         if(length>longest) { longest=length; x=dx; y=dy; }
       }
       double magnitude=Math.Sqrt(x*x+y*y);
-      if(magnitude<=CenteredAxisTolerance) return Vector3d.XAxis;
-      if(x<0||Math.Abs(x)<=CenteredAxisTolerance&&y<0) { x=-x; y=-y; }
+      if(magnitude<=ConfiguredCenteredAxisTolerance) return Vector3d.XAxis;
+      if(x<0||Math.Abs(x)<=ConfiguredCenteredAxisTolerance&&y<0) { x=-x; y=-y; }
       return new(x/magnitude,y/magnitude,0);
     }
 
@@ -1320,7 +1336,9 @@ namespace vTools.Commands
   internal sealed class MatchOverlapPreview : IDisposable
   {
     // Defaults and customizable detection tolerances
-    private const double FaceCoincidenceToleranceFactor = 5.0; // Document absolute-tolerance multiplier for comparing face planes; one or greater.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.MatchOverlapPreview.FaceCoincidenceToleranceFactor", "Document absolute-tolerance multiplier for comparing face planes; one or greater.")] private const double FaceCoincidenceToleranceFactor = 5.0; // Document absolute-tolerance multiplier for comparing face planes; one or greater.
+
+    private static readonly double ConfiguredFaceCoincidenceToleranceFactor = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.MatchOverlapPreview.FaceCoincidenceToleranceFactor", FaceCoincidenceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private static readonly PreviewDisplay.ObjectHighlightStyle OverlapHighlightStyle = new( // Overlap-only palette; RGB colors and shading transparency distinguish it from the cyan matching preview.
       BodyColor: Color.FromArgb(255, 128, 0), // RGB orange face/wire overlay color.
       OutlineColor: Color.FromArgb(90, 45, 0), // RGB dark-orange outline around overlapping objects.
@@ -1452,7 +1470,7 @@ namespace vTools.Commands
             faces.Add(new FaceOverlapFinder.FaceItem(new(id, face.FaceIndex), face));
         }
 
-        return FaceOverlapFinder.Find(faces, tolerance * FaceCoincidenceToleranceFactor, tolerance,
+        return FaceOverlapFinder.Find(faces, tolerance * ConfiguredFaceCoincidenceToleranceFactor, tolerance,
           (first, second) => objects[first.ObjectId].Group != objects[second.ObjectId].Group &&
             (changedObjects == null || changedObjects.Contains(first.ObjectId) || changedObjects.Contains(second.ObjectId)));
       }

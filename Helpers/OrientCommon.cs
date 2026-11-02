@@ -48,7 +48,7 @@ internal static class OrientCommon
   /// <summary>
   /// Prompts for objects that will be transformed by orient commands.
   /// </summary>
-  internal static List<Guid> SelectObjectsToOrient(RhinoDoc doc)
+  internal static List<ObjectTransformSelection.Item> SelectObjectsToOrient(RhinoDoc doc)
   {
     using var go = new GetObject();
     go.SetCommandPrompt("Select objects to orient");
@@ -56,25 +56,24 @@ internal static class OrientCommon
     go.EnableClearObjectsOnEntry(false);
     go.DeselectAllBeforePostSelect = false;
     go.GroupSelect = true;
-    go.SubObjectSelect = false;
+    go.SubObjectSelect = true;
+    go.SetCustomGeometryFilter((_, _, component) => component.Index < 0 || component.ComponentIndexType == ComponentIndexType.PolycurveSegment);
 
     var result = go.GetMultiple(1, 0);
     if (go.CommandResult() != Result.Success || result != GetResult.Object)
-      return new List<Guid>();
+      return new();
 
-    var ids = new List<Guid>();
+    var references = new List<ObjRef>();
     for (var i = 0; i < go.ObjectCount; i++)
     {
       var obj = go.Object(i);
       if (obj == null)
         continue;
 
-      var id = obj.ObjectId;
-      if (id != Guid.Empty && !ids.Contains(id))
-        ids.Add(id);
+      references.Add(obj);
     }
 
-    return ids;
+    return ObjectTransformSelection.FromReferences(doc, references);
   }
 
   /// <summary>
@@ -238,26 +237,6 @@ internal static class OrientCommon
   {
     plane = new Plane(origin, xPoint, yPoint);
     return plane.IsValid;
-  }
-
-  /// <summary>
-  /// Applies transform to selected objects, in-place or as copies.
-  /// </summary>
-  internal static List<Guid> TransformObjects(RhinoDoc doc, IReadOnlyList<Guid> objectIds, Transform xform, bool copyMode)
-  {
-    var transformed = new List<Guid>();
-
-    foreach (var id in objectIds)
-    {
-      if (id == Guid.Empty)
-        continue;
-
-      var newId = doc.Objects.Transform(id, xform, !copyMode);
-      if (newId != Guid.Empty)
-        transformed.Add(newId);
-    }
-
-    return transformed;
   }
 
   /// <summary>

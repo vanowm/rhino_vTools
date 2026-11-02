@@ -17,12 +17,24 @@ namespace vTools.Commands;
 public sealed class vTextAligned : vToolsCommand
 {
   // Defaults and customizable constants
-  private const string DefaultText = "Text"; // Plain text content.
-  private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
-  private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
-  private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
-  private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
-  private const bool DefaultAutoIncrement = false; // true advances the label after new placements; false repeats the same text.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultText", "Plain text content.")] private const string DefaultText = "Text"; // Plain text content.
+
+  private static readonly string ConfiguredDefaultText = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultText", DefaultText); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultHeight", "Text height in model units; greater than zero.")] private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultOffset", "Curve-normal offset in model units; signed values allowed.")] private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
+
+  private static readonly double ConfiguredDefaultOffset = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultOffset", DefaultOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultRotate90", "Quarter turns; normalized to an integer from 0 through 3.")] private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
+
+  private static readonly int ConfiguredDefaultRotate90 = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultRotate90", DefaultRotate90); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultBothSides", "true creates text on both sides of the curve; false uses the picked side only.")] private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
+
+  private static readonly bool ConfiguredDefaultBothSides = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultBothSides", DefaultBothSides); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultAutoIncrement", "true advances the label after new placements; false repeats the same text.")] private const bool DefaultAutoIncrement = false; // true advances the label after new placements; false repeats the same text.
+
+  private static readonly bool ConfiguredDefaultAutoIncrement = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultAutoIncrement", DefaultAutoIncrement); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string OptionsSectionName = "vTextAligned";
   private const string TextKey = "text";
@@ -32,12 +44,12 @@ public sealed class vTextAligned : vToolsCommand
   private const string BothSidesKey = "bothSides";
   private const string AutoIncrementKey = "autoIncrement";
 
-  private static string _text = DefaultText;
-  private static double _height = DefaultHeight;
-  private static double _offset = DefaultOffset;
-  private static int _rotate90 = DefaultRotate90;
-  private static bool _bothSides = DefaultBothSides;
-  private static bool _autoIncrement = DefaultAutoIncrement;
+  private static string _text = ConfiguredDefaultText;
+  private static double _height = ConfiguredDefaultHeight;
+  private static double _offset = ConfiguredDefaultOffset;
+  private static int _rotate90 = ConfiguredDefaultRotate90;
+  private static bool _bothSides = ConfiguredDefaultBothSides;
+  private static bool _autoIncrement = ConfiguredDefaultAutoIncrement;
 
   /// <summary>
   /// Rhino command name.
@@ -496,7 +508,7 @@ public sealed class vTextAligned : vToolsCommand
         if (ToolsOptionStore.TryGetBool(section, BothSidesKey, out var persistedBothSides))
           bothSides = persistedBothSides;
         var autoIncrement = ToolsOptionStore.TryGetBool(section, AutoIncrementKey, out var persistedIncrement)
-          ? persistedIncrement : DefaultAutoIncrement;
+          ? persistedIncrement : ConfiguredDefaultAutoIncrement;
 
         return (text, height, offset, rotate90, bothSides, autoIncrement);
       });
@@ -697,23 +709,7 @@ public sealed class vTextAligned : vToolsCommand
       // Annotation bounds can include a rotated layout box that does not match
       // the visible glyphs. Measure the exploded glyph outlines in the text's
       // own plane and retain the annotation box only as a fallback.
-      var bbox = BoundingBox.Empty;
-      var outlines = textEntity.Explode();
-      if (outlines != null)
-      {
-        foreach (var outline in outlines)
-        {
-          if (outline == null)
-            continue;
-
-          var outlineBox = outline.GetBoundingBox(plane);
-          if (outlineBox.IsValid)
-            bbox = bbox.IsValid ? BoundingBox.Union(bbox, outlineBox) : outlineBox;
-        }
-      }
-
-      if (!bbox.IsValid)
-        bbox = textEntity.GetBoundingBox(plane);
+      var bbox = AnnotationTextTransform.TextBounds(textEntity);
 
       if (!bbox.IsValid)
         return null;
@@ -1215,7 +1211,7 @@ public sealed class vTextAligned : vToolsCommand
 
   private static TextAction CreatePlacementAction(Guid id, TextEntity geometry, ObjectAttributes attributes, string placedText)
   {
-    var next = _autoIncrement ? LabelSequences.Increment(placedText, DefaultText) : null;
+    var next = _autoIncrement ? LabelSequences.Increment(placedText, ConfiguredDefaultText) : null;
     var action = TextAction.CreateAdd(id, geometry, attributes, next == null ? null : _text, next);
     if (next != null) _text = next;
     return action;

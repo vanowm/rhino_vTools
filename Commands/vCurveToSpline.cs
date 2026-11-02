@@ -25,16 +25,24 @@ public sealed class vCurveToSpline : vToolsCommand
   private const string SmoothKey = "smooth";
 
   // Option defaults
-  private const int DefaultJoinModeIndex = 2; // Zero-based JoinModes index: None, Connected, or All.
-  private const bool DefaultSmoothClose = false; // true closes joined output smoothly; false preserves a closing kink.
-  private const bool DefaultReplaceOriginal = false; // true deletes converted inputs; false keeps them.
-  private const bool DefaultSmooth = true; // true smooths joins between segments; false preserves segment transitions.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultJoinModeIndex", "Zero-based JoinModes index: None, Connected, or All.")] private const int DefaultJoinModeIndex = 2; // Zero-based JoinModes index: None, Connected, or All.
 
-  private static readonly string[] JoinModes = { "None", "Connected", "All" }; // Command option names in join-mode index order.
-  private static int _joinModeIndex = DefaultJoinModeIndex;
-  private static bool _smoothClose = DefaultSmoothClose;
-  private static bool _replaceOriginal = DefaultReplaceOriginal;
-  private static bool _smooth = DefaultSmooth;
+  private static readonly int ConfiguredDefaultJoinModeIndex = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultJoinModeIndex", DefaultJoinModeIndex); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmoothClose", "true closes joined output smoothly; false preserves a closing kink.")] private const bool DefaultSmoothClose = false; // true closes joined output smoothly; false preserves a closing kink.
+
+  private static readonly bool ConfiguredDefaultSmoothClose = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmoothClose", DefaultSmoothClose); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultReplaceOriginal", "true deletes converted inputs; false keeps them.")] private const bool DefaultReplaceOriginal = false; // true deletes converted inputs; false keeps them.
+
+  private static readonly bool ConfiguredDefaultReplaceOriginal = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultReplaceOriginal", DefaultReplaceOriginal); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmooth", "true smooths joins between segments; false preserves segment transitions.")] private const bool DefaultSmooth = true; // true smooths joins between segments; false preserves segment transitions.
+
+  private static readonly bool ConfiguredDefaultSmooth = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmooth", DefaultSmooth); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  [global::vTools.CommandChoicesAttribute("vCurveToSpline", "joinMode", false, "None", "Connected", "All")] private static readonly string[] JoinModes = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vCurveToSpline), nameof(JoinModes)); // Command option names in join-mode index order.
+  private static int _joinModeIndex = ConfiguredDefaultJoinModeIndex;
+  private static bool _smoothClose = ConfiguredDefaultSmoothClose;
+  private static bool _replaceOriginal = ConfiguredDefaultReplaceOriginal;
+  private static bool _smooth = ConfiguredDefaultSmooth;
 
   /// <summary>Unified representation of a selected curve or point object.</summary>
   private readonly struct Segment
@@ -83,7 +91,7 @@ public sealed class vCurveToSpline : vToolsCommand
     var pickResult = TryGetSelectedSegmentsAndJoinMode(doc, out var selectedSegments, out var joinMode, out var smoothClose, out var smooth);
     _joinModeIndex = Array.IndexOf(JoinModes, joinMode);
     if (_joinModeIndex < 0)
-      _joinModeIndex = DefaultJoinModeIndex;
+      _joinModeIndex = ConfiguredDefaultJoinModeIndex;
     SavePersistedOptions();
 
     if (pickResult != Result.Success)

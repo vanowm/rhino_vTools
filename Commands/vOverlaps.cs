@@ -19,18 +19,32 @@ namespace vTools.Commands;
 public sealed class vOverlaps : vToolsCommand
 {
   // Option defaults
-  private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
-  private const bool DefaultOverlapSegments = true; // true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultTolerance", "Comparison tolerance in model units; greater than zero.")] private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultTolerance = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.DefaultTolerance", DefaultTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultOverlapSegments", "true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.")] private const bool DefaultOverlapSegments = true; // true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.
+
+  private static readonly bool ConfiguredDefaultOverlapSegments = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.DefaultOverlapSegments", DefaultOverlapSegments); // Resolved once from advanced defaults; restart Rhino after changes.
 
   // Customizable selection and output behavior
   private const ObjectType SupportedGeometry = ObjectType.Curve | ObjectType.Surface | ObjectType.Brep; // Rhino object and subobject types accepted by the command.
-  private static readonly Color OverlapAreaColor = Color.Cyan; // Fill color used to identify shared face area.
-  private const double OverlapAreaTransparency = 0.15; // Shared-area fill transparency from 0.0 opaque to 1.0 invisible.
-  private const int OverlapValidationSamples = 8; // Equal-length interior samples used to verify that a highlighted interval follows both source edges; integer two or greater.
-  private const double FaceCoincidenceToleranceFactor = 5.0; // Multiplier applied to command tolerance only when deciding whether two face planes are close enough to compare; greater than or equal to one.
-  private const double MinimumOverlapToleranceFactor = 10.0; // Minimum highlighted overlap length as a multiple of tolerance; rejects point-contact slivers reported as overlaps.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.OverlapAreaColor", "Fill color used to identify shared face area.", "#FF00FFFF")] private static readonly Color OverlapAreaColor = global::vTools.CommandDefaults.GetColor("vOverlaps", "vTools.Commands.vOverlaps.OverlapAreaColor", Color.Cyan); // Fill color used to identify shared face area.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.OverlapAreaTransparency", "Shared-area fill transparency from 0.0 opaque to 1.0 invisible.")] private const double OverlapAreaTransparency = 0.15; // Shared-area fill transparency from 0.0 opaque to 1.0 invisible.
+
+  private static readonly double ConfiguredOverlapAreaTransparency = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.OverlapAreaTransparency", OverlapAreaTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.OverlapValidationSamples", "Equal-length interior samples used to verify that a highlighted interval follows both source edges; integer two or greater.")] private const int OverlapValidationSamples = 8; // Equal-length interior samples used to verify that a highlighted interval follows both source edges; integer two or greater.
+
+  private static readonly int ConfiguredOverlapValidationSamples = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.OverlapValidationSamples", OverlapValidationSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.FaceCoincidenceToleranceFactor", "Multiplier applied to command tolerance only when deciding whether two face planes are close enough to compare; greater than or equal to one.")] private const double FaceCoincidenceToleranceFactor = 5.0; // Multiplier applied to command tolerance only when deciding whether two face planes are close enough to compare; greater than or equal to one.
+
+  private static readonly double ConfiguredFaceCoincidenceToleranceFactor = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.FaceCoincidenceToleranceFactor", FaceCoincidenceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.MinimumOverlapToleranceFactor", "Minimum highlighted overlap length as a multiple of tolerance; rejects point-contact slivers reported as overlaps.")] private const double MinimumOverlapToleranceFactor = 10.0; // Minimum highlighted overlap length as a multiple of tolerance; rejects point-contact slivers reported as overlaps.
+
+  private static readonly double ConfiguredMinimumOverlapToleranceFactor = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.MinimumOverlapToleranceFactor", MinimumOverlapToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double MinimumOverlapEdgeFraction = 1e-6; // Minimum highlighted overlap length as a fraction of the shorter source edge; positive fraction below one.
-  private const int DoubleEscapeIntervalMilliseconds = 600; // Maximum elapsed milliseconds between two Esc presses that clear a persistent overlap highlight; positive integer.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DoubleEscapeIntervalMilliseconds", "Maximum elapsed milliseconds between two Esc presses that clear a persistent overlap highlight; positive integer.")] private const int DoubleEscapeIntervalMilliseconds = 600; // Maximum elapsed milliseconds between two Esc presses that clear a persistent overlap highlight; positive integer.
+
+  private static readonly int ConfiguredDoubleEscapeIntervalMilliseconds = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.DoubleEscapeIntervalMilliseconds", DoubleEscapeIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string SectionName = "vOverlaps";
   private const string TolKey = "tolerance";
@@ -38,8 +52,8 @@ public sealed class vOverlaps : vToolsCommand
   private const string LegacySegmentsKey = "segments";
   private const string OverlapSegmentsKey = "overlapSegments";
 
-  private static double _tolerance = DefaultTolerance;
-  private static bool _overlapSegments = DefaultOverlapSegments;
+  private static double _tolerance = ConfiguredDefaultTolerance;
+  private static bool _overlapSegments = ConfiguredDefaultOverlapSegments;
   private static OverlapAreaConduit? _activeAreaHighlight;
   private static uint _activeAreaDocumentSerial;
   private static long _lastEscapeTick;
@@ -49,8 +63,8 @@ public sealed class vOverlaps : vToolsCommand
   private static void LoadOptions() =>
     ToolsOptionStore.Read<int>(SectionName, section =>
     {
-      _tolerance = DefaultTolerance;
-      _overlapSegments = DefaultOverlapSegments;
+      _tolerance = ConfiguredDefaultTolerance;
+      _overlapSegments = ConfiguredDefaultOverlapSegments;
       if (ToolsOptionStore.TryGetDouble(section, TolKey, out var tolerance) && tolerance > 0.0)
         _tolerance = tolerance;
       if (ToolsOptionStore.TryGetBool(section, OverlapSegmentsKey, out var overlapSegments))
@@ -237,7 +251,7 @@ public sealed class vOverlaps : vToolsCommand
           $"overlap segment isolation skipped sources={remainingPartialIds.Count}");
     }
     var faceCoincidenceTolerance = Math.Max(
-      _tolerance * FaceCoincidenceToleranceFactor,
+      _tolerance * ConfiguredFaceCoincidenceToleranceFactor,
       RhinoMath.ZeroTolerance);
     var faceAreaTolerance = Math.Max(_tolerance, RhinoMath.ZeroTolerance);
     var faceOverlaps = inputFaces.Count >= 2
@@ -909,7 +923,7 @@ public sealed class vOverlaps : vToolsCommand
     Curve secondEdge,
     double tolerance) =>
     Math.Max(
-      tolerance * MinimumOverlapToleranceFactor,
+      tolerance * ConfiguredMinimumOverlapToleranceFactor,
       Math.Min(firstEdge.GetLength(), secondEdge.GetLength()) *
       MinimumOverlapEdgeFraction);
 
@@ -921,11 +935,11 @@ public sealed class vOverlaps : vToolsCommand
   {
     maximumDeviation = 0.0;
     for (var sampleIndex = 0;
-         sampleIndex <= OverlapValidationSamples;
+         sampleIndex <= ConfiguredOverlapValidationSamples;
          sampleIndex++)
     {
       var point = candidate.PointAtNormalizedLength(
-        (double)sampleIndex / OverlapValidationSamples);
+        (double)sampleIndex / ConfiguredOverlapValidationSamples);
       if (!point.IsValid || !edge.ClosestPoint(point, out var edgeParameter))
       {
         maximumDeviation = double.PositiveInfinity;
@@ -979,7 +993,7 @@ public sealed class vOverlaps : vToolsCommand
 
     var now = System.Environment.TickCount64;
     if (_lastEscapeTick != 0 &&
-        now - _lastEscapeTick <= DoubleEscapeIntervalMilliseconds)
+        now - _lastEscapeTick <= ConfiguredDoubleEscapeIntervalMilliseconds)
     {
       DisableAreaHighlight(
         RhinoDoc.FromRuntimeSerialNumber(_activeAreaDocumentSerial));
@@ -1020,8 +1034,8 @@ public sealed class vOverlaps : vToolsCommand
       BackDiffuse = Color.Black,
       Emission = OverlapAreaColor,
       BackEmission = OverlapAreaColor,
-      Transparency = OverlapAreaTransparency,
-      BackTransparency = OverlapAreaTransparency,
+      Transparency = ConfiguredOverlapAreaTransparency,
+      BackTransparency = ConfiguredOverlapAreaTransparency,
       IsTwoSided = true
     };
     private bool _disposed;

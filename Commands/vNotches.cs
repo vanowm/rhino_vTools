@@ -25,7 +25,9 @@ namespace vTools.Commands
     const int NextLabelButtonSize = 20; // Square icon button size in device-independent pixels; smaller than the 22-pixel label input height.
     const int NextLabelIconSize = 12; // Icon canvas size in device-independent pixels, smaller than its button.
     const double NextLabelIconStroke = 1.3; // Icon stroke thickness in device-independent pixels; positive value.
-    const double NextLabelButtonPadding = 1.0; // Native icon-button padding on each side in device-independent pixels; zero or greater.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NextLabelButtonPadding", "Native icon-button padding on each side in device-independent pixels; zero or greater.")] const double NextLabelButtonPadding = 1.0; // Native icon-button padding on each side in device-independent pixels; zero or greater.
+
+     static readonly double ConfiguredNextLabelButtonPadding = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NextLabelButtonPadding", NextLabelButtonPadding); // Resolved once from advanced defaults; restart Rhino after changes.
     const string NextLabelIconPath = "M1,6 L8,6 M5,3 L8,6 L5,9 M10.5,2 L10.5,10"; // Forward-to-next icon coordinates on the 12-by-12 canvas.
     const string NextLabelIconFallback = "\u21E5"; // Forward-to-next glyph used if the native vector icon is unavailable.
     // ── Constants ────────────────────────────────────────────────────────────
@@ -39,95 +41,183 @@ namespace vTools.Commands
     const string OpenVNotchType     = "\\/"; // Stored and displayed code for the Open Vee notch type.
     const string NotchObjectName = "Notch"; // Rhino object name assigned to every created notch component.
     const string OffsetSplitReferenceLayer = "Reference"; // Rhino layer path assigned only to the segment between V/U notch legs.
-    const double OffsetSplitContactToleranceScale = 2.0; // Multiplier on document absolute tolerance for matching each leg endpoint and any shared curve endpoints.
-    const double OffsetSplitZeroToleranceScale = 10.0; // Minimum contact tolerance in Rhino zero-tolerance units.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.OffsetSplitContactToleranceScale", "Multiplier on document absolute tolerance for matching each leg endpoint and any shared curve endpoints.")] const double OffsetSplitContactToleranceScale = 2.0; // Multiplier on document absolute tolerance for matching each leg endpoint and any shared curve endpoints.
+
+     static readonly double ConfiguredOffsetSplitContactToleranceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.OffsetSplitContactToleranceScale", OffsetSplitContactToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.OffsetSplitZeroToleranceScale", "Minimum contact tolerance in Rhino zero-tolerance units.")] const double OffsetSplitZeroToleranceScale = 10.0; // Minimum contact tolerance in Rhino zero-tolerance units.
+
+     static readonly double ConfiguredOffsetSplitZeroToleranceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.OffsetSplitZeroToleranceScale", OffsetSplitZeroToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
     const string NotchLabelObjectName = "NotchLabel"; // Rhino object name assigned to every created notch label.
     const string NotchComponentSetKey = NotchDataPrefix + "component_set"; // Metadata key linking one notch's output components.
     const double LabelWidthMult     = 0.9; // Estimated text-width multiplier applied per character.
-    const double DefaultLabelOffIn  = 0.1; // Label offset in inches before document-unit conversion; zero or greater.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelOffIn", "Label offset in inches before document-unit conversion; zero or greater.")] const double DefaultLabelOffIn  = 0.1; // Label offset in inches before document-unit conversion; zero or greater.
+
+     static readonly double ConfiguredDefaultLabelOffIn = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelOffIn", DefaultLabelOffIn); // Resolved once from advanced defaults; restart Rhino after changes.
     const string LabelOffsetXToolTip = "Minimum gap along the curve between the label and notch geometry, in model units; used when notches are enabled."; // Label Offset X caption and input help.
     const string LabelOffsetYToolTip = "Move the label perpendicular to the curve, in model units; positive moves toward the selected notch side, negative away."; // Label Offset Y caption and input help.
     const string LabelDirectionSettingsKey = "label_toward_start"; // Boolean setting: true prefers labels toward the curve start, false away from it.
 
     // ── Persisted defaults ───────────────────────────────────────────────────
 
-    const double DefaultNotchLength = 0.18; // Notch depth in model units; greater than zero.
-    const double DefaultNotchOffset = 0.5; // Offset-curve distance in model units; zero or greater.
-    const double DefaultNotchWidth = 0.18; // Notch width in model units; greater than zero.
-    const string DefaultNotchType = "I"; // Notch code: I, V, \/, U, or T.
-    const bool DefaultNotchEnabled = true; // true creates notch geometry; false creates labels only.
-    const bool DefaultBothSides = false; // true places matching geometry on both sides of each curve; false uses its selected side.
-    const NotchTrimMode DefaultNotchTrim = NotchTrimMode.No; // No leaves offset curves alone; Split moves the between-leg piece; Trim removes it.
-    const string DefaultNotchTrimLayer = "Reference"; // Named layer for split between-leg sections; created only when used.
-    static readonly string[] NotchTrimNames = ["No", "Split", "Trim"]; // Command-line choice order matching NotchTrimMode.
-    const bool DefaultPercent = false; // true interprets placement as curve percentage; false uses model-unit distance.
-    const bool DefaultGroup = false; // true groups each result with its landed source; false preserves existing grouping only.
-    const bool DefaultLabelEnabled = false; // true creates notch labels; false omits them.
-    const string DefaultLabelValue = "A"; // Plain label text.
-    const double DefaultLabelSize = 0.3; // Text height in model units; zero or greater.
-    const bool DefaultLabelSizeAuto = false; // true derives label size automatically; false uses the configured size.
-    const int DefaultLabelSizePercent = 75; // Auto-size percentage; 20 through 100 in five-point steps.
-    const string DefaultNotchLayer = SpecialLayerCurrent; // Rhino layer path or the current-layer sentinel.
-    const string DefaultLabelLayer = "PLOT"; // Rhino layer name or full layer path.
-    const double DefaultLabelOffset = double.NaN; // Model units; NaN requests DefaultLabelOffIn conversion.
-    const double DefaultLabelOffsetY = 0.0; // Perpendicular label offset in model units.
-    const bool DefaultLabelAutoAdvance = true; // true increments labels after placement; false reuses the current label.
-    const bool DefaultLabelSideFlip = false; // true prefers labels toward the curve start; false prefers them away from it, independent of notch side.
-    const bool DefaultKeepSelection = false; // true retains current curves while selecting; false replaces the selection.
-    const double DefaultMultipleStartOffset = 2.0; // Start clearance in model units; zero or greater.
-    const double DefaultMultipleEndOffset = 2.0; // End clearance in model units; zero or greater.
-    const bool DefaultMultipleStartOffsetEnabled = true; // true reserves the start offset; false excludes a start-end notch.
-    const bool DefaultMultipleEndOffsetEnabled = true; // true reserves the end offset; false excludes an end-end notch.
-    const int DefaultMultipleNumber = 2; // Number of notches; one through 10000.
-    const double DefaultMultipleDistance = 0.0; // Minimum spacing in model units; zero or greater.
-    const bool DefaultMultipleUseDistance = false; // true drives spacing by minimum distance; false drives it by notch count.
-    const bool DefaultMultipleAuto = false; // true uses curvature-aware spacing with Distance as the maximum; false uses uniform spacing.
-    const int DefaultMultipleCurvatureSensitivity = 10; // Whole-number curvature sensitivity from zero through 1000; ten preserves the original 1.0 curvature multiplier.
-    const bool DefaultMultipleSeparate = false; // true applies the requested multiple layout to each linked physical segment; false treats each linked sequence as one curve.
-    const double MultipleCurvatureSensitivityUnit = 0.1; // Internal curvature multiplier represented by one whole-number Sensitivity step.
-    const int MultipleAutoMinimumSamples = 64; // Minimum tangent samples used by curvature-aware spacing.
-    const int MultipleAutoSamplesPerSpacing = 16; // Tangent samples taken per maximum-distance interval.
-    const int MultipleAutoMaximumSamples = 20000; // Upper sampling limit protecting interactive preview performance.
-    const double MultipleAutoKinkSnapDistanceScale = 0.5; // Fraction of maximum spacing within which a regular Auto station is replaced by a kink station.
-    const double MultipleAutoKinkMinimumAngleDegrees = 1.0; // Minimum joined-segment tangent change treated as a kink candidate, in degrees.
-    const double MultipleExistingNotchClearanceScale = 1.0; // Fraction of the proposed local spacing kept clear around notches already placed on the current curve selection.
-    const int DefaultWindowWidth = 300; // Client width in device-independent pixels; 300 or greater.
-    const int DefaultWindowHeight = 0; // Client height in device-independent pixels; zero auto-sizes to content.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchLength", "Notch depth in model units; greater than zero.")] const double DefaultNotchLength = 0.18; // Notch depth in model units; greater than zero.
 
-    static double _notchLength = DefaultNotchLength;
-    static double _notchOffset = DefaultNotchOffset;
-    static double _notchWidth = DefaultNotchWidth;
-    static string _notchType = DefaultNotchType;
-    static bool _notch = DefaultNotchEnabled;
-    static bool _bothSides = DefaultBothSides;
-    static NotchTrimMode _notchTrim = DefaultNotchTrim;
-    static string _notchTrimLayer = DefaultNotchTrimLayer;
-    static bool _percent = DefaultPercent;
-    static bool _group = DefaultGroup;
-    static bool _label = DefaultLabelEnabled;
-    static string _labelValue = DefaultLabelValue;
-    static double _labelSize = DefaultLabelSize;
-    static bool _labelSizeAuto = DefaultLabelSizeAuto;
-    static int _labelSizePct = DefaultLabelSizePercent;
-    static string _notchLayer = DefaultNotchLayer;
-    static string _labelLayer = DefaultLabelLayer;
-    static double _labelOffset = DefaultLabelOffset; // resolved to model units on first load
-    static double _labelOffsetY = DefaultLabelOffsetY;
-    static bool _labelAutoAdv = DefaultLabelAutoAdvance;
-    static bool _labelSideFlip = DefaultLabelSideFlip;
-    static bool _keepSelection = DefaultKeepSelection;
-    static double _multipleStartOffset = DefaultMultipleStartOffset;
-    static double _multipleEndOffset = DefaultMultipleEndOffset;
-    static bool _multipleStartOffsetEnabled = DefaultMultipleStartOffsetEnabled;
-    static bool _multipleEndOffsetEnabled = DefaultMultipleEndOffsetEnabled;
-    static int _multipleNumber = DefaultMultipleNumber;
-    static double _multipleDistance = DefaultMultipleDistance;
-    static bool _multipleUseDistance = DefaultMultipleUseDistance;
-    static bool _multipleAuto = DefaultMultipleAuto;
-    static int _multipleCurvatureSensitivity = DefaultMultipleCurvatureSensitivity;
-    static bool _multipleSeparate = DefaultMultipleSeparate;
-    static int _windowWidth = DefaultWindowWidth;
-    static int _windowHeight = DefaultWindowHeight;
+     static readonly double ConfiguredDefaultNotchLength = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchLength", DefaultNotchLength); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchOffset", "Offset-curve distance in model units; zero or greater.")] const double DefaultNotchOffset = MatchingLabels.DefaultNotchOffset; // Offset-curve distance in model units; zero or greater.
+
+     static readonly double ConfiguredDefaultNotchOffset = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchOffset", DefaultNotchOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchWidth", "Notch width in model units; greater than zero.")] const double DefaultNotchWidth = 0.18; // Notch width in model units; greater than zero.
+
+     static readonly double ConfiguredDefaultNotchWidth = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchWidth", DefaultNotchWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchType", "Notch code: I, V, \\/, U, or T.")] const string DefaultNotchType = "I"; // Notch code: I, V, \/, U, or T.
+
+     static readonly string ConfiguredDefaultNotchType = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchType", DefaultNotchType); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchEnabled", "true creates notch geometry; false creates labels only.")] const bool DefaultNotchEnabled = true; // true creates notch geometry; false creates labels only.
+
+     static readonly bool ConfiguredDefaultNotchEnabled = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchEnabled", DefaultNotchEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultBothSides", "true places matching geometry on both sides of each curve; false uses its selected side.")] const bool DefaultBothSides = false; // true places matching geometry on both sides of each curve; false uses its selected side.
+
+     static readonly bool ConfiguredDefaultBothSides = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultBothSides", DefaultBothSides); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchTrim", "No leaves offset curves alone; Split moves the between-leg piece; Trim removes it.")] const NotchTrimMode DefaultNotchTrim = NotchTrimMode.No; // No leaves offset curves alone; Split moves the between-leg piece; Trim removes it.
+
+     static readonly NotchTrimMode ConfiguredDefaultNotchTrim = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchTrim", DefaultNotchTrim); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchTrimLayer", "Named layer for split between-leg sections; created only when used.")] const string DefaultNotchTrimLayer = "Reference"; // Named layer for split between-leg sections; created only when used.
+
+     static readonly string ConfiguredDefaultNotchTrimLayer = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchTrimLayer", DefaultNotchTrimLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandChoicesAttribute("vNotches", "notch_trim", false, "No", "Split", "Trim")] static readonly string[] NotchTrimNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vNotches), nameof(NotchTrimNames)); // Command-line choice order matching NotchTrimMode.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultPercent", "true interprets placement as curve percentage; false uses model-unit distance.")] const bool DefaultPercent = false; // true interprets placement as curve percentage; false uses model-unit distance.
+
+     static readonly bool ConfiguredDefaultPercent = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultPercent", DefaultPercent); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultGroup", "true groups each result with its landed source; false preserves existing grouping only.")] const bool DefaultGroup = false; // true groups each result with its landed source; false preserves existing grouping only.
+
+     static readonly bool ConfiguredDefaultGroup = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultGroup", DefaultGroup); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelEnabled", "true creates notch labels; false omits them.")] const bool DefaultLabelEnabled = false; // true creates notch labels; false omits them.
+
+     static readonly bool ConfiguredDefaultLabelEnabled = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelEnabled", DefaultLabelEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelValue", "Plain label text.")] const string DefaultLabelValue = MatchingLabels.DefaultValue; // Plain label text shared with mating seam labels.
+
+     static readonly string ConfiguredDefaultLabelValue = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelValue", DefaultLabelValue); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSize", "Text height in model units; zero or greater.")] const double DefaultLabelSize = MatchingLabels.DefaultSize; // Shared text height in model units; zero or greater.
+
+     static readonly double ConfiguredDefaultLabelSize = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelSize", DefaultLabelSize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSizeAuto", "true derives label size automatically; false uses the configured size.")] const bool DefaultLabelSizeAuto = MatchingLabels.DefaultAutoSize; // true derives label size automatically; false uses the configured size.
+
+     static readonly bool ConfiguredDefaultLabelSizeAuto = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelSizeAuto", DefaultLabelSizeAuto); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSizePercent", "Auto-size percentage; 20 through 100 in five-point steps.")] const int DefaultLabelSizePercent = MatchingLabels.DefaultSizePercent; // Auto-size percentage; 20 through 100 in five-point steps.
+
+     static readonly int ConfiguredDefaultLabelSizePercent = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelSizePercent", DefaultLabelSizePercent); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchLayer", "Rhino layer path or the current-layer sentinel.")] const string DefaultNotchLayer = SpecialLayerCurrent; // Rhino layer path or the current-layer sentinel.
+
+     static readonly string ConfiguredDefaultNotchLayer = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchLayer", DefaultNotchLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelLayer", "Rhino layer name or full layer path.")] const string DefaultLabelLayer = MatchingLabels.DefaultLayer; // Rhino layer name or full layer path.
+
+     static readonly string ConfiguredDefaultLabelLayer = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelLayer", DefaultLabelLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelOffset", "Model units; NaN requests DefaultLabelOffIn conversion.")] const double DefaultLabelOffset = double.NaN; // Model units; NaN requests DefaultLabelOffIn conversion.
+
+     static readonly double ConfiguredDefaultLabelOffset = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelOffset", DefaultLabelOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelOffsetY", "Perpendicular label offset in model units.")] const double DefaultLabelOffsetY = 0.0; // Perpendicular label offset in model units.
+
+     static readonly double ConfiguredDefaultLabelOffsetY = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelOffsetY", DefaultLabelOffsetY); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelAutoAdvance", "true increments labels after placement; false reuses the current label.")] const bool DefaultLabelAutoAdvance = MatchingLabels.DefaultAutoAdvance; // true increments labels after placement; false reuses the current label.
+
+     static readonly bool ConfiguredDefaultLabelAutoAdvance = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelAutoAdvance", DefaultLabelAutoAdvance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSideFlip", "true prefers labels toward the curve start; false prefers them away from it, independent of notch side.")] const bool DefaultLabelSideFlip = false; // true prefers labels toward the curve start; false prefers them away from it, independent of notch side.
+
+     static readonly bool ConfiguredDefaultLabelSideFlip = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelSideFlip", DefaultLabelSideFlip); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultKeepSelection", "true retains current curves while selecting; false replaces the selection.")] const bool DefaultKeepSelection = false; // true retains current curves while selecting; false replaces the selection.
+
+     static readonly bool ConfiguredDefaultKeepSelection = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultKeepSelection", DefaultKeepSelection); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleStartOffset", "Start clearance in model units; zero or greater.")] const double DefaultMultipleStartOffset = 2.0; // Start clearance in model units; zero or greater.
+
+     static readonly double ConfiguredDefaultMultipleStartOffset = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleStartOffset", DefaultMultipleStartOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleEndOffset", "End clearance in model units; zero or greater.")] const double DefaultMultipleEndOffset = 2.0; // End clearance in model units; zero or greater.
+
+     static readonly double ConfiguredDefaultMultipleEndOffset = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleEndOffset", DefaultMultipleEndOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleStartOffsetEnabled", "true reserves the start offset; false excludes a start-end notch.")] const bool DefaultMultipleStartOffsetEnabled = true; // true reserves the start offset; false excludes a start-end notch.
+
+     static readonly bool ConfiguredDefaultMultipleStartOffsetEnabled = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleStartOffsetEnabled", DefaultMultipleStartOffsetEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleEndOffsetEnabled", "true reserves the end offset; false excludes an end-end notch.")] const bool DefaultMultipleEndOffsetEnabled = true; // true reserves the end offset; false excludes an end-end notch.
+
+     static readonly bool ConfiguredDefaultMultipleEndOffsetEnabled = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleEndOffsetEnabled", DefaultMultipleEndOffsetEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleNumber", "Number of notches; one through 10000.")] const int DefaultMultipleNumber = 2; // Number of notches; one through 10000.
+
+     static readonly int ConfiguredDefaultMultipleNumber = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleNumber", DefaultMultipleNumber); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleDistance", "Minimum spacing in model units; zero or greater.")] const double DefaultMultipleDistance = 0.0; // Minimum spacing in model units; zero or greater.
+
+     static readonly double ConfiguredDefaultMultipleDistance = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleDistance", DefaultMultipleDistance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleUseDistance", "true drives spacing by minimum distance; false drives it by notch count.")] const bool DefaultMultipleUseDistance = false; // true drives spacing by minimum distance; false drives it by notch count.
+
+     static readonly bool ConfiguredDefaultMultipleUseDistance = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleUseDistance", DefaultMultipleUseDistance); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleAuto", "true uses curvature-aware spacing with Distance as the maximum; false uses uniform spacing.")] const bool DefaultMultipleAuto = false; // true uses curvature-aware spacing with Distance as the maximum; false uses uniform spacing.
+
+     static readonly bool ConfiguredDefaultMultipleAuto = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleAuto", DefaultMultipleAuto); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleCurvatureSensitivity", "Whole-number curvature sensitivity from zero through 1000; ten preserves the original 1.0 curvature multiplier.")] const int DefaultMultipleCurvatureSensitivity = 10; // Whole-number curvature sensitivity from zero through 1000; ten preserves the original 1.0 curvature multiplier.
+
+     static readonly int ConfiguredDefaultMultipleCurvatureSensitivity = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleCurvatureSensitivity", DefaultMultipleCurvatureSensitivity); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultMultipleSeparate", "true applies the requested multiple layout to each linked physical segment; false treats each linked sequence as one curve.")] const bool DefaultMultipleSeparate = false; // true applies the requested multiple layout to each linked physical segment; false treats each linked sequence as one curve.
+
+     static readonly bool ConfiguredDefaultMultipleSeparate = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultMultipleSeparate", DefaultMultipleSeparate); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleCurvatureSensitivityUnit", "Internal curvature multiplier represented by one whole-number Sensitivity step.")] const double MultipleCurvatureSensitivityUnit = 0.1; // Internal curvature multiplier represented by one whole-number Sensitivity step.
+
+     static readonly double ConfiguredMultipleCurvatureSensitivityUnit = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleCurvatureSensitivityUnit", MultipleCurvatureSensitivityUnit); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleAutoMinimumSamples", "Minimum tangent samples used by curvature-aware spacing.")] const int MultipleAutoMinimumSamples = 64; // Minimum tangent samples used by curvature-aware spacing.
+
+     static readonly int ConfiguredMultipleAutoMinimumSamples = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleAutoMinimumSamples", MultipleAutoMinimumSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleAutoSamplesPerSpacing", "Tangent samples taken per maximum-distance interval.")] const int MultipleAutoSamplesPerSpacing = 16; // Tangent samples taken per maximum-distance interval.
+
+     static readonly int ConfiguredMultipleAutoSamplesPerSpacing = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleAutoSamplesPerSpacing", MultipleAutoSamplesPerSpacing); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleAutoMaximumSamples", "Upper sampling limit protecting interactive preview performance.")] const int MultipleAutoMaximumSamples = 20000; // Upper sampling limit protecting interactive preview performance.
+
+     static readonly int ConfiguredMultipleAutoMaximumSamples = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleAutoMaximumSamples", MultipleAutoMaximumSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleAutoKinkSnapDistanceScale", "Fraction of maximum spacing within which a regular Auto station is replaced by a kink station.")] const double MultipleAutoKinkSnapDistanceScale = 0.5; // Fraction of maximum spacing within which a regular Auto station is replaced by a kink station.
+
+     static readonly double ConfiguredMultipleAutoKinkSnapDistanceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleAutoKinkSnapDistanceScale", MultipleAutoKinkSnapDistanceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleAutoKinkMinimumAngleDegrees", "Minimum joined-segment tangent change treated as a kink candidate, in degrees.")] const double MultipleAutoKinkMinimumAngleDegrees = 1.0; // Minimum joined-segment tangent change treated as a kink candidate, in degrees.
+
+     static readonly double ConfiguredMultipleAutoKinkMinimumAngleDegrees = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleAutoKinkMinimumAngleDegrees", MultipleAutoKinkMinimumAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.MultipleExistingNotchClearanceScale", "Fraction of the proposed local spacing kept clear around notches already placed on the current curve selection.")] const double MultipleExistingNotchClearanceScale = 1.0; // Fraction of the proposed local spacing kept clear around notches already placed on the current curve selection.
+
+     static readonly double ConfiguredMultipleExistingNotchClearanceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.MultipleExistingNotchClearanceScale", MultipleExistingNotchClearanceScale); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultWindowWidth", "Client width in device-independent pixels; 300 or greater.")] const int DefaultWindowWidth = 300; // Client width in device-independent pixels; 300 or greater.
+
+     static readonly int ConfiguredDefaultWindowWidth = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultWindowWidth", DefaultWindowWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultWindowHeight", "Client height in device-independent pixels; zero auto-sizes to content.")] const int DefaultWindowHeight = 0; // Client height in device-independent pixels; zero auto-sizes to content.
+
+     static readonly int ConfiguredDefaultWindowHeight = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultWindowHeight", DefaultWindowHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+
+    static double _notchLength = ConfiguredDefaultNotchLength;
+    static double _notchOffset = ConfiguredDefaultNotchOffset;
+    static double _notchWidth = ConfiguredDefaultNotchWidth;
+    static string _notchType = ConfiguredDefaultNotchType;
+    static bool _notch = ConfiguredDefaultNotchEnabled;
+    static bool _bothSides = ConfiguredDefaultBothSides;
+    static NotchTrimMode _notchTrim = ConfiguredDefaultNotchTrim;
+    static string _notchTrimLayer = ConfiguredDefaultNotchTrimLayer;
+    static bool _percent = ConfiguredDefaultPercent;
+    static bool _group = ConfiguredDefaultGroup;
+    static bool _label = ConfiguredDefaultLabelEnabled;
+    static string _labelValue = ConfiguredDefaultLabelValue;
+    static double _labelSize = ConfiguredDefaultLabelSize;
+    static bool _labelSizeAuto = ConfiguredDefaultLabelSizeAuto;
+    static int _labelSizePct = ConfiguredDefaultLabelSizePercent;
+    static string _notchLayer = ConfiguredDefaultNotchLayer;
+    static string _labelLayer = ConfiguredDefaultLabelLayer;
+    static double _labelOffset = ConfiguredDefaultLabelOffset; // resolved to model units on first load
+    static double _labelOffsetY = ConfiguredDefaultLabelOffsetY;
+    static bool _labelAutoAdv = ConfiguredDefaultLabelAutoAdvance;
+    static bool _labelSideFlip = ConfiguredDefaultLabelSideFlip;
+    static bool _keepSelection = ConfiguredDefaultKeepSelection;
+    static double _multipleStartOffset = ConfiguredDefaultMultipleStartOffset;
+    static double _multipleEndOffset = ConfiguredDefaultMultipleEndOffset;
+    static bool _multipleStartOffsetEnabled = ConfiguredDefaultMultipleStartOffsetEnabled;
+    static bool _multipleEndOffsetEnabled = ConfiguredDefaultMultipleEndOffsetEnabled;
+    static int _multipleNumber = ConfiguredDefaultMultipleNumber;
+    static double _multipleDistance = ConfiguredDefaultMultipleDistance;
+    static bool _multipleUseDistance = ConfiguredDefaultMultipleUseDistance;
+    static bool _multipleAuto = ConfiguredDefaultMultipleAuto;
+    static int _multipleCurvatureSensitivity = ConfiguredDefaultMultipleCurvatureSensitivity;
+    static bool _multipleSeparate = ConfiguredDefaultMultipleSeparate;
+    static int _windowWidth = ConfiguredDefaultWindowWidth;
+    static int _windowHeight = ConfiguredDefaultWindowHeight;
     static bool[] _curveSides     = Array.Empty<bool>();
     static NotchSession? _activeSession;
     static GetPoint? _activeGetter;
@@ -177,8 +267,8 @@ namespace vTools.Commands
 
     static void LoadOptions(RhinoDoc doc)
     {
-      _notchTrim = DefaultNotchTrim;
-      _notchTrimLayer = DefaultNotchTrimLayer;
+      _notchTrim = ConfiguredDefaultNotchTrim;
+      _notchTrimLayer = ConfiguredDefaultNotchTrimLayer;
       ToolsOptionStore.Read<int>(Section, s =>
       {
         ApplyStoredOptions(s, includeUiSettings: true);
@@ -186,7 +276,7 @@ namespace vTools.Commands
       });
       LoadDocumentOptions(doc);
       if (double.IsNaN(_labelOffset))
-        _labelOffset = ModelUnitsFromInches(doc, DefaultLabelOffIn);
+        _labelOffset = ModelUnitsFromInches(doc, ConfiguredDefaultLabelOffIn);
       if (!_notch && !_label)
         _notch = true;
     }
@@ -210,6 +300,7 @@ namespace vTools.Commands
       if (!ok)
         RhinoApp.WriteLine($"vNotches: failed to save options: {ToolsOptionStore.LastError}");
       SaveDocumentOptions(s.Doc);
+      MatchingLabels.NotifyChanged(s.Doc);
     }
 
     static void ApplyStoredOptions(
@@ -229,12 +320,12 @@ namespace vTools.Commands
       if (ToolsOptionStore.TryGetBool  (s, "percent",         out b))     _percent       = b;
       if (ToolsOptionStore.TryGetBool  (s, "group",           out b))     _group         = b;
       if (ToolsOptionStore.TryGetBool  (s, "label",           out b))     _label         = b;
-      if (ToolsOptionStore.TryGetString(s, "label_value",     out t))     _labelValue    = t;
+      _labelValue = MatchingLabels.ReadText(s, "label_value", _labelValue);
       if (ToolsOptionStore.TryGetDouble(s, "label_size",      out v))     _labelSize     = v;
       if (ToolsOptionStore.TryGetBool  (s, "label_size_auto", out b))     _labelSizeAuto = b;
       if (ToolsOptionStore.TryGetDouble(s, "label_size_pct",  out var pctv)) _labelSizePct = (int)pctv;
       if (ToolsOptionStore.TryGetString(s, "notch_layer",     out t))     _notchLayer    = t;
-      if (ToolsOptionStore.TryGetString(s, "label_layer",     out t))     _labelLayer    = t;
+      _labelLayer = MatchingLabels.ReadText(s, "label_layer", _labelLayer);
       if (ToolsOptionStore.TryGetDouble(s, "label_offset",    out v))     _labelOffset   = v;
       if (ToolsOptionStore.TryGetDouble(s, "label_offset_y",  out v))     _labelOffsetY  = v;
       if (ToolsOptionStore.TryGetBool  (s, "label_auto_adv",  out b))     _labelAutoAdv  = b;
@@ -256,9 +347,9 @@ namespace vTools.Commands
         return;
       if (ToolsOptionStore.TryGetBool(s, "keep_selection", out b)) _keepSelection = b;
       if (ToolsOptionStore.TryGetDouble(s, "window_width", out v))
-        _windowWidth = Math.Max(DefaultWindowWidth, (int)Math.Round(v));
+        _windowWidth = Math.Max(ConfiguredDefaultWindowWidth, (int)Math.Round(v));
       if (ToolsOptionStore.TryGetDouble(s, "window_height", out v))
-        _windowHeight = Math.Max(DefaultWindowHeight, (int)Math.Round(v));
+        _windowHeight = Math.Max(ConfiguredDefaultWindowHeight, (int)Math.Round(v));
       if (s?["curve_sides"] is System.Text.Json.Nodes.JsonArray arr)
       {
         var sides = new List<bool>();
@@ -1919,7 +2010,7 @@ namespace vTools.Commands
       double tolerance)
     {
       if (!s.MultipleAuto && s.MultipleUseDistance && s.MultipleDistance > tolerance)
-        return s.MultipleDistance * MultipleExistingNotchClearanceScale;
+        return s.MultipleDistance * ConfiguredMultipleExistingNotchClearanceScale;
 
       if (positionIndex < 0 || positionIndex >= positions.Count ||
           curveIndex < 0 || curveIndex >= positions[positionIndex].Count)
@@ -1947,7 +2038,7 @@ namespace vTools.Commands
           localSpacing = Math.Min(localSpacing, s.MultipleDistance);
       }
 
-      return Math.Max(tolerance, localSpacing * MultipleExistingNotchClearanceScale);
+      return Math.Max(tolerance, localSpacing * ConfiguredMultipleExistingNotchClearanceScale);
     }
 
     static void PlaceMultipleNotches(RhinoDoc doc, NotchSession s)
@@ -2119,7 +2210,7 @@ namespace vTools.Commands
               activeCurveIndices,
               baseAvailable,
               s.MultipleDistance,
-              s.MultipleCurvatureSensitivity * MultipleCurvatureSensitivityUnit,
+              s.MultipleCurvatureSensitivity * ConfiguredMultipleCurvatureSensitivityUnit,
               doc.ModelAbsoluteTolerance,
               s.MultipleStartOffsetEnabled,
               s.MultipleEndOffsetEnabled);
@@ -2235,7 +2326,7 @@ namespace vTools.Commands
                   localStartOffset,
                   segmentAvailable,
                   s.MultipleDistance,
-                  s.MultipleCurvatureSensitivity * MultipleCurvatureSensitivityUnit,
+                  s.MultipleCurvatureSensitivity * ConfiguredMultipleCurvatureSensitivityUnit,
                   doc.ModelAbsoluteTolerance,
                   includeStart,
                   includeEnd)
@@ -2562,12 +2653,12 @@ namespace vTools.Commands
     {
       int proportionalSamples = (int)Math.Ceiling(
         Math.Min(
-          MultipleAutoMaximumSamples,
-          (available / maximumDistance) * MultipleAutoSamplesPerSpacing));
+          ConfiguredMultipleAutoMaximumSamples,
+          (available / maximumDistance) * ConfiguredMultipleAutoSamplesPerSpacing));
       return Math.Clamp(
-        Math.Max(MultipleAutoMinimumSamples, proportionalSamples),
+        Math.Max(ConfiguredMultipleAutoMinimumSamples, proportionalSamples),
         1,
-        MultipleAutoMaximumSamples);
+        ConfiguredMultipleAutoMaximumSamples);
     }
 
     static List<double> PreferKinkRatios(
@@ -2581,7 +2672,7 @@ namespace vTools.Commands
         1.0e-9, tolerance / Math.Max(available, tolerance));
       double snapTolerance = Math.Max(
         ratioTolerance,
-        MultipleAutoKinkSnapDistanceScale * maximumDistance /
+        ConfiguredMultipleAutoKinkSnapDistanceScale * maximumDistance /
         Math.Max(available, tolerance));
       var kinks = candidateKinkRatios
         .Where(ratio =>
@@ -2638,7 +2729,7 @@ namespace vTools.Commands
         Vector3d after = segments[segmentIndex + 1].TangentAtStart;
         double angle = Vector3d.VectorAngle(before, after);
         if (double.IsFinite(angle) &&
-            angle >= RhinoMath.ToRadians(MultipleAutoKinkMinimumAngleDegrees))
+            angle >= RhinoMath.ToRadians(ConfiguredMultipleAutoKinkMinimumAngleDegrees))
           result.Add(cumulativeLength);
       }
       return result;
@@ -3147,15 +3238,8 @@ namespace vTools.Commands
       text = LabelSequences.FormatDisplayLabel(text);
       try
       {
-        var te = new TextEntity
-        {
-          Plane         = plane,
-          PlainText     = text,
-          TextHeight    = size,
-          Justification = TextJustification.MiddleCenter,
-          DimensionScale= 0.9,
-        };
-        try { te.DrawForward = false; } catch { }
+        using var te = MatchingLabels.CreateText(plane,text,size);
+        te.DrawForward = false;
         display.DrawAnnotation(te, color);
         return;
       }
@@ -3814,53 +3898,7 @@ namespace vTools.Commands
 
     static Plane BuildReadableTextPlane(RhinoDoc doc, Point3d anchor,
       Vector3d tangent, Vector3d direction, Point3d? curvePoint)
-    {
-      var xAxis = new Vector3d(tangent);
-      if (!xAxis.Unitize()) return Plane.Unset;
-
-      var view   = doc.Views.ActiveView;
-      var upAxis = view != null
-        ? view.ActiveViewport.ConstructionPlane().ZAxis
-        : new Vector3d(0.0, 0.0, 1.0);
-      if (!upAxis.Unitize()) upAxis = new Vector3d(0.0, 0.0, 1.0);
-
-      var yAxis = Vector3d.CrossProduct(upAxis, xAxis);
-      if (!yAxis.Unitize())
-      {
-        yAxis = new Vector3d(-direction.X, -direction.Y, -direction.Z);
-        if (!yAxis.Unitize()) return Plane.Unset;
-      }
-
-      var plane = new Plane(anchor, xAxis, yAxis);
-      if (!plane.IsValid) return Plane.Unset;
-
-      var refX = view != null
-        ? view.ActiveViewport.ConstructionPlane().XAxis
-        : new Vector3d(1.0, 0.0, 0.0);
-      if (!refX.Unitize()) refX = new Vector3d(1.0, 0.0, 0.0);
-
-      if (Vector3d.Multiply(plane.XAxis, refX) < 0.0)
-      {
-        xAxis = -xAxis; yAxis = -yAxis;
-        plane = new Plane(anchor, xAxis, yAxis);
-        if (!plane.IsValid) return Plane.Unset;
-      }
-
-      if (curvePoint.HasValue)
-      {
-        var toCurve = new Vector3d(
-          curvePoint.Value.X - anchor.X,
-          curvePoint.Value.Y - anchor.Y,
-          curvePoint.Value.Z - anchor.Z);
-        if (Vector3d.Multiply(toCurve, plane.YAxis) < 0.0)
-        {
-          xAxis = -xAxis; yAxis = -yAxis;
-          plane = new Plane(anchor, xAxis, yAxis);
-          if (!plane.IsValid) return Plane.Unset;
-        }
-      }
-      return plane;
-    }
+      => MatchingLabels.FacingPlane(doc,anchor,tangent,direction,curvePoint);
 
     static double EstimatedLabelHalfWidth(string text, double height)
     {
@@ -4060,14 +4098,7 @@ namespace vTools.Commands
             for (int labelIndex = 0; labelIndex < placements.Count; labelIndex++)
             {
               var (labelPlane, currentLabelSide) = placements[labelIndex];
-              var te = new TextEntity
-              {
-                Plane         = labelPlane,
-                PlainText     = lt,
-                TextHeight    = labelSize,
-                Justification = TextJustification.MiddleCenter,
-                DimensionScale= 0.9,
-              };
+              using var te = MatchingLabels.CreateText(labelPlane,lt,labelSize);
               var la = metadataAttributes.Duplicate();
               la.ObjectId = Guid.NewGuid();
               la.LayerIndex = ResolveLayerIndex(doc, labelLayer);
@@ -4682,7 +4713,7 @@ namespace vTools.Commands
       if (ToolsOptionStore.TryGetBool(settings, LabelDirectionSettingsKey, out var towardStart))
         return towardStart;
       if (!ToolsOptionStore.TryGetBool(settings, "label_side_flip", out var legacyFlip))
-        return DefaultLabelSideFlip;
+        return ConfiguredDefaultLabelSideFlip;
       bool firstLeft = fallbackFirstLeft;
       if (settings?["curve_sides"] is System.Text.Json.Nodes.JsonArray { Count: > 0 } sides &&
           sides[0] is System.Text.Json.Nodes.JsonValue value && value.TryGetValue<bool>(out var savedLeft))
@@ -4746,7 +4777,7 @@ namespace vTools.Commands
     static string FormatPanelNumber(double value) =>
       value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
 
-    static string IncrementLabelValue(string text) => LabelSequences.Increment(text, DefaultLabelValue);
+    static string IncrementLabelValue(string text) => LabelSequences.Increment(text, ConfiguredDefaultLabelValue);
 
     // ── Panel sync ────────────────────────────────────────────────────────────
 
@@ -4786,8 +4817,8 @@ namespace vTools.Commands
       public OptionToggle GroupToggle;
       public OptionToggle NotchToggle;
       public OptionToggle BothSidesToggle;
-      public NotchTrimMode NotchTrim = DefaultNotchTrim;
-      public string NotchTrimLayer = DefaultNotchTrimLayer;
+      public NotchTrimMode NotchTrim = ConfiguredDefaultNotchTrim;
+      public string NotchTrimLayer = ConfiguredDefaultNotchTrimLayer;
       public OptionToggle LabelToggle;
       public OptionToggle LabelSizeAutoToggle;
 
@@ -4807,7 +4838,7 @@ namespace vTools.Commands
       public bool   MultipleAuto;
       public int MultipleCurvatureSensitivity;
       public bool   MultipleSeparate;
-      public readonly string[] NotchTypeValues = ["I", "V", OpenVNotchType, "U", "T"];
+      [global::vTools.CommandChoicesAttribute("vNotches", "notch_type", false, "I", "V", "\\/", "U", "T")] public readonly string[] NotchTypeValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vNotches.NotchSession), nameof(NotchTypeValues));
       public readonly string[] NotchTypeOptionValues = ["I", "V", "OpenV", "U", "T"];
       public readonly string[] NotchTypeToolTips = ["Slit", "Vee", "Open Vee", "Castle", "Tee"];
       public int NotchTypeIndex;
@@ -5080,10 +5111,16 @@ namespace vTools.Commands
       const int CurveBothSidesButtonWidth = 22; // Width of the two-sided notch icon control in device-independent pixels.
       const int CurveReverseButtonWidth = 22; // Width of the borderless single-arrow reverse control in device-independent pixels.
       const int CurveDirectionButtonHeight = 26; // Height of both native direction buttons in device-independent pixels.
-      const double CurveDirectionButtonHorizontalPadding = 0.0; // Horizontal padding around Side and Reverse arrow glyphs in device-independent pixels.
-      const double CurveDirectionButtonVerticalPadding = 1.0; // Vertical padding around Side and Reverse arrow glyphs in device-independent pixels.
+      [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveDirectionButtonHorizontalPadding", "Horizontal padding around Side and Reverse arrow glyphs in device-independent pixels.")] const double CurveDirectionButtonHorizontalPadding = 0.0; // Horizontal padding around Side and Reverse arrow glyphs in device-independent pixels.
+
+       static readonly double ConfiguredCurveDirectionButtonHorizontalPadding = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveDirectionButtonHorizontalPadding", CurveDirectionButtonHorizontalPadding); // Resolved once from advanced defaults; restart Rhino after changes.
+      [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveDirectionButtonVerticalPadding", "Vertical padding around Side and Reverse arrow glyphs in device-independent pixels.")] const double CurveDirectionButtonVerticalPadding = 1.0; // Vertical padding around Side and Reverse arrow glyphs in device-independent pixels.
+
+       static readonly double ConfiguredCurveDirectionButtonVerticalPadding = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveDirectionButtonVerticalPadding", CurveDirectionButtonVerticalPadding); // Resolved once from advanced defaults; restart Rhino after changes.
       const double CurveDirectionButtonFontSize = 18.0; // Font size of Side and Reverse arrow glyphs in device-independent pixels.
-      const int CurveLengthBadgeHorizontalPadding = 2; // Equal left/right padding inside individual and cumulative colored length badges.
+      [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthBadgeHorizontalPadding", "Equal left/right padding inside individual and cumulative colored length badges.")] const int CurveLengthBadgeHorizontalPadding = 2; // Equal left/right padding inside individual and cumulative colored length badges.
+
+       static readonly int ConfiguredCurveLengthBadgeHorizontalPadding = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthBadgeHorizontalPadding", CurveLengthBadgeHorizontalPadding); // Resolved once from advanced defaults; restart Rhino after changes.
       const int CurveLengthBadgeWidthAllowance = 2; // Extra cumulative-badge width protecting the final digit from layout rounding.
       const string CurveSideCheckedGlyph = "🠝"; // Glyph shown when the curve's Side state is enabled.
       const string CurveSideUncheckedGlyph = "🠟"; // Glyph shown when the curve's Side state is disabled.
@@ -5091,7 +5128,9 @@ namespace vTools.Commands
       const string CurveReverseBackwardGlyph = "🠜"; // Glyph shown after the source curve has been reversed.
       const string CurveBothSidesOffPath = "M11,5 L11,21 M4,8 L9,13 L4,18"; // Compact centerline and one notch mark, in a 22-by-26 icon canvas.
       const string CurveBothSidesOnPath = "M11,5 L11,21 M4,8 L9,13 L4,18 M18,8 L13,13 L18,18"; // Compact centerline and opposing marks, in a 22-by-26 icon canvas.
-      const double CurveLengthDifferenceToleranceInches = 1.0 / 16.0; // Smallest longest-to-shortest span considered significant, converted to model units.
+      [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthDifferenceToleranceInches", "Smallest longest-to-shortest span considered significant, converted to model units.")] const double CurveLengthDifferenceToleranceInches = 1.0 / 16.0; // Smallest longest-to-shortest span considered significant, converted to model units.
+
+       static readonly double ConfiguredCurveLengthDifferenceToleranceInches = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthDifferenceToleranceInches", CurveLengthDifferenceToleranceInches); // Resolved once from advanced defaults; restart Rhino after changes.
       const string CurveLengthWidthSample = "999.999"; // Minimum-width sizing sample; longer displayed curve lengths remain unrestricted.
       const string CurveLengthDifferenceWidthSample = "(+999.999)"; // Minimum-width sizing sample for unrestricted signed superscript differences.
       const float CurveLengthDifferenceFontSize = 8.0f; // Font size of the signed longest/shortest superscript delta in device-independent pixels.
@@ -5225,7 +5264,7 @@ namespace vTools.Commands
         Resizable = true;
         Topmost   = true;
         ClientSize = new Eto.Drawing.Size(
-          Math.Max(DefaultWindowWidth, _windowWidth),
+          Math.Max(ConfiguredDefaultWindowWidth, _windowWidth),
           _windowHeight > 0 ? _windowHeight : -1);
 
         // Type
@@ -5692,6 +5731,7 @@ namespace vTools.Commands
 
         Closed += (_, __) =>
         {
+          MatchingLabels.Changed -= OnMatchingLabelsChanged;
           ClearMultiplePreview();
           ClearCurveRowHover();
           if (!s.SuppressPanelCloseExit)
@@ -5702,7 +5742,23 @@ namespace vTools.Commands
             try { RhinoApp.RunScript("_Cancel", false); } catch { }
           }
         };
+        MatchingLabels.Changed += OnMatchingLabelsChanged;
         _suppress = false;
+      }
+
+      void OnMatchingLabelsChanged(RhinoDoc doc)
+      {
+        if(doc.RuntimeSerialNumber!=_s.Doc.RuntimeSerialNumber) return;
+        var style=MatchingLabels.Read(doc);
+        if(LabelSequences.NormalizeValue(_s.LabelValueText)==style.Value&&_s.ManualLabelSize==style.ManualSize&&_s.LabelLayerName==style.Layer&&
+          _s.LabelAutoAdv==style.AutoAdvance&&_s.LabelSizeAutoToggle.CurrentValue==style.AutoSize&&
+          _s.LabelSizePctValues[_s.LabelSizePctIndex]==style.SizePercent) return;
+        _s.LabelValueText=style.Value;_s.ManualLabelSize=style.ManualSize;
+        _s.LabelSizeOpt.CurrentValue=style.Height;_s.LabelLayerName=style.Layer;
+        _s.LabelAutoAdv=style.AutoAdvance;_s.LabelSizeAutoToggle.CurrentValue=style.AutoSize;
+        _s.LabelSizePctIndex=Enumerable.Range(0,_s.LabelSizePctValues.Length).OrderBy(i=>Math.Abs(_s.LabelSizePctValues[i]-style.SizePercent)).First();
+        UpdateStaticDefaultsFromSession(_s);
+        SyncFromSession();
       }
 
       bool InputEditorFocused() =>
@@ -5890,7 +5946,7 @@ namespace vTools.Commands
           StrokeLineJoin = System.Windows.Media.PenLineJoin.Round,
         });
         button.Content = canvas;
-        button.Padding = new System.Windows.Thickness(NextLabelButtonPadding);
+        button.Padding = new System.Windows.Thickness(ConfiguredNextLabelButtonPadding);
       }
 
       void InstallFieldResets(RhinoDoc doc)
@@ -5914,26 +5970,26 @@ namespace vTools.Commands
           _fieldResetOverlays.Add(overlay);
           field.SelectedIndexChanged += (_, __) => overlay.Refresh();
         }
-        Number(_lengthStepper, DefaultNotchLength, "notch length");
-        Number(_widthStepper, DefaultNotchWidth, "notch width");
-        Number(_offsetStepper, DefaultNotchOffset, "notch offset");
-        Number(_multipleStartOffsetStepper, DefaultMultipleStartOffset, "start offset");
-        Number(_multipleEndOffsetStepper, DefaultMultipleEndOffset, "end offset");
-        Number(_multipleNumberStepper, DefaultMultipleNumber, "number");
-        Number(_multipleDistanceStepper, DefaultMultipleDistance, "distance");
-        Number(_multipleCurvatureSensitivityStepper, DefaultMultipleCurvatureSensitivity, "sensitivity");
-        Number(_labelSizeStepper, DefaultLabelSize, "label size");
-        Number(_labelSizePctStepper, DefaultLabelSizePercent, "label size percentage");
-        Number(_labelOffsetStepper, double.IsNaN(DefaultLabelOffset)
-          ? ModelUnitsFromInches(doc, DefaultLabelOffIn) : DefaultLabelOffset, "label offset X");
-        Number(_labelOffsetYStepper, DefaultLabelOffsetY, "label offset Y");
-        Layer(_notchLayerDrop, DefaultNotchLayer, () => _s.NotchLayerName,
+        Number(_lengthStepper, ConfiguredDefaultNotchLength, "notch length");
+        Number(_widthStepper, ConfiguredDefaultNotchWidth, "notch width");
+        Number(_offsetStepper, ConfiguredDefaultNotchOffset, "notch offset");
+        Number(_multipleStartOffsetStepper, ConfiguredDefaultMultipleStartOffset, "start offset");
+        Number(_multipleEndOffsetStepper, ConfiguredDefaultMultipleEndOffset, "end offset");
+        Number(_multipleNumberStepper, ConfiguredDefaultMultipleNumber, "number");
+        Number(_multipleDistanceStepper, ConfiguredDefaultMultipleDistance, "distance");
+        Number(_multipleCurvatureSensitivityStepper, ConfiguredDefaultMultipleCurvatureSensitivity, "sensitivity");
+        Number(_labelSizeStepper, ConfiguredDefaultLabelSize, "label size");
+        Number(_labelSizePctStepper, ConfiguredDefaultLabelSizePercent, "label size percentage");
+        Number(_labelOffsetStepper, double.IsNaN(ConfiguredDefaultLabelOffset)
+          ? ModelUnitsFromInches(doc, ConfiguredDefaultLabelOffIn) : ConfiguredDefaultLabelOffset, "label offset X");
+        Number(_labelOffsetYStepper, ConfiguredDefaultLabelOffsetY, "label offset Y");
+        Layer(_notchLayerDrop, ConfiguredDefaultNotchLayer, () => _s.NotchLayerName,
           value => _s.NotchLayerName = value, "notch layer");
-        Layer(_labelLayerDrop, DefaultLabelLayer, () => _s.LabelLayerName,
+        Layer(_labelLayerDrop, ConfiguredDefaultLabelLayer, () => _s.LabelLayerName,
           value => _s.LabelLayerName = value, "label layer");
         var textOverlay = new FieldResetOverlay(_labelValueBox,
-          () => !string.Equals(_labelValueBox.Text, DefaultLabelValue, StringComparison.Ordinal),
-          () => { _labelValueBox.Text = DefaultLabelValue; Persist(); }, $"Reset label to {DefaultLabelValue}");
+          () => !string.Equals(_labelValueBox.Text, ConfiguredDefaultLabelValue, StringComparison.Ordinal),
+          () => { _labelValueBox.Text = ConfiguredDefaultLabelValue; Persist(); }, $"Reset label to {ConfiguredDefaultLabelValue}");
         _fieldResetOverlays.Add(textOverlay);
         _labelValueBox.TextChanged += (_, __) => textOverlay.Refresh();
         Shown += (_, __) => { foreach (var overlay in _fieldResetOverlays) overlay.Refresh(); };
@@ -5963,7 +6019,7 @@ namespace vTools.Commands
         _labelSequenceMenu = null;
         if (choices.Count == 0)
         {
-          if (string.IsNullOrWhiteSpace(_labelValueBox.Text)) _labelValueBox.Text = DefaultLabelValue;
+          if (string.IsNullOrWhiteSpace(_labelValueBox.Text)) _labelValueBox.Text = ConfiguredDefaultLabelValue;
           return;
         }
         if (choices.Count == 1)
@@ -6006,7 +6062,7 @@ namespace vTools.Commands
           ? logicalLengths.Max() - logicalLengths.Min()
           : 0.0;
         string actualDifferenceWidthSample = logicalSpan > ModelUnitsFromInches(
-            _s.Doc, CurveLengthDifferenceToleranceInches)
+            _s.Doc, ConfiguredCurveLengthDifferenceToleranceInches)
           ? $"(+{FormatPanelNumber(logicalSpan)})"
           : "";
 
@@ -6127,8 +6183,8 @@ namespace vTools.Commands
           {
             ToolTip = _curveLengthLabels[i].ToolTip,
             Padding = new Eto.Drawing.Padding(
-              CurveLengthBadgeHorizontalPadding, 0,
-              CurveLengthBadgeHorizontalPadding, 0),
+              ConfiguredCurveLengthBadgeHorizontalPadding, 0,
+              ConfiguredCurveLengthBadgeHorizontalPadding, 0),
             Content = _curveLengthLabels[i],
           };
           double? totalLength = LinkedSequenceTotalForRow(i);
@@ -6148,8 +6204,8 @@ namespace vTools.Commands
             {
               ToolTip = _curveTotalLabels[i]!.ToolTip,
               Padding = new Eto.Drawing.Padding(
-                CurveLengthBadgeHorizontalPadding, 0,
-                CurveLengthBadgeHorizontalPadding, 0),
+                ConfiguredCurveLengthBadgeHorizontalPadding, 0,
+                ConfiguredCurveLengthBadgeHorizontalPadding, 0),
               Content = _curveTotalLabels[i],
             };
             _curveTotalColumnWidth = Math.Max(
@@ -6234,10 +6290,10 @@ namespace vTools.Commands
         nativeButton.BorderBrush = System.Windows.Media.Brushes.Transparent;
         nativeButton.BorderThickness = new System.Windows.Thickness(0.0);
         nativeButton.Padding = new System.Windows.Thickness(
-          CurveDirectionButtonHorizontalPadding,
-          CurveDirectionButtonVerticalPadding,
-          CurveDirectionButtonHorizontalPadding,
-          CurveDirectionButtonVerticalPadding);
+          ConfiguredCurveDirectionButtonHorizontalPadding,
+          ConfiguredCurveDirectionButtonVerticalPadding,
+          ConfiguredCurveDirectionButtonHorizontalPadding,
+          ConfiguredCurveDirectionButtonVerticalPadding);
         nativeButton.FontSize = CurveDirectionButtonFontSize;
         nativeButton.MinWidth = 0.0;
         nativeButton.MinHeight = 0.0;
@@ -6983,7 +7039,7 @@ namespace vTools.Commands
 
       int CurveMinimumWidth()
       {
-        return DefaultWindowWidth;
+        return ConfiguredDefaultWindowWidth;
       }
 
       void ConfigureCurveScroller()
@@ -7954,7 +8010,7 @@ namespace vTools.Commands
             label.Text = "";
 
         double tolerance = ModelUnitsFromInches(
-          _s.Doc, CurveLengthDifferenceToleranceInches);
+          _s.Doc, ConfiguredCurveLengthDifferenceToleranceInches);
         var logicalLengths = Enumerable.Range(0, _s.Curves.Count)
           .Select(index => PlacementCurveLength(_s, index))
           .ToArray();
@@ -8257,8 +8313,8 @@ namespace vTools.Commands
                       obj.Attributes.GetUserString(NotchDataPrefix + "version") == null)
         .ToArray();
       double contactTolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * OffsetSplitContactToleranceScale,
-        RhinoMath.ZeroTolerance * OffsetSplitZeroToleranceScale);
+        doc.ModelAbsoluteTolerance * ConfiguredOffsetSplitContactToleranceScale,
+        RhinoMath.ZeroTolerance * ConfiguredOffsetSplitZeroToleranceScale);
       int referenceIndex = cursorPoint.HasValue ? session.PreviewRefCurveIndex : -1;
       KinkTangentChoice? kinkChoice = referenceKinkChoice == KinkTangentChoice.Default
         ? null : referenceKinkChoice;

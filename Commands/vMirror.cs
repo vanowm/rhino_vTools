@@ -18,23 +18,45 @@ namespace vTools.Commands
   public sealed class vMirror : vToolsCommand
   {
     // Option defaults
-    private const bool DefaultCopy = true; // true mirrors copies and keeps originals; false moves originals across the mirror plane.
-    private const bool DefaultFlipText = true; // true keeps mirrored text readable; false mirrors text geometry literally.
-    private const bool DefaultChangeText = false; // true swaps mirrored vTitle text using the configured replacements; false preserves its text.
-    private const double DefaultDistance = 30.0; // Gap between original and directional mirrored bounds in model units; zero or greater.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultCopy", "true mirrors copies and keeps originals; false moves originals across the mirror plane.")] private const bool DefaultCopy = true; // true mirrors copies and keeps originals; false moves originals across the mirror plane.
+
+    private static readonly bool ConfiguredDefaultCopy = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultCopy", DefaultCopy); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultFlipText", "true keeps mirrored text readable; false mirrors text geometry literally.")] private const bool DefaultFlipText = true; // true keeps mirrored text readable; false mirrors text geometry literally.
+
+    private static readonly bool ConfiguredDefaultFlipText = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultFlipText", DefaultFlipText); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultChangeText", "true swaps mirrored vTitle text using the configured replacements; false preserves its text.")] private const bool DefaultChangeText = false; // true swaps mirrored vTitle text using the configured replacements; false preserves its text.
+
+    private static readonly bool ConfiguredDefaultChangeText = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultChangeText", DefaultChangeText); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultDistance", "Gap between original and directional mirrored bounds in model units; zero or greater.")] private const double DefaultDistance = 30.0; // Gap between original and directional mirrored bounds in model units; zero or greater.
+
+    private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string NativeFailureIdlePrompt = "Command"; // Idle command-line text restored when Rhino fails to execute the native mirror macro.
     private static readonly Color PreviewSelectedColor = // Rhino selection color used for mirrored preview geometry.
       Rhino.ApplicationSettings.AppearanceSettings.SelectedObjectColor;
-    private static readonly Color PreviewGhostColor = Color.FromArgb(145, 145, 145); // Neutral ARGB color for originals ghosted in move mode.
-    private const double PreviewSelectedTransparency = 0.3; // Selected-preview material transparency from 0 (opaque) to 1 (invisible).
-    private const double PreviewGhostTransparency = 0.7; // Ghosted-original material transparency from 0 (opaque) to 1 (invisible).
-    private const int PreviewSelectedThicknessOffset = 1; // Relative curve/wire thickness added to selected preview geometry; integer zero or greater.
-    private const int PreviewGhostThicknessOffset = 0; // Relative curve/wire thickness added to ghosted geometry; integer zero or greater.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewGhostColor", "Neutral ARGB color for originals ghosted in move mode.", "#FF919191")] private static readonly Color PreviewGhostColor = global::vTools.CommandDefaults.GetColor("vMirror", "vTools.Commands.vMirror.PreviewGhostColor", Color.FromArgb(145, 145, 145)); // Neutral ARGB color for originals ghosted in move mode.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewSelectedTransparency", "Selected-preview material transparency from 0 (opaque) to 1 (invisible).")] private const double PreviewSelectedTransparency = 0.3; // Selected-preview material transparency from 0 (opaque) to 1 (invisible).
+
+    private static readonly double ConfiguredPreviewSelectedTransparency = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewSelectedTransparency", PreviewSelectedTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewGhostTransparency", "Ghosted-original material transparency from 0 (opaque) to 1 (invisible).")] private const double PreviewGhostTransparency = 0.7; // Ghosted-original material transparency from 0 (opaque) to 1 (invisible).
+
+    private static readonly double ConfiguredPreviewGhostTransparency = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewGhostTransparency", PreviewGhostTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewSelectedThicknessOffset", "Relative curve/wire thickness added to selected preview geometry; integer zero or greater.")] private const int PreviewSelectedThicknessOffset = 1; // Relative curve/wire thickness added to selected preview geometry; integer zero or greater.
+
+    private static readonly int ConfiguredPreviewSelectedThicknessOffset = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewSelectedThicknessOffset", PreviewSelectedThicknessOffset); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewGhostThicknessOffset", "Relative curve/wire thickness added to ghosted geometry; integer zero or greater.")] private const int PreviewGhostThicknessOffset = 0; // Relative curve/wire thickness added to ghosted geometry; integer zero or greater.
+
+    private static readonly int ConfiguredPreviewGhostThicknessOffset = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewGhostThicknessOffset", PreviewGhostThicknessOffset); // Resolved once from advanced defaults; restart Rhino after changes.
     private const PointStyle PreviewPointStyle = PointStyle.RoundSimple; // Plain marker style used for mirrored point-object previews without active-point crosshairs.
-    private const int PreviewSelectedPointSize = 3; // Selected preview point diameter in display pixels; positive integer.
-    private const int PreviewGhostPointSize = 3; // Ghosted preview point diameter in display pixels; positive integer.
-    private static readonly Color ThreePointCueColor = Color.White; // RGB color used for the live three-point mirror-plane rectangle.
-    private const int ThreePointCueThickness = 1; // Three-point mirror-plane rectangle width in display pixels; positive integer.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewSelectedPointSize", "Selected preview point diameter in display pixels; positive integer.")] private const int PreviewSelectedPointSize = 3; // Selected preview point diameter in display pixels; positive integer.
+
+    private static readonly int ConfiguredPreviewSelectedPointSize = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewSelectedPointSize", PreviewSelectedPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.PreviewGhostPointSize", "Ghosted preview point diameter in display pixels; positive integer.")] private const int PreviewGhostPointSize = 3; // Ghosted preview point diameter in display pixels; positive integer.
+
+    private static readonly int ConfiguredPreviewGhostPointSize = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.PreviewGhostPointSize", PreviewGhostPointSize); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.ThreePointCueColor", "RGB color used for the live three-point mirror-plane rectangle.", "#FFFFFFFF")] private static readonly Color ThreePointCueColor = global::vTools.CommandDefaults.GetColor("vMirror", "vTools.Commands.vMirror.ThreePointCueColor", Color.White); // RGB color used for the live three-point mirror-plane rectangle.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.ThreePointCueThickness", "Three-point mirror-plane rectangle width in display pixels; positive integer.")] private const int ThreePointCueThickness = 1; // Three-point mirror-plane rectangle width in display pixels; positive integer.
+
+    private static readonly int ConfiguredThreePointCueThickness = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.ThreePointCueThickness", ThreePointCueThickness); // Resolved once from advanced defaults; restart Rhino after changes.
     private static readonly (string A, string B, string Mode, bool PreserveCase, bool WholeWord)[]
       DefaultTextReplacementValues = // Bidirectional default title swaps: non-empty A/B text, literal/wildcard/regex mode, and matching flags.
       [
@@ -358,10 +380,10 @@ namespace vTools.Commands
         OptionsSection,
         section =>
         {
-          bool copy = DefaultCopy;
-          bool flipText = DefaultFlipText;
-          bool changeText = DefaultChangeText;
-          double distance = DefaultDistance;
+          bool copy = ConfiguredDefaultCopy;
+          bool flipText = ConfiguredDefaultFlipText;
+          bool changeText = ConfiguredDefaultChangeText;
+          double distance = ConfiguredDefaultDistance;
           if (ToolsOptionStore.TryGetBool(section, CopyKey, out var savedCopy))
             copy = savedCopy;
           if (ToolsOptionStore.TryGetBool(section, FlipTextKey, out var savedFlip))
@@ -1151,7 +1173,7 @@ namespace vTools.Commands
                 out var dynamicPlane,
                 out var cue))
             return;
-          e.Display.DrawPolyline(cue, ThreePointCueColor, ThreePointCueThickness);
+          e.Display.DrawPolyline(cue, ThreePointCueColor, ConfiguredThreePointCueThickness);
           preview.DrawMirrored(
             e.Display,
             Transform.Mirror(dynamicPlane),
@@ -1821,13 +1843,13 @@ namespace vTools.Commands
       readonly HashSet<Guid> _objectIds;
       readonly DisplayMaterial _selectedMaterial = new(PreviewSelectedColor)
       {
-        Transparency = PreviewSelectedTransparency,
-        BackTransparency = PreviewSelectedTransparency,
+        Transparency = ConfiguredPreviewSelectedTransparency,
+        BackTransparency = ConfiguredPreviewSelectedTransparency,
       };
       readonly DisplayMaterial _ghostMaterial = new(PreviewGhostColor)
       {
-        Transparency = PreviewGhostTransparency,
-        BackTransparency = PreviewGhostTransparency,
+        Transparency = ConfiguredPreviewGhostTransparency,
+        BackTransparency = ConfiguredPreviewGhostTransparency,
       };
       bool _ghostOriginals;
       bool _hasPersistentMirror;
@@ -2052,7 +2074,7 @@ namespace vTools.Commands
           return;
 
         PreviewDisplay.DrawCurve(
-          display, frame, color, PreviewSelectedThicknessOffset);
+          display, frame, color, ConfiguredPreviewSelectedThicknessOffset);
       }
 
       void DrawGeometry(
@@ -2111,8 +2133,8 @@ namespace vTools.Commands
                 curve,
                 color,
                 selected
-                  ? PreviewSelectedThicknessOffset
-                  : PreviewGhostThicknessOffset);
+                  ? ConfiguredPreviewSelectedThicknessOffset
+                  : ConfiguredPreviewGhostThicknessOffset);
               break;
             case Brep brep:
               display.DrawBrepShaded(brep, material);
@@ -2121,8 +2143,8 @@ namespace vTools.Commands
                 brep,
                 color,
                 selected
-                  ? PreviewSelectedThicknessOffset
-                  : PreviewGhostThicknessOffset);
+                  ? ConfiguredPreviewSelectedThicknessOffset
+                  : ConfiguredPreviewGhostThicknessOffset);
               break;
             case Extrusion extrusion:
               using (var brep = extrusion.ToBrep())
@@ -2134,8 +2156,8 @@ namespace vTools.Commands
                   brep,
                   color,
                   selected
-                    ? PreviewSelectedThicknessOffset
-                    : PreviewGhostThicknessOffset);
+                    ? ConfiguredPreviewSelectedThicknessOffset
+                    : ConfiguredPreviewGhostThicknessOffset);
               }
               break;
             case Surface surface:
@@ -2148,8 +2170,8 @@ namespace vTools.Commands
                   brep,
                   color,
                   selected
-                    ? PreviewSelectedThicknessOffset
-                    : PreviewGhostThicknessOffset);
+                    ? ConfiguredPreviewSelectedThicknessOffset
+                    : ConfiguredPreviewGhostThicknessOffset);
               }
               break;
             case Mesh mesh:
@@ -2159,8 +2181,8 @@ namespace vTools.Commands
                 mesh,
                 color,
                 selected
-                  ? PreviewSelectedThicknessOffset
-                  : PreviewGhostThicknessOffset);
+                  ? ConfiguredPreviewSelectedThicknessOffset
+                  : ConfiguredPreviewGhostThicknessOffset);
               break;
             case SubD subd:
               display.DrawSubDShaded(subd, material);
@@ -2168,8 +2190,8 @@ namespace vTools.Commands
                 PreviewDisplay.Thickness(
                   display,
                   selected
-                    ? PreviewSelectedThicknessOffset
-                    : PreviewGhostThicknessOffset));
+                    ? ConfiguredPreviewSelectedThicknessOffset
+                    : ConfiguredPreviewGhostThicknessOffset));
               break;
             case TextEntity text:
               text.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(
@@ -2207,7 +2229,7 @@ namespace vTools.Commands
                 display.DrawPoint(
                   point.Location,
                   PreviewPointStyle,
-                  selected ? PreviewSelectedPointSize : PreviewGhostPointSize,
+                  selected ? ConfiguredPreviewSelectedPointSize : ConfiguredPreviewGhostPointSize,
                   color);
               }
               finally
@@ -2252,7 +2274,9 @@ namespace vTools.Commands
   {
     // Defaults and customizable constants
     private const double MinimumAxisLength = 1.0; // Positive model-unit spacing of mirror-plane definition points; enlarged for coarse document tolerances.
-    private const double AxisToleranceFactor = 10.0; // Multiplier above document absolute tolerance used to keep definition points distinct; greater than one.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.NativeMirrorRunner.AxisToleranceFactor", "Multiplier above document absolute tolerance used to keep definition points distinct; greater than one.")] private const double AxisToleranceFactor = 10.0; // Multiplier above document absolute tolerance used to keep definition points distinct; greater than one.
+
+    private static readonly double ConfiguredAxisToleranceFactor = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.NativeMirrorRunner.AxisToleranceFactor", AxisToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
 
     private const string NativeCommand = "_-Mirror";
     private const string Tag = "vMirror";
@@ -2320,7 +2344,7 @@ namespace vTools.Commands
 
     internal static string BuildScript(Plane mirrorPlane, Plane constructionPlane, bool copy, double tolerance)
     {
-      var axisLength = Math.Max(MinimumAxisLength, tolerance * AxisToleranceFactor);
+      var axisLength = Math.Max(MinimumAxisLength, tolerance * ConfiguredAxisToleranceFactor);
       var command = new StringBuilder(NativeCommand).Append(" _Copy=_").Append(copy ? "Yes" : "No");
       if (Math.Abs(mirrorPlane.Normal * constructionPlane.Normal) <= RhinoMath.ZeroTolerance)
       {

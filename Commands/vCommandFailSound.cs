@@ -16,9 +16,15 @@ namespace vTools.Commands
   public sealed class vCommandFailSound : vToolsCommand
   {
     // Defaults
-    internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
-    internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
-    internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultEnabled", "true plays a sound after command failure; false stays silent.")] internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
+
+    internal static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultSoundIndex", "Zero-based SoundNames index.")] internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
+
+    internal static readonly int ConfiguredDefaultSoundIndex = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultSoundIndex", DefaultSoundIndex); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultAudioFile", "Relative or absolute audio path; empty uses the selected system sound.")] internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
+
+    internal static readonly string ConfiguredDefaultAudioFile = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultAudioFile", DefaultAudioFile); // Resolved once from advanced defaults; restart Rhino after changes.
 
     public override string EnglishName => "vCommandFailSound";
 
@@ -133,22 +139,15 @@ namespace vTools.Commands
     private const string SoundKey = "sound";
     private const string AudioFileKey = "audioFile";
 
-    internal static readonly string[] SoundNames = // Command option names in persisted sound-index order.
-    {
-      "Default",
-      "Asterisk",
-      "Exclamation",
-      "Hand",
-      "Question",
-      "Custom"
-    };
+    [global::vTools.CommandChoicesAttribute("vCommandFailSound", "sound", false, "Default", "Asterisk", "Exclamation", "Hand", "Question", "Custom")] internal static readonly string[] SoundNames = // Command option names in persisted sound-index order.
+    global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.CommandFailSoundMonitor), nameof(SoundNames));
 
     private static readonly object Sync = new();
-    private static bool _enabled = vCommandFailSound.DefaultEnabled;
+    private static bool _enabled = vCommandFailSound.ConfiguredDefaultEnabled;
     private static bool _subscribed;
     private static bool _settingsLoaded;
-    private static int _soundIndex = vCommandFailSound.DefaultSoundIndex;
-    private static string _audioFile = vCommandFailSound.DefaultAudioFile;
+    private static int _soundIndex = vCommandFailSound.ConfiguredDefaultSoundIndex;
+    private static string _audioFile = vCommandFailSound.ConfiguredDefaultAudioFile;
     private static MediaPlayer? _mediaPlayer;
 
     internal static bool Enabled
@@ -189,9 +188,9 @@ namespace vTools.Commands
           SettingsSection,
           section =>
           {
-            var enabled = vCommandFailSound.DefaultEnabled;
-            var soundIndex = vCommandFailSound.DefaultSoundIndex;
-            var audioFile = vCommandFailSound.DefaultAudioFile;
+            var enabled = vCommandFailSound.ConfiguredDefaultEnabled;
+            var soundIndex = vCommandFailSound.ConfiguredDefaultSoundIndex;
+            var audioFile = vCommandFailSound.ConfiguredDefaultAudioFile;
 
             if (ToolsOptionStore.TryGetBool(section, EnabledKey, out var persistedEnabled))
               enabled = persistedEnabled;

@@ -20,7 +20,9 @@ namespace vTools.Commands;
 public sealed class vDir : vToolsCommand
 {
   // Defaults and customizable constants
-  private const FaceOperation DefaultOperation = FaceOperation.SingleFace; // Initial click mode: SingleFace, FlipAll, or SameDirection.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.DefaultOperation", "Initial click mode: SingleFace, FlipAll, or SameDirection.")] private const FaceOperation DefaultOperation = FaceOperation.SingleFace; // Initial click mode: SingleFace, FlipAll, or SameDirection.
+
+  private static readonly FaceOperation ConfiguredDefaultOperation = global::vTools.CommandDefaults.Get("vDir", "vTools.Commands.vDir.DefaultOperation", DefaultOperation); // Resolved once from advanced defaults; restart Rhino after changes.
   private const ObjectType SupportedGeometry = ObjectType.Surface | ObjectType.Brep | ObjectType.Extrusion | ObjectType.Mesh | ObjectType.SubD; // Rhino object types accepted while hovering face-based geometry.
   private static readonly MeshType[] CachedMeshTypes = [MeshType.Render, MeshType.Analysis, MeshType.Preview]; // Cached face-mesh kinds whose winding must follow the changed Brep face direction.
   private const double FlippedNormalDotMaximum = -0.9; // Largest acceptable dot product between pre-flip and post-flip unit normals; range -1.0 to 1.0.
@@ -28,13 +30,21 @@ public sealed class vDir : vToolsCommand
   private const string SingleFaceOptionName = "SingleFace"; // Command-line option restoring one-face-at-a-time flipping.
   private const string FlipAllOptionName = "FlipAll"; // Command-line option reversing every face in the clicked Brep.
   private const string SameDirectionOptionName = "SameDirection"; // Command-line option aligning connected faces to the clicked face's direction.
-  private static readonly Color ReferenceFacePreviewColor = Color.FromArgb(255, 154, 48); // RGB color identifying the hovered reference face for the active direction operation.
-  private static readonly Color AffectedFacePreviewColor = Color.FromArgb(35, 190, 235); // RGB color identifying additional faces that the active direction operation will reverse.
-  private const double FacePreviewTransparency = 0.18; // Display-material transparency for reference and affected face previews; range 0.0 opaque to 1.0 invisible.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.ReferenceFacePreviewColor", "RGB color identifying the hovered reference face for the active direction operation.", "#FFFF9A30")] private static readonly Color ReferenceFacePreviewColor = global::vTools.CommandDefaults.GetColor("vDir", "vTools.Commands.vDir.ReferenceFacePreviewColor", Color.FromArgb(255, 154, 48)); // RGB color identifying the hovered reference face for the active direction operation.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.AffectedFacePreviewColor", "RGB color identifying additional faces that the active direction operation will reverse.", "#FF23BEEB")] private static readonly Color AffectedFacePreviewColor = global::vTools.CommandDefaults.GetColor("vDir", "vTools.Commands.vDir.AffectedFacePreviewColor", Color.FromArgb(35, 190, 235)); // RGB color identifying additional faces that the active direction operation will reverse.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.FacePreviewTransparency", "Display-material transparency for reference and affected face previews; range 0.0 opaque to 1.0 invisible.")] private const double FacePreviewTransparency = 0.18; // Display-material transparency for reference and affected face previews; range 0.0 opaque to 1.0 invisible.
+
+  private static readonly double ConfiguredFacePreviewTransparency = global::vTools.CommandDefaults.Get("vDir", "vTools.Commands.vDir.FacePreviewTransparency", FacePreviewTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double BackFacePreviewBrightness = 0.5; // Multiplier applied to preview RGB channels on the back side; range 0.0 black to 1.0 unchanged.
-  private const double HoverPickDistanceTiePixels = 0.5; // Maximum projected cursor-distance difference in pixels treated as a tie before camera depth decides the hovered face.
-  private const double MeshPickDistanceTieTolerance = 1e-9; // Maximum difference between Rhino mesh-pick distance values treated as equal before camera depth decides the hovered face.
-  private const int ModifierRefreshIntervalMilliseconds = 30; // Polling interval in milliseconds for modifier-only preview and prompt updates; positive integer.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.HoverPickDistanceTiePixels", "Maximum projected cursor-distance difference in pixels treated as a tie before camera depth decides the hovered face.")] private const double HoverPickDistanceTiePixels = 0.5; // Maximum projected cursor-distance difference in pixels treated as a tie before camera depth decides the hovered face.
+
+  private static readonly double ConfiguredHoverPickDistanceTiePixels = global::vTools.CommandDefaults.Get("vDir", "vTools.Commands.vDir.HoverPickDistanceTiePixels", HoverPickDistanceTiePixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.MeshPickDistanceTieTolerance", "Maximum difference between Rhino mesh-pick distance values treated as equal before camera depth decides the hovered face.")] private const double MeshPickDistanceTieTolerance = 1e-9; // Maximum difference between Rhino mesh-pick distance values treated as equal before camera depth decides the hovered face.
+
+  private static readonly double ConfiguredMeshPickDistanceTieTolerance = global::vTools.CommandDefaults.Get("vDir", "vTools.Commands.vDir.MeshPickDistanceTieTolerance", MeshPickDistanceTieTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDir", "vTools.Commands.vDir.ModifierRefreshIntervalMilliseconds", "Polling interval in milliseconds for modifier-only preview and prompt updates; positive integer.")] private const int ModifierRefreshIntervalMilliseconds = 30; // Polling interval in milliseconds for modifier-only preview and prompt updates; positive integer.
+
+  private static readonly int ConfiguredModifierRefreshIntervalMilliseconds = global::vTools.CommandDefaults.Get("vDir", "vTools.Commands.vDir.ModifierRefreshIntervalMilliseconds", ModifierRefreshIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int ShiftVirtualKey = 0x10; // Win32 virtual-key code used to detect either Shift key.
   private const int ControlVirtualKey = 0x11; // Win32 virtual-key code used to detect either Ctrl key.
   private const int KeyPressedMask = 0x8000; // Win32 GetAsyncKeyState mask indicating that a key is currently held.
@@ -46,7 +56,7 @@ public sealed class vDir : vToolsCommand
   private static EventHandler? _pendingHistoryIdleHandler;
   private static PendingHistoryAction? _pendingHistoryAction;
   private static bool _continuingAfterHistory;
-  private static FaceOperation _continuedOperation = DefaultOperation;
+  private static FaceOperation _continuedOperation = ConfiguredDefaultOperation;
 
   public override string EnglishName => "vDir";
 
@@ -56,7 +66,7 @@ public sealed class vDir : vToolsCommand
     _continuingAfterHistory = false;
     var operation = continuingAfterHistory
       ? _continuedOperation
-      : DefaultOperation;
+      : ConfiguredDefaultOperation;
     if (!continuingAfterHistory)
     {
       UndoHistory.Clear();
@@ -111,7 +121,7 @@ public sealed class vDir : vToolsCommand
       var displayedOperation = ResolveModifierOperation(operation);
       using var modifierTimer = new System.Windows.Forms.Timer
       {
-        Interval = ModifierRefreshIntervalMilliseconds
+        Interval = ConfiguredModifierRefreshIntervalMilliseconds
       };
       modifierTimer.Tick += (_, _) =>
       {
@@ -1671,7 +1681,7 @@ public sealed class vDir : vToolsCommand
       if (candidate.HasMeshMetric)
       {
         var meshDistanceDifference = candidate.PickDistance - current.PickDistance;
-        if (Math.Abs(meshDistanceDifference) > MeshPickDistanceTieTolerance)
+        if (Math.Abs(meshDistanceDifference) > ConfiguredMeshPickDistanceTieTolerance)
           return meshDistanceDifference < 0.0;
 
         return candidate.Depth > current.Depth;
@@ -1679,7 +1689,7 @@ public sealed class vDir : vToolsCommand
 
       var distanceDifference =
         candidate.PickDistance - current.PickDistance;
-      if (Math.Abs(distanceDifference) > HoverPickDistanceTiePixels)
+      if (Math.Abs(distanceDifference) > ConfiguredHoverPickDistanceTiePixels)
         return distanceDifference < 0.0;
 
       return candidate.Depth < current.Depth;
@@ -1937,8 +1947,8 @@ public sealed class vDir : vToolsCommand
           material.BackDiffuse = ScaleColor(
             previewColor,
             BackFacePreviewBrightness);
-          material.Transparency = FacePreviewTransparency;
-          material.BackTransparency = FacePreviewTransparency;
+          material.Transparency = ConfiguredFacePreviewTransparency;
+          material.BackTransparency = ConfiguredFacePreviewTransparency;
           switch (preview.Geometry)
           {
             case Brep brep:

@@ -28,17 +28,27 @@ public sealed class vScallop : vToolsCommand
   private const string AutoKey = "auto";
   private const string SizePercentKey = "sizePercent";
 
-  private const double DefaultSize = 1.0; // Scallop size in model units; greater than zero.
-  private const double DefaultSizePercent = 5.0; // Automatic size as a percentage of span; greater than zero.
-  private const bool DefaultDeleteOriginal = false; // true deletes source curves after scalloping; false keeps them.
-  private const bool DefaultFree = false; // true allows unconstrained placement; false anchors scallops to the curve.
-  private const bool DefaultAuto = true; // true derives size from the selected span; false uses the configured size.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSize", "Scallop size in model units; greater than zero.")] private const double DefaultSize = 1.0; // Scallop size in model units; greater than zero.
 
-  private static double _size = DefaultSize;
-  private static bool _deleteOriginal = DefaultDeleteOriginal;
-  private static bool _free = DefaultFree;
-  private static bool _auto = DefaultAuto;
-  private static double _sizePercent = DefaultSizePercent;
+  private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSizePercent", "Automatic size as a percentage of span; greater than zero.")] private const double DefaultSizePercent = 5.0; // Automatic size as a percentage of span; greater than zero.
+
+  private static readonly double ConfiguredDefaultSizePercent = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultSizePercent", DefaultSizePercent); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultDeleteOriginal", "true deletes source curves after scalloping; false keeps them.")] private const bool DefaultDeleteOriginal = false; // true deletes source curves after scalloping; false keeps them.
+
+  private static readonly bool ConfiguredDefaultDeleteOriginal = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultDeleteOriginal", DefaultDeleteOriginal); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultFree", "true allows unconstrained placement; false anchors scallops to the curve.")] private const bool DefaultFree = false; // true allows unconstrained placement; false anchors scallops to the curve.
+
+  private static readonly bool ConfiguredDefaultFree = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultFree", DefaultFree); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultAuto", "true derives size from the selected span; false uses the configured size.")] private const bool DefaultAuto = true; // true derives size from the selected span; false uses the configured size.
+
+  private static readonly bool ConfiguredDefaultAuto = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultAuto", DefaultAuto); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static double _size = ConfiguredDefaultSize;
+  private static bool _deleteOriginal = ConfiguredDefaultDeleteOriginal;
+  private static bool _free = ConfiguredDefaultFree;
+  private static bool _auto = ConfiguredDefaultAuto;
+  private static double _sizePercent = ConfiguredDefaultSizePercent;
 
   /// <summary>
   /// Rhino command name.
@@ -259,9 +269,9 @@ public sealed class vScallop : vToolsCommand
   private static double? GetSizeSubprompt(RhinoDoc doc)
   {
     double current = _auto ? _sizePercent : _size;
-    double def = _auto ? DefaultSizePercent : DefaultSize;
+    double def = _auto ? ConfiguredDefaultSizePercent : ConfiguredDefaultSize;
     double minVal = _auto ? 0.001 : doc.ModelAbsoluteTolerance;
-    string unit = _auto ? "% (d=reset to 5)" : $"(d=reset to {DefaultSize:G})";
+    string unit = _auto ? "% (d=reset to 5)" : $"(d=reset to {ConfiguredDefaultSize:G})";
 
     var gs = new GetString();
     gs.SetCommandPrompt($"Size {unit} <{current:G}>");

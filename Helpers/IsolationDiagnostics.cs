@@ -21,11 +21,17 @@ namespace vTools;
 internal static class IsolationDiagnostics
 {
   // Defaults and customizable constants
-  private const bool DefaultEnabled = true; // true records the temporary investigation trace; false disables all its event subscriptions.
+  [global::vTools.CommandDefault("IsolationDiagnostics", "vTools.IsolationDiagnostics.DefaultEnabled", "true records the temporary investigation trace; false disables all its event subscriptions.")] private const bool DefaultEnabled = true; // true records the temporary investigation trace; false disables all its event subscriptions.
+
+  private static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("IsolationDiagnostics", "vTools.IsolationDiagnostics.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string TraceFileName = "vTools.commands.jsonl"; // Append-only JSON Lines filename beside the loaded DLL; preserved across restarts.
   private const int ReviewSessionCount = 5; // Tested clean sessions required before diagnostics can be reviewed for removal; positive integer.
-  private const int InputSampleIntervalMilliseconds = 500; // Minimum milliseconds between changed input-state samples during commands; positive integer.
-  private const int IsolationSettleMilliseconds = 300; // Quiet milliseconds after command completion before checking Isolate's retained selection.
+  [global::vTools.CommandDefault("IsolationDiagnostics", "vTools.IsolationDiagnostics.InputSampleIntervalMilliseconds", "Minimum milliseconds between changed input-state samples during commands; positive integer.")] private const int InputSampleIntervalMilliseconds = 500; // Minimum milliseconds between changed input-state samples during commands; positive integer.
+
+  private static readonly int ConfiguredInputSampleIntervalMilliseconds = global::vTools.CommandDefaults.Get("IsolationDiagnostics", "vTools.IsolationDiagnostics.InputSampleIntervalMilliseconds", InputSampleIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("IsolationDiagnostics", "vTools.IsolationDiagnostics.IsolationSettleMilliseconds", "Quiet milliseconds after command completion before checking Isolate's retained selection.")] private const int IsolationSettleMilliseconds = 300; // Quiet milliseconds after command completion before checking Isolate's retained selection.
+
+  private static readonly int ConfiguredIsolationSettleMilliseconds = global::vTools.CommandDefaults.Get("IsolationDiagnostics", "vTools.IsolationDiagnostics.IsolationSettleMilliseconds", IsolationSettleMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int ObjectSampleLimit = 32; // Maximum object IDs included in ordinary event samples; Isolate checks use the full retained selection.
   private const int HistoryTailCharacters = 8192; // Command-history suffix retained to find newly printed text; positive character count.
   private const int HistoryChunkCharacters = 65536; // Maximum command-history characters emitted in one event; older excess is marked as truncated.
@@ -56,7 +62,7 @@ internal static class IsolationDiagnostics
     if (_started)
       return;
     var enabled = ToolsOptionStore.Read(SettingsSection, section =>
-      ToolsOptionStore.TryGetBool(section, "enabled", out var value) ? value : DefaultEnabled);
+      ToolsOptionStore.TryGetBool(section, "enabled", out var value) ? value : ConfiguredDefaultEnabled);
     if (!enabled)
       return;
 
@@ -249,7 +255,7 @@ internal static class IsolationDiagnostics
   private static void OnIdle(object? sender, EventArgs e) => Watch(() =>
   {
     var now = Environment.TickCount64;
-    if (now - _lastSampleTick < InputSampleIntervalMilliseconds)
+    if (now - _lastSampleTick < ConfiguredInputSampleIntervalMilliseconds)
       return;
     _lastSampleTick = now;
     if (!_idlePending && Commands.Count == 0 && PendingChecks.Count == 0)
@@ -266,7 +272,7 @@ internal static class IsolationDiagnostics
     }
     if (doc != null && (doc.InCommand(false) != 0 || RhinoGet.InGet(doc)))
       return;
-    if (now - _lastCommandEndTick < IsolationSettleMilliseconds)
+    if (now - _lastCommandEndTick < ConfiguredIsolationSettleMilliseconds)
       return;
     foreach (var check in PendingChecks)
       CheckIsolation(doc, check);

@@ -25,10 +25,40 @@ public sealed class vPart : vToolsCommand
   public override string EnglishName => "vPart";
 
   // Option defaults
-  private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
-  private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
-  private const bool DefaultCleanup = true; // true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.
-  private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultGroup", "true groups created part geometry; false leaves output ungrouped.")] private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
+
+  private static readonly bool ConfiguredDefaultGroup = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultGroup", DefaultGroup); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultJoinPerimeter", "true joins perimeter curves; false preserves separate boundary curves.")] private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
+
+  private static readonly bool ConfiguredDefaultJoinPerimeter = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultJoinPerimeter", DefaultJoinPerimeter); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultCleanup", "true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.")] private const bool DefaultCleanup = true; // true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.
+
+  private static readonly bool ConfiguredDefaultCleanup = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultCleanup", DefaultCleanup); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabel", "true prompts for a label after placement; false creates the part without a new label.")] private const bool DefaultLabel = false; // true prompts for a label after placement; false creates the part without a new label.
+
+  private static readonly bool ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelText", "Last-entered plain label offered for the next part.")] private const string DefaultLabelText = "A"; // Last-entered plain label offered for the next part.
+
+  private static readonly string ConfiguredDefaultLabelText = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelText", DefaultLabelText); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelLayer", "Label layer path or the current-layer sentinel.")] private const string DefaultLabelLayer = "Reference"; // Label layer path or the current-layer sentinel.
+
+  private static readonly string ConfiguredDefaultLabelLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelLayer", DefaultLabelLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelSize", "Label height in model units; positive.")] private const double DefaultLabelSize = 1.0; // Label height in model units; positive.
+
+  private static readonly double ConfiguredDefaultLabelSize = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelSize", DefaultLabelSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelInteriorGridSamples", "Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.")] private const int LabelInteriorGridSamples = 25; // Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.
+
+  private static readonly int ConfiguredLabelInteriorGridSamples = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelInteriorGridSamples", LabelInteriorGridSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelPointerThresholdPixels", "Minimum cursor movement before moving the initially centered label; positive screen pixels.")] private const int LabelPointerThresholdPixels = 3; // Minimum cursor movement before moving the initially centered label; positive screen pixels.
+
+  private static readonly int ConfiguredLabelPointerThresholdPixels = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelPointerThresholdPixels", LabelPointerThresholdPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", "Upward Shift-movement pixels per one model-unit label-height increment; positive.")] private const double LabelSizePixelsPerUnit = 20.0; // Upward Shift-movement pixels per one model-unit label-height increment; positive.
+
+  private static readonly double ConfiguredLabelSizePixelsPerUnit = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", LabelSizePixelsPerUnit); // Resolved once from advanced defaults; restart Rhino after changes.
+  private const string LabelObjectName = "PartLabel"; // Object name for the part's primary identifying label.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+
+  private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string SourceLayerOption = "*Source*"; // Sentinel that preserves each perimeter segment's source layer; joined output and bridges use the first actual boundary source layer.
 
   private const string SectionName  = "vPart";
@@ -41,14 +71,22 @@ public sealed class vPart : vToolsCommand
   private const string NotchRoleKey = "notch.object_role"; // Notch metadata key whose value is "notch" for generated notch geometry.
   private const string NotchIdKey = "notch.notch_id"; // Notch metadata key containing a nonempty notch component identifier.
   private const string MultiLayerSourceCleanupMessage = "vPart: Cleanup skipped because Layer=Source perimeter uses multiple layers ({0})."; // string.Format template; {0} is a comma-separated list of source layer paths.
-  private const int PerimeterContributionSampleCount = 17; // Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.
-  private const double InteriorLineBoundaryToleranceScale = 2.0; // Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.PerimeterContributionSampleCount", "Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.")] private const int PerimeterContributionSampleCount = 17; // Number of midpoint samples used to determine whether a selected curve contributes to the perimeter; integer greater than zero.
+
+  private static readonly int ConfiguredPerimeterContributionSampleCount = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.PerimeterContributionSampleCount", PerimeterContributionSampleCount); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.InteriorLineBoundaryToleranceScale", "Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.")] private const double InteriorLineBoundaryToleranceScale = 2.0; // Model-tolerance multiplier used to distinguish interior lines from perimeter-aligned lines; positive number.
+
+  private static readonly double ConfiguredInteriorLineBoundaryToleranceScale = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.InteriorLineBoundaryToleranceScale", InteriorLineBoundaryToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
   private static readonly double[] InteriorSelectionSamples = [0.25, 0.5, 0.75]; // Fractions of an open selected divider tested for containment in another selected closed perimeter; between zero and one.
 
-  private static bool _group = DefaultGroup;
-  private static bool _joinPerim = DefaultJoinPerimeter;
-  private static bool _cleanup = DefaultCleanup;
-  private static string _layer = DefaultLayer;
+  private static bool _group = ConfiguredDefaultGroup;
+  private static bool _joinPerim = ConfiguredDefaultJoinPerimeter;
+  private static bool _cleanup = ConfiguredDefaultCleanup;
+  private static string _layer = ConfiguredDefaultLayer;
+  private static bool _label = ConfiguredDefaultLabel;
+  private static string _labelText = ConfiguredDefaultLabelText;
+  private static string _labelLayer = ConfiguredDefaultLabelLayer;
+  private static double _labelSize = ConfiguredDefaultLabelSize;
 
   // ── Logging ────────────────────────────────────────────────────────────
   private static void L(string message) => vTools.Log.Write("vPart", message);
@@ -66,6 +104,11 @@ public sealed class vPart : vToolsCommand
         _cleanup = cleanup;
       if (ToolsOptionStore.TryGetString(section, LayerKey, out var layer))
         _layer = NormalizePerimeterLayerOption(layer);
+      _label = ToolsOptionStore.TryGetBool(section, "label", out var label) ? label : ConfiguredDefaultLabel;
+      _labelText = ToolsOptionStore.TryGetString(section, "labelText", out var text) ? text : ConfiguredDefaultLabelText;
+      _labelLayer = ToolsOptionStore.TryGetString(section, "labelLayer", out var labelLayer) ? labelLayer : ConfiguredDefaultLabelLayer;
+      _labelSize = ToolsOptionStore.TryGetDouble(section, "labelSize", out var size) && double.IsFinite(size) && size > 0
+        ? size : ConfiguredDefaultLabelSize;
       return 0;
     });
 
@@ -77,6 +120,10 @@ public sealed class vPart : vToolsCommand
       section[CleanupKey] = _cleanup;
       section.Remove(LegacyRemoveInteriorLinesKey);
       section[LayerKey] = _layer;
+      section["label"] = _label;
+      section["labelText"] = _labelText;
+      section["labelLayer"] = _labelLayer;
+      section["labelSize"] = _labelSize;
     });
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
@@ -97,6 +144,8 @@ public sealed class vPart : vToolsCommand
     var groupToggle    = new OptionToggle(_group,    "No", "Yes");
     var joinPerimToggle = new OptionToggle(_joinPerim, "No", "Yes");
     var cleanupToggle = new OptionToggle(_cleanup, "No", "Yes");
+    var labelToggle = new OptionToggle(_label, "No", "Yes");
+    var labelSizeOption = new OptionDouble(_labelSize, RhinoMath.ZeroTolerance, double.MaxValue);
 
     using var go = new GetObject();
     go.EnableTransparentCommands(true);
@@ -118,6 +167,9 @@ public sealed class vPart : vToolsCommand
       go.AddOptionToggle("Group", ref groupToggle);
       go.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
       go.AddOptionToggle("Cleanup", ref cleanupToggle);
+      go.AddOptionToggle("Label", ref labelToggle);
+      go.AddOptionDouble("LabelSize", ref labelSizeOption);
+      int labelLayerIndex = go.AddOption("LabelLayer", _labelLayer);
       var layerOptionIndex = go.AddOption("Layer", layerSession.OptionLayerName);
       var selRes = go.GetMultiple(0, 0);
       layerSession.ObserveCurrentLayer(doc);
@@ -128,6 +180,9 @@ public sealed class vPart : vToolsCommand
         _group = groupToggle.CurrentValue;
         _joinPerim = joinPerimToggle.CurrentValue;
         _cleanup = cleanupToggle.CurrentValue;
+        _label = labelToggle.CurrentValue;
+        _labelSize = labelSizeOption.CurrentValue;
+        if (go.Option()?.Index == labelLayerIndex) PromptForLabelLayer(doc, mode);
         if (go.Option()?.Index == layerOptionIndex)
           PromptForLayer(doc, mode, layerSession);
         SaveOptions();
@@ -400,6 +455,9 @@ public sealed class vPart : vToolsCommand
       gp.AddOptionToggle("Group", ref groupToggle);
       gp.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
       gp.AddOptionToggle("Cleanup", ref cleanupToggle);
+      gp.AddOptionToggle("Label", ref labelToggle);
+      gp.AddOptionDouble("LabelSize", ref labelSizeOption);
+      int labelLayerIndex = gp.AddOption("LabelLayer", _labelLayer);
       var layerOptionIndex = gp.AddOption("Layer", layerSession.OptionLayerName);
       EventHandler<GetPointDrawEventArgs> drawPreview = (_, e) =>
       {
@@ -433,8 +491,11 @@ public sealed class vPart : vToolsCommand
       _group = groupToggle.CurrentValue;
       _joinPerim = joinPerimToggle.CurrentValue;
       _cleanup = cleanupToggle.CurrentValue;
+      _label = labelToggle.CurrentValue;
+      _labelSize = labelSizeOption.CurrentValue;
       if (gpResult == GetResult.Option)
       {
+        if (gp.Option()?.Index == labelLayerIndex) PromptForLabelLayer(doc, mode);
         if (gp.Option()?.Index == layerOptionIndex &&
             PromptForLayer(doc, mode, layerSession))
         {
@@ -512,6 +573,17 @@ public sealed class vPart : vToolsCommand
       if (id != Guid.Empty) addedIds.Add(id);
     }
 
+    if (_label && addedIds.Count > 0)
+    {
+      doc.Views.Redraw();
+      using var placedPerimeter = perimeter.DuplicateCurve();
+      placedPerimeter.Transform(translation);
+      var labelPlane = plane;
+      labelPlane.Origin = plane.Origin + (placementPoint - basePoint);
+      var labelId = PlacePartLabel(doc, mode, placedPerimeter, labelPlane);
+      if (labelId != Guid.Empty) addedIds.Add(labelId);
+    }
+
     if (_group && addedIds.Count > 1)
     {
       var grpIdx = doc.Groups.Add();
@@ -533,6 +605,237 @@ public sealed class vPart : vToolsCommand
     L("=== done ===");
     doc.Views.Redraw();
     return Result.Success;
+  }
+
+  private static bool PromptForLabelLayer(RhinoDoc doc, RunMode mode)
+  {
+    if (!LayerSelector.TrySelect(doc, _labelLayer, DuplicateCommandSupport.CurrentLayerOption,
+      "vPart label layer", mode, allowNewLayer: true, out var selected)) return false;
+    _labelLayer = selected;
+    SaveOptions();
+    return true;
+  }
+
+  private static Point3d PartLabelCenter(Curve perimeter, Plane plane, double tolerance)
+  {
+    var bounds = perimeter.GetBoundingBox(plane);
+    var center = plane.PointAt(bounds.Center.X, bounds.Center.Y);
+    if (perimeter.Contains(center, plane, tolerance) == PointContainment.Inside) return center;
+    var best = Point3d.Unset;
+    double bestDistance = double.MaxValue;
+    for (int x = 0; x < ConfiguredLabelInteriorGridSamples; x++)
+      for (int y = 0; y < ConfiguredLabelInteriorGridSamples; y++)
+      {
+        var candidate = plane.PointAt(
+          bounds.Min.X + (bounds.Max.X - bounds.Min.X) * (x + 0.5) / ConfiguredLabelInteriorGridSamples,
+          bounds.Min.Y + (bounds.Max.Y - bounds.Min.Y) * (y + 0.5) / ConfiguredLabelInteriorGridSamples);
+        double distance = candidate.DistanceToSquared(center);
+        if (distance < bestDistance && perimeter.Contains(candidate, plane, tolerance) == PointContainment.Inside)
+        { best = candidate; bestDistance = distance; }
+      }
+    return best.IsValid ? best : center;
+  }
+
+  private static Guid PlacePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane)
+  {
+    var text = _labelText;
+    if (RhinoGet.GetString("Part label", false, ref text) != Result.Success || string.IsNullOrWhiteSpace(text))
+      return Guid.Empty;
+    _labelText = text;
+    SaveOptions();
+    var position = PartLabelCenter(perimeter, plane, doc.ModelAbsoluteTolerance);
+    double angle = 0;
+    using var entity = new TextEntity
+    {
+      PlainText = text, Plane = new Plane(position, plane.XAxis, plane.YAxis),
+      TextHeight = _labelSize, Justification = TextJustification.MiddleCenter, DrawForward = false,
+      DimensionStyleId = doc.DimStyles.Current.Id
+    };
+    using (var style = doc.DimStyles.Current.Duplicate())
+    {
+      style.TextHeight = _labelSize;
+      style.DimensionScale = 1;
+      style.TextOrientation = TextOrientation.InPlane;
+      style.TextRotation = 0;
+      entity.SetOverrideDimStyle(style);
+    }
+    while (true)
+    {
+      using var getter = new GetPoint();
+      getter.SetCommandPrompt("Confirm label or drag to move; Alt rotates, Shift sizes");
+      getter.AcceptNothing(true);
+      getter.AcceptCustomMessage(true);
+      getter.SetDefaultPoint(position);
+      getter.Constrain(plane, false);
+      var size = new OptionDouble(_labelSize, RhinoMath.ZeroTolerance, double.MaxValue);
+      int textOption = getter.AddOption("Text", entity.PlainText);
+      int sizeOption = getter.AddOptionDouble("LabelSize", ref size);
+      int layerOption = getter.AddOption("LabelLayer", _labelLayer);
+      var previousMode = -1;
+      double rotationStart = 0, initialAngle = angle, initialSize = _labelSize;
+      int sizeStartY = 0;
+      var dragPosition = position;
+      var dragPoint = position;
+      Color LabelColor()
+      {
+        int layerIndex = LayerSelector.IsCurrentLayerValue(_labelLayer, DuplicateCommandSupport.CurrentLayerOption)
+          ? doc.Layers.CurrentLayerIndex : doc.Layers.FindByFullPath(_labelLayer, -1);
+        return layerIndex >= 0 ? doc.Layers[layerIndex].Color : Color.White;
+      }
+      doc.Views.Redraw();
+
+      void BeginDrag(Point3d point, System.Drawing.Point cursor)
+      {
+        previousMode = -1; dragPosition = position; dragPoint = point;
+        initialAngle = angle; initialSize = _labelSize; sizeStartY = cursor.Y;
+      }
+      void UpdateLabel(Point3d point, System.Drawing.Point cursor)
+      {
+        var modifiers = System.Windows.Forms.Control.ModifierKeys;
+        int interaction = modifiers.HasFlag(System.Windows.Forms.Keys.Shift) ? 2
+          : modifiers.HasFlag(System.Windows.Forms.Keys.Alt) ? 1 : 0;
+        if (interaction == 2)
+        {
+          if (previousMode >= 0 && previousMode != interaction) { sizeStartY = cursor.Y; initialSize = _labelSize; }
+          _labelSize = ShiftLabelSize(initialSize, sizeStartY - cursor.Y);
+        }
+        else if (interaction == 1)
+        {
+          var direction = point - position;
+          double pointerAngle = Math.Atan2(direction * plane.YAxis, direction * plane.XAxis);
+          if (previousMode != interaction)
+          {
+            var startDirection = (previousMode < 0 ? dragPoint : point) - position;
+            rotationStart = Math.Atan2(startDirection * plane.YAxis, startDirection * plane.XAxis);
+            initialAngle = angle;
+          }
+          if (direction.Length > doc.ModelAbsoluteTolerance) angle = initialAngle + pointerAngle - rotationStart;
+        }
+        else
+        {
+          if (previousMode > 0) { dragPosition = position; dragPoint = point; }
+          position = plane.ClosestPoint(dragPosition + (point - dragPoint));
+        }
+        previousMode = interaction;
+        var labelPlane = new Plane(position, plane.XAxis, plane.YAxis);
+        labelPlane.Rotate(angle, plane.Normal, position);
+        entity.Plane = labelPlane;
+        entity.TextHeight = _labelSize;
+      }
+      using var drag = new PartLabelDrag(doc, entity, plane, BeginDrag, UpdateLabel) { Enabled = true };
+      getter.MouseMove += (_, e) => drag.UpdateModifiers(e.Viewport, e.WindowPoint);
+      getter.DynamicDraw += (_, e) =>
+      {
+        e.Display.PushDepthTesting(false);
+        try { e.Display.DrawAnnotation(entity, LabelColor()); }
+        finally { e.Display.PopDepthTesting(); }
+      };
+      var result = getter.Get(onMouseUp: true);
+      drag.Enabled = false;
+      if (result == GetResult.Point && drag.Moved) { SaveOptions(); continue; }
+      if (result == GetResult.Option)
+      {
+        if (getter.Option()?.Index == textOption)
+        {
+          var proposed = entity.PlainText;
+          if (RhinoGet.GetString("Part label", false, ref proposed) == Result.Success && !string.IsNullOrWhiteSpace(proposed))
+          { entity.PlainText = proposed; _labelText = proposed; }
+        }
+        if (getter.Option()?.Index == sizeOption) _labelSize = size.CurrentValue;
+        entity.TextHeight = _labelSize;
+        if (getter.Option()?.Index == layerOption) PromptForLabelLayer(doc, mode);
+        SaveOptions();
+        continue;
+      }
+      SaveOptions();
+      if (result != GetResult.Point && result != GetResult.Nothing &&
+        !(result == GetResult.CustomMessage && getter.CustomMessage() is PartLabelConfirm)) return Guid.Empty;
+      // Commit the same entity and transform used by the last preview, including Alt/Shift edits.
+      int outputLayer = LayerSelector.IsCurrentLayerValue(_labelLayer, DuplicateCommandSupport.CurrentLayerOption)
+        ? doc.Layers.CurrentLayerIndex : UzipCommon.EnsureLayer(doc, _labelLayer, Color.White);
+      if (outputLayer < 0) return Guid.Empty;
+      return doc.Objects.AddText(entity, new ObjectAttributes { Name = LabelObjectName, LayerIndex = outputLayer });
+    }
+  }
+
+  private static double ShiftLabelSize(double startSize, double upwardPixels) =>
+    Math.Max(1, Math.Round(startSize + upwardPixels / ConfiguredLabelSizePixelsPerUnit, MidpointRounding.AwayFromZero));
+
+  private sealed record PartLabelConfirm;
+
+  private sealed class PartLabelDrag(RhinoDoc doc, TextEntity entity, Plane plane,
+    Action<Point3d, System.Drawing.Point> begin, Action<Point3d, System.Drawing.Point> update) : Rhino.UI.MouseCallback, IDisposable
+  {
+    private System.Drawing.Point? _start;
+    private Guid _viewport;
+    private bool _dragged;
+    private bool _modifierInteraction;
+    internal bool Moved => _dragged;
+
+    private static bool PointAt(Rhino.UI.MouseCallbackEventArgs e, Plane plane, out Point3d point)
+    {
+      point = Point3d.Unset;
+      return e.View?.ActiveViewport is { } viewport && PointAt(viewport, e.ViewportPoint, plane, out point);
+    }
+
+    private static bool PointAt(Rhino.Display.RhinoViewport viewport, System.Drawing.Point cursor, Plane plane, out Point3d point)
+    {
+      point = Point3d.Unset;
+      if (!viewport.GetFrustumLine(cursor.X, cursor.Y, out var ray) ||
+        !Intersection.LinePlane(ray, plane, out double t)) return false;
+      point = ray.PointAt(t); return point.IsValid;
+    }
+
+    internal void UpdateModifiers(Rhino.Display.RhinoViewport viewport, System.Drawing.Point cursor)
+    {
+      if (_start != null) return;
+      var modifiers = System.Windows.Forms.Control.ModifierKeys;
+      if (!modifiers.HasFlag(System.Windows.Forms.Keys.Alt) && !modifiers.HasFlag(System.Windows.Forms.Keys.Shift))
+      { _modifierInteraction = false; return; }
+      if (!PointAt(viewport, cursor, plane, out var point)) return;
+      if (!_modifierInteraction) { begin(point, cursor); _modifierInteraction = true; }
+      update(point, cursor);
+    }
+
+    protected override void OnMouseDown(Rhino.UI.MouseCallbackEventArgs e)
+    {
+      if (RhinoDoc.ActiveDoc != doc || e.MouseButton != Rhino.UI.MouseButton.Left ||
+        e.View?.ActiveViewport is not { } viewport || !PointAt(e, plane, out var point)) { base.OnMouseDown(e); return; }
+      var bounds = AnnotationTextTransform.TextBounds(entity);
+      var corners = bounds.IsValid ? bounds.GetCorners().Select(p => entity.Plane.PointAt(p.X, p.Y, p.Z)).Select(viewport.WorldToClient).ToArray() : [];
+      if (corners.Length == 0) { base.OnMouseDown(e); return; }
+      var cursor = e.ViewportPoint;
+      int padding = ConfiguredLabelPointerThresholdPixels;
+      if (cursor.X < corners.Min(p => p.X) - padding || cursor.X > corners.Max(p => p.X) + padding ||
+        cursor.Y < corners.Min(p => p.Y) - padding || cursor.Y > corners.Max(p => p.Y) + padding) { base.OnMouseDown(e); return; }
+      _start = cursor; _viewport = viewport.Id; _dragged = false; _modifierInteraction = false;
+      begin(point, cursor);
+      e.Cancel = true;
+      base.OnMouseDown(e);
+    }
+
+    protected override void OnMouseMove(Rhino.UI.MouseCallbackEventArgs e)
+    {
+      if (_start is { } start && e.View?.ActiveViewport.Id == _viewport && PointAt(e, plane, out var point))
+      {
+        _dragged |= Math.Abs(e.ViewportPoint.X - start.X) >= ConfiguredLabelPointerThresholdPixels ||
+          Math.Abs(e.ViewportPoint.Y - start.Y) >= ConfiguredLabelPointerThresholdPixels;
+        if (_dragged) update(point, e.ViewportPoint);
+      }
+      base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(Rhino.UI.MouseCallbackEventArgs e)
+    {
+      if (_start != null && e.MouseButton == Rhino.UI.MouseButton.Left)
+      {
+        e.Cancel = true;
+        if (!_dragged) GetBaseClass.PostCustomMessage(new PartLabelConfirm());
+        _start = null;
+      }
+      base.OnMouseUp(e);
+    }
+    public void Dispose() { Enabled = false; _start = null; _modifierInteraction = false; }
   }
 
   private static bool PromptForLayer(
@@ -1266,7 +1569,7 @@ public sealed class vPart : vToolsCommand
 
     var midpoint = curve.PointAtNormalizedLength(0.5);
     return perimeter.Contains(
-      midpoint, plane, tolerance * InteriorLineBoundaryToleranceScale)
+      midpoint, plane, tolerance * ConfiguredInteriorLineBoundaryToleranceScale)
       == PointContainment.Inside;
   }
 
@@ -1279,22 +1582,22 @@ public sealed class vPart : vToolsCommand
     var overlapEvents = Intersection.CurveCurve(
       curve,
       perimeter,
-      tolerance * InteriorLineBoundaryToleranceScale,
-      tolerance * InteriorLineBoundaryToleranceScale);
+      tolerance * ConfiguredInteriorLineBoundaryToleranceScale,
+      tolerance * ConfiguredInteriorLineBoundaryToleranceScale);
     if (overlapEvents != null && overlapEvents.Any(intersection =>
           intersection.IsOverlap &&
           Math.Abs(intersection.OverlapA.Length) > RhinoMath.ZeroTolerance))
       return true;
 
     for (var sampleIndex = 0;
-         sampleIndex < PerimeterContributionSampleCount;
+         sampleIndex < ConfiguredPerimeterContributionSampleCount;
          sampleIndex++)
     {
       var normalizedLength =
-        (sampleIndex + 0.5) / PerimeterContributionSampleCount;
+        (sampleIndex + 0.5) / ConfiguredPerimeterContributionSampleCount;
       if (perimeter.Contains(
             curve.PointAtNormalizedLength(normalizedLength), plane,
-            tolerance * InteriorLineBoundaryToleranceScale)
+            tolerance * ConfiguredInteriorLineBoundaryToleranceScale)
           == PointContainment.Coincident)
         return true;
     }

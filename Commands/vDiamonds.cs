@@ -33,41 +33,87 @@ public sealed class vDiamonds : vToolsCommand
   private const string LayerRefKey     = "layerRef";
 
   // Option defaults
-  private const string DefaultLayerPlot = "PLOT"; // Rhino layer name or full layer path.
-  private const string DefaultLayerCut = "CUT1"; // Rhino layer name or full layer path.
-  private const string DefaultLayerReference = "Reference"; // Rhino layer name or full layer path.
-  private const double DefaultWidth  = 2.0; // Diamond width in model units; greater than zero.
-  private const double DefaultHeight = 2.0; // Diamond height in model units; greater than zero.
-  private const double DefaultCW     = 3.0; // Number of diamonds across; one or greater.
-  private const double DefaultCH     = 3.0; // Number of diamonds high; one or greater.
-  private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
-  private const bool DefaultShowSize = true; // true creates the size label; false omits it.
-  private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
-  private const LabelInsideMode DefaultLabelInside = LabelInsideMode.No; // FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.
-  private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
-  private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
-  private const DiamondRoundingMode DefaultRoundToDiamond = DiamondRoundingMode.None; // Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerPlot", "Rhino layer name or full layer path.")] private const string DefaultLayerPlot = "PLOT"; // Rhino layer name or full layer path.
 
-  private static string _layerPlot = DefaultLayerPlot;
-  private static string _layerCut  = DefaultLayerCut;
-  private static string _layerRef  = DefaultLayerReference;
+  private static readonly string ConfiguredDefaultLayerPlot = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerPlot", DefaultLayerPlot); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerCut", "Rhino layer name or full layer path.")] private const string DefaultLayerCut = "CUT1"; // Rhino layer name or full layer path.
 
-  private static readonly Color PlotColor = Color.FromArgb(0x0F, 0x8A, 0x8A); // Color assigned when the PLOT layer is created.
-  private static readonly Color CutColor  = Color.FromArgb(0xCC, 0x33, 0x33); // Color assigned when the CUT1 layer is created.
-  private static readonly Color RefColor  = Color.White; // Color assigned when the Reference layer is created.
+  private static readonly string ConfiguredDefaultLayerCut = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerCut", DefaultLayerCut); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerReference", "Rhino layer name or full layer path.")] private const string DefaultLayerReference = "Reference"; // Rhino layer name or full layer path.
+
+  private static readonly string ConfiguredDefaultLayerReference = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerReference", DefaultLayerReference); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultWidth", "Diamond width in model units; greater than zero.")] private const double DefaultWidth  = 2.0; // Diamond width in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultHeight", "Diamond height in model units; greater than zero.")] private const double DefaultHeight = 2.0; // Diamond height in model units; greater than zero.
+
+  private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCW", "Number of diamonds across; one or greater.")] private const double DefaultCW     = 3.0; // Number of diamonds across; one or greater.
+
+  private static readonly double ConfiguredDefaultCW = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultCW", DefaultCW); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCH", "Number of diamonds high; one or greater.")] private const double DefaultCH     = 3.0; // Number of diamonds high; one or greater.
+
+  private static readonly double ConfiguredDefaultCH = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultCH", DefaultCH); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowBoundary", "true creates the bounding rectangle; false omits it.")] private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
+
+  private static readonly bool ConfiguredDefaultShowBoundary = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowBoundary", DefaultShowBoundary); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowSize", "true creates the size label; false omits it.")] private const bool DefaultShowSize = true; // true creates the size label; false omits it.
+
+  private static readonly bool ConfiguredDefaultShowSize = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowSize", DefaultShowSize); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowCount", "true includes diamond counts in the label; false omits them.")] private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
+
+  private static readonly bool ConfiguredDefaultShowCount = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowCount", DefaultShowCount); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLabelInside", "FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.")] private const LabelInsideMode DefaultLabelInside = LabelInsideMode.No; // FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.
+
+  private static readonly LabelInsideMode ConfiguredDefaultLabelInside = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLabelInside", DefaultLabelInside); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeWidth", "Boundary width in model units; zero means unset.")] private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
+
+  private static readonly double ConfiguredDefaultBySizeWidth = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeWidth", DefaultBySizeWidth); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeHeight", "Boundary height in model units; zero means unset.")] private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
+
+  private static readonly double ConfiguredDefaultBySizeHeight = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeHeight", DefaultBySizeHeight); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultRoundToDiamond", "Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.")] private const DiamondRoundingMode DefaultRoundToDiamond = DiamondRoundingMode.None; // Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.
+
+  private static readonly DiamondRoundingMode ConfiguredDefaultRoundToDiamond = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultRoundToDiamond", DefaultRoundToDiamond); // Resolved once from advanced defaults; restart Rhino after changes.
+
+  private static string _layerPlot = ConfiguredDefaultLayerPlot;
+  private static string _layerCut  = ConfiguredDefaultLayerCut;
+  private static string _layerRef  = ConfiguredDefaultLayerReference;
+
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.PlotColor", "Color assigned when the PLOT layer is created.", "#FF0F8A8A")] private static readonly Color PlotColor = global::vTools.CommandDefaults.GetColor("vDiamonds", "vTools.Commands.vDiamonds.PlotColor", Color.FromArgb(0x0F, 0x8A, 0x8A)); // Color assigned when the PLOT layer is created.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.CutColor", "Color assigned when the CUT1 layer is created.", "#FFCC3333")] private static readonly Color CutColor  = global::vTools.CommandDefaults.GetColor("vDiamonds", "vTools.Commands.vDiamonds.CutColor", Color.FromArgb(0xCC, 0x33, 0x33)); // Color assigned when the CUT1 layer is created.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.RefColor", "Color assigned when the Reference layer is created.", "#FFFFFFFF")] private static readonly Color RefColor  = global::vTools.CommandDefaults.GetColor("vDiamonds", "vTools.Commands.vDiamonds.RefColor", Color.White); // Color assigned when the Reference layer is created.
 
   private const double LabelGap = 0.125; // Minimum gap from the boundary to the label stack in model units; zero or greater.
-  private const double LabelLineGapFactor = 0.2; // Gap between stacked annotations as a fraction of the upper label's text height; zero or greater.
-  private const double DetailsLineGapFactor = 0.2; // Gap between the grid-count and boundary-size annotations as a fraction of their shared text height; zero or greater.
-  private const double DetailsTextWidthFactor = 0.8; // Boundary-width share available to the two-row details text before its parenthesis curves are added; greater than zero and less than one.
-  private const double ParenthesisHorizontalGapFactor = 0.12; // Horizontal gap from details text to each parenthesis as a fraction of text height; zero or greater.
-  private const double ParenthesisVerticalPaddingFactor = 0.08; // Vertical extension beyond the details text as a fraction of text height; zero or greater.
-  private const double ParenthesisWidthFactor = 0.12; // Parenthesis outward bow as a fraction of the full parenthesis height; greater than zero.
-  private const double ParenthesisControlHeightFactor = 0.22; // Cubic control-point inset from each parenthesis end as a fraction of parenthesis height; from zero through 0.5.
-  private const double InsideLabelPaddingFraction = 0.1; // Empty inset on each boundary side when LabelInside is enabled; from zero through less than 0.5.
-  private const double RoundUpRatioTolerance = 1e-10; // Dimensionless tolerance subtracted before ceiling a diamond-count increment; small positive value.
-  private static readonly string[] RoundToDiamondNames = ["Full", "Half", "None"]; // Command-line values in DiamondRoundingMode numeric order.
-  private static readonly string[] LabelInsideNames = ["FitAll", "Fit", "No"]; // Command-line values in LabelInsideMode numeric order.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.LabelLineGapFactor", "Gap between stacked annotations as a fraction of the upper label's text height; zero or greater.")] private const double LabelLineGapFactor = 0.2; // Gap between stacked annotations as a fraction of the upper label's text height; zero or greater.
+
+  private static readonly double ConfiguredLabelLineGapFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.LabelLineGapFactor", LabelLineGapFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DetailsLineGapFactor", "Gap between the grid-count and boundary-size annotations as a fraction of their shared text height; zero or greater.")] private const double DetailsLineGapFactor = 0.2; // Gap between the grid-count and boundary-size annotations as a fraction of their shared text height; zero or greater.
+
+  private static readonly double ConfiguredDetailsLineGapFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DetailsLineGapFactor", DetailsLineGapFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DetailsTextWidthFactor", "Boundary-width share available to the two-row details text before its parenthesis curves are added; greater than zero and less than one.")] private const double DetailsTextWidthFactor = 0.8; // Boundary-width share available to the two-row details text before its parenthesis curves are added; greater than zero and less than one.
+
+  private static readonly double ConfiguredDetailsTextWidthFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DetailsTextWidthFactor", DetailsTextWidthFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisHorizontalGapFactor", "Horizontal gap from details text to each parenthesis as a fraction of text height; zero or greater.")] private const double ParenthesisHorizontalGapFactor = 0.12; // Horizontal gap from details text to each parenthesis as a fraction of text height; zero or greater.
+
+  private static readonly double ConfiguredParenthesisHorizontalGapFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisHorizontalGapFactor", ParenthesisHorizontalGapFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisVerticalPaddingFactor", "Vertical extension beyond the details text as a fraction of text height; zero or greater.")] private const double ParenthesisVerticalPaddingFactor = 0.08; // Vertical extension beyond the details text as a fraction of text height; zero or greater.
+
+  private static readonly double ConfiguredParenthesisVerticalPaddingFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisVerticalPaddingFactor", ParenthesisVerticalPaddingFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisWidthFactor", "Parenthesis outward bow as a fraction of the full parenthesis height; greater than zero.")] private const double ParenthesisWidthFactor = 0.12; // Parenthesis outward bow as a fraction of the full parenthesis height; greater than zero.
+
+  private static readonly double ConfiguredParenthesisWidthFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisWidthFactor", ParenthesisWidthFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisControlHeightFactor", "Cubic control-point inset from each parenthesis end as a fraction of parenthesis height; from zero through 0.5.")] private const double ParenthesisControlHeightFactor = 0.22; // Cubic control-point inset from each parenthesis end as a fraction of parenthesis height; from zero through 0.5.
+
+  private static readonly double ConfiguredParenthesisControlHeightFactor = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.ParenthesisControlHeightFactor", ParenthesisControlHeightFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.InsideLabelPaddingFraction", "Empty inset on each boundary side when LabelInside is enabled; from zero through less than 0.5.")] private const double InsideLabelPaddingFraction = 0.1; // Empty inset on each boundary side when LabelInside is enabled; from zero through less than 0.5.
+
+  private static readonly double ConfiguredInsideLabelPaddingFraction = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.InsideLabelPaddingFraction", InsideLabelPaddingFraction); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.RoundUpRatioTolerance", "Dimensionless tolerance subtracted before ceiling a diamond-count increment; small positive value.")] private const double RoundUpRatioTolerance = 1e-10; // Dimensionless tolerance subtracted before ceiling a diamond-count increment; small positive value.
+
+  private static readonly double ConfiguredRoundUpRatioTolerance = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.RoundUpRatioTolerance", RoundUpRatioTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandChoicesAttribute("vDiamonds", "roundToDiamond", false, "Full", "Half", "None")] private static readonly string[] RoundToDiamondNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vDiamonds), nameof(RoundToDiamondNames)); // Command-line values in DiamondRoundingMode numeric order.
+  [global::vTools.CommandChoicesAttribute("vDiamonds", "labelInside", false, "FitAll", "Fit", "No")] private static readonly string[] LabelInsideNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vDiamonds), nameof(LabelInsideNames)); // Command-line values in LabelInsideMode numeric order.
 
   private enum DiamondRoundingMode
   {
@@ -83,17 +129,17 @@ public sealed class vDiamonds : vToolsCommand
     No
   }
 
-  private static double _width        = DefaultWidth;
-  private static double _height       = DefaultHeight;
-  private static double _cw           = DefaultCW;
-  private static double _ch           = DefaultCH;
-  private static bool   _showBoundary = DefaultShowBoundary;
-  private static bool   _showSize     = DefaultShowSize;
-  private static bool   _showCount    = DefaultShowCount;
-  private static LabelInsideMode _labelInside = DefaultLabelInside;
-  private static double _bySizeW      = DefaultBySizeWidth; // stored dims (always positive when ever set)
-  private static double _bySizeH      = DefaultBySizeHeight;
-  private static DiamondRoundingMode _roundToDiamond = DefaultRoundToDiamond;
+  private static double _width        = ConfiguredDefaultWidth;
+  private static double _height       = ConfiguredDefaultHeight;
+  private static double _cw           = ConfiguredDefaultCW;
+  private static double _ch           = ConfiguredDefaultCH;
+  private static bool   _showBoundary = ConfiguredDefaultShowBoundary;
+  private static bool   _showSize     = ConfiguredDefaultShowSize;
+  private static bool   _showCount    = ConfiguredDefaultShowCount;
+  private static LabelInsideMode _labelInside = ConfiguredDefaultLabelInside;
+  private static double _bySizeW      = ConfiguredDefaultBySizeWidth; // stored dims (always positive when ever set)
+  private static double _bySizeH      = ConfiguredDefaultBySizeHeight;
+  private static DiamondRoundingMode _roundToDiamond = ConfiguredDefaultRoundToDiamond;
   private static bool   _bySizeActive = false; // transient: true only during the current invocation
 
   public override string EnglishName => "vDiamonds";
@@ -182,7 +228,7 @@ public sealed class vDiamonds : vToolsCommand
           Justification = TextJustification.BottomCenter,
         };
         CalibrateSharedTextHeight(
-          W * DetailsTextWidthFactor,
+          W * ConfiguredDetailsTextWidthFactor,
           countLabelTe,
           boundaryLabelTe);
       }
@@ -192,7 +238,7 @@ public sealed class vDiamonds : vToolsCommand
       if (countLabelTe != null && boundaryLabelTe != null)
       {
         var parenthesisPadding =
-          countLabelTe.TextHeight * ParenthesisVerticalPaddingFactor;
+          countLabelTe.TextHeight * ConfiguredParenthesisVerticalPaddingFactor;
         var boundaryTop = PlaceTextAbove(
           boundaryLabelTe,
           W / 2.0,
@@ -200,7 +246,7 @@ public sealed class vDiamonds : vToolsCommand
         PlaceTextAbove(
           countLabelTe,
           W / 2.0,
-          boundaryTop + countLabelTe.TextHeight * DetailsLineGapFactor);
+          boundaryTop + countLabelTe.TextHeight * ConfiguredDetailsLineGapFactor);
         detailParenthesisCurves = BuildDetailParentheses(
           countLabelTe,
           boundaryLabelTe,
@@ -210,7 +256,7 @@ public sealed class vDiamonds : vToolsCommand
           PlaceTextAbove(
             sizeLabelTe,
             W / 2.0,
-            parenthesisTop + sizeLabelTe.TextHeight * LabelLineGapFactor);
+            parenthesisTop + sizeLabelTe.TextHeight * ConfiguredLabelLineGapFactor);
         }
       }
       else if (_showSize)
@@ -580,14 +626,14 @@ public sealed class vDiamonds : vToolsCommand
     }
 
     var verticalPadding =
-      upperText.TextHeight * ParenthesisVerticalPaddingFactor;
+      upperText.TextHeight * ConfiguredParenthesisVerticalPaddingFactor;
     var top = Math.Max(upperBounds.Max.Y, lowerBounds.Max.Y) + verticalPadding;
     var bottom = Math.Min(upperBounds.Min.Y, lowerBounds.Min.Y) - verticalPadding;
     var height = Math.Max(upperText.TextHeight, top - bottom);
     var horizontalGap =
-      upperText.TextHeight * ParenthesisHorizontalGapFactor;
-    var bow = height * ParenthesisWidthFactor;
-    var controlInset = height * ParenthesisControlHeightFactor;
+      upperText.TextHeight * ConfiguredParenthesisHorizontalGapFactor;
+    var bow = height * ConfiguredParenthesisWidthFactor;
+    var controlInset = height * ConfiguredParenthesisControlHeightFactor;
     var leftInner = Math.Min(upperBounds.Min.X, lowerBounds.Min.X) - horizontalGap;
     var rightInner = Math.Max(upperBounds.Max.X, lowerBounds.Max.X) + horizontalGap;
 
@@ -637,8 +683,8 @@ public sealed class vDiamonds : vToolsCommand
     if (!bounds.IsValid)
       return;
 
-    var availableWidth = boundaryWidth * (1.0 - 2.0 * InsideLabelPaddingFraction);
-    var availableHeight = boundaryHeight * (1.0 - 2.0 * InsideLabelPaddingFraction);
+    var availableWidth = boundaryWidth * (1.0 - 2.0 * ConfiguredInsideLabelPaddingFraction);
+    var availableHeight = boundaryHeight * (1.0 - 2.0 * ConfiguredInsideLabelPaddingFraction);
     var boundsWidth = bounds.Max.X - bounds.Min.X;
     var boundsHeight = bounds.Max.Y - bounds.Min.Y;
     if (availableWidth <= RhinoMath.ZeroTolerance ||
@@ -659,7 +705,7 @@ public sealed class vDiamonds : vToolsCommand
       ? new Point3d(boundaryWidth * 0.5, boundaryHeight * 0.5, 0.0)
       : new Point3d(
           boundaryWidth * 0.5,
-          boundaryHeight * InsideLabelPaddingFraction,
+          boundaryHeight * ConfiguredInsideLabelPaddingFraction,
           0.0);
     var moveToOrigin = Transform.Translation(Point3d.Origin - sourceAnchor);
     var resize = Transform.Scale(Point3d.Origin, scale);
@@ -919,7 +965,7 @@ public sealed class vDiamonds : vToolsCommand
       minimumBoundarySize / (diamondSize * countIncrement);
     var count = Math.Max(
       countIncrement,
-      Math.Ceiling(incrementUnits - RoundUpRatioTolerance) * countIncrement);
+      Math.Ceiling(incrementUnits - ConfiguredRoundUpRatioTolerance) * countIncrement);
 
     while (count * diamondSize < minimumBoundarySize - RhinoMath.ZeroTolerance)
       count += countIncrement;

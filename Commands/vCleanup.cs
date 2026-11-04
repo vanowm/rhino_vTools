@@ -38,7 +38,10 @@ public sealed class vCleanup : vToolsCommand
 
   private static readonly bool ConfiguredDefaultFindOverlaps = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", DefaultFindOverlaps); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool ProtectOpenCurveEnds = true; // true excludes open-curve endpoint segments and endpoint control points; false permits them.
-  private const int MaximumExportCleanupPasses = 100; // Maximum delete/recheck passes per export; prevents looping when native deletion makes no progress.
+  private const int MaximumExportCleanupPasses = 100; // Positive hard limit on geometry-changing export cleanup passes; unchanged geometry stops immediately.
+  private const string OrphanPartDataOption = "OrphanPartData"; // Explicit cleanup-only action; never persisted or run automatically with geometry/export cleanup.
+  private const string OrphanPartDataUndoName = "vCleanup orphaned part data"; // Native Undo/Redo record description for confirmed part-data removal.
+  private static readonly string[] PartDataSections = [PartGroupData.NestSection, PartGroupData.CustomSection, PartGroupData.NamesSection]; // Only these part-data namespaces are eligible for orphan cleanup.
 
   // Customizable appearance, output, limits, tolerance, and sampling
   [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", "ARGB viewport color used for all short-geometry overlays.", "#FFFF00FF")] private static readonly Color ShortHighlightColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", Color.Magenta); // ARGB viewport color used for all short-geometry overlays.
@@ -220,6 +223,7 @@ public sealed class vCleanup : vToolsCommand
           }
           if (pass >= MaximumExportCleanupPasses)
             throw new InvalidOperationException("Cleanup deletion did not resolve the findings. Choose Ignore to export them.");
+          var previousGeometry = CaptureExportCleanupGeometry(doc, sourceIds);
           var historyRecords = overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId))
             .SelectMany(id => HistoryBreakWarning.CaptureAffectedRecords(doc, id)).ToHashSet();
           if (!HistoryBreakWarning.Confirm(doc, "vExportDXF cleanup deletion", historyRecords))
@@ -233,11 +237,12 @@ public sealed class vCleanup : vToolsCommand
             shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
           }
           doc.Objects.UnselectAll();
-          int selectedOverlaps = SelectObjects(doc, overlapTargets);
+          int deletedOverlaps = DeleteExportOverlapObjects(doc, overlapTargets, sourceIds);
           int selectedShort = SelectShortHits(doc, shortAnalysis.Hits, [], false);
-          if (selectedOverlaps + selectedShort == 0 || !RhinoApp.RunScript("_Delete", false))
+          if (deletedOverlaps + selectedShort == 0 ||
+              selectedShort > 0 && !RhinoApp.RunScript(doc.RuntimeSerialNumber, "_Delete", false))
             throw new InvalidOperationException("Cleanup findings could not be deleted.");
-          removedOverlaps += selectedOverlaps;
+          removedOverlaps += deletedOverlaps;
           removedShort += selectedShort;
           doc.Objects.UnselectAll();
           DisposeHits(shortAnalysis.Hits);
@@ -255,6 +260,9 @@ public sealed class vCleanup : vToolsCommand
           overlaps = overlapTargets.Count;
           shortCount = shortAnalysis.Hits.Count;
           Log.Write("vExportDXF", $"cleanup review delete pass={pass + 1} remainingOverlaps={overlaps} remainingShort={shortCount}");
+          if ((overlaps > 0 || shortCount > 0) &&
+              previousGeometry.SetEquals(CaptureExportCleanupGeometry(doc, sourceIds)))
+            throw new InvalidOperationException("Cleanup deletion made no geometry changes. Choose Ignore to export the remaining findings.");
         }
       }
       finally
@@ -288,6 +296,44 @@ public sealed class vCleanup : vToolsCommand
     }
   }
 
+  private static HashSet<(Guid ObjectId, uint GeometryCrc)> CaptureExportCleanupGeometry(
+    RhinoDoc doc, IEnumerable<Guid> sourceIds) => sourceIds
+      .Select(id => doc.Objects.FindId(id))
+      .Where(obj => obj is { IsDeleted: false })
+      .Select(obj => (obj!.Id, obj.Geometry.DataCRC(0)))
+      .ToHashSet();
+
+  private static int DeleteExportOverlapObjects(
+    RhinoDoc doc, IReadOnlyCollection<Guid> overlapIds, HashSet<Guid> sourceIds)
+  {
+    if (overlapIds.Count == 0) return 0;
+    int removed = 0;
+    uint undoRecord = doc.BeginUndoRecord("vExportDXF Cleanup");
+    try
+    {
+      foreach (Guid id in overlapIds)
+      {
+        if (!sourceIds.Contains(id))
+          throw new InvalidOperationException($"Overlap object {id} is outside the export scope; nothing outside that scope will be deleted.");
+        var obj = doc.Objects.FindId(id);
+        if (obj == null || obj.IsDeleted) continue;
+        if (obj.GripsOn) obj.GripsOn = false;
+        if (obj.IsLocked || obj.IsReference || !doc.Objects.Delete(id, quiet: true) ||
+            doc.Objects.FindId(id) is { IsDeleted: false })
+        {
+          Log.Write("vExportDXF", $"overlap deletion rejected source={id} layer={doc.Layers.FindIndex(obj.Attributes.LayerIndex)?.FullPath} mode={obj.Attributes.Mode}");
+          throw new InvalidOperationException($"Overlap object {id} could not be deleted; check whether it is locked or reference geometry.");
+        }
+        removed++;
+      }
+    }
+    finally
+    {
+      if (undoRecord != 0) doc.EndUndoRecord(undoRecord);
+    }
+    return removed;
+  }
+
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     DisableHighlight(doc);
@@ -295,9 +341,10 @@ public sealed class vCleanup : vToolsCommand
     var overlapSettings = vOverlaps.GetDetectionSettings();
     var overlapSegments = overlapSettings.OverlapSegments;
 
-    var selectionResult = GetScope(doc, ref overlapSegments, out var scopedIds);
+    var selectionResult = GetScope(doc, ref overlapSegments, out var scopedIds, out var partDataOnly);
     if (selectionResult != Result.Success)
       return selectionResult;
+    if (partDataOnly) return CleanOrphanPartData(doc);
     overlapSettings = (
       overlapSettings.Tolerance,
       overlapSegments);
@@ -499,9 +546,11 @@ public sealed class vCleanup : vToolsCommand
   private static Result GetScope(
     RhinoDoc doc,
     ref bool overlapSegments,
-    out HashSet<Guid> scopedIds)
+    out HashSet<Guid> scopedIds,
+    out bool partDataOnly)
   {
     scopedIds = [];
+    partDataOnly = false;
     using var getter = new GetObject();
     getter.EnableTransparentCommands(true);
     getter.SetCommandPrompt("Select curves to clean; Enter with none selected processes the document");
@@ -538,6 +587,7 @@ public sealed class vCleanup : vToolsCommand
       getter.AddOptionToggle("SimplifyCrv", ref simplifyOption);
       getter.AddOptionToggle("Overlaps", ref overlapOption);
       getter.AddOptionToggle("OverlapSegments", ref overlapSegmentsOption);
+      int orphanDataOption = getter.AddOption(OrphanPartDataOption);
 
       var result = getter.GetMultiple(0, 0);
       _threshold = thresholdOption.CurrentValue;
@@ -549,6 +599,8 @@ public sealed class vCleanup : vToolsCommand
       if (result == GetResult.Option)
       {
         var selectedOption = getter.Option();
+        if (selectedOption?.Index == orphanDataOption)
+        { partDataOnly = true; return Result.Success; }
         if (selectedOption?.Index == preselectOptionIndex)
           _preselectMode = TargetModeFromIndex(selectedOption.CurrentListOptionIndex);
         else if (selectedOption?.Index == deleteOptionIndex)
@@ -590,6 +642,119 @@ public sealed class vCleanup : vToolsCommand
 
       return Result.Cancel;
     }
+  }
+
+  private sealed record OrphanPartRecord(string Key, Dictionary<string, string> Values);
+  private sealed class OrphanPartDataUndo(List<OrphanPartRecord> records)
+  {
+    internal readonly List<OrphanPartRecord> Records = records;
+    internal bool Committed;
+  }
+
+  private static string? CanonicalPartKey(string key)
+  {
+    string? prefix = key.StartsWith("group-", StringComparison.Ordinal) ? "group-"
+      : key.StartsWith("boundary-", StringComparison.Ordinal) ? "boundary-" : null;
+    return prefix != null && Guid.TryParse(key[prefix.Length..], out var id) ? prefix + id.ToString("N") : null;
+  }
+
+  private static List<OrphanPartRecord> FindOrphanPartData(RhinoDoc doc)
+  {
+    var active = new HashSet<string>(StringComparer.Ordinal);
+    for (int index = 0; index < doc.Groups.Count; index++)
+      if (doc.Groups[index] is { IsDeleted: false } group) active.Add(PartGroupData.GroupKey(group.Id));
+    var settings = new ObjectEnumeratorSettings
+    {
+      ObjectTypeFilter = ObjectType.AnyObject, NormalObjects = true, HiddenObjects = true,
+      LockedObjects = true, ReferenceObjects = true, IdefObjects = false, DeletedObjects = false
+    };
+    foreach (var obj in doc.Objects.GetObjectList(settings)) Protect(obj);
+    foreach (var definition in doc.InstanceDefinitions)
+      if (!definition.IsDeleted)
+        foreach (var obj in definition.GetObjects() ?? []) Protect(obj);
+    void Protect(RhinoObject obj)
+    {
+      if (obj.IsDeleted) return;
+      active.Add("boundary-" + obj.Id.ToString("N"));
+      if (obj.Attributes.GetUserString(PartGroupData.SourceSettingsKey) is {} key && CanonicalPartKey(key) is {} source) active.Add(source);
+    }
+    var keys = PartDataSections.SelectMany(section => doc.Strings.GetEntryNames(section) ?? []).Distinct(StringComparer.Ordinal);
+    var records = new List<OrphanPartRecord>();
+    foreach (string key in keys)
+    {
+      string? canonical = CanonicalPartKey(key);
+      if (canonical == null || active.Contains(canonical)) continue;
+      if (canonical.StartsWith("boundary-", StringComparison.Ordinal) &&
+          Guid.TryParse(canonical["boundary-".Length..], out var id) && doc.Objects.FindId(id) is { IsDeleted: false }) continue;
+      var values = new Dictionary<string, string>(StringComparer.Ordinal);
+      foreach (string section in PartDataSections)
+        if (doc.Strings.GetValue(section, key) is {} value) values[section] = value;
+      if (values.Count > 0) records.Add(new(key, values));
+    }
+    return records;
+  }
+
+  private static Result CleanOrphanPartData(RhinoDoc doc)
+  {
+    var records = FindOrphanPartData(doc);
+    if (records.Count == 0)
+    { RhinoApp.WriteLine("vCleanup: no orphaned part data found."); return Result.Success; }
+    using var getter = new GetOption();
+    getter.SetCommandPrompt($"Found {records.Count} orphaned part records ({records.Sum(record => record.Values.Count)} entries)");
+    int delete = getter.AddOption("Delete"); getter.AddOption("Cancel"); getter.AcceptNothing(true);
+    if (getter.Get() != GetResult.Option || getter.OptionIndex() != delete) return Result.Cancel;
+    int removed = DeleteOrphanPartData(doc, records);
+    RhinoApp.WriteLine($"vCleanup: removed {removed} orphaned part records; active and referenced part data retained.");
+    return Result.Success;
+  }
+
+  private static int DeleteOrphanPartData(RhinoDoc doc, IReadOnlyList<OrphanPartRecord> requested)
+  {
+    var current = FindOrphanPartData(doc).ToDictionary(record => record.Key, StringComparer.Ordinal);
+    var records = requested.Where(record => current.TryGetValue(record.Key, out var live) &&
+      record.Values.Count == live.Values.Count && record.Values.All(pair => live.Values.TryGetValue(pair.Key, out var value) && value == pair.Value)).ToList();
+    if (records.Count == 0) return 0;
+    bool recording = doc.UndoRecordingEnabled; doc.UndoRecordingEnabled = true;
+    uint undo = doc.BeginUndoRecord(OrphanPartDataUndoName);
+    var history = new OrphanPartDataUndo(records);
+    try
+    {
+      if (!doc.AddCustomUndoEvent(OrphanPartDataUndoName, UndoOrphanPartData, history))
+        throw new InvalidOperationException("Could not record part-data cleanup for Undo.");
+      foreach (var record in records)
+        foreach (var pair in record.Values)
+        {
+          doc.Strings.Delete(pair.Key, record.Key);
+          if (doc.Strings.GetValue(pair.Key, record.Key) != null) throw new InvalidOperationException("Could not remove orphaned part data.");
+        }
+      Log.Write("vCleanup", "removed orphaned part records={0} entries={1}", records.Count, records.Sum(record => record.Values.Count));
+      history.Committed = true;
+      return records.Count;
+    }
+    catch
+    {
+      history.Committed = false;
+      foreach (var record in records)
+        foreach (var pair in record.Values) doc.Strings.SetString(pair.Key, record.Key, pair.Value);
+      throw;
+    }
+    finally { if (undo != 0) doc.EndUndoRecord(undo); doc.UndoRecordingEnabled = recording; }
+  }
+
+  private static void UndoOrphanPartData(object? sender, CustomUndoEventArgs e)
+  {
+    if (e.Document is not {} doc || e.Tag is not OrphanPartDataUndo { Committed: true } history) return;
+    var records = history.Records;
+    doc.AddCustomUndoEvent(OrphanPartDataUndoName, UndoOrphanPartData, history);
+    var eligible = doc.RedoActive ? FindOrphanPartData(doc).Select(record => record.Key).ToHashSet() : [];
+    foreach (var record in records)
+      foreach (var pair in record.Values)
+      {
+        string? current = doc.Strings.GetValue(pair.Key, record.Key);
+        if (doc.RedoActive)
+        { if (eligible.Contains(record.Key) && current == pair.Value) doc.Strings.Delete(pair.Key, record.Key); }
+        else if (current == null) doc.Strings.SetString(pair.Key, record.Key, pair.Value);
+      }
   }
 
   private static List<RhinoObject> ResolveScopeObjects(

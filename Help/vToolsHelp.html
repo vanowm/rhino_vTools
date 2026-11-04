@@ -335,6 +335,10 @@ a:active { text-decoration: none; }
 <p>Mirrors selected objects across two-point, three-point, CPlane-axis, or planar-object planes, with persistent copying and text-flipping options.</p>
 </li>
 <li class="command-option" type="number">
+<h5><a href="#vmaterialmanager">vMaterialManager</a></h5>
+<p>Organizes and edits the global material library shared by vNest.</p>
+</li>
+<li class="command-option" type="number">
 <h5><a href="#vnest">vNest</a></h5>
 <p>Manages grain-aware planar part nesting across fixed-size tables with a modeless part editor and automatic re-nesting.</p>
 </li>
@@ -668,6 +672,7 @@ a:active { text-decoration: none; }
 <p class="command-description">The vCleanup command simplifies scoped curves, finds covered overlaps, and identifies or deletes protected short segments and control-point candidates.</p>
 <div class="tutorialblock">
 <h4>Steps</h4>
+<p>Choose <code>OrphanPartData</code> at the selection prompt to run data-only cleanup without simplifying, deleting or selecting geometry. It scans saved part settings, custom fields and display names, then reports the number of orphaned part records and entries. Choose <code>Delete</code> to remove them or <code>Cancel</code> to leave them untouched. Active groups, existing boundary objects, unknown keys and records referenced by placed nesting output are retained, including hidden and locked objects and block-definition contents. Undo restores the removed entries. This action is never run automatically by normal cleanup or export optimization.</p>
 <ol>
 <li>Preselect curves or add/remove individual curves at the command prompt. Press Enter with no curve selection to process every curve object in the document.</li>
 <li>Press Enter after selection to approve and run cleanup.</li>
@@ -942,10 +947,10 @@ a:active { text-decoration: none; }
 </ol>
 <p>Role assignment rules:</p>
 <ul>
-<li>Curves are grouped by layer; each layer group is treated as one role (base, side 1, side 2).</li>
-<li>If all curves share the same layer: exactly 3 curves — roles are auto-detected by topology; more than 3 — the command prompts you to click the two side curves.</li>
+<li>Three curves are assigned geometrically. Three intentional layer groups retain their existing multi-curve role grouping.</li>
+<li>With more than three curves on one layer or across other layer arrangements, a connected open chain is analyzed automatically before asking for sides. The two end chains become the sides; smooth end segments stay together, and the intervening curves, including short chamfers, form the base. Actual connections use model tolerance rather than a broad proximity snap. Source layers are retained. Ambiguous or disconnected selections retain the manual-side fallback.</li>
 <li>A single closed curve — the command splits it at corners (≥30&#176;), highlights the pieces, and prompts you to click the base edge.</li>
-<li>Four layer groups — the group that shares an endpoint with only one other group is identified as the chamfer piece and merged into the adjacent side.</li>
+<li>If automatic chain detection is unavailable for four layer groups, the existing layer-based chamfer merge remains a fallback.</li>
 </ul>
 <ol start="2">
 <li>The command builds the four-piece boundary: base, offset front (at <code>Size</code> distance inward), and two trimmed side segments. All visible objects inside the closed boundary are collected automatically, clipping crossing curves to the facing. Containment stays at the source elevation even when the active CPlane origin is elsewhere, preserving internal side curves.</li>
@@ -1062,6 +1067,7 @@ a:active { text-decoration: none; }
 <li>For each closed boundary, all selected objects whose representative point falls inside it are collected. Original curves that defined the boundary (e.g. crossing lines whose midpoint lies outside the inner polygon) are included via source-curve tracking.</li>
 <li>Outer outlines appear progressively as boundaries are found. The completed preview shows only the retained grouping boundaries, not their nested inner outlines. Small depth differences within the boundary tolerance do not create another outline for the same part; distinct parts remain separate. Boundaries with identical member sets create only one group.</li>
 <li>Each retained boundary and its interior objects are added to a Rhino group (minimum 2 members required).</li>
+<li>Existing part groups are reused where possible, retaining their material, nesting settings, custom fields and display name. Grouping an ungrouped part transfers boundary-keyed data to the group. Flattening conflicting part records asks which part&#39;s complete data to keep; Cancel leaves all groups unchanged. Previous vGroup results outside the selection are not dissolved.</li>
 </ol>
 
 </div>
@@ -1196,7 +1202,7 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>BiTangent</h5>
-<p>hover-clicks two curves and previews the candidate tangent line while hovering the second curve.</p>
+<p>hover-clicks two curves and previews the candidate tangent line while hovering the second curve. Confirmation creates that exact displayed solution rather than switching branches when Rhino snaps to another point. A changed source or picked edge invalidates the cached solution.</p>
 </div>
 <div class="command-option">
 <h5>3Point</h5>
@@ -1500,6 +1506,28 @@ a:active { text-decoration: none; }
 <h2>See also</h2>
 <p><a href="#vhelp">vHelp</a></p>
 </article>
+<article class="help-topic" data-topic="vmaterialmanager">
+<h1>vMaterialManager</h1>
+<p class="command-description">The vMaterialManager command organizes and edits the global material library shared by vNest.</p>
+<div class="tutorialblock">
+<h4>Steps</h4>
+<ol>
+<li>Run <code>vMaterialManager</code> without selecting drawing objects. It opens the global library shared by all drawings and Rhino versions.</li>
+<li>Edit material names, Width, Gap, Grain mode, Obey grain, Deviation and 180 reversal directly in the list. Click column headings to sort, or search by material name.</li>
+<li>Use New Material, Duplicate, Delete and Revert to organize presets. Save All commits the displayed library, including existing unsaved material drafts. Reload rereads the library; Close leaves saved materials unchanged unless Save All was used.</li>
+</ol>
+
+</div>
+<h3>Notes</h3>
+<ul>
+<li>Width and Gap use the same document-unit values as vNest; Deviation is in degrees. Grain choices and defaults use the same shared validation as nesting.</li>
+<li>Renaming or deleting a library preset does not rename drawing parts or change already placed tables. They retain their stored material data. Deleted names are not silently restored by automatic drawing recovery; an explicit Save As may recreate one.</li>
+<li>Changes in another window or Rhino process are detected before saving; reload to resolve a conflict instead of overwriting newer data. Saved changes refresh open vNest material lists after any active operation finishes.</li>
+</ul>
+
+<h2>See also</h2>
+<p><a href="#vhelp">vHelp</a></p>
+</article>
 <article class="help-topic" data-topic="vnest">
 <h1>vNest</h1>
 <p class="command-description">The vNest command manages grain-aware planar part nesting across fixed-size tables with a modeless part editor and automatic re-nesting.</p>
@@ -1535,6 +1563,13 @@ a:active { text-decoration: none; }
 <h5>Gap</h5>
 <p>minimum distance between part outlines in document units; default <code>0</code> allows touching. Remembered between runs and available in the window and command-line settings. Applied to initial packing, refinement and fixed placements; does not add a table-edge margin or change source/copy outlines.</p>
 </div>
+<div class="command-option">
+<h5>CompactExtra</h5>
+<p>maximum extra occupied length per table, in document units, for straightening long strips into narrow bottom-aligned lanes. Default <code>0</code> keeps strict minimum usage. Editable globally or per table; trials preserve allowed rotations, fixed parts, clearances and table membership.</p>
+</div>
+<ul>
+<li>Inches, Feet and Yards independently toggle ruler and cursor-label rows. Label bounds stay outside the ticks, and new preview table spacing accommodates the enabled rows without changing nest geometry or moving tables when zooming. Rulers remain preview-only and are not exported.</li>
+</ul>
 <div class="command-option">
 <h5>Material</h5>
 <p>top dropdown of globally saved named presets containing Width and Gap in document units, Grain mode, Obey grain, Grain deviation in degrees and Grain turn/reversal. Older presets retain their previously inherited saved grain settings on migration; presets without deviation use zero. <code>Save As...</code> creates a new preset; <code>Save</code> overwrites the selected preset. Modified presets show <code>* (unsaved)</code> and retain their separate working values when switching presets, closing the window or restarting Rhino, without overwriting saved presets or asking to save/discard them. Reopening preserves the last preset name and its unsaved edits rather than showing Custom. Material-field reset icons appear only when different from that preset and restore its saved values. Place uses the current values without overwriting material presets. Per-part Material supports batch edits and a Default choice that follows the top material. Each material is packed independently into its own tables using its width, spacing and grain rules; explicit per-part overrides take precedence, regardless of the currently selected top material. Free rotation settings remain separate from material grain rules.</p>
@@ -1581,7 +1616,7 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>Show gap</h5>
-<p>choose <code>Off</code>, <code>Selected part</code>, or <code>All</code> in that order. The command-line <code>ShowGap</code> values are <code>Off</code>, <code>Selected</code>, and <code>All</code>. Default off; the chosen mode is remembered, including migration of older checkbox settings. Guides use one-pixel curves at each material&#39;s full Gap distance and reuse cached geometry. Convex corners use circular clearance arcs rather than extended miters, and collisions use exact minimum edge/corner distances. Existing short clearances can improve or slide without weakening another side&#39;s gap. The guide follows manual movement/rotation and gap edits without changing document or exported geometry. Stronger cached fills distinguish unflipped focus (yellow/blue), flipped focus (fuchsia/violet), unselected flipped parts (mint), original sources (cyan), and invalid parts (red/orange). Curves and labels retain their original colors. The rotation pivot is hidden when the drawing loses focus, and thin table frames draw behind parts.</p>
+<p>three-state checkbox cycling unchecked (off), indeterminate (selected parts), checked (all parts), then off. The command-line <code>ShowGap</code> values remain <code>Off</code>, <code>Selected</code>, and <code>All</code>. Default off; the chosen mode is remembered, including migration of older checkbox settings. Guides use one-pixel curves at each material&#39;s full Gap distance and reuse cached geometry. Convex corners use circular clearance arcs rather than extended miters, and collisions use exact minimum edge/corner distances. Existing short clearances can improve or slide without weakening another side&#39;s gap. The guide follows manual movement/rotation and gap edits without changing document or exported geometry. Stronger cached fills distinguish unflipped focus (yellow/blue), flipped focus (fuchsia/violet), unselected flipped parts (mint), original sources (cyan), and invalid parts (red/orange). Curves and labels retain their original colors. The rotation pivot is hidden when the drawing loses focus, and thin table frames draw behind parts.</p>
 </div>
 <ul>
 <li>Preview-only rulers run outside all four edges of every preview and placed table, regardless of focus, with inch ticks and longer foot ticks labelled in inches and yards underneath. Zoomed-out views suppress unreadable tick/label clutter. The UI status bar reports cursor X/Y in inches from the focused table&#39;s bottom-left corner: X increases rightward and Y upward, with values clamped at zero outside the table. A cursor outside the table is still tracked while aligned with either axis; matching ruler arrows show each in-range coordinate in inches and yards. The optional <code>3 ft grid</code> draws one-pixel cross-roll lines every 36 inches on all tables and is remembered between runs. Rulers, grid and cursor arrows never become drawing objects or enter exports.</li>
@@ -1638,11 +1673,13 @@ a:active { text-decoration: none; }
 <p class="command-description">The vNotches command places perpendicular notch marks along one or more selected curves at clicked positions; connected curves can be selected as a joined chain; a floating panel controls notch type, dimensions, optional label, per-curve side/reverse settings, and a multiple-notch batch adder with live hover preview.</p>
 <div class="tutorialblock">
 <h4>Steps</h4>
-<p>Use Ctrl+Shift to select individual polycurve or polyline segments, including multiple segments from the same parent. Segments have independent row identities, Side, Reverse, and Both sides settings; touching selections can still link into a chain. The parent curve supplies group membership and source metadata. The Select button supports adding and removing segments as well as whole curves. All curve-ID labels share the width of the widest displayed ID, keeping the following controls vertically aligned.</p>
+<p>Placing at an existing notch&#39;s position on the same source curve updates its geometry and metadata instead of adding a duplicate. Matching is within document tolerance and respects the curve station. New partners join the existing matching set; joining existing sets preserves all partners. With labels enabled, the current value and prefix replace all labels in the resulting match, retaining existing partner-label positions and sizes. Undo/Redo restores the old output and matching data. Locked affected output prevents the edit rather than creating an overlapping replacement.</p>
+<p>Hold Ctrl and hover over a notch or text label to highlight the removal targets in red, then click to remove them. Corresponding notches placed together across curves store a shared match ID: clicking a notch removes all matching notch strokes, independently of their labels; clicking a label removes the matching labels. The relationship survives saving and reopening the drawing. Older output without a match ID removes only its own component set. Source curves, unrelated group members and duplicates carrying copied match metadata are not pulled into another notch&#39;s removal. Ctrl-click on empty space does not place a new notch. Local Undo/Redo restores or removes the whole matched set, and changing side/reverse does not recreate deliberately removed components.</p>
+<p>Use Ctrl+Shift to select individual polycurve or polyline segments, including multiple segments from the same parent. Segments have independent row identities, Side, Reverse, and Both sides settings; touching selections can still link into a chain. The parent curve supplies group membership and source metadata. The Select button supports adding and removing segments as well as whole curves. Compact length columns align single-curve lengths with linked totals; each total spans and is centered across its linked rows. Individual linked-curve lengths and differences have separate aligned columns.</p>
 <p>Numeric fields, label text, and layer selectors show an inline reset icon only when their value differs from the built-in default. The icon restores that field without covering the spinner or dropdown arrows.</p>
 <p>Connected runs inside a linked sequence retain their junction kinks even when another linked curve is separated by a gap. A notch snapped to a kink uses the middle orientation of the two touching curves; gaps are never bridged for placement.</p>
 <ol>
-<li>Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions. For grouped curves, the outermost containing boundary in the part group determines the notch side: an inner curve (typically PLOT) faces toward the outer boundary (typically CUT1), while a curve already on that boundary faces inward. Smaller usable part groups take priority over enclosing assembly groups. Without a usable group boundary, newly selected curves use the inward side when they are closed or form an unambiguous closed boundary with visible curves at the same elevation, including endpoint connections and intersections. Each linked source segment is evaluated in its own direction. Open or ambiguous boundaries retain the existing side; Side remains manually adjustable and is preserved during reordering, linking, and reselection in the current session.</li>
+<li>Select one or more open or closed curves (preselect supported; press Enter to confirm). If all selected curves form one connected end-to-end chain, they are automatically joined and treated as a single curve with kinks preserved at segment junctions. For grouped curves, the outermost containing boundary in the part group determines the notch side: an inner curve (typically PLOT) faces toward the outer boundary (typically CUT1), while a curve already on that boundary faces inward. Smaller usable part groups take priority over enclosing assembly groups. Without a usable group boundary, newly selected curves use the inward side when they are closed or form an unambiguous closed boundary with visible curves at the same elevation, including endpoint connections and intersections. Each linked source segment is evaluated in its own direction. Open or ambiguous boundaries retain the existing side; Side remains manually adjustable and is preserved during reordering, linking, and reselection in the current session. At the start/end boundary between disconnected linked curves, the physical curve under the cursor owns the placement. Preview, confirmation and later rebuilds retain that ownership without requiring a direction change.</li>
 <li>A floating <strong>Notches</strong> panel opens. Click positions along the curve(s) to place notches.</li>
 <li>Use the disclosure chevron in each group header to collapse or restore the Notch, Multiple, and Label settings.</li>
 <li>Numeric controls and readouts display at most three decimal places without unnecessary trailing zeroes.</li>
@@ -1670,12 +1707,9 @@ a:active { text-decoration: none; }
 <p class="Dialog_Box_Title">Label group options</p>
 <ul>
 <li>The <code>Label</code> header checkbox controls label output. The remaining label settings stay editable whether output is enabled or not.</li>
-<li>Value text box: the label string placed at the notch. The next-label icon beside it scans existing document notch labels, including hidden and locked labels, and sets the value after the highest used label. When multiple numeric, alphabetic, or prefixed mixed sequences exist, choose one from the icon&#39;s dropdown. Numeric padding is preserved and alphabetic values continue from <code>Z</code> to <code>AA</code>; unrelated document text is ignored.</li>
+<li>The adjacent text fields contain a fixed prefix on the left and the label value on the right. Both fit three wide letters plus their reset control; the value keeps that width while the prefix expands with the panel. Prefix text is remembered and is placed farther from the notch, keeping the value nearest on either label side. Trailing prefix whitespace stays between the prefix and value when their order reverses. Preview and output use the same layout. Existing placements keep their own prefix during side changes and Undo/Redo. The next-label icon scans existing document notch labels, including hidden and locked labels, and sets the value after the highest used label without incorporating the fixed prefix. When multiple numeric, alphabetic, or prefixed mixed value sequences exist, choose one from the icon&#39;s dropdown. Numeric padding is preserved and alphabetic values continue from <code>Z</code> to <code>AA</code>; unrelated document text is ignored.</li>
+<li>A nonempty value automatically increments its trailing numeric or alphabetic suffix after each placement; there is no separate label Auto checkbox. An empty value creates a fixed prefix-only label without advancing, while both fields empty produce no label. Numeric values that read as a different number upside-down receive a trailing dot in previews and output; the dot does not affect numbering or next-unused scans.</li>
 </ul>
-<div class="command-option">
-<h5>AutoAdv</h5>
-<p>when enabled, increments a trailing numeric or alphabetic suffix after each placement. Numeric labels that read as a different number upside-down receive a trailing dot in previews and output; the dot does not affect numbering or next-unused scans.</p>
-</div>
 <div class="command-option">
 <h5>Side</h5>
 <p>checked prefers labels toward the curve start; unchecked prefers away from it.</p>
@@ -1727,7 +1761,7 @@ a:active { text-decoration: none; }
 <p>return to individual-curve selection without selecting groups or ending the command. Its inset checkbox defaults unchecked: unchecked selection replaces the current curve set; checked selection keeps the current curves so others can be added or removed. The setting is saved immediately. Existing placed notches remain in the document. Replacement curves inherit Side by sequence, retained curves preserve their source-specific Side and oriented start, and explicitly clicking another end intentionally defines a new start.</p>
 </div>
 <ul>
-<li>Per-curve row — use the grip at the left to drag and reorder curves. The stable, optically centered curve number appears before its enable checkbox and highlights when the row or corresponding viewport curve is hovered. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. Side and Reverse use compact borderless arrow controls. The smaller icon after Reverse toggles Both sides for that source curve, duplicating both notch geometry and label text; in a linked chain, the segment containing the placement point supplies this setting. The paired components share one placement for preview and undo. The command-line <code>BothSides</code> option toggles the curve under the cursor. Use the borderless link button between rows to join or separate placement sequences. The centered length badges use equal compact padding and <code>999.999</code> only as their minimum-width sample for individual and combined linked lengths; cumulative values include a clipping allowance, and larger values remain fully displayable in the scrollable row. The longest and shortest sequences also show transparent-background green <code>(+difference)</code> and red <code>(-difference)</code> superscripts after the applicable length.</li>
+<li>Per-curve row — use the grip at the left to drag and reorder curves. The grip highlights when the row or corresponding viewport curve is hovered; curve IDs are not displayed. During dragging, the entire source row and curve are highlighted while surrounding rows move aside; a row moved within its original linked block is relinked automatically. Side and Reverse use compact borderless arrow controls. The smaller icon after Reverse toggles Both sides for that source curve, duplicating both notch geometry and label text; in a linked chain, the segment containing the placement point supplies this setting. The paired components share one placement for preview and undo. The command-line <code>BothSides</code> option toggles the curve under the cursor. Use the borderless link button between rows to join or separate placement sequences. Length badge columns size uniformly to their longest displayed value; single-curve lengths share the left-aligned linked-total column, and linked totals span only their own rows. The longest and shortest sequences also show transparent-background green <code>(+difference)</code> and red <code>(-difference)</code> superscripts after the applicable length.</li>
 <li>Distance info: <strong>From start</strong>, <strong>From end</strong>, <strong>From previous</strong> show arc-length values rounded to three decimal places.</li>
 <li><strong>Undo</strong> / <strong>Redo</strong> buttons: step backward or forward through placements.</li>
 </ul>
@@ -1977,7 +2011,7 @@ a:active { text-decoration: none; }
 </div>
 <div class="command-option">
 <h5>Label</h5>
-<p><code>No</code> by default; <code>Yes</code> adds the same matching label between the nominal split and allowance cut edge on both mating parts, plus matching labels on both sides of the split on the retained original&#39;s <code>Reference</code> layer. Each label faces its seam as in vNotches, so corresponding labels face opposite ways. With zero Seam, labels sit inside the finished edge. Labels are grouped with their respective parts. Uses vNotches&#39; current label value, size (including auto-size), layer and auto-advance setting, with the same reversible-number display markers. Each disconnected seam section receives its own matching pair. When auto-advance is enabled, the shared sequence advances once per seam only after the complete placement succeeds; previews, cancellation and failed output consume no labels. Changes refresh an open vNotches panel, and seam labels participate in its next-unused-label scan.</p>
+<p><code>No</code> by default; <code>Yes</code> adds the same matching label between the nominal split and allowance cut edge on both mating parts, plus matching labels on both sides of the split on the retained original&#39;s <code>Reference</code> layer. Each label faces its seam as in vNotches, so corresponding labels face opposite ways. With zero Seam, labels sit inside the finished edge. Labels are grouped with their respective parts. Uses vNotches&#39; current label value, size (including auto-size), layer and automatically advancing nonempty value, with the same reversible-number display markers. Each disconnected seam section receives its own matching pair. The shared sequence advances once per seam only after the complete placement succeeds; previews, cancellation and failed output consume no labels. Changes refresh an open vNotches panel, and seam labels participate in its next-unused-label scan.</p>
 </div>
 <div class="command-option">
 <h5>StartLabel</h5>
@@ -2011,6 +2045,7 @@ a:active { text-decoration: none; }
 <ul>
 <li>Source split-line previews omit seam allowance; copied-part previews and final output include it. Curved boundaries remain curved, and interior curve details are clipped as original fragments rather than being closed artificially.</li>
 <li>Originals are retained. Each output part has its own group and preserves source detail layers. Its cutting perimeter uses the original outer-boundary layer. Each common nominal cut is included in the copied parts as a PLOT sew line. Nominal cut lines on the originals use Reference and are grouped with their source parts.</li>
+<li>Grouped annotations, dots and points are retained once, with the containing or nearest split piece, including labels positioned outside the source outline. Existing PLOT seam curves stop at nominal splits rather than extending into the added allowance. When a closed finished PLOT perimeter is available, new PLOT sew lines stop at that perimeter instead of crossing the existing outer allowance.</li>
 <li>Width, Seam, Label, Mode, Layout, Distance, and the last selected Direction are remembered in the shared configuration. Label style and sequence use the existing vNotches global/document settings. Layout planning is shared with <a href="#vshade">vShade</a>.</li>
 </ul>
 
@@ -2166,8 +2201,8 @@ a:active { text-decoration: none; }
 <h4>Steps</h4>
 <ol>
 <li>Preselect or select objects in any combination of groups and sub-groups.</li>
-<li>If the selection spans exactly one group and every member of that group is selected, the existing group is reused and any ungrouped objects are simply added to it.</li>
-<li>Otherwise, all existing group memberships (including nested sub-groups) are stripped from the selected objects, any groups left empty are deleted, and all selected objects are placed into one new group.</li>
+<li>Existing part data is captured before memberships change. If several parts have different data, choose which part&#39;s material, nesting settings, custom fields and display name the combined part should keep; Cancel leaves the drawing unchanged.</li>
+<li>The chosen part group is reused when all its members are included. Otherwise an exact existing group is reused or a new group is created, and the chosen data is transferred to its persistent identity. Other selected memberships are flattened and groups left empty are deleted. Groups and data outside the selection remain untouched.</li>
 </ol>
 
 </div>
@@ -2243,6 +2278,7 @@ a:active { text-decoration: none; }
 <ol>
 <li>Run <code>vSelSame</code> with or without preselection. Preselected objects supply reference values; Pick Reference changes the reference objects without losing edited filters. Properties+ offers the same command through its SelSame icon when vTools is available.</li>
 <li>Check relevant geometry, layer, object name, display color, individual attributes, part name, vNest settings and custom fields. Add Filter offers supported properties even when they are absent from the reference, plus arbitrary Attribute User Text, Geometry User Text and Part Custom Field keys.</li>
+<li>Tolerance controls absolute dimension matching in model units and refreshes the preview immediately. It initially follows document absolute tolerance, remembers custom values, and resets to the default with its inline reset icon. Zero permits only numerical roundoff. Counts, IDs, text and angular comparisons keep their own matching rules.</li>
 <li>Each value field offers a checklist with Select All and Clear. Edit Values or the row&#39;s ellipsis button lets you add, remove or type values; custom-field keys are editable too. The minus button removes a condition. These changes edit search filters only, never object data.</li>
 <li>Checked criteria combine in a single live preview. Pan and zoom remain available in the Rhino viewport while the filter window is open. Unchanged criteria must match the same reference object; explicitly edited criteria match any of their enabled values independently of the old reference. Unchecked and hovered rows do not affect highlighting.</li>
 <li>Select replaces the selection with visible, unlocked matches. Add to Selection retains existing selections. Cancel leaves the selection unchanged.</li>
@@ -2267,7 +2303,7 @@ a:active { text-decoration: none; }
 <p>When opposing allowances overlap across a narrow dart, the cutting envelope closes over it while the original PLOT dart stays intact. Per-edge allowances remain attached to the finished part, including swallowed dart flanks, so later edge edits can rebuild the envelope without losing neighboring seam values.</p>
 <ol start="4">
 <li><strong>Seam=0</strong> converts the original finished curve to the cutting layer without adding a coincident duplicate. An individual joined-curve section is detached first, leaving the exact remainder on its original layer. Converted edges remain identifiable as part of the finished boundary; assigning a positive seam later returns them to their original finished layer. Zero also supports a standalone planar open curve.</li>
-<li>Output remains grouped with its source part. Subsequent edits replace existing allowances rather than adding duplicates, including source-object replacements that retain seam metadata. A stale geometry profile does not discard the part&#39;s allowance ownership; ambiguous copies sharing a group are rejected instead of replacing another part&#39;s seam. Invalid results and failed source conversions restore the prior geometry. While the command remains active, Ctrl+Z undoes one successful click and Ctrl+Y or Ctrl+Shift+Z redoes it, restoring source splits, layers, allowance geometry, groups and metadata together. A new successful click clears the local redo history. Enter or Esc at selection ends the command; normal Rhino Undo then applies to the command as a whole.</li>
+<li>Output remains grouped with its source part. Subsequent edits replace existing allowances rather than adding duplicates, including source-object replacements that retain seam metadata. A stale geometry profile does not discard the part&#39;s allowance ownership. Edge mode can recover a uniform saved allowance after section lengths/counts change, without first rebuilding in Part mode; ambiguous mixed profiles and manually edited envelopes still require Part mode rather than guessing. Ambiguous copies sharing a group are rejected instead of replacing another part&#39;s seam. Invalid results and failed source conversions restore the prior geometry. While the command remains active, Ctrl+Z undoes one successful click and Ctrl+Y or Ctrl+Shift+Z redoes it, restoring source splits, layers, allowance geometry, groups and metadata together. A new successful click clears the local redo history. Enter or Esc at selection ends the command; normal Rhino Undo then applies to the command as a whole.</li>
 </ol>
 
 </div>
@@ -2712,7 +2748,7 @@ a:active { text-decoration: none; }
 </div>
 <h3>Notes</h3>
 <ul>
-<li>Background gumball updates preserve the help shown for the current command, including other toggle commands. Updates run under Rhino&#39;s native callback command, with coordinate input nested in a ScriptRunner, so the internal helper is not dispatched as the top-level Repeat command. Customized never-repeat lists retain their existing entries and exclude both internal gumball command boundaries.</li>
+<li>Background gumball updates run transparently, without the ordinary callback wrapper that hides Rhino&#39;s gumball. Coordinate input stays inside a non-repeatable ScriptRunner. Active customized never-repeat lists temporarily exclude the internal relocation commands and are restored afterward; default repeat settings remain unchanged. Hidden gumballs are left alone, and failed updates are not retried until their selection or frame changes.</li>
 </ul>
 
 <h2>See also</h2>

@@ -1326,20 +1326,30 @@ public sealed class vSeam : vToolsCommand
     (index, distance: Distance(edge, ((Curve)root.Geometry).PointAtStart), start: edge.PointAtStart.DistanceTo(((Curve)root.Geometry).PointAtStart)))
     .OrderBy(item => item.distance <= RhinoMath.ZeroTolerance ? 0 : item.distance).ThenBy(item => item.start).First().index;
 
-  private static bool ReadProfile(RhinoDoc doc, Part part, double[] distances)
+  private static bool ReadProfile(RhinoDoc doc, Part part, double[] distances, out bool recoveredUniform)
   {
+    recoveredUniform = false;
     var sources = part.Sources.Select(source => doc.Objects.FindId(source.Id)).OfType<RhinoObject>().ToArray();
     var roots = sources.Where(obj => obj.Attributes.GetUserString(ProfileRootKey) == "1").ToArray();
     if (roots.Length != 1) return false;
     try
     {
       var profile = System.Text.Json.JsonSerializer.Deserialize<AllowanceProfile>(roots[0].Attributes.GetUserString(ProfileKey) ?? "null");
-      if (profile?.Lengths == null || profile.Distances == null || profile.Lengths.Length != part.Edges.Count || profile.Distances.Length != part.Edges.Count ||
+      if (profile?.Lengths == null || profile.Distances == null || profile.Lengths.Length == 0 || profile.Lengths.Length != profile.Distances.Length ||
+        profile.Lengths.Any(value => !double.IsFinite(value) || value <= 0) ||
         profile.Distances.Any(value => !double.IsFinite(value) || value < 0)) return false;
       int anchor = ProfileAnchor(part, roots[0]);
-      for (int i = 0; i < part.Edges.Count; i++)
-        if (!double.IsFinite(profile.Lengths[i]) || Math.Abs(profile.Lengths[i] - part.Edges[(i + anchor) % part.Edges.Count].GetLength()) > doc.ModelAbsoluteTolerance * BoundaryToleranceFactor)
-          return false;
+      bool matches = profile.Lengths.Length == part.Edges.Count && Enumerable.Range(0, part.Edges.Count).All(i =>
+        Math.Abs(profile.Lengths[i] - part.Edges[(i + anchor) % part.Edges.Count].GetLength()) <= doc.ModelAbsoluteTolerance * BoundaryToleranceFactor);
+      if (!matches)
+      {
+        // A uniform assignment survives section splits/merges without guessing which edge had which allowance.
+        if (profile.Distances.Any(value => value != profile.Distances[0])) return false;
+        Array.Fill(distances, profile.Distances[0]);
+        recoveredUniform = true;
+        Log.Write(Section, $"Recovered uniform seam profile owner={part.Owner} allowance={profile.Distances[0]:G17} savedSections={profile.Lengths.Length} currentSections={part.Edges.Count}");
+        return true;
+      }
       for (int i = 0; i < part.Edges.Count; i++) distances[(i + anchor) % part.Edges.Count] = profile.Distances[i];
       return true;
     }
@@ -1382,7 +1392,7 @@ public sealed class vSeam : vToolsCommand
 
   private static void ReadExisting(RhinoDoc doc, Part part, Existing state)
   {
-    bool profile = ReadProfile(doc, part, state.Distances);
+    bool profile = ReadProfile(doc, part, state.Distances, out bool recoveredUniform);
     if (_settings.Type == SeamType.Edge)
       for (int edge = 0; edge < part.Edges.Count; edge++)
         if (part.Sources.Select(source => doc.Objects.FindId(source.Id)).Any(obj => obj != null && IsFinishedCut(obj) &&
@@ -1442,7 +1452,7 @@ public sealed class vSeam : vToolsCommand
       if (obj.Attributes.GetUserString(RoleKey) == "envelope")
       {
         if (!profile) throw new InvalidOperationException("The filled seam's finished sections changed; use Part mode to rebuild it.");
-        if (sameSource && obj.Attributes.GetUserString(GeometryStampKey) != obj.Geometry.DataCRC(0).ToString("X8", CultureInfo.InvariantCulture))
+        if ((sameSource || recoveredUniform) && obj.Attributes.GetUserString(GeometryStampKey) != obj.Geometry.DataCRC(0).ToString("X8", CultureInfo.InvariantCulture))
           throw new InvalidOperationException("The filled seam was edited manually; use Part mode to rebuild it.");
       }
       if (obj.Attributes.GetUserString(RoleKey) == "edge")

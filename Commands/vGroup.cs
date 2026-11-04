@@ -35,7 +35,6 @@ public sealed class vGroup : vToolsCommand
   private const string LogName = "vGroup";
   private const string OptionsSectionName = "vGroup";
 
-  private static readonly HashSet<int> _ourGroupIndices = new();
   private static double _boundaryTolerance = ConfiguredDefaultStoredBoundaryTolerance;
   private static bool _flattenGroups = ConfiguredDefaultFlattenGroups;
 
@@ -84,8 +83,8 @@ public sealed class vGroup : vToolsCommand
       return Result.Nothing;
     }
 
-    ClearPreviousGroups(doc);
     var groupCount = CreateGroups(doc, selection, solve);
+    if (groupCount < 0) return Result.Cancel;
 
     if (groupCount == 0)
       RhinoApp.WriteLine("vGroup: no enclosed objects found.");
@@ -870,64 +869,32 @@ public sealed class vGroup : vToolsCommand
 
   private static int CreateGroups(RhinoDoc doc, SelectionData selection, BoundarySolve solve)
   {
-    var groupCount = 0;
-    foreach (var i in solve.GroupBoundaryIndices)
+    var data = PartGroupData.Capture(doc, selection.AllIds);
+    var plans = new List<(int Boundary, PartGroupData.Snapshot? Source)>();
+    foreach (int index in solve.GroupBoundaryIndices)
     {
+      var candidates = PartGroupData.Candidates(data, solve.BoundaryMembers[index]);
+      PartGroupData.Snapshot? source = null;
+      if ((_flattenGroups || candidates.Length <= 1) && !PartGroupData.TryChooseSource(doc, candidates, out source)) return -1;
+      plans.Add((index, source));
+    }
+    var groupCount = 0;
+    foreach (var plan in plans)
+    {
+      int i = plan.Boundary;
       var members = solve.BoundaryMembers[i];
 
       Log.Write(LogName, $"  boundary[{i}] members={members.Count} -> group");
-      if (_flattenGroups)
-        RemoveExistingGroupMemberships(doc, members);
-      var groupIndex = doc.Groups.Add();
-      if (groupIndex < 0)
+      if (!PartGroupData.ApplyGroup(doc, members, plan.Source, _flattenGroups, out var groupIndex))
       {
-        Log.Write(LogName, $"  boundary[{i}] doc.Groups.Add() failed");
+        Log.Write(LogName, $"  boundary[{i}] grouping failed; memberships retained");
         continue;
       }
-
-      var committed = 0;
-      foreach (var id in members)
-      {
-        var obj = doc.Objects.FindId(id);
-        if (obj == null) continue;
-        var attr = obj.Attributes.Duplicate();
-        attr.AddToGroup(groupIndex);
-        if (doc.Objects.ModifyAttributes(obj, attr, quiet: true))
-          committed++;
-        else
-          Log.Write(LogName, $"  boundary[{i}] ModifyAttributes failed for {id}");
-      }
-
-      if (committed == 0)
-      {
-        doc.Groups.Delete(groupIndex);
-        Log.Write(LogName, $"  boundary[{i}] no members committed — group deleted");
-        continue;
-      }
-
-      _ourGroupIndices.Add(groupIndex);
       groupCount++;
-      Log.Write(LogName, $"  boundary[{i}] group created index={groupIndex} committed={committed}/{members.Count}");
+      Log.Write(LogName, $"  boundary[{i}] group index={groupIndex} members={members.Count}");
     }
 
     return groupCount;
-  }
-
-  private static void RemoveExistingGroupMemberships(RhinoDoc doc, IEnumerable<Guid> ids)
-  {
-    var removed = 0;
-    foreach (var id in ids)
-    {
-      var obj = doc.Objects.FindId(id);
-      if (obj == null) continue;
-      var groups = obj.Attributes.GetGroupList();
-      if (groups == null || groups.Length == 0) continue;
-      var attr = obj.Attributes.Duplicate();
-      attr.RemoveFromAllGroups();
-      if (doc.Objects.ModifyAttributes(obj, attr, quiet: true))
-        removed++;
-    }
-    Log.Write(LogName, $"  FlattenGroups: stripped group memberships from {removed} object(s)");
   }
 
   private static void LoadPersistedOptions()
@@ -942,36 +909,6 @@ public sealed class vGroup : vToolsCommand
   private static void SavePersistedOptions()
   {
     ToolsOptionStore.Update(OptionsSectionName, section => section["flattenGroups"] = _flattenGroups);
-  }
-
-  private static void ClearPreviousGroups(RhinoDoc doc)
-  {
-    if (_ourGroupIndices.Count == 0)
-      return;
-
-    foreach (RhinoObject obj in doc.Objects)
-    {
-      var groups = obj.Attributes.GetGroupList();
-      if (groups == null || groups.Length == 0)
-        continue;
-
-      var dirty = false;
-      foreach (var groupIndex in groups)
-      {
-        if (!_ourGroupIndices.Contains(groupIndex))
-          continue;
-
-        obj.Attributes.RemoveFromGroup(groupIndex);
-        dirty = true;
-      }
-
-      if (dirty)
-        obj.CommitChanges();
-    }
-
-    foreach (var index in _ourGroupIndices)
-      doc.Groups.Delete(index);
-    _ourGroupIndices.Clear();
   }
 
   // Returns true if any part of the object is inside or on the boundary.

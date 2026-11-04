@@ -170,7 +170,6 @@
     "label_layer": "PLOT",
     "label_offset": 0.125,
     "label_offset_y": 0.0,
-    "label_auto_adv": true,
     "label_side_flip": false,
     "keep_selection": false,
     "multiple_start_offset": 2.0,

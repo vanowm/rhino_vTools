@@ -21,7 +21,10 @@ internal static class PlanarPartSelection
   private const bool DefaultRequirePlanarDetails = true; // true requires all part curves to share the outline plane for splitting; false lets nesting carry original off-plane details.
   private const string ReferenceLayerName = "Reference"; // Leaf layer excluded from loose nesting perimeter candidates when non-reference closed curves exist.
 
-  internal sealed record Item(Guid Id, GeometryBase Geometry, ObjectAttributes Attributes, Color Color);
+  internal sealed record Item(Guid Id, GeometryBase Geometry, ObjectAttributes Attributes, Color Color)
+  {
+    internal string LayerPath { get; init; } = "";
+  }
   internal sealed class Part(Curve outline, Plane plane, ObjectAttributes attributes, List<Item> items) : IDisposable
   {
     internal Curve Outline { get; private set; } = outline;
@@ -152,7 +155,8 @@ internal static class PlanarPartSelection
         if(!requirePlanarDetails)
           foreach(var detail in objects.Where(obj=>obj.Geometry is Curve curve&&!curve.IsInPlane(region.Plane,tolerance)))
             Log.Write("PartSelection","nest detail retained off plane id={0} layer={1}",detail.Id,doc.Layers[detail.Attributes.LayerIndex].FullPath);
-        var items=objects.Select(obj=>new Item(obj.Id,obj.Geometry.Duplicate(),obj.Attributes.Duplicate(),obj.Attributes.DrawColor(doc))).ToList();
+        var items=objects.Select(obj=>new Item(obj.Id,obj.Geometry.Duplicate(),obj.Attributes.Duplicate(),obj.Attributes.DrawColor(doc))
+          {LayerPath=doc.Layers[obj.Attributes.LayerIndex].FullPath}).ToList();
         parts.Add(new Part(region.Outline.DuplicateCurve(),region.Plane,boundary.Attributes.Duplicate(),items));
       }
       if(parts.Sum(part=>part.Items.Count)!=selected.Count)

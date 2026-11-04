@@ -757,6 +757,8 @@ namespace vTools.Commands
         getPoint.SetCommandPrompt(
           layerSession.DecoratePrompt(doc, "Start of line"));
         getPoint.ClearCommandOptions();
+        // Keep shared options in the same order in both point prompts so Rhino's
+        // automatic shortcut allocation is not displaced by endpoint-only options.
         var chainModeOptionIndex = getPoint.AddOptionList(
           "Mode", ChainModeValues, chainModeIndex);
         var constraintSpaceOption = getPoint.AddOptionList("ConstraintSpace", ConstraintSpaceValues, _constraintSpace);
@@ -2213,6 +2215,7 @@ namespace vTools.Commands
           getPoint.ClearCommandOptions();
           var idxChainMode = getPoint.AddOptionList(
             "Mode", ChainModeValues, chainModeIndex);
+          var idxConstraintSpace = getPoint.AddOptionList("ConstraintSpace", ConstraintSpaceValues, _constraintSpace);
           getPoint.AddOptionToggle("BothSides", ref bothSides);
           var allowDirectionMode = !startDirection.HasValue;
           var allowEndDirectionAnchor = !startDirection.HasValue;
@@ -2227,23 +2230,6 @@ namespace vTools.Commands
           var idxBisector = allowDirectionMode ? getPoint.AddOption("Bisector") : -1;
           var idxPerp = getPoint.AddOption("Perpendicular");
           var idxTan = getPoint.AddOption("Tangent");
-          var idxPerpNear = getPoint.AddOption("PerpNear");
-          var idxTanNear = getPoint.AddOption("TanNear");
-          var idxExtension = allowEndDirectionAnchor ? getPoint.AddOption("Extension") : -1;
-          var idxParallel = allowDirectionMode ? getPoint.AddOption("Parallel") : -1;
-          var idxPriority = mode == "auto"
-            ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
-            : -1;
-          var idxConstraintSpace = getPoint.AddOptionList("ConstraintSpace", ConstraintSpaceValues, _constraintSpace);
-          var idxFromPoint = startConstraint?.Kind == EndpointConstraintKind.Perpendicular
-            ? getPoint.AddOption("FromPoint")
-            : -1;
-          var idxFromFirstPoint = originalStartConstraint.HasValue &&
-                                  (!fromFirstPoint || fromPointActive)
-            ? getPoint.AddOption("FromFirstPoint")
-            : -1;
-          var idxAuto = getPoint.AddOption("Auto");
-          var idxProjectTo = getPoint.AddOption("ProjectTo");
           var idxThreePoint = chainModeIndex == ModeSingle &&
                               !bothSides.CurrentValue &&
                               !startConstraint.HasValue &&
@@ -2254,13 +2240,29 @@ namespace vTools.Commands
                               lengthOption.CurrentValue <= 0.0
             ? getPoint.AddOption("3Point")
             : -1;
+          var idxExtension = allowEndDirectionAnchor ? getPoint.AddOption("Extension") : -1;
+          var idxParallel = allowDirectionMode ? getPoint.AddOption("Parallel") : -1;
+          var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
+          var idxPerpNear = getPoint.AddOption("PerpNear");
+          var idxTanNear = getPoint.AddOption("TanNear");
+          var idxPriority = mode == "auto"
+            ? getPoint.AddOptionList("Priority", PriorityValues, priorityIndex)
+            : -1;
+          var idxFromPoint = startConstraint?.Kind == EndpointConstraintKind.Perpendicular
+            ? getPoint.AddOption("FromPoint")
+            : -1;
+          var idxFromFirstPoint = originalStartConstraint.HasValue &&
+                                  (!fromFirstPoint || fromPointActive)
+            ? getPoint.AddOption("FromFirstPoint")
+            : -1;
+          var idxAuto = getPoint.AddOption("Auto");
+          var idxProjectTo = getPoint.AddOption("ProjectTo");
           if (allowAngleControls)
             getPoint.AddOptionToggle("AngleRef", ref angleRelative);
           var idxAngle = allowAngleControls
             ? getPoint.AddOptionDouble("Angle", ref angleOption)
             : -1;
           var idxLength = getPoint.AddOptionDouble("Length", ref lengthOption);
-          var idxLayer = getPoint.AddOption("Layer", layerSession.OptionLayerName);
           var idxPersistConstraint = getPoint.AddOption(
             "PersistConstraint",
             persistConstraint.CurrentValue ? "Yes" : "No",
@@ -3616,6 +3618,7 @@ namespace vTools.Commands
         EndpointConstraintKind.Tangent);
       if (first == null)
         return false;
+      using var firstCurve = first.Value.Curve;
 
       using var firstHighlight = TemporaryGeometryHighlight.Create(
         doc,
@@ -3628,19 +3631,43 @@ namespace vTools.Commands
         first.Value);
       if (second == null)
         return false;
+      using var secondCurve = second.Value.Curve;
 
       var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
-      if (!TryFindBiTangent(first.Value.Curve, second.Value.Curve,
-                           first.Value.PickPoint, second.Value.PickPoint,
-                           cplane, out var line))
+      if (!TryResolveBiTangent(first.Value, second.Value, cplane, out var line))
       {
         RhinoApp.WriteLine("vLine: no bitangent solution found for the selected curves.");
         return false;
       }
 
-      _ = doc.Objects.AddLine(line, layerSession.CreateAttributes(doc));
+      var id = doc.Objects.AddLine(line, layerSession.CreateAttributes(doc));
       doc.Views.Redraw();
+      return id != Guid.Empty;
+    }
+
+    private static bool TryResolveBiTangent(PickedCurve first, PickedCurve second,
+      Plane cplane, out Line line)
+    {
+      if (second.BiTangentPreview is not { } preview)
+        return TryFindBiTangent(first.Curve, second.Curve, first.PickPoint,
+          second.PickPoint, cplane, out line);
+      line = Line.Unset;
+      if (preview.First.ObjectId != first.ObjectId ||
+          !preview.First.ComponentIndex.Equals(first.ComponentIndex) ||
+          preview.Second.ObjectId != second.ObjectId ||
+          !preview.Second.ComponentIndex.Equals(second.ComponentIndex) ||
+          preview.FirstCrc != BiTangentCurveCrc(first.Curve) ||
+          preview.SecondCrc != BiTangentCurveCrc(second.Curve) || !preview.Line.IsValid)
+        return false;
+      line = preview.Line;
       return true;
+    }
+
+    private static uint BiTangentCurveCrc(Curve curve)
+    {
+      // Edge proxies and their picked standalone copies need the same geometry fingerprint.
+      using var standalone = curve is BrepEdge ? curve.DuplicateCurve() : null;
+      return (standalone ?? curve).DataCRC(0);
     }
 
     private static PickedCurve? PickCurveWithPoint(
@@ -3668,7 +3695,8 @@ namespace vTools.Commands
       System.Drawing.Point hoverHitWindow = System.Drawing.Point.Empty;
       var hoverLogged = false;
       Guid hoverLoggedId = Guid.Empty;
-      Line? biTangentPreview = null;
+      BiTangentPreviewSnapshot? biTangentPreview = null;
+      BiTangentPreviewSnapshot? displayedBiTangent = null;
       getPoint.MouseMove += (_, e) =>
       {
         var nextPick = PickCurveAtScreenPoint(
@@ -3704,7 +3732,10 @@ namespace vTools.Commands
                 e.Viewport.ConstructionPlane(),
                 out var previewLine))
           {
-            biTangentPreview = previewLine;
+            biTangentPreview = new(previewLine,
+              new ScreenCurvePick(biTangentFrom.Value.ObjectId,
+                biTangentFrom.Value.ComponentIndex, biTangentFrom.Value.PickPoint),
+              hovered.Value, BiTangentCurveCrc(biTangentFrom.Value.Curve), BiTangentCurveCrc(secondCurve));
           }
         }
 
@@ -3720,6 +3751,7 @@ namespace vTools.Commands
       };
       getPoint.DynamicDraw += (_, e) =>
       {
+        displayedBiTangent = null;
         if (layerSession != null)
           DrawHiddenLayerWarning(e, doc, layerSession);
 
@@ -3736,14 +3768,19 @@ namespace vTools.Commands
             2);
         }
 
-        if (biTangentPreview.HasValue)
+        if (biTangentPreview is { } preview && biTangentFrom.HasValue && curve != null &&
+            TryResolveBiTangent(biTangentFrom.Value,
+              new PickedCurve(curve, hovered.Value.PickPoint, hovered.Value.ObjectId,
+                hovered.Value.ComponentIndex) { BiTangentPreview = preview },
+              e.Viewport.ConstructionPlane(), out var previewLine))
         {
           var previewColor = layerSession?.ResolveColor(doc) ?? Color.Cyan;
-          PreviewDisplay.DrawLine(e.Display, biTangentPreview.Value, previewColor);
+          PreviewDisplay.DrawLine(e.Display, previewLine, previewColor);
           e.Display.DrawDottedLine(
-            biTangentPreview.Value.From,
-            biTangentPreview.Value.To,
+            previewLine.From,
+            previewLine.To,
             previewColor);
+          displayedBiTangent = preview;
         }
       };
 
@@ -3756,7 +3793,8 @@ namespace vTools.Commands
         return null;
 
       Curve? pickedCurve = null;
-      var pickedPoint = getPoint.Point();  // always use Rhino's snapped point so the visual marker matches
+      var pickedPoint = biTangentFrom.HasValue && hovered.HasValue
+        ? hovered.Value.PickPoint : getPoint.Point();
       var pickedObjectId = Guid.Empty;
       var pickedComponentIndex = ComponentIndex.Unset;
       if (hovered.HasValue)
@@ -3792,7 +3830,7 @@ namespace vTools.Commands
         duplicate,
         pickedPoint,
         pickedObjectId,
-        pickedComponentIndex);
+        pickedComponentIndex) { BiTangentPreview = displayedBiTangent };
     }
 
     private static ScreenCurvePick? PickCurveAtScreenPoint(
@@ -5194,7 +5232,13 @@ namespace vTools.Commands
       Curve Curve,
       Point3d PickPoint,
       Guid ObjectId,
-      ComponentIndex ComponentIndex);
+      ComponentIndex ComponentIndex)
+    {
+      internal BiTangentPreviewSnapshot? BiTangentPreview { get; init; }
+    }
+
+    private sealed record BiTangentPreviewSnapshot(Line Line, ScreenCurvePick First,
+      ScreenCurvePick Second, uint FirstCrc, uint SecondCrc);
 
     private enum EndpointConstraintKind
     {

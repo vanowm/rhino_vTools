@@ -23,6 +23,15 @@ public sealed class vSelSame : vToolsCommand
   private static readonly Size InitialDialogSize = new(560, 570); // Initial filter-window dimensions in logical pixels.
   private static readonly Size MinimumDialogSize = new(430, 280); // Smallest filter-window dimensions in logical pixels.
   private static readonly Size FilterEditorSize = new(480, 350); // Initial condition-editor dimensions in logical pixels.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultMatchTolerance", "Absolute dimension-matching tolerance in model units; -1 uses document absolute tolerance, zero is roundoff-only matching.")] private const double DefaultMatchTolerance = -1; // -1 follows document tolerance; zero or greater overrides numeric dimension matching in model units.
+  private static readonly double ConfiguredDefaultMatchTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultMatchTolerance", DefaultMatchTolerance); // Saved-default fallback; -1 follows each document.
+  private const double MatchToleranceIncrement = 0.0001; // Model-unit step for the matching-tolerance spinner; positive.
+  private const double MinimumMatchTolerance = 0; // Minimum absolute dimension tolerance in model units; zero allows only numerical roundoff.
+  private const double MaximumMatchTolerance = double.MaxValue; // Largest finite absolute dimension tolerance in model units.
+  private const int MatchToleranceDecimalPlaces = 8; // Maximum decimal digits shown and entered for matching tolerance; zero through fifteen.
+  private const int MatchToleranceInputWidth = 124; // Logical-pixel width including the reset overlay and spinner arrows.
+  private const string SettingsSection = "vSelSame"; // Global saved matching preferences; does not modify document geometry tolerance.
+  private const string MatchToleranceKey = "matchTolerance"; // Saved absolute matching tolerance; -1 means document default.
   private const int IconButtonWidth = 26; // Fixed logical-pixel width for condition edit/remove and value add/remove controls.
   [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultAddToSelection", "true adds matches to the existing selection; false replaces it when confirmed.")] private const bool DefaultAddToSelection = false; // true adds matches to the existing selection; false replaces it when confirmed.
 
@@ -113,6 +122,19 @@ public sealed class vSelSame : vToolsCommand
   private const string SourceSettingsKey = "vNest.sourceSettings"; // Original part identity attached to placed geometry.
 
   public override string EnglishName => "vSelSame";
+
+  private static double ResolveMatchTolerance(RhinoDoc doc, double value) =>
+    double.IsFinite(value) && value >= 0 ? value : Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+
+  private static double LoadMatchTolerance(RhinoDoc doc) => ToolsOptionStore.Read(SettingsSection,
+    section => ResolveMatchTolerance(doc, ToolsOptionStore.TryGetDouble(section, MatchToleranceKey, out var saved)
+      ? saved : ConfiguredDefaultMatchTolerance));
+
+  private static void SaveMatchTolerance(double value)
+  {
+    if (!ToolsOptionStore.Update(SettingsSection, section => section[MatchToleranceKey] = value))
+      Log.Write("SelSame", $"Could not save matching tolerance: {ToolsOptionStore.LastError}");
+  }
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
@@ -556,7 +578,7 @@ private static class SimilarObjectMatcher
       _referenceChoices = references.Select(value =>
       {
         if (value == null) return -1;
-        int index = values.FindIndex(existing => Equal(existing, value));
+        int index = values.FindIndex(existing => SameValue(existing, value));
         if (index >= 0) return index;
         values.Add(value);
         return values.Count - 1;
@@ -582,7 +604,7 @@ private static class SimilarObjectMatcher
         {
           var value = _values.FirstOrDefault(existing => existing.Display == text || existing.Text == text)
             ?? _parse(text) ?? throw new ArgumentException($"Invalid value: {text}");
-          if (!values.Any(existing => Equal(existing, value))) values.Add(value);
+          if (!values.Any(existing => SameValue(existing, value))) values.Add(value);
         }
       }
       catch (Exception ex) { error = ex.Message; return false; }
@@ -601,7 +623,13 @@ private static class SimilarObjectMatcher
           : selected.Length == Values.Count ? $"All ({selected.Length})" : $"{selected.Length} of {Values.Count}";
       }
     }
-    internal double Tolerance { get; }
+    internal double Tolerance { get; private set; }
+    internal bool UsesMatchTolerance => Key is "length" or "radius" or "diameter" or "width" or "height"
+      or "major" or "minor" or "text-height" or "nest:X" or "nest:Y" or "nest:Recipe:Width" or "nest:Recipe:Gap";
+    internal void SetMatchTolerance(double tolerance)
+    {
+      if (UsesMatchTolerance) Tolerance = Math.Max(tolerance, RhinoMath.ZeroTolerance);
+    }
     internal int Cost { get; }
 
     internal bool Matches(RhinoObject obj, int reference)
@@ -626,6 +654,10 @@ private static class SimilarObjectMatcher
 
     private bool Equal(Value first, Value second) => first.Number.HasValue && second.Number.HasValue
       ? Math.Abs(first.Number.Value - second.Number.Value) <= Tolerance
+      : first.Number == null && second.Number == null && string.Equals(first.Text, second.Text, StringComparison.Ordinal);
+
+    private static bool SameValue(Value first, Value second) => first.Number.HasValue && second.Number.HasValue
+      ? first.Number.Value == second.Number.Value
       : first.Number == null && second.Number == null && string.Equals(first.Text, second.Text, StringComparison.Ordinal);
   }
 
@@ -930,6 +962,9 @@ private sealed class SelSameDialog : Dialog<bool>
   private readonly Button _select = new() { Text = "Select", Enabled = false };
   private readonly Button _add = new() { Text = "Add to Selection", Enabled = false };
   private readonly StackLayout _rows = new() { Spacing = RowSpacing, HorizontalContentAlignment = HorizontalAlignment.Stretch };
+  private readonly NumericStepper _matchTolerance;
+  private readonly Panel _matchToleranceHost;
+  private readonly FieldResetOverlay _matchToleranceReset;
   private IReadOnlyList<RhinoObject>? _candidates;
   private bool _stopped;
 
@@ -942,7 +977,30 @@ private sealed class SelSameDialog : Dialog<bool>
     Action<IReadOnlyList<RhinoObject>> preview)
   {
     _doc = doc; _references = references; _referenceCount = references.Count; _preview = preview;
+    _matchTolerance = new NumericStepper
+    {
+      MinValue = MinimumMatchTolerance, MaxValue = MaximumMatchTolerance, Increment = MatchToleranceIncrement,
+      DecimalPlaces = 0, MaximumDecimalPlaces = MatchToleranceDecimalPlaces,
+      CultureInfo = CultureInfo.InvariantCulture, Width = MatchToleranceInputWidth,
+      ToolTip = "Absolute matching tolerance in model units for dimensions. Counts, IDs, text and angular rules are unchanged.",
+      Value = LoadMatchTolerance(doc),
+    };
+    _matchToleranceHost = new Panel { Content = _matchTolerance, Width = MatchToleranceInputWidth };
     _catalog = SimilarObjectMatcher.CreateCriteria(doc, references, typeName, rectangleSize, true);
+    double defaultTolerance = ResolveMatchTolerance(doc, ConfiguredDefaultMatchTolerance);
+    _matchToleranceReset = new FieldResetOverlay(_matchToleranceHost,
+      () => FieldResetOverlay.NumberChanged(_matchTolerance.Value, defaultTolerance, MatchToleranceDecimalPlaces),
+      () => { _matchTolerance.Value = defaultTolerance; SaveMatchTolerance(ConfiguredDefaultMatchTolerance); },
+      "Reset matching tolerance to its default");
+    _matchTolerance.ValueChanged += (_, _) =>
+    {
+      foreach (var criterion in _catalog.Concat(_checks.Select(item => item.Criterion)).Distinct())
+        criterion.SetMatchTolerance(_matchTolerance.Value);
+      SaveMatchTolerance(_matchTolerance.Value);
+      _matchToleranceReset.Refresh();
+      QueuePreview();
+    };
+    foreach (var criterion in _catalog) criterion.SetMatchTolerance(_matchTolerance.Value);
     Title = "SelSame";
     Resizable = true;
     ClientSize = InitialDialogSize;
@@ -968,7 +1026,8 @@ private sealed class SelSameDialog : Dialog<bool>
       Rows =
       {
         new TableRow(new StackLayout { Orientation = Orientation.Horizontal, Spacing = ButtonSpacing,
-          Items = { addFilter, reference } }),
+          Items = { addFilter, reference, new StackLayoutItem(null, true),
+            new Label { Text = "Tolerance", VerticalAlignment = VerticalAlignment.Center }, _matchToleranceHost } }),
         new TableRow(new Scrollable { Content = _rows, Border = BorderType.None,
           ExpandContentWidth = true, ExpandContentHeight = false }) { ScaleHeight = true },
         new TableRow(_status),
@@ -1084,6 +1143,7 @@ private sealed class SelSameDialog : Dialog<bool>
       foreach (var setting in group)
       {
         var criterion = setting.Criterion;
+        criterion.SetMatchTolerance(_matchTolerance.Value);
         var check = new CheckBox { Text = ShortText(criterion.Label, LabelLimit), Width = LabelWidth,
           ToolTip = criterion.Label, Checked = setting.Enabled };
         var edit = new Button { Text = "...", Width = IconButtonWidth, ToolTip = "Edit filter values or field key" };
@@ -1193,6 +1253,7 @@ private sealed class SelSameDialog : Dialog<bool>
   {
     if (_stopped) return;
     _stopped = true;
+    _matchToleranceReset.Dispose();
     _timer.Stop();
     _timer.Dispose();
     foreach (var menu in _valueMenus) menu.Dispose();

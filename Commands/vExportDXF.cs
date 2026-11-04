@@ -91,6 +91,7 @@ namespace vTools.Commands
     private const string LegacyOptimizeEntry = "vExportOptions.Optimize"; // Previous document key read for migration.
     private const string LastPathKey = ".DXF_export.LastPath"; // Document user-text key compatible with the Python exporter.
     private const string BlockInsertLayer = "Reference"; // Layer for temporary group-block inserts.
+    private const int SelectionFailureLogLimit = 8; // Maximum prepared-object selection failures detailed in one diagnostic entry sequence.
     [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultFileStem", "Suggested filename stem for an unsaved Rhino document.")] private const string DefaultFileStem = "untitled"; // Suggested filename stem for an unsaved Rhino document.
 
     private static readonly string ConfiguredDefaultFileStem = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultFileStem", DefaultFileStem); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -183,6 +184,7 @@ namespace vTools.Commands
       var originalSelection = selection.Select(obj => obj.Id).ToArray();
       var temporaryObjects = new List<Guid>();
       var temporaryDefinitions = new List<int>();
+      TemporaryBlockLayerScope? blockLayerScope = null;
       var notchTrimOverrides = new Dictionary<Guid, List<ExportCurvePiece>>();
       var textBreakOverrides = new Dictionary<Guid, List<TextEntity>>();
       try
@@ -201,10 +203,21 @@ namespace vTools.Commands
         if (exportIds.Count == 0)
           throw new InvalidOperationException("No exportable objects were prepared.");
 
+        blockLayerScope = new TemporaryBlockLayerScope(doc, exportIds);
         doc.Objects.UnselectAll();
         int selectedCount = 0;
+        int selectionFailures = 0;
         foreach (Guid id in exportIds)
-          if (doc.Objects.Select(id)) selectedCount++;
+        {
+          if (doc.Objects.Select(id)) { selectedCount++; continue; }
+          if (++selectionFailures <= SelectionFailureLogLimit)
+          {
+            var rejected = doc.Objects.FindId(id);
+            var layer = rejected == null ? null : doc.Layers.FindIndex(rejected.Attributes.LayerIndex);
+            Log.Write("vExportDXF", $"prepared selection rejected id={id} type={rejected?.ObjectType} " +
+              $"layer={layer?.FullPath} visible={layer?.IsVisible} locked={layer?.IsLocked} mode={rejected?.Attributes.Mode}");
+          }
+        }
         if (selectedCount != exportIds.Count)
           throw new InvalidOperationException("Not all prepared objects could be selected; export cancelled.");
         if (!TryChoosePath(doc, out string path))
@@ -239,10 +252,14 @@ namespace vTools.Commands
       finally
       {
         doc.Objects.UnselectAll();
-        for (int index = temporaryObjects.Count - 1; index >= 0; index--)
-          doc.Objects.Delete(temporaryObjects[index], quiet: true);
-        for (int index = temporaryDefinitions.Count - 1; index >= 0; index--)
-          doc.InstanceDefinitions.Delete(temporaryDefinitions[index], false, true);
+        try
+        {
+          for (int index = temporaryObjects.Count - 1; index >= 0; index--)
+            doc.Objects.Delete(temporaryObjects[index], quiet: true);
+          for (int index = temporaryDefinitions.Count - 1; index >= 0; index--)
+            doc.InstanceDefinitions.Delete(temporaryDefinitions[index], false, true);
+        }
+        finally { blockLayerScope?.Dispose(); }
         foreach (Guid id in originalSelection)
           doc.Objects.Select(id);
         doc.Views.Redraw();
@@ -255,6 +272,54 @@ namespace vTools.Commands
           foreach (var piece in pieces)
             piece.Geometry.Dispose();
         DisposeTextBreakOverrides(textBreakOverrides);
+      }
+    }
+
+    private sealed class TemporaryBlockLayerScope : IDisposable
+    {
+      readonly RhinoDoc _doc;
+      readonly Guid _layerId;
+      readonly bool _visible;
+      readonly bool _locked;
+      bool _changed;
+
+      public TemporaryBlockLayerScope(RhinoDoc doc, IReadOnlyCollection<Guid> exportIds)
+      {
+        _doc = doc;
+        int index = doc.Layers.FindByFullPath(BlockInsertLayer, -1);
+        if (index < 0) return;
+        if (!exportIds.Any(id => doc.Objects.FindId(id) is InstanceObject instance && instance.Attributes.LayerIndex == index))
+          return;
+        var layer = doc.Layers[index];
+        _layerId = layer.Id;
+        _visible = layer.IsVisible;
+        _locked = layer.IsLocked;
+        if (_visible && !_locked) return;
+        _changed = true;
+        try
+        {
+          layer.IsVisible = true;
+          layer.IsLocked = false;
+          if (!doc.Layers.Modify(layer, index, quiet: true))
+            throw new InvalidOperationException($"Could not make temporary export blocks selectable on layer '{layer.FullPath}'.");
+        }
+        catch { Dispose(); throw; }
+        Log.Write("vExportDXF", $"temporary block layer made selectable layer={layer.FullPath} visible={_visible} locked={_locked}");
+      }
+
+      public void Dispose()
+      {
+        if (!_changed) return;
+        var layer = _doc.Layers.FindId(_layerId);
+        if (layer == null || layer.IsDeleted) return;
+        layer.IsVisible = _visible;
+        layer.IsLocked = _locked;
+        if (!_doc.Layers.Modify(layer, layer.Index, quiet: true))
+        {
+          Log.Write("vExportDXF", $"could not restore temporary block layer state layer={layer.FullPath}");
+          return;
+        }
+        _changed = false;
       }
     }
 

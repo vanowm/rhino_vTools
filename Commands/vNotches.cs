@@ -23,6 +23,11 @@ namespace vTools.Commands
   {
     // Next-label control defaults
     const int NextLabelButtonSize = 20; // Square icon button size in device-independent pixels; smaller than the 22-pixel label input height.
+    const int LabelPrefixLayoutAllowance = 48; // Extra minimum panel width in device-independent pixels for the additional input; actual field minimum is measured from three wide letters.
+    const string LabelValueWidthSample = "WWW"; // Three widest Latin capitals used to size the value input at the current UI font.
+    const int LabelTextCaretWidth = 1; // Device-independent pixel reserved for the insertion caret after three wide letters.
+    const int LabelTextFallbackInsets = 4; // Fallback text-input border/padding width in device-independent pixels when native metrics are unavailable.
+    const int LabelInputSpacing = 4; // Horizontal separation between prefix and value inputs, in device-independent pixels.
     const int NextLabelIconSize = 12; // Icon canvas size in device-independent pixels, smaller than its button.
     const double NextLabelIconStroke = 1.3; // Icon stroke thickness in device-independent pixels; positive value.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NextLabelButtonPadding", "Native icon-button padding on each side in device-independent pixels; zero or greater.")] const double NextLabelButtonPadding = 1.0; // Native icon-button padding on each side in device-independent pixels; zero or greater.
@@ -49,6 +54,11 @@ namespace vTools.Commands
      static readonly double ConfiguredOffsetSplitZeroToleranceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.OffsetSplitZeroToleranceScale", OffsetSplitZeroToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
     const string NotchLabelObjectName = "NotchLabel"; // Rhino object name assigned to every created notch label.
     const string NotchComponentSetKey = NotchDataPrefix + "component_set"; // Metadata key linking one notch's output components.
+    const string NotchMatchSetKey = NotchDataPrefix + "match_set"; // GUID linking corresponding output from one placement across curves.
+    const string NotchMatchMemberKey = NotchDataPrefix + "match_member"; // Output object's own GUID; copied metadata cannot link an unrelated duplicate to the original set.
+    const double RemovalModifierPollSeconds = 0.05; // UI-thread interval checking Ctrl changes without requiring cursor motion.
+    static readonly PreviewDisplay.ObjectHighlightStyle RemovalHighlightStyle = new(
+      System.Drawing.Color.Red, System.Drawing.Color.DarkRed, System.Drawing.Color.DarkRed, 1.0); // Red removal feedback, with no shaded-body allocation.
     const double LabelWidthMult     = 0.9; // Estimated text-width multiplier applied per character.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelOffIn", "Label offset in inches before document-unit conversion; zero or greater.")] const double DefaultLabelOffIn  = 0.1; // Label offset in inches before document-unit conversion; zero or greater.
 
@@ -94,6 +104,8 @@ namespace vTools.Commands
 
      static readonly bool ConfiguredDefaultLabelEnabled = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelEnabled", DefaultLabelEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelValue", "Plain label text.")] const string DefaultLabelValue = MatchingLabels.DefaultValue; // Plain label text shared with mating seam labels.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelPrefix", "Fixed literal notch-label prefix; empty omits it and only the separate value is incremented.")] const string DefaultLabelPrefix = ""; // Literal text, including intentional spaces; empty disables the prefix.
+    static readonly string ConfiguredDefaultLabelPrefix = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelPrefix", DefaultLabelPrefix); // Resolved factory prefix; restart after advanced changes.
 
      static readonly string ConfiguredDefaultLabelValue = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelValue", DefaultLabelValue); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSize", "Text height in model units; zero or greater.")] const double DefaultLabelSize = MatchingLabels.DefaultSize; // Shared text height in model units; zero or greater.
@@ -117,9 +129,6 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelOffsetY", "Perpendicular label offset in model units.")] const double DefaultLabelOffsetY = 0.0; // Perpendicular label offset in model units.
 
      static readonly double ConfiguredDefaultLabelOffsetY = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelOffsetY", DefaultLabelOffsetY); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelAutoAdvance", "true increments labels after placement; false reuses the current label.")] const bool DefaultLabelAutoAdvance = MatchingLabels.DefaultAutoAdvance; // true increments labels after placement; false reuses the current label.
-
-     static readonly bool ConfiguredDefaultLabelAutoAdvance = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelAutoAdvance", DefaultLabelAutoAdvance); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultLabelSideFlip", "true prefers labels toward the curve start; false prefers them away from it, independent of notch side.")] const bool DefaultLabelSideFlip = false; // true prefers labels toward the curve start; false prefers them away from it, independent of notch side.
 
      static readonly bool ConfiguredDefaultLabelSideFlip = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultLabelSideFlip", DefaultLabelSideFlip); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -196,6 +205,7 @@ namespace vTools.Commands
     static bool _group = ConfiguredDefaultGroup;
     static bool _label = ConfiguredDefaultLabelEnabled;
     static string _labelValue = ConfiguredDefaultLabelValue;
+    static string _labelPrefix = ConfiguredDefaultLabelPrefix;
     static double _labelSize = ConfiguredDefaultLabelSize;
     static bool _labelSizeAuto = ConfiguredDefaultLabelSizeAuto;
     static int _labelSizePct = ConfiguredDefaultLabelSizePercent;
@@ -203,7 +213,6 @@ namespace vTools.Commands
     static string _labelLayer = ConfiguredDefaultLabelLayer;
     static double _labelOffset = ConfiguredDefaultLabelOffset; // resolved to model units on first load
     static double _labelOffsetY = ConfiguredDefaultLabelOffsetY;
-    static bool _labelAutoAdv = ConfiguredDefaultLabelAutoAdvance;
     static bool _labelSideFlip = ConfiguredDefaultLabelSideFlip;
     static bool _keepSelection = ConfiguredDefaultKeepSelection;
     static double _multipleStartOffset = ConfiguredDefaultMultipleStartOffset;
@@ -240,7 +249,7 @@ namespace vTools.Commands
     {
       if (redo)
       {
-        if (session.RedoBatches.Count == 0)
+        if (session.RedoBatches.Count == 0 && session.RemovalRedo.Count == 0)
         {
           RhinoApp.WriteLine("vNotches: nothing to redo.");
           vTools.Log.Write("vNotches", $"{source} redo ignored: empty stack");
@@ -250,7 +259,7 @@ namespace vTools.Commands
       }
       else
       {
-        if (session.NotchRecords.Count == 0)
+        if (session.NotchRecords.Count == 0 && session.Removals.Count == 0)
         {
           RhinoApp.WriteLine("vNotches: nothing to undo.");
           vTools.Log.Write("vNotches", $"{source} undo ignored: empty stack");
@@ -321,6 +330,7 @@ namespace vTools.Commands
       if (ToolsOptionStore.TryGetBool  (s, "group",           out b))     _group         = b;
       if (ToolsOptionStore.TryGetBool  (s, "label",           out b))     _label         = b;
       _labelValue = MatchingLabels.ReadText(s, "label_value", _labelValue);
+      _labelPrefix = MatchingLabels.ReadText(s, "label_prefix", _labelPrefix);
       if (ToolsOptionStore.TryGetDouble(s, "label_size",      out v))     _labelSize     = v;
       if (ToolsOptionStore.TryGetBool  (s, "label_size_auto", out b))     _labelSizeAuto = b;
       if (ToolsOptionStore.TryGetDouble(s, "label_size_pct",  out var pctv)) _labelSizePct = (int)pctv;
@@ -328,7 +338,6 @@ namespace vTools.Commands
       _labelLayer = MatchingLabels.ReadText(s, "label_layer", _labelLayer);
       if (ToolsOptionStore.TryGetDouble(s, "label_offset",    out v))     _labelOffset   = v;
       if (ToolsOptionStore.TryGetDouble(s, "label_offset_y",  out v))     _labelOffsetY  = v;
-      if (ToolsOptionStore.TryGetBool  (s, "label_auto_adv",  out b))     _labelAutoAdv  = b;
       _labelSideFlip = ReadLabelDirection(s, _curveSides.FirstOrDefault());
       if (ToolsOptionStore.TryGetDouble(s, "multiple_start_offset", out v)) _multipleStartOffset = Math.Max(0.0, v);
       if (ToolsOptionStore.TryGetDouble(s, "multiple_end_offset",   out v)) _multipleEndOffset = Math.Max(0.0, v);
@@ -374,6 +383,7 @@ namespace vTools.Commands
       sec["group"] = _group;
       sec["label"] = _label;
       sec["label_value"] = _labelValue;
+      sec["label_prefix"] = _labelPrefix;
       sec["label_size"] = _labelSize;
       sec["label_size_auto"] = _labelSizeAuto;
       sec["label_size_pct"] = _labelSizePct;
@@ -381,7 +391,7 @@ namespace vTools.Commands
       sec["label_layer"] = _labelLayer;
       sec["label_offset"] = _labelOffset;
       sec["label_offset_y"] = _labelOffsetY;
-      sec["label_auto_adv"] = _labelAutoAdv;
+      sec.Remove("label_auto_adv");
       sec[LabelDirectionSettingsKey] = _labelSideFlip;
       sec["label_side_flip"] = _labelSideFlip ^ _curveSides.FirstOrDefault();
       sec["multiple_start_offset"] = _multipleStartOffset;
@@ -448,6 +458,7 @@ namespace vTools.Commands
     _group         = s.GroupToggle.CurrentValue;
     _label         = s.LabelToggle.CurrentValue;
     _labelValue    = s.LabelValueText;
+    _labelPrefix   = s.LabelPrefixText;
 
     _labelSize     = s.ManualLabelSize;
     _labelSizeAuto = s.LabelSizeAutoToggle.CurrentValue;
@@ -458,7 +469,6 @@ namespace vTools.Commands
     _labelOffset   = s.LabelOffsetOpt.CurrentValue;
     _labelOffsetY  = s.LabelOffsetYOpt.CurrentValue;
 
-    _labelAutoAdv  = s.LabelAutoAdv;
     _labelSideFlip = s.LabelSideFlip;
     _keepSelection = s.KeepCurveSelection;
     _multipleStartOffset = s.MultipleStartOffset;
@@ -520,11 +530,12 @@ namespace vTools.Commands
         _percent, _group, _label, _labelValue,
         _labelSize, _labelSizeAuto, _labelSizePct,
         _notchLayer, _labelLayer, _labelOffset, _labelOffsetY,
-        _labelAutoAdv, _labelSideFlip, _keepSelection,
+        _labelSideFlip, _keepSelection,
         _multipleStartOffset, _multipleEndOffset,
         _multipleStartOffsetEnabled, _multipleEndOffsetEnabled, _multipleNumber,
         _multipleDistance, _multipleUseDistance,
-        _multipleAuto, _multipleCurvatureSensitivity, _multipleSeparate, sourceRegistry);
+        _multipleAuto, _multipleCurvatureSensitivity, _multipleSeparate, sourceRegistry)
+        { LabelPrefixText = _labelPrefix };
 
       // Apply actual source IDs so SelectBothCurves highlights all segments of joined chains.
       for (int i = 0; i < curveSourceIds.Count && i < session.PerCurveSourceIds.Count; i++)
@@ -1022,7 +1033,7 @@ namespace vTools.Commands
       if (changed)
       {
         s.CurveEnabled = Enumerable.Repeat(true, s.Curves.Count).ToArray();
-        s.RedoBatches.Clear();
+        ClearNotchRedo(s);
         vTools.Log.Write("vNotches", $"selection changed; enabled all {s.Curves.Count} curve(s)");
       }
       SaveOptions(s);
@@ -1168,7 +1179,7 @@ namespace vTools.Commands
         s.CurveEnabled[logicalIndex] = enabledBySource.GetValueOrDefault(sourceIds[0], true);
       }
 
-      s.RedoBatches.Clear();
+      ClearNotchRedo(s);
       s.PreviewValid = false;
       s.PreviewLengthsFromStart.Clear();
       SelectBothCurves(doc, s);
@@ -1441,6 +1452,7 @@ namespace vTools.Commands
       Rhino.Commands.Command.EndCommand += commandEnded;
       _activeSession = s;
       _activeGetter = gp;
+      using var removalPicking = new NotchRemovalPicking(doc,s);
       LocalUndoRedoShortcutSession? shortcutSession = null;
 
       try
@@ -1456,7 +1468,13 @@ namespace vTools.Commands
             ? "Select a point on curve (notch location)"
             : "Select a point on any selected curve (notch location)");
           RefreshCommandOptions(gp, s);
-          var result = gp.Get();
+          removalPicking.Active=true;
+          GetResult result;
+          try {result=gp.Get();}
+          finally {removalPicking.Active=false;}
+
+          if(result==GetResult.CustomMessage&&gp.CustomMessage() is NotchRemovalRequest removal)
+          {RemoveNotchComponent(doc,s,removal.ObjectId);continue;}
 
           if (result == GetResult.CustomMessage && gp.CustomMessage() is NotchHistoryRequest historyRequest)
           {
@@ -1550,10 +1568,10 @@ namespace vTools.Commands
       gp.ClearCommandOptions();
       s.SideOptionIndex        = gp.AddOption("Side");
       s.ReverseOptionIndex     = gp.AddOption("Reverse");
-      s.UndoOptionIndex        = s.NotchRecords.Count > 0
+      s.UndoOptionIndex        = s.NotchRecords.Count > 0 || s.Removals.Count > 0
         ? gp.AddOption("Undo", string.Empty, true)
         : -1;
-      s.RedoOptionIndex        = s.RedoBatches.Count > 0
+      s.RedoOptionIndex        = s.RedoBatches.Count > 0 || s.RemovalRedo.Count > 0
         ? gp.AddOption("Redo", string.Empty, true)
         : -1;
       s.TypeOptionIndex        = gp.AddOptionList("NotchType", s.NotchTypeOptionValues, s.NotchTypeIndex);
@@ -1715,7 +1733,8 @@ namespace vTools.Commands
         lengthsFromStart = Enumerable.Repeat(lengthFromStart, s.Curves.Count).ToList();
       }
 
-      PlaceNotchWithLengths(doc, s, lengthsFromStart, s.LastCursorPoint ?? point);
+      var boundaryChoice=DisconnectedBoundaryChoice(s,refIdx,lengthFromStart,point);
+      PlaceNotchWithLengths(doc, s, lengthsFromStart, s.LastCursorPoint ?? point,preferredKinkChoice:boundaryChoice);
     }
     static void PlaceNotchFromPreview(RhinoDoc doc, Point3d clickedPoint, NotchSession s)
     {
@@ -1725,7 +1744,7 @@ namespace vTools.Commands
         return;
       }
 
-      PlaceNotchWithLengths(doc, s, s.PreviewLengthsFromStart, s.PreviewCursorPoint);
+      PlaceNotchWithLengths(doc, s, s.PreviewLengthsFromStart, s.PreviewCursorPoint,preferredKinkChoice:s.PreviewKinkChoice);
     }
 
     static bool PlaceNotchWithLengths(RhinoDoc doc, NotchSession s,
@@ -1746,7 +1765,8 @@ namespace vTools.Commands
 
       string labelText = s.LabelValueText.Trim();
       bool canNotch    = s.NotchToggle.CurrentValue;
-      bool canLabel    = allowLabel && s.LabelToggle.CurrentValue && labelText.Length > 0;
+      bool canLabel    = allowLabel && s.LabelToggle.CurrentValue && HasLabelText(labelText,s.LabelPrefixText);
+      if(!canNotch&&!canLabel)return false;
       bool[] placementCurveEnabled = curveEnabledOverride ?? s.CurveEnabled;
       string nextLabel = labelText;
 
@@ -1777,10 +1797,12 @@ namespace vTools.Commands
           s.PreviewRefCurveIndex >= 0 && s.PreviewRefCurveIndex < s.Curves.Count &&
           s.PreviewRefCurveIndex < lengthsFromStart.Count)
       {
+        preferredKinkChoice??=DisconnectedBoundaryChoice(s,s.PreviewRefCurveIndex,
+          lengthsFromStart[s.PreviewRefCurveIndex],cursorPoint.Value);
         ResolvePlacementCurve(s, s.PreviewRefCurveIndex,
-          lengthsFromStart[s.PreviewRefCurveIndex], null,
+          lengthsFromStart[s.PreviewRefCurveIndex], preferredKinkChoice,
           out var referenceCurve, out double referenceLength);
-        referenceKinkChoice = ResolveKinkChoice(
+        referenceKinkChoice = preferredKinkChoice??ResolveKinkChoice(
           referenceCurve, referenceLength, cursorPoint.Value);
       }
 
@@ -1790,9 +1812,15 @@ namespace vTools.Commands
             notchTyp, notchWid,
             cursorPoint, referenceKinkChoice)
         : [];
+      var reuse = PrepareNotchReuse(doc,s,lengthsFromStart,placementCurveEnabled,
+        canNotch,canLabel,referenceKinkChoice);
+      if (reuse == null)
+        return false;
       var affectedHistory = splitPlans
         .SelectMany(plan => HistoryBreakWarning.CaptureAffectedRecords(doc, plan.TargetId))
         .ToHashSet();
+      foreach(var original in reuse.Originals)
+        affectedHistory.UnionWith(HistoryBreakWarning.CaptureAffectedRecords(doc,original.Attributes.ObjectId));
       if (!HistoryBreakWarning.Confirm(doc, "vNotches", affectedHistory))
         return false;
 
@@ -1806,6 +1834,7 @@ namespace vTools.Commands
       }
 
       List<(Guid notch, Guid? label)>? newIds = null;
+      Guid matchSetId = reuse.MatchSetId;
       var splitEdits = new List<OffsetSplitEdit>();
       try
       {
@@ -1815,12 +1844,19 @@ namespace vTools.Commands
           effectiveNotchLayer, effectiveLabelLayer,
           s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue,
           s.LabelSideFlip, cursorPoint, referenceKinkChoice, placementCurveEnabled,
-          placementMode);
+          placementMode, matchSetId);
+        if (!ApplyNotchReuse(doc,s,reuse,newIds))
+        {
+          DeletePlacedNotches(doc,newIds);
+          RestoreNotchReuse(doc,s,reuse,false);
+          return false;
+        }
         if (newIds.Any(item => item.notch != Guid.Empty) &&
             !TryApplyOffsetSplits(doc, splitPlans, newIds, s.NotchTrim,
               s.NotchTrimLayer, splitEdits))
         {
           DeletePlacedNotches(doc, newIds);
+          RestoreNotchReuse(doc,s,reuse,false);
           return false;
         }
       }
@@ -1833,9 +1869,12 @@ namespace vTools.Commands
       if (newIds == null || !newIds.Any(n => n.notch != Guid.Empty || n.label.HasValue))
         return false;
 
-      s.RedoBatches.Clear();
+      ClearNotchRedo(s);
       var record = new NotchRecord
       {
+        HistoryOrder=++s.HistoryOrder,
+        MatchSetId       = matchSetId,
+        Reuse            = reuse,
         BatchId          = batchId ?? Guid.NewGuid(),
         Mode             = placementMode,
         NotchLength      = notchLen,
@@ -1846,6 +1885,7 @@ namespace vTools.Commands
         GroupEnabled     = s.GroupToggle.CurrentValue,
         LabelEnabled     = canLabel,
         LabelValues      = new List<string>(placementLabels),
+        LabelPrefix      = s.LabelPrefixText,
         LabelSize        = resolvedLabelSize,
         NotchLayer       = s.NotchLayerName,
         LabelLayer       = s.LabelLayerName,
@@ -1857,6 +1897,11 @@ namespace vTools.Commands
         KinkChoice       = referenceKinkChoice,
       };
       record.OffsetSplits.AddRange(splitEdits);
+      for(int curveIndex=0;curveIndex<s.Curves.Count;curveIndex++)
+      {
+        var source=ResolvePlacementSourceCurveId(doc,s,curveIndex,lengthsFromStart[curveIndex],referenceKinkChoice);
+        if(source!=Guid.Empty)record.PlacementSources[s.CurveIds[curveIndex]]=source;
+      }
 
       s.NotchRecords.Add(record);
 
@@ -2089,7 +2134,7 @@ namespace vTools.Commands
       }
 
       string originalLabel = s.LabelValueText;
-      bool labelActive = s.LabelToggle.CurrentValue && originalLabel.Trim().Length > 0;
+      bool labelActive = s.LabelToggle.CurrentValue && HasLabelText(originalLabel,s.LabelPrefixText);
       bool firstPlacementAdded = false;
       int placementsAdded = 0;
       var batchId = Guid.NewGuid();
@@ -2802,10 +2847,424 @@ namespace vTools.Commands
     static double EffectiveMultipleEndOffset(NotchSession s) =>
       s.MultipleEndOffsetEnabled ? Math.Max(0.0, s.MultipleEndOffset) : 0.0;
 
+    sealed record NotchRemovalRequest(Guid ObjectId);
+    sealed record RemovalSlot(NotchRecord Record,Guid Curve,bool Label,Guid Primary);
+    sealed record RemovedObject(Guid Id,uint Serial,uint Crc);
+    sealed record NotchRemoval(long Order,RemovedObject[] Objects,RemovalSlot[] Slots);
+
+    sealed record ReusedCurveObjects(RhinoObject[] Notches,RhinoObject[] Labels);
+    sealed record MatchAttributeEdit(Guid Id,string Before,string? BeforeValue,string? BeforePrefix,
+      TextEntity? BeforeText,string? AfterText);
+    sealed record MatchRecordEdit(NotchRecord Record,Guid Before,List<string> BeforeValues,string BeforePrefix);
+    sealed class NotchReuse
+    {
+      public Guid MatchSetId=Guid.NewGuid();
+      public string? LabelValue;
+      public string LabelPrefix=DefaultLabelPrefix;
+      public readonly Dictionary<int,ReusedCurveObjects> Curves=[];
+      public readonly List<DocObjectSnapshot> Originals=[];
+      public readonly List<RemovalSlot> Superseded=[];
+      public readonly List<MatchAttributeEdit> MatchEdits=[];
+      public readonly List<MatchRecordEdit> RecordEdits=[];
+    }
+
+    static bool OwnedNotchMatch(RhinoObject obj)=>Guid.TryParse(
+      obj.Attributes.GetUserString(NotchMatchMemberKey),out var member)&&member==obj.Id;
+
+    static bool TryStoredNotchPoint(string? text,out Point3d point)
+    {
+      point=Point3d.Unset;
+      var values=text?.Split(',');
+      if(values?.Length!=3)return false;
+      var numbers=new double[3];
+      for(int i=0;i<3;i++)
+        if(!double.TryParse(values[i],System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,out numbers[i]))return false;
+      point=new Point3d(numbers[0],numbers[1],numbers[2]);return point.IsValid;
+    }
+
+    static bool SameNotchStation(RhinoObject obj,Curve curve,double length,double tolerance)
+    {
+      if(TryStoredNotchPoint(obj.Attributes.GetUserString(NotchDataPrefix+"curve_point"),out var point))
+        if(point.DistanceTo(PointAtCurveLength(curve,length).pt)>tolerance)return false;
+      if(!TryStoredNotchPoint(obj.Attributes.GetUserString(NotchDataPrefix+"curve_start"),out var start)||
+         !TryStoredNotchPoint(obj.Attributes.GetUserString(NotchDataPrefix+"curve_end"),out var end)||
+         !double.TryParse(obj.Attributes.GetUserString(NotchDataPrefix+"length_from_start"),
+           System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var station))return false;
+      if(start.DistanceTo(curve.PointAtStart)<=tolerance&&end.DistanceTo(curve.PointAtEnd)<=tolerance)
+        return Math.Abs(station-length)<=tolerance;
+      return start.DistanceTo(curve.PointAtEnd)<=tolerance&&end.DistanceTo(curve.PointAtStart)<=tolerance&&
+        Math.Abs(curve.GetLength()-station-length)<=tolerance;
+    }
+
+    static NotchReuse? PrepareNotchReuse(RhinoDoc doc,NotchSession s,List<double> lengths,
+      bool[] enabled,bool notch,bool label,KinkTangentChoice choice)
+    {
+      var reuse=new NotchReuse{LabelValue=label?s.LabelValueText.Trim():null,LabelPrefix=s.LabelPrefixText};
+      var matches=new HashSet<Guid>();
+      for(int i=0;i<s.Curves.Count;i++)
+      {
+        if(i>=lengths.Count||i<enabled.Length&&!enabled[i])continue;
+        ResolvePlacementCurve(s,i,lengths[i],choice,out var curve,out var length);
+        var source=s.Sources.ParentId(ResolvePlacementSourceCurveId(doc,s,i,lengths[i],choice));
+        if(source==Guid.Empty)continue;
+        var candidates=(doc.Objects.FindByUserString(NotchDataPrefix+"curve_id",source.ToString(),true)??[])
+          .Where(obj=>obj is {IsDeleted:false}&&RemovableNotchObject(obj)&&
+            (string.IsNullOrEmpty(obj.Attributes.GetUserString(NotchMatchSetKey))||OwnedNotchMatch(obj))&&
+            SameNotchStation(obj,curve,length,doc.ModelAbsoluteTolerance))
+          .OrderBy(NotchComponentIndex).ToArray();
+        foreach(var obj in candidates)
+          if(OwnedNotchMatch(obj)&&Guid.TryParse(obj.Attributes.GetUserString(NotchMatchSetKey),out var match))
+          {if(matches.Count==0)reuse.MatchSetId=match;matches.Add(match);}
+        var notches=notch?candidates.Where(obj=>obj.Attributes.GetUserString(NotchDataPrefix+"object_role")=="notch").ToArray():[];
+        var labels=label?candidates.Where(obj=>obj.Attributes.GetUserString(NotchDataPrefix+"object_role")=="label").ToArray():[];
+        if(notches.Length+labels.Length==0)continue;
+        reuse.Curves[i]=new(notches,labels);
+        foreach(var obj in notches.Concat(labels))
+          if(reuse.Originals.All(snapshot=>snapshot.Attributes.ObjectId!=obj.Id)&&CaptureDocObject(doc,obj.Id) is {} snapshot)
+            reuse.Originals.Add(snapshot);
+      }
+      var originalIds=reuse.Originals.Select(snapshot=>snapshot.Attributes.ObjectId).ToHashSet();
+      foreach(var match in matches)
+        foreach(var obj in doc.Objects.FindByUserString(NotchMatchSetKey,match.ToString("N"),true)??[])
+        {
+          if(obj.IsDeleted||!OwnedNotchMatch(obj)||originalIds.Contains(obj.Id))continue;
+          if(match==reuse.MatchSetId&&!label)continue;
+          var text=label?obj.Geometry as TextEntity:null;
+          reuse.MatchEdits.Add(new(obj.Id,obj.Attributes.GetUserString(NotchMatchSetKey)!,
+            obj.Attributes.GetUserString(NotchDataPrefix+"label_text"),obj.Attributes.GetUserString(NotchDataPrefix+"label_prefix"),
+            text?.Duplicate() as TextEntity,text==null?null:MatchedLabelText(doc,obj,text,reuse.LabelValue!,reuse.LabelPrefix)));
+        }
+      foreach(var record in s.NotchRecords)
+        if(matches.Contains(record.MatchSetId)&&(label||record.MatchSetId!=reuse.MatchSetId))
+          reuse.RecordEdits.Add(new(record,record.MatchSetId,record.LabelValues.ToList(),record.LabelPrefix));
+      for(int record=0;record<s.NotchRecords.Count;record++)
+        for(int curve=0;curve<s.CurveIds.Count;curve++)
+        {
+          Guid notchId=s.PlacementIds[record][curve];var labelId=s.PlacementLabelIds[record][curve];
+          if(originalIds.Contains(notchId)&&!s.RemovedSlots.Contains((s.NotchRecords[record],s.CurveIds[curve],false)))
+            reuse.Superseded.Add(new(s.NotchRecords[record],s.CurveIds[curve],false,notchId));
+          if(labelId.HasValue&&originalIds.Contains(labelId.Value)&&!s.RemovedSlots.Contains((s.NotchRecords[record],s.CurveIds[curve],true)))
+            reuse.Superseded.Add(new(s.NotchRecords[record],s.CurveIds[curve],true,labelId.Value));
+        }
+      if(originalIds.Concat(reuse.MatchEdits.Select(edit=>edit.Id)).Any(id=>
+          doc.Objects.FindId(id) is not {} obj||!obj.IsSelectable(true,false,false,false)))
+      {
+        RhinoApp.WriteLine("vNotches: an existing notch or matching object is locked or unavailable; placement was not changed.");
+        return null;
+      }
+      return reuse;
+    }
+
+    static Guid ReuseNotchComponents(RhinoDoc doc,Guid fresh,RhinoObject[] existing,bool label,Guid notchId)
+    {
+      if(existing.Length==0&&(!label||fresh==Guid.Empty))return fresh;
+      var freshObjects=RelatedComponentObjects(doc,fresh).Where(obj=>!obj.IsDeleted).OrderBy(NotchComponentIndex).ToArray();
+      if(freshObjects.Length==0)throw new InvalidOperationException("Existing notch could not be updated.");
+      var finalIds=new List<Guid>();
+      for(int i=0;i<freshObjects.Length;i++)
+      {
+        var obj=freshObjects[i];Guid id=i<existing.Length?existing[i].Id:obj.Id;
+        var attributes=obj.Attributes.Duplicate();attributes.ObjectId=id;
+        attributes.SetUserString(NotchMatchMemberKey,id.ToString("N"));
+        attributes.SetUserString(NotchDataPrefix+(label?"label_id":"notch_id"),id.ToString());
+        if(label)attributes.SetUserString(NotchDataPrefix+"notch_id",notchId==Guid.Empty?string.Empty:notchId.ToString());
+        if(i<existing.Length)
+        {
+          foreach(int group in existing[i].Attributes.GetGroupList()??[])attributes.AddToGroup(group);
+          var userStrings=existing[i].Attributes.GetUserStrings();
+          foreach(string? key in userStrings.AllKeys)
+            if(key!=null&&!key.StartsWith(NotchDataPrefix,StringComparison.Ordinal)&&attributes.GetUserString(key)==null)
+              attributes.SetUserString(key,userStrings[key]);
+          if(!doc.Objects.Replace(id,obj.Geometry,true)||!doc.Objects.ModifyAttributes(id,attributes,true)||!doc.Objects.Delete(obj.Id,true))
+            throw new InvalidOperationException("Existing notch could not be updated.");
+        }
+        else if(!doc.Objects.ModifyAttributes(id,attributes,true))
+          throw new InvalidOperationException("Notch metadata could not be updated.");
+        finalIds.Add(id);
+      }
+      foreach(var surplus in existing.Skip(freshObjects.Length))
+        if(!doc.Objects.Delete(surplus.Id,true))throw new InvalidOperationException("Duplicate notch could not be removed.");
+      return finalIds[0];
+    }
+
+    static int NotchComponentIndex(RhinoObject obj)=>int.TryParse(
+      obj.Attributes.GetUserString(NotchDataPrefix+"component_index"),out var index)?index:0;
+
+    static bool ApplyNotchReuse(RhinoDoc doc,NotchSession s,NotchReuse reuse,List<(Guid notch,Guid? label)> ids)
+    {
+      try
+      {
+        foreach(var pair in reuse.Curves)
+        {
+          var current=ids[pair.Key];
+          var notch=ReuseNotchComponents(doc,current.notch,pair.Value.Notches,false,Guid.Empty);
+          var label=ReuseNotchComponents(doc,current.label??Guid.Empty,pair.Value.Labels,true,notch);
+          ids[pair.Key]=(notch,label==Guid.Empty?null:label);
+        }
+        foreach(var edit in reuse.MatchEdits)
+          if(!ApplyMatchedData(doc,reuse,edit,true))throw new InvalidOperationException("Existing match could not be updated.");
+        foreach(var edit in reuse.RecordEdits)ApplyMatchedRecord(reuse,edit,true);
+        foreach(var slot in reuse.Superseded)s.RemovedSlots.Add((slot.Record,slot.Curve,slot.Label));
+        return true;
+      }
+      catch(Exception ex){Log.Write(Section,"notch reuse failed: {0}",ex);return false;}
+    }
+
+    static void RestoreNotchReuse(RhinoDoc doc,NotchSession s,NotchReuse reuse,bool redo)
+    {
+      foreach(var snapshot in reuse.Originals)
+      {
+        Guid id=snapshot.Attributes.ObjectId;
+        if(redo){if(doc.Objects.FindId(id) is {IsDeleted:false})doc.Objects.Delete(id,true);}
+        else if(doc.Objects.FindId(id) is {IsDeleted:false})
+        {doc.Objects.Replace(id,snapshot.Geometry,true);doc.Objects.ModifyAttributes(id,snapshot.Attributes.Duplicate(),true);}
+        else RestoreDocObject(doc,snapshot);
+      }
+      foreach(var edit in reuse.MatchEdits)ApplyMatchedData(doc,reuse,edit,redo);
+      foreach(var edit in reuse.RecordEdits)ApplyMatchedRecord(reuse,edit,redo);
+      foreach(var slot in reuse.Superseded)
+      {
+        if(redo)s.RemovedSlots.Add((slot.Record,slot.Curve,slot.Label));
+        else
+        {
+          s.RemovedSlots.Remove((slot.Record,slot.Curve,slot.Label));
+          int record=s.NotchRecords.IndexOf(slot.Record),curve=s.CurveIds.IndexOf(slot.Curve);
+          if(record<0||curve<0)continue;
+          if(slot.Label){s.PlacementLabelIds[record][curve]=slot.Primary;s.LabelIdsByCurve[curve][record]=slot.Primary;}
+          else{s.PlacementIds[record][curve]=slot.Primary;s.NotchIdsByCurve[curve][record]=slot.Primary;}
+        }
+      }
+    }
+
+    static void ApplyMatchedRecord(NotchReuse reuse,MatchRecordEdit edit,bool redo)
+    {
+      edit.Record.MatchSetId=redo?reuse.MatchSetId:edit.Before;
+      edit.Record.LabelValues=redo&&reuse.LabelValue!=null
+        ?edit.BeforeValues.Select(_=>reuse.LabelValue).ToList():edit.BeforeValues.ToList();
+      edit.Record.LabelPrefix=redo&&reuse.LabelValue!=null?reuse.LabelPrefix:edit.BeforePrefix;
+    }
+
+    static string MatchedLabelText(RhinoDoc doc,RhinoObject obj,TextEntity text,string value,string prefix)
+    {
+      if(TryStoredNotchPoint(obj.Attributes.GetUserString(NotchDataPrefix+"curve_point"),out var point))
+        return FormatNotchLabel(value,prefix,text.Plane,point);
+      if(Guid.TryParse(obj.Attributes.GetUserString(NotchDataPrefix+"curve_id"),out var source)&&
+        doc.Objects.FindId(source)?.Geometry is Curve curve&&
+        double.TryParse(obj.Attributes.GetUserString(NotchDataPrefix+"length_from_start"),
+          System.Globalization.NumberStyles.Float,System.Globalization.CultureInfo.InvariantCulture,out var station))
+        return FormatNotchLabel(value,prefix,text.Plane,PointAtCurveLength(curve,station).pt);
+      string beforePrefix=obj.Attributes.GetUserString(NotchDataPrefix+"label_prefix")??string.Empty;
+      string beforeValue=LabelSequences.FormatDisplayLabel(obj.Attributes.GetUserString(NotchDataPrefix+"label_text")??string.Empty);
+      bool valueFirst=text.PlainText==beforeValue+beforePrefix[beforePrefix.TrimEnd().Length..]+beforePrefix.TrimEnd();
+      return FormatNotchLabel(value,prefix,text.Plane,text.Plane.Origin+text.Plane.XAxis*(valueFirst?-1:1));
+    }
+
+    static bool ApplyMatchedData(RhinoDoc doc,NotchReuse reuse,MatchAttributeEdit edit,bool redo)
+    {
+      if(doc.Objects.FindId(edit.Id) is not {IsDeleted:false} obj)return false;
+      var attributes=obj.Attributes.Duplicate();
+      attributes.SetUserString(NotchMatchSetKey,redo?reuse.MatchSetId.ToString("N"):edit.Before);
+      if(reuse.LabelValue!=null)
+      {
+        attributes.SetUserString(NotchDataPrefix+"label_text",redo?reuse.LabelValue:edit.BeforeValue);
+        attributes.SetUserString(NotchDataPrefix+"label_prefix",redo?reuse.LabelPrefix:edit.BeforePrefix);
+        if(edit.BeforeText!=null)
+        {
+          using var text=edit.BeforeText.Duplicate() as TextEntity;
+          if(text==null)return false;
+          if(redo)text.PlainText=edit.AfterText!;
+          if(!doc.Objects.Replace(edit.Id,text,true))return false;
+        }
+      }
+      return doc.Objects.ModifyAttributes(edit.Id,attributes,true);
+    }
+
+    static bool RemovableNotchObject(RhinoObject obj)=>obj is {IsDeleted:false}&&
+      (obj.Geometry is TextEntity or TextDot||obj.Attributes.Name is NotchObjectName or NotchLabelObjectName||
+        obj.Attributes.GetUserString(NotchDataPrefix+"object_role") is "notch" or "label");
+
+    static RhinoObject[] RemovalTargets(RhinoDoc doc,Guid id)
+    {
+      if(doc.Objects.FindId(id) is not {} picked||!RemovableNotchObject(picked))return [];
+      var objects=RelatedComponentObjects(doc,id).Where(RemovableNotchObject).ToArray();
+      string? matchSet=picked.Attributes.GetUserString(NotchMatchSetKey);
+      if(Guid.TryParse(matchSet,out _))
+      {
+        bool OwnedMatch(RhinoObject obj)=>Guid.TryParse(
+          obj.Attributes.GetUserString(NotchMatchMemberKey),out var member)&&member==obj.Id;
+        bool Label(RhinoObject obj)=>obj.Geometry is TextEntity or TextDot||
+          obj.Attributes.GetUserString(NotchDataPrefix+"object_role")=="label";
+        objects=OwnedMatch(picked)
+          ?(doc.Objects.FindByUserString(NotchMatchSetKey,matchSet!,true)??[])
+            .Where(obj=>RemovableNotchObject(obj)&&OwnedMatch(obj)&&Label(obj)==Label(picked))
+            .OrderBy(obj=>obj.Id==id?0:1).ToArray()
+          :[picked];
+      }
+      return objects.All(obj=>obj.IsSelectable(true,false,false,false))?objects:[];
+    }
+
+    static bool RemoveNotchComponent(RhinoDoc doc,NotchSession s,Guid id)
+    {
+      var targets=RemovalTargets(doc,id);
+      if(targets.Length==0)return false;
+      var objects=targets.Select(obj=>new RemovedObject(obj.Id,obj.RuntimeSerialNumber,obj.Geometry.DataCRC(0))).ToArray();
+      var ids=objects.Select(obj=>obj.Id).ToHashSet();
+      var slots=new List<RemovalSlot>();
+      for(int record=0;record<s.NotchRecords.Count;record++)
+        for(int curve=0;curve<s.CurveIds.Count;curve++)
+        {
+          if(record<s.PlacementIds.Count&&curve<s.PlacementIds[record].Count&&ids.Contains(s.PlacementIds[record][curve]))
+            slots.Add(new(s.NotchRecords[record],s.CurveIds[curve],false,s.PlacementIds[record][curve]));
+          if(record<s.PlacementLabelIds.Count&&curve<s.PlacementLabelIds[record].Count&&
+            s.PlacementLabelIds[record][curve] is {} label&&ids.Contains(label))
+            slots.Add(new(s.NotchRecords[record],s.CurveIds[curve],true,label));
+        }
+      var deleted=new List<RemovedObject>();
+      foreach(var obj in objects)
+      {
+        if(!doc.Objects.Delete(obj.Id,true))
+        {
+          foreach(var previous in deleted)doc.Objects.Undelete(previous.Serial);
+          Log.Write(Section,"Ctrl removal rejected id={0}; deletion rolled back",obj.Id);
+          return false;
+        }
+        deleted.Add(obj);
+      }
+      ClearNotchRedo(s);
+      var removal=new NotchRemoval(++s.HistoryOrder,objects,slots.ToArray());
+      s.Removals.Push(removal);
+      foreach(var slot in slots)s.RemovedSlots.Add((slot.Record,slot.Curve,slot.Label));
+      s.PreviewValid=false;
+      s.Panel?.UpdateUndoEnabled();
+      Log.Write(Section,"Ctrl removed objects={0} currentSlots={1}",objects.Length,slots.Count);
+      doc.Views.Redraw();return true;
+    }
+
+    static void MoveRemovalHistory(RhinoDoc doc,NotchSession s,bool redo)
+    {
+      var from=redo?s.RemovalRedo:s.Removals;var to=redo?s.Removals:s.RemovalRedo;
+      if(!from.TryPeek(out var removal))return;
+      var changed=new List<RemovedObject>();
+      foreach(var item in removal.Objects)
+      {
+        bool success;
+        if(redo)
+        {
+          var obj=doc.Objects.FindId(item.Id);
+          success=obj is {IsDeleted:false}&&obj.Geometry.DataCRC(0)==item.Crc&&
+            obj.IsSelectable(true,false,false,false)&&doc.Objects.Delete(item.Id,true);
+        }
+        else success=doc.Objects.Undelete(item.Serial);
+        if(!success)
+        {
+          foreach(var previous in changed)
+            if(redo)doc.Objects.Undelete(previous.Serial);else doc.Objects.Delete(previous.Id,true);
+          RhinoApp.WriteLine("vNotches: removed objects changed or are locked; history was not applied.");
+          return;
+        }
+        changed.Add(item);
+      }
+      foreach(var slot in removal.Slots)
+      {
+        if(redo)s.RemovedSlots.Add((slot.Record,slot.Curve,slot.Label));
+        else
+        {
+          s.RemovedSlots.Remove((slot.Record,slot.Curve,slot.Label));
+          int record=s.NotchRecords.IndexOf(slot.Record),curve=s.CurveIds.IndexOf(slot.Curve);
+          if(record<0)continue;
+          if(curve<0)
+          {
+            var detached=slot.Label?slot.Record.DetachedLabelIds:slot.Record.DetachedNotchIds;
+            if(!detached.Contains(slot.Primary))detached.Add(slot.Primary);
+          }
+          else if(slot.Label)
+          {s.PlacementLabelIds[record][curve]=slot.Primary;s.LabelIdsByCurve[curve][record]=slot.Primary;}
+          else {s.PlacementIds[record][curve]=slot.Primary;s.NotchIdsByCurve[curve][record]=slot.Primary;}
+        }
+      }
+      from.Pop();to.Push(removal);SyncPanelFromOptions(s);doc.Views.Redraw();
+    }
+
+    static void ClearNotchRedo(NotchSession s){s.RedoBatches.Clear();s.RemovalRedo.Clear();}
+
+    sealed class NotchRemovalPicking : Rhino.UI.MouseCallback,IDisposable
+    {
+      readonly RhinoDoc _doc;
+      readonly NotchSession _session;
+      readonly PreviewDisplay.ObjectHighlighter _highlight;
+      readonly UITimer _timer=new(){Interval=RemovalModifierPollSeconds};
+      RhinoView? _view;
+      System.Drawing.Point _pixel;
+      bool _active,_control,_captured;
+      Guid[] _targets=[];
+      public bool Active {get=>_active;set{_active=value;if(!value)ShowTargets([]);}}
+      internal static bool ControlPressed=>(System.Windows.Forms.Control.ModifierKeys&System.Windows.Forms.Keys.Control)!=0;
+      internal NotchRemovalPicking(RhinoDoc doc,NotchSession session)
+      {
+        _doc=doc;_session=session;
+        _highlight=new(doc,RemovalHighlightStyle){RedrawOnChange=false,DrawOnTop=true};
+        _timer.Elapsed+=(_,_)=>
+        {
+          if(!CanPick()){ShowTargets([]);return;}
+          bool control=ControlPressed;
+          if(control==_control)return;
+          _control=control;UpdateTarget();
+        };
+        Enabled=true;_timer.Start();
+      }
+      bool CanPick()=>_active&&!_session.CurveSelectionRequested&&ReferenceEquals(_activeSession,_session)&&
+        RhinoDoc.ActiveDoc==_doc&&_session.Panel?.ViewportPreviewActive!=false;
+      void ShowTargets(Guid[] ids)
+      {
+        if(_targets.SequenceEqual(ids))return;
+        _targets=ids;_highlight.SetObjects(ids);_doc.Views.Redraw();
+      }
+      void UpdateTarget()
+      {
+        if(!CanPick()||!ControlPressed||_view?.ActiveViewport is not {} viewport){ShowTargets([]);return;}
+        _session.PreviewValid=false;
+        try
+        {
+          if(!viewport.GetFrustumLine(_pixel.X,_pixel.Y,out var ray)){ShowTargets([]);return;}
+          using var context=new PickContext{View=_view,PickLine=ray,PickStyle=PickStyle.PointPick,PickMode=PickMode.Wireframe,PickGroupsEnabled=false};
+          context.SetPickTransform(viewport.GetPickTransform(_pixel));context.UpdateClippingPlanes();
+          var references=_doc.Objects.PickObjects(context)??[];
+          try
+          {
+            var target=references.Select(reference=>reference.Object()).FirstOrDefault(obj=>obj!=null&&RemovableNotchObject(obj));
+            ShowTargets(target==null?[]:RemovalTargets(_doc,target.Id).Select(obj=>obj.Id).ToArray());
+          }
+          finally{foreach(var reference in references)reference.Dispose();}
+        }
+        catch(Exception ex){ShowTargets([]);Log.Write(Section,"removal hover failed: {0}",ex.Message);}
+      }
+      protected override void OnMouseMove(Rhino.UI.MouseCallbackEventArgs e)
+      {
+        if(_active&&RhinoDoc.ActiveDoc==_doc)_session.Panel?.SetViewportPointerActive();
+        _view=e.View;_pixel=e.ViewportPoint;_control=e.CtrlKeyDown;UpdateTarget();base.OnMouseMove(e);
+      }
+      protected override void OnMouseDown(Rhino.UI.MouseCallbackEventArgs e)
+      {
+        if(_active&&RhinoDoc.ActiveDoc==_doc)_session.Panel?.SetViewportPointerActive();
+        if(e.MouseButton==Rhino.UI.MouseButton.Left&&e.CtrlKeyDown&&CanPick())
+        {
+          e.Cancel=true;_captured=true;_view=e.View;_pixel=e.ViewportPoint;UpdateTarget();
+          if(_targets.FirstOrDefault() is var id&&id!=Guid.Empty)GetBaseClass.PostCustomMessage(new NotchRemovalRequest(id));
+        }
+        base.OnMouseDown(e);
+      }
+      protected override void OnMouseUp(Rhino.UI.MouseCallbackEventArgs e)
+      {if(_captured&&e.MouseButton==Rhino.UI.MouseButton.Left){e.Cancel=true;_captured=false;}base.OnMouseUp(e);}
+      public void Dispose(){Enabled=false;_timer.Stop();_timer.Dispose();_highlight.Dispose();}
+    }
+
     // ── Undo ──────────────────────────────────────────────────────────────────
 
     static void UndoLastNotch(RhinoDoc doc, NotchSession s)
     {
+      if(s.Removals.TryPeek(out var removal)&&removal.Order>(s.NotchRecords.LastOrDefault()?.HistoryOrder??0))
+      {MoveRemovalHistory(doc,s,false);return;}
       if (s.NotchRecords.Count == 0) return;
       int removeCount = 1;
       if (s.NotchRecords[^1].BatchId != Guid.Empty)
@@ -2853,7 +3312,10 @@ namespace vTools.Commands
       }
 
       foreach (var record in removedRecords.AsEnumerable().Reverse())
+      {
         RestoreOriginalOffsetCurves(doc, record.OffsetSplits);
+        if(record.Reuse is {} reuse)RestoreNotchReuse(doc,s,reuse,false);
+      }
 
       if (removeCount > 0 && s.NotchRecords.Count >= removeCount)
         s.NotchRecords.RemoveRange(s.NotchRecords.Count - removeCount, removeCount);
@@ -2872,12 +3334,16 @@ namespace vTools.Commands
 
     static void RedoLastNotch(RhinoDoc doc, NotchSession s)
     {
+      if(s.RemovalRedo.TryPeek(out var removal)&&
+        (s.RedoBatches.Count==0||removal.Order<s.RedoBatches.Peek().Placements[0].Record.HistoryOrder))
+      {MoveRemovalHistory(doc,s,true);return;}
       if (s.RedoBatches.Count == 0) return;
 
       var batch = s.RedoBatches.Pop();
       int restoredObjects = 0;
       foreach (var placement in batch.Placements)
       {
+        if(placement.Record.Reuse is {} reuse)RestoreNotchReuse(doc,s,reuse,true);
         RestoreSplitOffsetPieces(doc, placement.Record.OffsetSplits);
         var notchIds = new List<Guid>();
         var labelIds = new List<Guid?>();
@@ -3048,6 +3514,7 @@ namespace vTools.Commands
 
     static void DrawPreview(RhinoDoc doc, NotchSession s, GetPointDrawEventArgs e)
     {
+      if(NotchRemovalPicking.ControlPressed){s.PreviewValid=false;return;}
       if (s.Panel != null && !s.Panel.ViewportPreviewActive && !s.MultipleHoverPreviewActive)
       {
         s.PreviewValid = false;
@@ -3130,7 +3597,7 @@ namespace vTools.Commands
       double lsize = EffectiveLabelSize(s);
       string ltext = s.LabelValueText.Trim();
       bool   canNotch = s.NotchToggle.CurrentValue;
-      bool   canLabel = s.LabelToggle.CurrentValue && ltext.Length > 0 && lsize > doc.ModelAbsoluteTolerance;
+      bool   canLabel = s.LabelToggle.CurrentValue && HasLabelText(ltext,s.LabelPrefixText) && lsize > doc.ModelAbsoluteTolerance;
       bool curveSnapActive = false;
       try
       {
@@ -3143,7 +3610,8 @@ namespace vTools.Commands
       }
       s.Panel?.SetViewportCurveHover(curveSnapActive ? refIdx : -1, lfs);
 
-      ResolvePlacementCurve(s, refIdx, lengths[refIdx], null,
+      var boundaryChoice=DisconnectedBoundaryChoice(s,refIdx,lengths[refIdx],snapPoint);
+      ResolvePlacementCurve(s, refIdx, lengths[refIdx], boundaryChoice,
         out var referenceCurve, out double referenceLength);
       var snappedKinkChoice = curveSnapActive
         ? ResolveKinkChoice(referenceCurve, referenceLength, snapPoint)
@@ -3151,9 +3619,10 @@ namespace vTools.Commands
       bool forceSnappedMiddle = snappedKinkChoice == KinkTangentChoice.Middle;
       var effectiveCursorPoint = forceSnappedMiddle ? snapPoint : cursorPoint;
       s.PreviewCursorPoint = effectiveCursorPoint;
-      var referenceKinkChoice = forceSnappedMiddle
+      var referenceKinkChoice = boundaryChoice??(forceSnappedMiddle
         ? KinkTangentChoice.Middle
-        : ResolveKinkChoice(referenceCurve, referenceLength, effectiveCursorPoint);
+        : ResolveKinkChoice(referenceCurve, referenceLength, effectiveCursorPoint));
+      s.PreviewKinkChoice=referenceKinkChoice;
 
       if (s.KinkCenterSnapActive != forceSnappedMiddle)
       {
@@ -3193,8 +3662,8 @@ namespace vTools.Commands
               foreach (var (plane, _) in NotchLabelPlacements(
                 doc, hoverCurve, hoverLength, side, labelCurveSide, nt, bothSides,
                 null, hoverKinkChoice, hgeom, ltext, lsize, no,
-                s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue))
-                DrawLabelPreview(e.Display, plane, ltext, lsize, System.Drawing.Color.Cyan);
+                s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue, s.LabelPrefixText))
+                DrawLabelPreview(e.Display, plane, ltext, lsize, System.Drawing.Color.Cyan, s.LabelPrefixText, PointAtCurveLength(hoverCurve, hoverLength).pt);
             }
           }
         }
@@ -3227,18 +3696,33 @@ namespace vTools.Commands
           foreach (var (plane, _) in NotchLabelPlacements(
             doc, placementCurve, placementLength, side, labelCurveSide, nt, bothSides,
             curveCursor, kinkChoice, geom, ltext, lsize, no,
-            s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue))
-            DrawLabelPreview(e.Display, plane, ltext, lsize, System.Drawing.Color.Cyan);
+            s.LabelOffsetOpt.CurrentValue, s.LabelOffsetYOpt.CurrentValue, s.LabelPrefixText))
+            DrawLabelPreview(e.Display, plane, ltext, lsize, System.Drawing.Color.Cyan, s.LabelPrefixText, PointAtCurveLength(placementCurve, placementLength).pt);
         }
       }
     }
 
-    static void DrawLabelPreview(DisplayPipeline display, Plane plane, string text, double size, System.Drawing.Color color)
+    static bool HasLabelText(string? value,string? prefix)=>!string.IsNullOrWhiteSpace(value)||!string.IsNullOrWhiteSpace(prefix);
+
+    static string FormatNotchLabel(string? value, string prefix, Plane plane, Point3d notchPoint)
     {
-      text = LabelSequences.FormatDisplayLabel(text);
+      string display = LabelSequences.FormatDisplayLabel((value ?? string.Empty).Trim());
+      if (display.Length == 0) return prefix.TrimEnd();
+      if (prefix.Length == 0) return display;
+      string prefixText = prefix.TrimEnd();
+      string separator = prefix.Substring(prefixText.Length);
+      return (notchPoint - plane.Origin) * plane.XAxis < 0
+        ? display + separator + prefixText : prefixText + separator + display;
+    }
+
+    static void DrawLabelPreview(DisplayPipeline display, Plane plane, string text, double size, System.Drawing.Color color,
+      string prefix = DefaultLabelPrefix, Point3d? notchPoint = null)
+    {
+      text = FormatNotchLabel(text, prefix, plane, notchPoint ?? plane.Origin);
       try
       {
         using var te = MatchingLabels.CreateText(plane,text,size);
+        te.PlainText = text;
         te.DrawForward = false;
         display.DrawAnnotation(te, color);
         return;
@@ -3285,7 +3769,7 @@ namespace vTools.Commands
       string labelCurveSide, string notchType, bool bothSides,
       Point3d? cursorPoint, KinkTangentChoice? kinkChoice,
       IReadOnlyList<Curve> geometry, string labelText, double labelSize,
-      double notchOffset, double labelOffset, double labelOffsetY)
+      double notchOffset, double labelOffset, double labelOffsetY, string prefix = DefaultLabelPrefix)
     {
       var placements = new List<(Plane plane, string side)>();
       int componentsPerSide = CanonicalNotchType(notchType) is "T" or OpenVNotchType ? 2 : 1;
@@ -3304,7 +3788,7 @@ namespace vTools.Commands
           continue;
         var (plane, _, _) = ComputeLabelLayout(doc, curve, lengthFromStart,
           direction, tangent, notchOffset, sideGeometry, labelText, labelSize,
-          labelOffset, labelOffsetY, currentLabelSide);
+          labelOffset, labelOffsetY, currentLabelSide, prefix);
         if (plane.IsValid)
           placements.Add((plane, currentLabelSide));
       }
@@ -3881,6 +4365,8 @@ namespace vTools.Commands
     {
       double total = curve.GetLength();
       double clamped = Clamp(lengthFromStart, 0.0, total);
+      if(clamped<=0)return (curve.PointAtStart,curve.Domain.T0);
+      if(clamped>=total)return (curve.PointAtEnd,curve.Domain.T1);
       if (curve.LengthParameter(clamped, out double t))
         return (curve.PointAt(t), t);
       if (clamped <= 0.0) return (curve.PointAtStart, curve.Domain.T0);
@@ -3890,6 +4376,8 @@ namespace vTools.Commands
     static double LengthFromStart(Curve curve, double t)
     {
       var domain = curve.Domain;
+      if(t<=domain.T0)return 0;
+      if(t>=domain.T1)return curve.GetLength();
       var interval = new Interval(domain.T0, t);
       return curve.GetLength(interval);
     }
@@ -3954,12 +4442,12 @@ namespace vTools.Commands
       return (0.0, 0.0);
     }
 
-    static double MeasuredLabelHalfWidth(RhinoDoc doc, string text, double height, Plane plane)
+    static double MeasuredLabelHalfWidth(RhinoDoc doc, string text, double height, Plane plane, bool formatted = false)
     {
       if (height <= doc.ModelAbsoluteTolerance) return 0.0;
-      text = LabelSequences.FormatDisplayLabel(text);
+      if (!formatted) text = LabelSequences.FormatDisplayLabel(text);
       // Measure in WorldXY for orientation-independent width
-      var te = new TextEntity
+      using var te = new TextEntity
       {
         Plane         = Plane.WorldXY,
         PlainText     = text,
@@ -3996,7 +4484,7 @@ namespace vTools.Commands
       RhinoDoc doc, Curve curve, double lengthFromStart,
       Vector3d direction, Vector3d tangent, double notchOffset,
       IReadOnlyList<Curve>? notchGeom, string labelText, double labelSize,
-      double labelOffset, double labelOffsetY, string curveSide)
+      double labelOffset, double labelOffsetY, string curveSide, string prefix = DefaultLabelPrefix)
     {
       double tol = doc.ModelAbsoluteTolerance;
       if (labelSize <= tol)
@@ -4011,7 +4499,12 @@ namespace vTools.Commands
       if (!plane.IsValid)
         return (Plane.Unset, false, BoundingBox.Empty);
 
-      double labelHW  = MeasuredLabelHalfWidth(doc, labelText, labelSize, plane);
+      string displayValue = LabelSequences.FormatDisplayLabel(labelText);
+      double labelHW = prefix.Length == 0 ? MeasuredLabelHalfWidth(doc, displayValue, labelSize, plane, true)
+        : Math.Max(MeasuredLabelHalfWidth(doc,
+            FormatNotchLabel(labelText, prefix, plane, plane.Origin + plane.XAxis), labelSize, plane, true),
+          MeasuredLabelHalfWidth(doc,
+            FormatNotchLabel(labelText, prefix, plane, plane.Origin - plane.XAxis), labelSize, plane, true));
       var effectiveBbox = new BoundingBox(
         new Point3d(-labelHW, -0.5 * labelSize, 0.0),
         new Point3d( labelHW,  0.5 * labelSize, 0.0));
@@ -4058,7 +4551,8 @@ namespace vTools.Commands
       double labelOffset, double labelOffsetY,
       string labelCurveSide,
       Point3d? cursorPoint, KinkTangentChoice? kinkChoice,
-      Guid sourceCurveId, int curveIndex, string placementMode)
+      Guid sourceCurveId, int curveIndex, string placementMode, string labelPrefix = DefaultLabelPrefix,
+      Guid? matchSetId = null)
     {
       GetCurveTangentAndDirection(curve, lengthFromStart, side, cursorPoint, kinkChoice,
         out var tangent, out var direction);
@@ -4073,6 +4567,8 @@ namespace vTools.Commands
         notchWidth, side, labelEnabled, labelText, labelSize, labelOffset,
         labelOffsetY, labelCurveSide, notchLayer, labelLayer, tangent);
       metadataAttributes.SetUserString(NotchDataPrefix + "both_sides", bothSides ? "1" : "0");
+      metadataAttributes.SetUserString(NotchDataPrefix + "label_prefix", labelPrefix);
+      metadataAttributes.SetUserString(NotchMatchSetKey,(matchSetId??Guid.NewGuid()).ToString("N"));
 
       Guid notchId = Guid.Empty;
       if (notchEnabled)
@@ -4085,12 +4581,12 @@ namespace vTools.Commands
       Guid? labelId = null;
       if (labelEnabled && tangent.IsValid && direction.IsValid)
       {
-        string lt = LabelSequences.FormatDisplayLabel((labelText ?? "").Trim());
-        if (lt.Length > 0 && labelSize > doc.ModelAbsoluteTolerance)
+        string lt = (labelText ?? "").Trim();
+        if (HasLabelText(lt,labelPrefix) && labelSize > doc.ModelAbsoluteTolerance)
         {
           var placements = NotchLabelPlacements(doc, curve, lengthFromStart,
             side, labelCurveSide, notchType, bothSides, cursorPoint, kinkChoice,
-            geom, lt, labelSize, notchOffset, labelOffset, labelOffsetY);
+            geom, lt, labelSize, notchOffset, labelOffset, labelOffsetY, labelPrefix);
           if (placements.Count == (bothSides ? 2 : 1))
           {
             string componentSet = bothSides ? Guid.NewGuid().ToString("N") : string.Empty;
@@ -4099,8 +4595,10 @@ namespace vTools.Commands
             {
               var (labelPlane, currentLabelSide) = placements[labelIndex];
               using var te = MatchingLabels.CreateText(labelPlane,lt,labelSize);
+              te.PlainText = FormatNotchLabel(labelText, labelPrefix, labelPlane, PointAtCurveLength(curve, lengthFromStart).pt);
               var la = metadataAttributes.Duplicate();
               la.ObjectId = Guid.NewGuid();
+              la.SetUserString(NotchMatchMemberKey,la.ObjectId.ToString("N"));
               la.LayerIndex = ResolveLayerIndex(doc, labelLayer);
               la.Name = NotchLabelObjectName;
               la.SetUserString(NotchDataPrefix + "object_role", "label");
@@ -4152,6 +4650,7 @@ namespace vTools.Commands
       {
         var attrs = baseAttributes.Duplicate();
         attrs.ObjectId = Guid.NewGuid();
+        attrs.SetUserString(NotchMatchMemberKey,attrs.ObjectId.ToString("N"));
         attrs.SetUserString(NotchDataPrefix + "notch_id", attrs.ObjectId.ToString());
         if (compound)
         {
@@ -4236,6 +4735,7 @@ namespace vTools.Commands
       Set("curve_start", PointText(sourceCurve.PointAtStart));
       Set("curve_end", PointText(sourceCurve.PointAtEnd));
       Set("curve_mid", PointText(curveMid));
+      Set("curve_point", PointText(PointAtCurveLength(sourceCurve,lengthFromStart).pt));
       return attrs;
     }
 
@@ -4247,7 +4747,7 @@ namespace vTools.Commands
       string notchLayer, string labelLayer,
       double labelOffset, double labelOffsetY,
       bool labelSideFlip, Point3d? cursorPoint, KinkTangentChoice referenceKinkChoice,
-      bool[] curveEnabled, string placementMode)
+      bool[] curveEnabled, string placementMode, Guid matchSetId)
     {
       var ids = new List<(Guid, Guid?)>();
       int referenceIndex = cursorPoint.HasValue ? s.PreviewRefCurveIndex : -1;
@@ -4275,7 +4775,7 @@ namespace vTools.Commands
           notchLayer, labelLayer,
           labelOffset, labelOffsetY,
           labelCurveSide, curveCursor, kinkChoice,
-          s.Sources.ParentId(sourceCurveId), i, placementMode);
+          s.Sources.ParentId(sourceCurveId), i, placementMode, s.LabelPrefixText, matchSetId);
 
         if (nid != Guid.Empty || lid.HasValue)
         {
@@ -4292,6 +4792,31 @@ namespace vTools.Commands
         ids.Add((nid, lid));
       }
       return ids;
+    }
+
+    static KinkTangentChoice? DisconnectedBoundaryChoice(NotchSession s,int curveIndex,double length,Point3d cursor)
+    {
+      if(curveIndex<0||curveIndex>=s.PerCurveSegments.Count)return null;
+      var segments=s.PerCurveSegments[curveIndex];double station=0,tolerance=s.Doc.ModelAbsoluteTolerance;
+      for(int index=0;index+1<segments.Count;index++)
+      {
+        station+=segments[index].GetLength();
+        if(Math.Abs(length-station)>tolerance||segments[index].PointAtEnd.DistanceTo(segments[index+1].PointAtStart)<=tolerance)continue;
+        return cursor.DistanceToSquared(segments[index+1].PointAtStart)<cursor.DistanceToSquared(segments[index].PointAtEnd)
+          ?KinkTangentChoice.After:KinkTangentChoice.Before;
+      }
+      return null;
+    }
+
+    static KinkTangentChoice? DisconnectedBoundaryChoice(NotchSession s,int curveIndex,double length,Guid source)
+    {
+      if(curveIndex<0||curveIndex>=s.PerCurveSourceIds.Count)return null;
+      int index=s.PerCurveSourceIds[curveIndex].IndexOf(source);
+      if(index<0||index>=s.PerCurveSegments[curveIndex].Count)return null;
+      var segment=s.PerCurveSegments[curveIndex][index];
+      double start=s.PerCurveSegments[curveIndex].Take(index).Sum(curve=>curve.GetLength());
+      var point=Math.Abs(length-start)<=s.Doc.ModelAbsoluteTolerance?segment.PointAtStart:segment.PointAtEnd;
+      return DisconnectedBoundaryChoice(s,curveIndex,length,point);
     }
 
     static Guid ResolvePlacementSourceCurveId(
@@ -4409,12 +4934,14 @@ namespace vTools.Commands
           continue;
         }
         double d = LengthFromRecord(s, rec, curveIndex);
-        bool lbl = rec.LabelEnabled;
+        bool lbl = rec.LabelEnabled&&!s.RemovedSlots.Contains((rec,s.CurveIds[curveIndex],true));
         string lv = (rec.LabelValues != null && curveIndex < rec.LabelValues.Count)
           ? rec.LabelValues[curveIndex] : "";
         KinkTangentChoice? kinkChoice = rec.KinkChoice == KinkTangentChoice.Default
           ? null
           : rec.KinkChoice;
+        if(rec.PlacementSources.TryGetValue(s.CurveIds[curveIndex],out var boundarySource))
+          kinkChoice=DisconnectedBoundaryChoice(s,curveIndex,d,boundarySource)??kinkChoice;
         ResolvePlacementCurve(s, curveIndex, d, kinkChoice,
           out var placementCurve, out double placementLength);
         string side = PlacementCurveSide(s, curveIndex, d, kinkChoice);
@@ -4424,14 +4951,14 @@ namespace vTools.Commands
         var (nid, lid) = AddNotch(doc, placementCurve, placementLength,
           rec.NotchLength, rec.NotchOffset, side, rec.GroupEnabled,
           rec.NotchType, rec.NotchWidth,
-          rec.NotchEnabled, PlacementCurveBothSides(s, curveIndex, d, kinkChoice),
+          rec.NotchEnabled&&!s.RemovedSlots.Contains((rec,s.CurveIds[curveIndex],false)), PlacementCurveBothSides(s, curveIndex, d, kinkChoice),
           lbl, lv, rec.LabelSize,
           EffectiveLayerName(doc, rec.NotchLayer, rec.NotchLayer),
           EffectiveLayerName(doc, rec.LabelLayer, rec.NotchLayer),
           rec.LabelOffset, rec.LabelOffsetY, labelCurveSide, null,
           kinkChoice,
           s.Sources.ParentId(sourceCurveId),
-          curveIndex, rec.Mode);
+          curveIndex, rec.Mode, rec.LabelPrefix, rec.MatchSetId);
         newIds.Add(nid);
         newLabelIds.Add(lid);
       }
@@ -4480,7 +5007,7 @@ namespace vTools.Commands
         RebuildCurveNotches(doc, s, idx);
       }
       else
-        s.RedoBatches.Clear();
+        ClearNotchRedo(s);
       SelectBothCurves(doc, s);
       s.Panel?.UpdateUndoEnabled();
     }
@@ -4501,7 +5028,7 @@ namespace vTools.Commands
         return false;
       }
       s.BothSidesToggle.CurrentValue = enabled;
-      s.RedoBatches.Clear();
+      ClearNotchRedo(s);
       s.Panel?.UpdateUndoEnabled();
       return true;
     }
@@ -4520,7 +5047,7 @@ namespace vTools.Commands
         return false;
       }
       SaveOptions(s);
-      s.RedoBatches.Clear();
+      ClearNotchRedo(s);
       s.Panel?.RefreshNotchTrimIcon();
       s.Panel?.UpdateUndoEnabled();
       return true;
@@ -4548,6 +5075,7 @@ namespace vTools.Commands
       foreach (var rec in s.NotchRecords)
       {
         if (rec.LengthsFromStart == null || idx >= rec.LengthsFromStart.Count) continue;
+        if(rec.PlacementSources.TryGetValue(s.CurveIds[idx],out var boundarySource)&&boundarySource!=sourceId)continue;
         double old = rec.LengthsFromStart[idx];
         if (old < prefix - tolerance || old > prefix + sourceLength + tolerance)
           continue;
@@ -4582,7 +5110,7 @@ namespace vTools.Commands
         RebuildCurveNotches(doc, s, idx);
       }
       else
-        s.RedoBatches.Clear();
+        ClearNotchRedo(s);
       SelectBothCurves(doc, s);
       s.Panel?.UpdateUndoEnabled();
     }
@@ -4823,10 +5351,11 @@ namespace vTools.Commands
       public OptionToggle LabelSizeAutoToggle;
 
       public string LabelValueText;
+      public string LabelPrefixText = ConfiguredDefaultLabelPrefix;
       public double ManualLabelSize;
       public string NotchLayerName;
       public string LabelLayerName;
-      public bool   LabelAutoAdv;
+      public bool LabelAutoAdv => !string.IsNullOrWhiteSpace(LabelValueText);
       public bool   LabelSideFlip;
       public double MultipleStartOffset;
       public double MultipleEndOffset;
@@ -4853,6 +5382,10 @@ namespace vTools.Commands
       public readonly List<List<Guid>>   PlacementIds    = [];
       public readonly List<List<Guid?>>  PlacementLabelIds = [];
       public readonly List<NotchRecord>  NotchRecords    = [];
+      public long HistoryOrder;
+      public readonly Stack<NotchRemoval> Removals=[];
+      public readonly Stack<NotchRemoval> RemovalRedo=[];
+      public readonly HashSet<(NotchRecord Record,Guid Curve,bool Label)> RemovedSlots=[];
 
       // Per-curve source IDs — one inner list per curve slot; multiple IDs for joined chains.
       public readonly List<List<Guid>> PerCurveSourceIds;
@@ -4895,6 +5428,7 @@ namespace vTools.Commands
       public Point3d PreviewCursorPoint;
       public int PreviewRefCurveIndex;
       public List<double> PreviewLengthsFromStart = [];
+      public KinkTangentChoice PreviewKinkChoice;
       public bool MultipleHoverPreviewActive;
       public List<MultiplePlacementPlan>? MultipleHoverPlans;
       public readonly Stack<NotchUndoBatch> RedoBatches = [];
@@ -4904,7 +5438,7 @@ namespace vTools.Commands
         bool percent, bool group, bool label, string labelValue,
         double labelSize, bool labelSizeAuto, int labelSizePct,
         string notchLayer, string labelLayer, double labelOffset, double labelOffsetY,
-        bool labelAutoAdv, bool labelSideFlip, bool keepSelection,
+        bool labelSideFlip, bool keepSelection,
         double multipleStartOffset, double multipleEndOffset,
         bool multipleStartOffsetEnabled, bool multipleEndOffsetEnabled, int multipleNumber,
         double multipleDistance, bool multipleUseDistance,
@@ -4937,7 +5471,6 @@ namespace vTools.Commands
         ManualLabelSize = Math.Max(0.0, labelSize);
         NotchLayerName  = notchLayer ?? SpecialLayerCurrent;
         LabelLayerName  = labelLayer ?? "PLOT";
-        LabelAutoAdv    = labelAutoAdv;
         LabelSideFlip   = labelSideFlip;
         KeepCurveSelection = keepSelection;
         MultipleStartOffset = Math.Max(0.0, multipleStartOffset);
@@ -5013,6 +5546,7 @@ namespace vTools.Commands
 
     sealed class NotchRecord
     {
+      public long HistoryOrder;
       public Guid           BatchId;
       public string         Mode           = "distance";
       public double         NotchLength;
@@ -5023,6 +5557,7 @@ namespace vTools.Commands
       public bool           GroupEnabled;
       public bool           LabelEnabled;
       public List<string>   LabelValues    = [];
+      public string         LabelPrefix    = ConfiguredDefaultLabelPrefix;
       public double         LabelSize;
       public string         NotchLayer     = SpecialLayerCurrent;
       public string         LabelLayer     = "PLOT";
@@ -5034,6 +5569,9 @@ namespace vTools.Commands
       public List<Guid>     DetachedLabelIds = [];
       public double?        Percent;
       public KinkTangentChoice KinkChoice;
+      public readonly Dictionary<Guid,Guid> PlacementSources=[];
+      public Guid MatchSetId;
+      public NotchReuse? Reuse;
       public List<OffsetSplitEdit> OffsetSplits = [];
     }
 
@@ -5105,8 +5643,6 @@ namespace vTools.Commands
       const int CurveDragHandleWidth = 16; // Width of the only cursor and drag-sensitive handle area; matches link buttons.
       const float CurveDragDotDiameter = 2.0f; // Diameter of each drawn handle dot in device-independent pixels.
       const float CurveDragDotGap = 3.0f; // Equal edge-to-edge spacing between handle dots.
-      const int CurveIdentityMinimumWidth = 10; // Minimum width of the centered source-curve number in device-independent pixels.
-      const double CurveIdentityVerticalOffset = 1.0; // Downward optical adjustment for source-ID glyphs in device-independent pixels.
       const int CurveSideButtonWidth = 22; // Width of the borderless up/down side control in device-independent pixels.
       const int CurveBothSidesButtonWidth = 22; // Width of the two-sided notch icon control in device-independent pixels.
       const int CurveReverseButtonWidth = 22; // Width of the borderless single-arrow reverse control in device-independent pixels.
@@ -5131,8 +5667,6 @@ namespace vTools.Commands
       [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthDifferenceToleranceInches", "Smallest longest-to-shortest span considered significant, converted to model units.")] const double CurveLengthDifferenceToleranceInches = 1.0 / 16.0; // Smallest longest-to-shortest span considered significant, converted to model units.
 
        static readonly double ConfiguredCurveLengthDifferenceToleranceInches = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.NotchPanel.CurveLengthDifferenceToleranceInches", CurveLengthDifferenceToleranceInches); // Resolved once from advanced defaults; restart Rhino after changes.
-      const string CurveLengthWidthSample = "999.999"; // Minimum-width sizing sample; longer displayed curve lengths remain unrestricted.
-      const string CurveLengthDifferenceWidthSample = "(+999.999)"; // Minimum-width sizing sample for unrestricted signed superscript differences.
       const float CurveLengthDifferenceFontSize = 8.0f; // Font size of the signed longest/shortest superscript delta in device-independent pixels.
       const double CurveLengthDifferenceRaise = 3.0; // Upward superscript shift applied to signed length deltas in device-independent pixels.
       const double CurveDragRowOutlineWidth = 1.0; // Outline thickness around the row currently being dragged.
@@ -5155,10 +5689,8 @@ namespace vTools.Commands
       ]; // High-contrast badge colors assigned to significantly different curve-length groups.
       static readonly Eto.Drawing.Color CurveLengthGroupForeground =
         new(1.0f, 1.0f, 1.0f); // Text color shown over curve-length group badges.
-      static readonly Eto.Drawing.Color CurveIdentityHoverBackground =
-        SystemColors.Highlight; // Background applied to source IDs while their curve or row is hovered.
-      static readonly Eto.Drawing.Color CurveIdentityHoverForeground =
-        SystemColors.HighlightText; // Source-ID text color while its curve or row is hovered.
+      static readonly Eto.Drawing.Color CurveRowHoverBackground =
+        Eto.Drawing.Color.FromArgb(204, 230, 255); // Pale-blue row-handle feedback; dark grip dots remain legible.
       static readonly System.Windows.Media.Brush CurveBothSidesOnBrush =
         new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(6, 118, 201)); // Active two-sided icon stroke.
       static readonly System.Windows.Media.Brush CurveBothSidesOffBrush =
@@ -5192,10 +5724,11 @@ namespace vTools.Commands
       readonly NumericStepper _lengthStepper, _offsetStepper, _widthStepper;
       readonly DropDown    _notchLayerDrop;
       readonly CheckBox    _percentCheck, _groupCheck;
-      readonly CheckBox    _notchCheck, _labelCheck, _autoAdvCheck, _sideFlipCheck;
+      readonly CheckBox    _notchCheck, _labelCheck, _sideFlipCheck;
       System.Windows.Controls.CheckBox? _notchHeaderCheck;
       System.Windows.Controls.CheckBox? _labelHeaderCheck;
       readonly TextBox     _labelValueBox;
+      readonly TextBox     _labelPrefixBox;
       readonly DropDown    _labelLayerDrop;
       readonly Button _nextLabelButton;
       ContextMenu? _labelSequenceMenu;
@@ -5220,7 +5753,7 @@ namespace vTools.Commands
       Button[]   _bothSidesButtons = [];
       Button[]   _reverseButtons = [];
       CheckBox[] _enableChecks = [];
-      Label[]    _curveIdentityLabels = [];
+      Panel[]    _curveDragHandles = [];
       Label[]    _curveLengthLabels = [];
       Panel[]    _curveLengthBadges = [];
       Label?[]   _curveLengthDifferenceLabels = [];
@@ -5228,6 +5761,8 @@ namespace vTools.Commands
       Panel?[]   _curveTotalBadges = [];
       Label?[]   _curveTotalDifferenceLabels = [];
       int _curveTotalColumnWidth;
+      int _curveLengthColumnWidth;
+      int _curveDifferenceColumnWidth;
       CurveRowInfo[] _curveRows = [];
       readonly CurveRowHoverConduit _curveHoverConduit = new();
       Scrollable? _scrollable;
@@ -5264,7 +5799,7 @@ namespace vTools.Commands
         Resizable = true;
         Topmost   = true;
         ClientSize = new Eto.Drawing.Size(
-          Math.Max(ConfiguredDefaultWindowWidth, _windowWidth),
+          Math.Max(CurveMinimumWidth(), _windowWidth),
           _windowHeight > 0 ? _windowHeight : -1);
 
         // Type
@@ -5381,7 +5916,22 @@ namespace vTools.Commands
           ToolTip = "Create a text label at each placement",
         };
         _labelValueBox = MakeTextBox(s.LabelValueText);
-        _labelValueBox.ToolTip = "Text for the next label; Auto advances numbers or letters after placement";
+        int labelInputWidth = LabelInputWidth(_labelValueBox);
+        _labelValueBox.Width = labelInputWidth;
+        _labelPrefixBox = MakeTextBox(s.LabelPrefixText);
+        _labelPrefixBox.Width = labelInputWidth;
+        void RefreshLabelInputWidths()
+        {
+          if (_labelPrefixBox.ControlObject is System.Windows.FrameworkElement nativePrefix)
+          {
+            nativePrefix.MinWidth = labelInputWidth;
+            nativePrefix.Width = double.NaN;
+            nativePrefix.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
+          }
+        }
+        _labelPrefixBox.Load += (_, __) => RefreshLabelInputWidths();
+        _labelPrefixBox.ToolTip = "Fixed label prefix; the value stays closest to the notch on either side";
+        _labelValueBox.ToolTip = "Sequence value, automatically advanced after placement; leave empty to repeat only the prefix";
         _nextLabelButton = new Button
         {
           Text = NextLabelIconFallback,
@@ -5392,11 +5942,6 @@ namespace vTools.Commands
         _nextLabelButton.Load += (_, __) => InstallNextLabelIcon();
         _nextLabelButton.Click += (_, __) => SetNextDocumentLabel();
         Closed += (_, __) => _labelSequenceMenu?.Dispose();
-        _autoAdvCheck = new CheckBox
-        {
-          ToolTip = "Advance the label value after each placement; off repeats the same text",
-          Text = "Auto", Checked = s.LabelAutoAdv,
-        };
         _sideFlipCheck = new CheckBox
         {
           Text = "Side", Checked = s.LabelSideFlip,
@@ -5408,8 +5953,7 @@ namespace vTools.Commands
           ApplyFeatureToggle(notch: false, _labelCheck.Checked == true);
         };
         AttachTextLive(_labelValueBox, text => s.LabelValueText = text);
-        _autoAdvCheck.CheckedChanged += (_, __) =>
-        { if (_suppress) return; s.LabelAutoAdv = _autoAdvCheck.Checked == true; Redraw(); Persist(); };
+        AttachTextLive(_labelPrefixBox, text => s.LabelPrefixText = text);
         _sideFlipCheck.CheckedChanged += (_, __) =>
         { if (_suppress) return; s.LabelSideFlip = _sideFlipCheck.Checked == true; Redraw(); Persist(); };
 
@@ -5709,13 +6253,13 @@ namespace vTools.Commands
         MouseEnter += (_, __) =>
         {
           _viewportPointerActive = false;
-          ApplyCurveIdentityHighlights();
+          ApplyCurveRowHighlights();
           RefreshMultiplePreview();
         };
         MouseLeave += (_, __) =>
         {
           _viewportPointerActive = true;
-          ApplyCurveIdentityHighlights(_viewportCurveHoverRowIndex);
+          ApplyCurveRowHighlights(_viewportCurveHoverRowIndex);
           RefreshMultiplePreview();
         };
 
@@ -5751,11 +6295,11 @@ namespace vTools.Commands
         if(doc.RuntimeSerialNumber!=_s.Doc.RuntimeSerialNumber) return;
         var style=MatchingLabels.Read(doc);
         if(LabelSequences.NormalizeValue(_s.LabelValueText)==style.Value&&_s.ManualLabelSize==style.ManualSize&&_s.LabelLayerName==style.Layer&&
-          _s.LabelAutoAdv==style.AutoAdvance&&_s.LabelSizeAutoToggle.CurrentValue==style.AutoSize&&
+          _s.LabelSizeAutoToggle.CurrentValue==style.AutoSize&&
           _s.LabelSizePctValues[_s.LabelSizePctIndex]==style.SizePercent) return;
         _s.LabelValueText=style.Value;_s.ManualLabelSize=style.ManualSize;
         _s.LabelSizeOpt.CurrentValue=style.Height;_s.LabelLayerName=style.Layer;
-        _s.LabelAutoAdv=style.AutoAdvance;_s.LabelSizeAutoToggle.CurrentValue=style.AutoSize;
+        _s.LabelSizeAutoToggle.CurrentValue=style.AutoSize;
         _s.LabelSizePctIndex=Enumerable.Range(0,_s.LabelSizePctValues.Length).OrderBy(i=>Math.Abs(_s.LabelSizePctValues[i]-style.SizePercent)).First();
         UpdateStaticDefaultsFromSession(_s);
         SyncFromSession();
@@ -5766,6 +6310,7 @@ namespace vTools.Commands
         _offsetStepper.HasFocus ||
         _widthStepper.HasFocus ||
         _labelValueBox.HasFocus ||
+        _labelPrefixBox.HasFocus ||
         _labelSizeStepper.HasFocus ||
         _labelSizePctStepper.HasFocus ||
         _labelOffsetStepper.HasFocus ||
@@ -5833,13 +6378,14 @@ namespace vTools.Commands
         };
 
         // ── Label group ──────────────────────────────────────────────────────
+        var labelTextFields = new TableLayout { Spacing = new Eto.Drawing.Size(LabelInputSpacing, 0) };
+        labelTextFields.Rows.Add(new TableRow { ScaleHeight = false, Cells = {
+          new TableCell(_labelPrefixBox, true), new TableCell(_labelValueBox, false) } });
         var labelHeader = new TableLayout { Spacing = new Eto.Drawing.Size(4, 0) };
         labelHeader.Rows.Add(new TableRow { ScaleHeight = false, Cells = {
-          new TableCell(_labelValueBox, false),
+          new TableCell(labelTextFields, true),
           new TableCell(_nextLabelButton, false),
-          new TableCell(_autoAdvCheck,  false),
           new TableCell(_sideFlipCheck, false),
-          new TableCell(null,           true),   // filler â€” absorbs extra width
         } });
 
         var sizeRow = new TableLayout { Spacing = new Eto.Drawing.Size(4, 0) };
@@ -5992,6 +6538,11 @@ namespace vTools.Commands
           () => { _labelValueBox.Text = ConfiguredDefaultLabelValue; Persist(); }, $"Reset label to {ConfiguredDefaultLabelValue}");
         _fieldResetOverlays.Add(textOverlay);
         _labelValueBox.TextChanged += (_, __) => textOverlay.Refresh();
+        var prefixOverlay = new FieldResetOverlay(_labelPrefixBox,
+          () => !string.Equals(_labelPrefixBox.Text, ConfiguredDefaultLabelPrefix, StringComparison.Ordinal),
+          () => { _labelPrefixBox.Text = ConfiguredDefaultLabelPrefix; Persist(); }, "Reset label prefix");
+        _fieldResetOverlays.Add(prefixOverlay);
+        _labelPrefixBox.TextChanged += (_, __) => prefixOverlay.Refresh();
         Shown += (_, __) => { foreach (var overlay in _fieldResetOverlays) overlay.Refresh(); };
       }
 
@@ -6012,7 +6563,7 @@ namespace vTools.Commands
             (string.Equals(obj.Attributes.Name, NotchLabelObjectName, StringComparison.OrdinalIgnoreCase) ||
              obj.Attributes.GetUserString(NotchDataPrefix + "object_role") == "label" ||
              obj.Attributes.GetUserString(NotchDataPrefix + "version") != null))
-          .Select(obj => ((TextEntity)obj.Geometry).PlainText ?? string.Empty).ToArray();
+          .Select(obj => obj.Attributes.GetUserString(NotchDataPrefix + "label_text") ?? ((TextEntity)obj.Geometry).PlainText ?? string.Empty).ToArray();
         var choices = LabelSequences.FindNext(labels);
         Log.Write(Section, $"next label scan: labels={labels.Length} sequences={choices.Count}");
         _labelSequenceMenu?.Dispose();
@@ -6045,7 +6596,7 @@ namespace vTools.Commands
         _bothSidesButtons = new Button[_curveRows.Length];
         _reverseButtons = new Button[_curveRows.Length];
         _enableChecks = new CheckBox[_curveRows.Length];
-        _curveIdentityLabels = new Label[_curveRows.Length];
+        _curveDragHandles = new Panel[_curveRows.Length];
         _curveLengthLabels = new Label[_curveRows.Length];
         _curveLengthBadges = new Panel[_curveRows.Length];
         _curveLengthDifferenceLabels = new Label?[_curveRows.Length];
@@ -6070,19 +6621,6 @@ namespace vTools.Commands
         {
           int rowIndex = i;
           int curveIndex = _curveRows[i].LogicalIndex;
-          _curveIdentityLabels[i] = new Label
-          {
-            Text = _curveRows[i].DisplayNumber.ToString(
-              System.Globalization.CultureInfo.InvariantCulture),
-            ToolTip = $"Source curve {_curveRows[i].DisplayNumber}; hover to highlight it in the drawing",
-            VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
-          };
-          _curveIdentityLabels[i].Width = Math.Max(
-            CurveIdentityMinimumWidth,
-            (int)Math.Ceiling(_curveIdentityLabels[i].GetPreferredSize().Width));
-          _curveIdentityLabels[i].Load += (_, __) =>
-            ConfigureCurveIdentityLabel(_curveIdentityLabels[rowIndex]);
           bool initialSide = _s.CurveSideBySource.GetValueOrDefault(
             _curveRows[i].SourceId, _s.CurveSides[curveIndex]);
           _sideButtons[i] = new Button
@@ -6098,7 +6636,7 @@ namespace vTools.Commands
             Log.Write("vNotches",
               $"side control row={rowIndex + 1} sequence={curveIndex + 1} suppress={_suppress}");
             if (_suppress) return;
-            _s.RedoBatches.Clear();
+            ClearNotchRedo(_s);
             bool newSide = !_s.CurveSideBySource.GetValueOrDefault(
               _curveRows[rowIndex].SourceId,
               _s.CurveSides[curveIndex]);
@@ -6171,14 +6709,13 @@ namespace vTools.Commands
             Text = FormatPanelNumber(_curveRows[i].Curve.GetLength()),
             ToolTip = "Length of this source curve, in model units",
             VerticalAlignment = VerticalAlignment.Center,
-            TextAlignment = TextAlignment.Center,
+            TextAlignment = TextAlignment.Right,
           };
-          ReserveLabelWidth(_curveLengthLabels[i], CurveLengthWidthSample);
           bool linkedSequenceRow = _curveRows[i].LinkedToPrevious ||
             (i + 1 < _curveRows.Length && _curveRows[i + 1].LinkedToPrevious);
+          if (!linkedSequenceRow) _curveLengthLabels[i].TextAlignment = TextAlignment.Left;
           if (!linkedSequenceRow)
-            _curveLengthDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(
-              CurveLengthDifferenceWidthSample, actualDifferenceWidthSample);
+            _curveLengthDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(actualDifferenceWidthSample);
           _curveLengthBadges[i] = new Panel
           {
             ToolTip = _curveLengthLabels[i].ToolTip,
@@ -6195,11 +6732,9 @@ namespace vTools.Commands
               Text = FormatPanelNumber(totalLength.Value),
               ToolTip = "Total length of the linked curve sequence, in model units",
               VerticalAlignment = VerticalAlignment.Center,
-              TextAlignment = TextAlignment.Center,
+              TextAlignment = TextAlignment.Left,
             };
-            ReserveLabelWidth(_curveTotalLabels[i]!, CurveLengthWidthSample);
-            _curveTotalDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(
-              CurveLengthDifferenceWidthSample, actualDifferenceWidthSample);
+            _curveTotalDifferenceLabels[i] = CreateCurveLengthDifferenceLabel(actualDifferenceWidthSample);
             _curveTotalBadges[i] = new Panel
             {
               ToolTip = _curveTotalLabels[i]!.ToolTip,
@@ -6232,19 +6767,30 @@ namespace vTools.Commands
             };
           }
         }
-        int identityColumnWidth = _curveIdentityLabels.Select(label => label.Width)
-          .DefaultIfEmpty(CurveIdentityMinimumWidth).Max();
-        foreach (var label in _curveIdentityLabels)
-          label.Width = identityColumnWidth;
+        bool LinkedRow(int index) => _curveRows[index].LinkedToPrevious ||
+          (index + 1 < _curveRows.Length && _curveRows[index + 1].LinkedToPrevious);
+        _curveLengthColumnWidth = Enumerable.Range(0, _curveRows.Length).Where(LinkedRow)
+          .Select(index => (int)Math.Ceiling(_curveLengthBadges[index].GetPreferredSize().Width))
+          .DefaultIfEmpty(0).Max();
+        _curveTotalColumnWidth = Math.Max(_curveTotalColumnWidth,
+          Enumerable.Range(0, _curveRows.Length).Where(index => !LinkedRow(index))
+            .Select(index => (int)Math.Ceiling(_curveLengthBadges[index].GetPreferredSize().Width))
+            .DefaultIfEmpty(0).Max());
+        for (int i = 0; i < _curveRows.Length; i++)
+          _curveLengthBadges[i].Width = LinkedRow(i) ? _curveLengthColumnWidth : _curveTotalColumnWidth;
+        foreach (var badge in _curveTotalBadges.OfType<Panel>())
+          badge.Width = _curveTotalColumnWidth;
+        var differences = _curveLengthDifferenceLabels.Concat(_curveTotalDifferenceLabels).OfType<Label>().ToArray();
+        _curveDifferenceColumnWidth = differences.Select(label => label.Width).DefaultIfEmpty(0).Max();
+        foreach (var label in differences) label.Width = _curveDifferenceColumnWidth;
         ApplyCurveLengthHighlights();
       }
 
-      static Label CreateCurveLengthDifferenceLabel(
-        string widthSample, string actualValueSample)
+      static Label CreateCurveLengthDifferenceLabel(string actualValueSample)
       {
         var label = new Label
         {
-          Text = widthSample,
+          Text = actualValueSample,
           ToolTip = "Difference from the other selected curve lengths, in model units",
           Font = new Eto.Drawing.Font(
             Eto.Drawing.SystemFont.Default,
@@ -6263,22 +6809,12 @@ namespace vTools.Commands
         int width = (int)Math.Ceiling(label.GetPreferredSize().Width);
         if (!string.IsNullOrEmpty(actualValueSample))
         {
-          label.Text = actualValueSample;
-          width = Math.Max(width, (int)Math.Ceiling(label.GetPreferredSize().Width));
+          using var measure = new Label { Text = actualValueSample, Font = label.Font };
+          width = Math.Max(width, (int)Math.Ceiling(measure.GetPreferredSize().Width));
         }
         label.Width = width;
         label.Text = "";
         return label;
-      }
-
-      static void ReserveLabelWidth(Label label, string widthSample)
-      {
-        string text = label.Text;
-        int width = (int)Math.Ceiling(label.GetPreferredSize().Width);
-        label.Text = widthSample;
-        width = Math.Max(width, (int)Math.Ceiling(label.GetPreferredSize().Width));
-        label.Width = width;
-        label.Text = text;
       }
 
       static void ConfigureCurveDirectionButton(Button button)
@@ -6347,22 +6883,6 @@ namespace vTools.Commands
           "ButtonBackground"));
         template.Triggers.Add(pressedTrigger);
         return template;
-      }
-
-      static void ConfigureCurveIdentityLabel(Label label)
-      {
-        if (label.ControlObject is not System.Windows.FrameworkElement nativeLabel)
-          return;
-        nativeLabel.VerticalAlignment = System.Windows.VerticalAlignment.Center;
-        nativeLabel.HorizontalAlignment = System.Windows.HorizontalAlignment.Stretch;
-        nativeLabel.Margin = new System.Windows.Thickness(0.0);
-        nativeLabel.RenderTransform = new System.Windows.Media.TranslateTransform(
-          0.0, CurveIdentityVerticalOffset);
-        if (nativeLabel is System.Windows.Controls.TextBlock textBlock)
-        {
-          textBlock.TextAlignment = System.Windows.TextAlignment.Center;
-          textBlock.Padding = new System.Windows.Thickness(0.0);
-        }
       }
 
       void UpdateCurveSideButton(int rowIndex, bool side)
@@ -6480,62 +7000,84 @@ namespace vTools.Commands
           Orientation = Orientation.Vertical,
           Spacing = CurveRowSpacing,
         };
-        for (int i = 0; i < _curveRows.Length; i++)
+        for (int start = 0; start < _curveRows.Length;)
         {
-          int rowIndex = i;
-          var row = new StackLayout
+          int end = start;
+          while (end + 1 < _curveRows.Length && _curveRows[end + 1].LinkedToPrevious) end++;
+          bool linked = end > start;
+          int groupHeight = (end - start + 1) * CurveRowHeight + (end - start) * CurveRowSpacing;
+          var rows = new StackLayout { Orientation = Orientation.Vertical, Spacing = CurveRowSpacing };
+          for (int i = start; i <= end; i++)
           {
-            Orientation = Orientation.Horizontal,
-            Spacing = CurveRowControlSpacing,
-            VerticalContentAlignment = VerticalAlignment.Center,
-            Height = CurveRowHeight,
-          };
-          var dragHandle = CreateCurveDragHandle();
-          dragHandle.Load += (_, __) => InstallCurveRowDrag(dragHandle, rowIndex);
-          row.Items.Add(new StackLayoutItem(dragHandle, false));
-          row.Items.Add(new StackLayoutItem(_curveIdentityLabels[i], false));
-          if (_s.Curves.Count > 1 && _enableChecks[i] != null)
-            row.Items.Add(new StackLayoutItem(_enableChecks[i], false));
-          row.Items.Add(new StackLayoutItem(_sideButtons[i], false));
-          row.Items.Add(new StackLayoutItem(_reverseButtons[i], false));
-          row.Items.Add(new StackLayoutItem(_bothSidesButtons[i], false));
-          row.Items.Add(new StackLayoutItem(null, true));
-          row.Items.Add(new StackLayoutItem(_curveLengthBadges[i], false));
-          if (_curveTotalBadges[i] != null)
-          {
-            Control totalCell = _curveTotalBadges[i]!;
-            totalCell.Width = _curveTotalColumnWidth;
-            row.Items.Add(new StackLayoutItem(totalCell, false));
-            if (_curveTotalDifferenceLabels[i] != null)
-              row.Items.Add(new StackLayoutItem(
-                _curveTotalDifferenceLabels[i]!, false));
-          }
-          else if (_curveLengthDifferenceLabels[i] != null)
-          {
-            row.Items.Add(new StackLayoutItem(
-              _curveLengthDifferenceLabels[i]!, false));
-          }
-          else if (_curveTotalColumnWidth > 0)
-          {
-            row.Items.Add(new StackLayoutItem(
-              new Panel { Width = _curveTotalColumnWidth }, false));
-          }
-          row.MouseEnter += (_, __) => SetCurveRowHover(rowIndex);
-          row.MouseLeave += (_, __) =>
-          {
-            if (!_curveRowDragInProgress && _curveHoverConduit.CurveIndex == rowIndex)
-              ClearCurveRowHover();
-          };
-          row.Load += (_, __) =>
-          {
-            if (row.ControlObject is System.Windows.FrameworkElement nativeRow)
+            int rowIndex = i;
+            var row = new StackLayout
             {
-              _nativeCurveRows[rowIndex] = nativeRow;
-              if (nativeRow is System.Windows.Controls.Panel nativePanel)
-                _nativeCurveRowBackgrounds[rowIndex] = nativePanel.Background;
-            }
+              Orientation = Orientation.Horizontal,
+              Spacing = CurveRowControlSpacing,
+              VerticalContentAlignment = VerticalAlignment.Center,
+              Height = CurveRowHeight,
+            };
+            var dragHandle = CreateCurveDragHandle();
+            _curveDragHandles[i] = dragHandle;
+            dragHandle.Load += (_, __) => InstallCurveRowDrag(dragHandle, rowIndex);
+            row.Items.Add(new StackLayoutItem(dragHandle, false));
+            if (_s.Curves.Count > 1 && _enableChecks[i] != null)
+              row.Items.Add(new StackLayoutItem(_enableChecks[i], false));
+            row.Items.Add(new StackLayoutItem(_sideButtons[i], false));
+            row.Items.Add(new StackLayoutItem(_reverseButtons[i], false));
+            row.Items.Add(new StackLayoutItem(_bothSidesButtons[i], false));
+            row.Items.Add(new StackLayoutItem(null, true));
+            if (_curveLengthColumnWidth > 0)
+              row.Items.Add(new StackLayoutItem(CurveNumberCell(
+                linked ? _curveLengthBadges[i] : null, _curveLengthColumnWidth), false));
+            row.MouseEnter += (_, __) => SetCurveRowHover(rowIndex);
+            row.MouseLeave += (_, __) =>
+            {
+              if (!_curveRowDragInProgress && _curveHoverConduit.CurveIndex == rowIndex)
+                ClearCurveRowHover();
+            };
+            row.Load += (_, __) =>
+            {
+              if (row.ControlObject is System.Windows.FrameworkElement nativeRow)
+              {
+                _nativeCurveRows[rowIndex] = nativeRow;
+                if (nativeRow is System.Windows.Controls.Panel nativePanel)
+                  _nativeCurveRowBackgrounds[rowIndex] = nativePanel.Background;
+              }
+            };
+            rows.Items.Add(new StackLayoutItem(row));
+          }
+          Panel totalBadge = linked ? _curveTotalBadges[start]! : _curveLengthBadges[start];
+          // Span the text badges, leaving the same clear space above and below as each row.
+          int textHeight = (int)Math.Ceiling(totalBadge.GetPreferredSize().Height);
+          totalBadge.Height = Math.Min(CurveRowHeight, textHeight) +
+            (end - start) * (CurveRowHeight + CurveRowSpacing);
+          var totalCell = new StackLayout
+          {
+            Width = _curveTotalColumnWidth,
+            Height = groupHeight,
+            Orientation = Orientation.Vertical,
+            Items = { new StackLayoutItem(null, true), totalBadge, new StackLayoutItem(null, true) },
           };
-          curveStack.Items.Add(new StackLayoutItem(row));
+          var group = new TableLayout { Spacing = new Eto.Drawing.Size(CurveRowControlSpacing, 0) };
+          var groupRow = new TableRow { ScaleHeight = false };
+          groupRow.Cells.Add(new TableCell(rows, true));
+          groupRow.Cells.Add(new TableCell(totalCell, false));
+          if (_curveDifferenceColumnWidth > 0)
+          {
+            Label? difference = _curveTotalDifferenceLabels[start] ?? _curveLengthDifferenceLabels[start];
+            var differenceCell = new StackLayout
+            {
+              Width = _curveDifferenceColumnWidth,
+              Height = groupHeight,
+              Orientation = Orientation.Vertical,
+              Items = { new StackLayoutItem(null, true), difference, new StackLayoutItem(null, true) },
+            };
+            groupRow.Cells.Add(new TableCell(differenceCell, false));
+          }
+          group.Rows.Add(groupRow);
+          curveStack.Items.Add(new StackLayoutItem(group));
+          start = end + 1;
         }
         curveStack.Load += (_, __) =>
         {
@@ -6544,6 +7086,14 @@ namespace vTools.Commands
         };
         return curveStack;
       }
+
+      static StackLayout CurveNumberCell(Control? content, int width) => new StackLayout
+      {
+        Width = width,
+        Orientation = Orientation.Horizontal,
+        VerticalContentAlignment = VerticalAlignment.Center,
+        Items = { new StackLayoutItem(null, true), content },
+      };
 
       static Panel CreateCurveDragHandle()
       {
@@ -6868,6 +7418,7 @@ namespace vTools.Commands
             if (_nativeCurveRows.TryGetValue(index, out var row))
               row.RenderTransform = new System.Windows.Media.TranslateTransform(0.0, CurveRowHeight);
         }
+        UpdateCurveDragRowHighlight();
       }
 
       void ResetCurveRowTransforms()
@@ -6882,7 +7433,17 @@ namespace vTools.Commands
       void ClearCurveDragPreview()
       {
         ResetCurveRowTransforms();
+        UpdateCurveDragRowHighlight();
         _curveDropInsertionIndex = -1;
+      }
+
+      void UpdateCurveDragRowHighlight()
+      {
+        if (_curveDragHighlightAdorner is not { } highlight)
+          return;
+        // OLE dragging can defer layout; update the row and its overlay together.
+        highlight.AdornedElement.UpdateLayout();
+        _curveDragHighlightLayer?.Update(highlight.AdornedElement);
       }
 
       void SetCurveDragRowHighlight(int rowIndex, bool highlighted)
@@ -7039,7 +7600,7 @@ namespace vTools.Commands
 
       int CurveMinimumWidth()
       {
-        return ConfiguredDefaultWindowWidth;
+        return Math.Max(ConfiguredDefaultWindowWidth, DefaultWindowWidth + LabelPrefixLayoutAllowance);
       }
 
       void ConfigureCurveScroller()
@@ -7150,7 +7711,7 @@ namespace vTools.Commands
         _curveHoverConduit.Curve = _curveRows[curveIndex].Curve;
         _curveHoverConduit.SecondCurve = null;
         _curveHoverConduit.Enabled = true;
-        ApplyCurveIdentityHighlights(curveIndex);
+        ApplyCurveRowHighlights(curveIndex);
         Redraw();
       }
 
@@ -7162,13 +7723,13 @@ namespace vTools.Commands
         _curveHoverConduit.Curve = _curveRows[boundaryIndex - 1].Curve;
         _curveHoverConduit.SecondCurve = _curveRows[boundaryIndex].Curve;
         _curveHoverConduit.Enabled = true;
-        ApplyCurveIdentityHighlights(boundaryIndex - 1, boundaryIndex);
+        ApplyCurveRowHighlights(boundaryIndex - 1, boundaryIndex);
         Redraw();
       }
 
       void ClearCurveRowHover()
       {
-        ApplyCurveIdentityHighlights(
+        ApplyCurveRowHighlights(
           _viewportPointerActive ? _viewportCurveHoverRowIndex : -1);
         if (!_curveHoverConduit.Enabled &&
             _curveHoverConduit.Curve == null &&
@@ -7181,19 +7742,16 @@ namespace vTools.Commands
         Redraw();
       }
 
-      void ApplyCurveIdentityHighlights(params int[] rowIndices)
+      void ApplyCurveRowHighlights(params int[] rowIndices)
       {
         var highlighted = rowIndices.Where(index =>
-          index >= 0 && index < _curveIdentityLabels.Length).ToHashSet();
-        for (int index = 0; index < _curveIdentityLabels.Length; index++)
+          index >= 0 && index < _curveDragHandles.Length).ToHashSet();
+        for (int index = 0; index < _curveDragHandles.Length; index++)
         {
-          bool active = highlighted.Contains(index);
-          _curveIdentityLabels[index].BackgroundColor = active
-            ? CurveIdentityHoverBackground
+          if (_curveDragHandles[index] is not { } handle) continue;
+          handle.BackgroundColor = highlighted.Contains(index)
+            ? CurveRowHoverBackground
             : Colors.Transparent;
-          _curveIdentityLabels[index].TextColor = active
-            ? CurveIdentityHoverForeground
-            : SystemColors.ControlText;
         }
       }
 
@@ -7214,7 +7772,7 @@ namespace vTools.Commands
         }
         _viewportCurveHoverRowIndex = rowIndex;
         if (_viewportPointerActive)
-          ApplyCurveIdentityHighlights(rowIndex);
+          ApplyCurveRowHighlights(rowIndex);
       }
 
       void ApplyDynamic()
@@ -7224,6 +7782,23 @@ namespace vTools.Commands
 
       static TextBox MakeTextBox(string text) =>
         new TextBox { Text = text, Width = 70, Height = 22 };
+
+      static int LabelInputWidth(TextBox input)
+      {
+        if (input.ControlObject is System.Windows.Controls.TextBox native)
+        {
+          native.ApplyTemplate();
+          var sample = new System.Windows.Media.FormattedText(LabelValueWidthSample,
+            System.Globalization.CultureInfo.CurrentUICulture, native.FlowDirection,
+            new System.Windows.Media.Typeface(native.FontFamily, native.FontStyle, native.FontWeight, native.FontStretch),
+            native.FontSize, System.Windows.Media.Brushes.Black, System.Windows.Media.VisualTreeHelper.GetDpi(native).PixelsPerDip);
+          return (int)Math.Ceiling(sample.WidthIncludingTrailingWhitespace + native.Padding.Left + native.Padding.Right +
+            native.BorderThickness.Left + native.BorderThickness.Right + FieldResetOverlay.TextReserveWidth + LabelTextCaretWidth);
+        }
+        using var measure = new Label { Text = LabelValueWidthSample, Font = input.Font };
+        return (int)Math.Ceiling(measure.GetPreferredSize().Width + LabelTextFallbackInsets +
+          FieldResetOverlay.TextReserveWidth + LabelTextCaretWidth);
+      }
 
       static NumericStepper MakeNumberStepper(double value, double minValue,
         double maxValue, double increment, int maximumDecimalPlaces = 3)
@@ -7890,7 +8465,7 @@ namespace vTools.Commands
           return;
 
         _viewportPointerActive = true;
-        ApplyCurveIdentityHighlights(_viewportCurveHoverRowIndex);
+        ApplyCurveRowHighlights(_viewportCurveHoverRowIndex);
         RefreshMultiplePreview();
       }
 
@@ -8127,13 +8702,13 @@ namespace vTools.Commands
           if (_labelHeaderCheck != null)
             _labelHeaderCheck.IsChecked = _s.LabelToggle.CurrentValue;
           _labelValueBox.Text            = _s.LabelValueText;
+          _labelPrefixBox.Text           = _s.LabelPrefixText;
           _labelSizeStepper.Value        = _s.ManualLabelSize;
           _labelSizeAutoCheck.Checked    = _s.LabelSizeAutoToggle.CurrentValue;
           UpdateLabelSizeEnabled();
           _labelSizePctStepper.Value     = _s.LabelSizePctValues[Math.Max(0, _s.LabelSizePctIndex)];
           _labelOffsetStepper.Value      = _s.LabelOffsetOpt.CurrentValue;
           _labelOffsetYStepper.Value     = _s.LabelOffsetYOpt.CurrentValue;
-          _autoAdvCheck.Checked          = _s.LabelAutoAdv;
           _sideFlipCheck.Checked         = _s.LabelSideFlip;
           _multipleStartOffsetStepper.Value = _s.MultipleStartOffset;
           _multipleEndOffsetStepper.Value   = _s.MultipleEndOffset;
@@ -8188,7 +8763,7 @@ namespace vTools.Commands
         if (!_s.NotchToggle.CurrentValue && !_s.LabelToggle.CurrentValue)
           _s.NotchToggle.CurrentValue = true;
         _s.LabelValueText = _labelValueBox.Text;
-        _s.LabelAutoAdv = _autoAdvCheck.Checked == true;
+        _s.LabelPrefixText = _labelPrefixBox.Text;
         _s.LabelSideFlip = _sideFlipCheck.Checked == true;
         _s.LabelLayerName = LayerSelector.GetDropDownValue(
           _labelLayerDrop, _s.LabelLayerName);
@@ -8236,8 +8811,8 @@ namespace vTools.Commands
 
       public void UpdateUndoEnabled()
       {
-        _undoBtn.Enabled = _s.NotchRecords.Count > 0;
-        _redoBtn.Enabled = _s.RedoBatches.Count > 0;
+        _undoBtn.Enabled = _s.NotchRecords.Count > 0 || _s.Removals.Count > 0;
+        _redoBtn.Enabled = _s.RedoBatches.Count > 0 || _s.RemovalRedo.Count > 0;
       }
     }
   }
@@ -8917,6 +9492,8 @@ namespace vTools
       int index = SelectRunIndex(_ends,
         logicalLength, preferFollowing, _tolerance);
       var run = _runs[index];
+      if(Math.Abs(logicalLength-run.Start)<=_tolerance)return (run.Curve,0);
+      if(Math.Abs(logicalLength-run.Start-run.Length)<=_tolerance)return (run.Curve,run.GeometryLength);
       return (run.Curve, Math.Clamp(logicalLength - run.Start, 0.0, run.GeometryLength));
     }
 

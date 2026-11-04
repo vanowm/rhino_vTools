@@ -87,6 +87,7 @@ namespace vTools.Commands
     private const string CutName = "PartSplitCut"; // Object name for a nominal Reference-layer cut on the original part.
     private const string SewName = "PartSplitSewLine"; // Object name for nominal split lines included inside each output part.
     private const string SewLayer = "PLOT"; // Existing or new Rhino layer for the split parts' sew lines.
+    private const double MinimumFinishedAreaRatio = 0.5; // Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", "true adds matching seam labels using vNotches settings; false omits new seam labels.")]
     private const bool DefaultLabel = false; // true labels mating seams; false retains the unlabeled split workflow.
     private static readonly bool ConfiguredDefaultLabel = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults.
@@ -127,12 +128,21 @@ namespace vTools.Commands
       internal PlanarPartSplitter.Proposal? CachedProposal;
       internal List<LocalCut>? CachedCuts;
       internal List<CutPreview> CutPreviews { get; } = [];
-      public void Dispose() { foreach(var panel in Panels) panel.Dispose(); foreach(var cut in CutPreviews)cut.Dispose(); Part.Dispose(); }
+      public void Dispose()
+      {
+        foreach(var panel in Panels)panel.Dispose();foreach(var cut in CutPreviews)cut.Dispose();
+        if(SourceCache.TryGetValue(Part,out var source)){source.Dispose();SourceCache.Remove(Part);}
+        Part.Dispose();
+      }
     }
     private sealed record Output(List<Guid> Added, List<int> Groups, List<Guid> Copies);
     private sealed record LocalCut(Plane Frame);
     private sealed record SourceItem(Item Item,BoundingBox Bounds,bool Boundary);
-    private sealed record SourceDetails(List<SourceItem> Items,double Area);
+    private sealed record SourceDetails(List<SourceItem> Items,double Area,Curve? FinishedBoundary) : IDisposable
+    {
+      public void Dispose(){FinishedBoundary?.Dispose();GC.SuppressFinalize(this);}
+      ~SourceDetails(){FinishedBoundary?.Dispose();}
+    }
     private sealed record CutPreview(Curve Line,List<Curve> Segments) : IDisposable
     { public void Dispose(){Line.Dispose();foreach(var segment in Segments)segment.Dispose();} }
     private sealed record SeamLabel(int Seam, int Segment, string Value, TextEntity Text);
@@ -613,14 +623,11 @@ namespace vTools.Commands
       PlanarPartSplitter.Settings settings,double tolerance,out double maximumWidth,IReadOnlyList<Panel>? previous,int changedSeam)
     {
       maximumWidth=0;
-      var panels=new List<Panel>();var labels=new HashSet<Guid>();double nominalArea=0;
+      var panels=new List<Panel>();double nominalArea=0;
       try
       {
         if(!OrderedCuts(part,cuts,tolerance))return [];
         var source=GetSourceDetails(part,tolerance);
-        if(previous!=null)
-          foreach(var panel in previous.Where(panel=>panel.BandIndex!=changedSeam&&panel.BandIndex!=changedSeam+1))
-            foreach(var item in panel.Details.Where(item=>item.Geometry is not Curve))labels.Add(item.Id);
         for(int band=0;band<=cuts.Count;band++)
         {
           if(previous!=null&&band!=changedSeam&&band!=changedSeam+1)
@@ -653,7 +660,7 @@ namespace vTools.Commands
               {
                 if(index<0||index>=cuts.Count)continue;
                 using var sew=SplitLine(part,proposal,cuts,index,tolerance);
-                if(sew!=null)panel.SewLines.AddRange(PlanarPartSplitter.ClipCurve(sew,cut,part.Plane,tolerance));
+                if(sew!=null)panel.SewLines.AddRange(ClipSewLine(part,sew,cut,tolerance));
               }
             }
             if(panels.Count>firstPanel)panels[firstPanel].NominalArea=bandArea;
@@ -675,17 +682,12 @@ namespace vTools.Commands
               var item=detail.Item;
               if(item.Geometry is Curve curve)
               {
-                foreach(var piece in PlanarPartSplitter.ClipCurve(curve,panel.Cut,part.Plane,tolerance))
+                foreach(var piece in ClipDetail(item,panel,part.Plane,tolerance))
                   if(detail.Boundary&&Coincident(piece,part.Outline,tolerance))piece.Dispose();else panel.Details.Add(item with{Geometry=piece});
-              }
-              else
-              {
-                var point=RepresentativePoint(item.Geometry);
-                if(point.IsValid&&!labels.Contains(item.Id)&&panel.Preview.Any(outline=>outline.Contains(point,part.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident))
-                {panel.Details.Add(item with{Geometry=item.Geometry.Duplicate()});labels.Add(item.Id);}
               }
             }
           }
+        if(maximumWidth<=settings.Width+tolerance)AssignNonCurveDetails(part,panels,tolerance);
         return panels;
       }
       catch(Exception ex){foreach(var panel in panels)if(previous==null||!previous.Contains(panel))panel.Dispose();Log.Write("vPartSplit","cross-cut layout rejected: {0}",ex.Message);return [];}
@@ -702,7 +704,21 @@ namespace vTools.Commands
         items.Add(new(item,item.Geometry.GetBoundingBox(source.Plane),boundary));
       }
       using var mass=AreaMassProperties.Compute(source.Outline);
-      return new(items,mass?.Area??throw new InvalidOperationException("source area could not be measured"));
+      double area=mass?.Area??throw new InvalidOperationException("source area could not be measured");
+      var sewItems=source.Items.Where(item=>item.Geometry is Curve&&IsSewDetail(item)).ToArray();
+      var loops=GroupBoundaryTopology.PlanarRegions(sewItems.Select(item=>(Curve)item.Geometry).ToArray(),tolerance,tolerance);
+      try
+      {
+        var finished=loops.Where(loop=>loop.IsClosed&&loop.IsInPlane(source.Plane,tolerance))
+          .Select(loop=>{using var properties=AreaMassProperties.Compute(loop);return (Loop:loop,Area:properties?.Area??0);})
+          .Where(candidate=>candidate.Area<=area+tolerance*source.Outline.GetLength()&&
+            (candidate.Area>=area*MinimumFinishedAreaRatio||sewItems.Any(item=>item.Attributes.GetUserString("vSeam.sourceRoot")!=null)))
+          .Where(candidate=>Coincident(candidate.Loop,source.Outline,tolerance)||
+            source.Outline.Contains(candidate.Loop.PointAtNormalizedLength(0.5),source.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident)
+          .OrderByDescending(candidate=>candidate.Area).FirstOrDefault().Loop;
+        return new(items,area,finished?.DuplicateCurve());
+      }
+      finally {foreach(var loop in loops)loop.Dispose();}
     });
 
     private static bool BoundsOverlap(BoundingBox a,BoundingBox b,double tolerance) =>
@@ -814,7 +830,7 @@ namespace vTools.Commands
               {
                 if(seamIndex<0 || seamIndex>=proposal.Seams.Count) continue;
                 using var sew = PlanarPartSplitter.Seam(part.Outline,proposal.Frame,proposal.Seams[seamIndex],tolerance);
-                if(sew!=null) panel.SewLines.AddRange(PlanarPartSplitter.ClipCurve(sew,cut,proposal.Frame,tolerance));
+                if(sew!=null) panel.SewLines.AddRange(ClipSewLine(part,sew,cut,tolerance));
               }
               foreach (var item in part.Items)
               {
@@ -823,20 +839,9 @@ namespace vTools.Commands
                   bool boundaryLayer = item.Attributes.LayerIndex == part.Attributes.LayerIndex &&
                     !string.Equals(item.Attributes.Name,NotchName,StringComparison.OrdinalIgnoreCase) &&
                     item.Attributes.GetUserString(NotchRoleKey) != "notch";
-                  foreach (var piece in PlanarPartSplitter.ClipCurve(curve,cut,proposal.Frame,tolerance))
+                  foreach (var piece in ClipDetail(item,panel,proposal.Frame,tolerance))
                     if (boundaryLayer && Coincident(piece,part.Outline,tolerance)) piece.Dispose();
                     else panel.Details.Add(item with { Geometry=piece });
-                }
-                else
-                {
-                  var point = RepresentativePoint(item.Geometry);
-                  double y = PlanarPartSplitter.FrameY(proposal.Frame,point);
-                  bool owns = y >= nominal.Lower-tolerance && (index==proposal.Seams.Count
-                    ? y <= nominal.Upper+tolerance : y < nominal.Upper-tolerance);
-                  if (point.IsValid && owns && cut.Contains(point,proposal.Frame,tolerance) is PointContainment.Inside or PointContainment.Coincident)
-                  {
-                    panel.Details.Add(item with { Geometry=item.Geometry.Duplicate() });
-                  }
                 }
               }
             }
@@ -844,16 +849,54 @@ namespace vTools.Commands
           finally { foreach (var curve in cuts.Concat(previews)) curve.Dispose(); }
         }
         if (panels.Count == 0 || panels.Count > settings.MaxParts) throw new InvalidOperationException("no valid split panels");
+        AssignNonCurveDetails(part,panels,tolerance);
         return panels;
       }
       catch (Exception ex)
       { foreach (var panel in panels) panel.Dispose(); Log.Write("vPartSplit","layout rejected: {0}",ex.Message); return []; }
     }
 
+    private static bool IsSewDetail(Item item)=>string.Equals(item.LayerPath.Split("::").Last(),SewLayer,StringComparison.OrdinalIgnoreCase)||
+      string.Equals(item.Attributes.Name,SewName,StringComparison.OrdinalIgnoreCase)||item.Attributes.GetUserString("vSeam.sourceRoot")!=null;
+
+    private static IEnumerable<Curve> ClipSewLine(Part part,Curve line,Curve cut,double tolerance)
+    {
+      var boundary=GetSourceDetails(part,tolerance).FinishedBoundary??part.Outline;
+      foreach(var piece in PlanarPartSplitter.ClipCurve(line,boundary,part.Plane,tolerance))
+        using(piece)
+          foreach(var clipped in PlanarPartSplitter.ClipCurve(piece,cut,part.Plane,tolerance))yield return clipped;
+    }
+
+    private static IEnumerable<Curve> ClipDetail(Item item,Panel panel,Plane plane,double tolerance)
+    {
+      var source=(Curve)item.Geometry;
+      bool sew=IsSewDetail(item);
+      // Finished seam/reference paths stop at the sew line, not at the allowance's outer cut edge.
+      IEnumerable<Curve> boundaries=sew?panel.Preview:new[]{panel.Cut};
+      foreach(var boundary in boundaries)
+        foreach(var piece in PlanarPartSplitter.ClipCurve(source,boundary,plane,tolerance))yield return piece;
+    }
+
+    private static void AssignNonCurveDetails(Part part,IReadOnlyList<Panel> panels,double tolerance)
+    {
+      var assigned=panels.SelectMany(panel=>panel.Details).Where(item=>item.Geometry is not Curve).Select(item=>item.Id).ToHashSet();
+      foreach(var item in part.Items.Where(item=>item.Geometry is not Curve&&!assigned.Contains(item.Id)))
+      {
+        var point=part.Plane.ClosestPoint(RepresentativePoint(item.Geometry));
+        if(!point.IsValid)throw new InvalidOperationException("a part label or point has no valid location");
+        // Grouped labels may sit outside the outline; keep them with the nearest nominal piece.
+        var owner=panels.FirstOrDefault(panel=>panel.Preview.Any(outline=>outline.Contains(point,part.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident))
+          ??panels.OrderBy(panel=>panel.Preview.Min(outline=>outline.ClosestPoint(point,out var parameter)?point.DistanceToSquared(outline.PointAt(parameter)):double.PositiveInfinity)).First();
+        owner.Details.Add(item with {Geometry=item.Geometry.Duplicate()});
+        assigned.Add(item.Id);
+      }
+    }
+
     private static Point3d RepresentativePoint(GeometryBase geometry) => geometry switch
     {
       Rhino.Geometry.Point point => point.Location,
       TextDot dot => dot.Point,
+      AnnotationBase annotation => annotation.Plane.Origin,
       _ => geometry.GetBoundingBox(true).Center
     };
 

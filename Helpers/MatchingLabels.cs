@@ -24,7 +24,7 @@ internal static class MatchingLabels
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelValue", DefaultValue),
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelSize", DefaultSize),
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelLayer", DefaultLayer),
-    CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelAutoAdvance", DefaultAutoAdvance),
+    DefaultAutoAdvance,
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelSizeAuto", DefaultAutoSize),
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultLabelSizePercent", DefaultSizePercent),
     CommandDefaults.Get(Section, "vTools.Commands.vNotches.DefaultNotchOffset", DefaultNotchOffset)); // Resolved once from the existing vNotches factory settings.
@@ -45,7 +45,7 @@ internal static class MatchingLabels
     Value = LabelSequences.NormalizeValue(ReadText(settings, "label_value", style.Value)),
     ManualSize = ToolsOptionStore.TryGetDouble(settings, "label_size", out var size) && double.IsFinite(size) && size >= 0 ? size : style.ManualSize,
     Layer = ReadText(settings, "label_layer", style.Layer),
-    AutoAdvance = ToolsOptionStore.TryGetBool(settings, "label_auto_adv", out var advance) ? advance : style.AutoAdvance,
+    AutoAdvance = !string.IsNullOrWhiteSpace(ReadText(settings, "label_value", style.Value)),
     AutoSize = ToolsOptionStore.TryGetBool(settings, "label_size_auto", out var auto) ? auto : style.AutoSize,
     SizePercent = ToolsOptionStore.TryGetDouble(settings, "label_size_pct", out var pct) && double.IsFinite(pct) ? Math.Clamp((int)Math.Round(pct), 20, 100) : style.SizePercent,
     NotchOffset = ToolsOptionStore.TryGetDouble(settings, "notch_offset", out var offset) && double.IsFinite(offset) && offset >= 0 ? offset : style.NotchOffset

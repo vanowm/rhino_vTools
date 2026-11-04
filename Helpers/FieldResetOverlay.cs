@@ -20,6 +20,7 @@ internal sealed class FieldResetOverlay : IDisposable
   private const double HoverOpacity = 0.12; // Foreground-colored hover tint opacity, zero through one, matching light and dark input themes.
   private const double PressedOpacity = 0.22; // Foreground-colored pressed tint opacity, zero through one.
   private const string IconPath = "M2,4 A4.25,4.25 0 1 1 2,8 M2,1 L2,4 L5,4"; // Balanced counterclockwise circular reset arrow on the 12-by-12 icon canvas.
+  internal static double TextReserveWidth => ButtonSize + EdgeGap;
 
   private readonly EtoControl _control;
   private readonly Func<bool> _changed;

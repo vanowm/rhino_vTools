@@ -28,6 +28,7 @@ public sealed class vFacing : vToolsCommand
   [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", "Samples used to preserve fully contained curves before perimeter clipping; three or greater.")] private const int InteriorCurveContainmentSamples = 17; // Samples used to preserve fully contained curves before perimeter clipping; three or greater.
 
   private static readonly int ConfiguredInteriorCurveContainmentSamples = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", InteriorCurveContainmentSamples); // Resolved once from advanced defaults; restart Rhino after changes.
+  private const double AutomaticRoleCornerAngleDegrees = 30.0; // Minimum tangent change in degrees separating smooth end-side chains from the multi-curve base.
 
   private const string SectionName = "vFacing";
   private const string SizeKey     = "size";
@@ -350,6 +351,10 @@ public sealed class vFacing : vToolsCommand
     for (var _i = 0; _i < layerGroups.Count; _i++)
       Log.Write("vFacing", $"  group[{_i}] layer={layerGroups[_i][0].Layer} count={layerGroups[_i].Count}");
 
+    if(input.Count>3&&layerGroups.Count!=3&&
+      TryBuildChainGroups(input,tol,out baseParts,out side1Parts,out side2Parts))
+      return true;
+
     // For exactly 3 input curves, roles are always determined geometrically — layers don't decide.
     if (input.Count == 3)
     {
@@ -570,13 +575,13 @@ public sealed class vFacing : vToolsCommand
   {
     baseParts = side1Parts = side2Parts = null;
     var n = input.Count;
-    // Use a generous snap for adjacency — garment endpoints are often not perfectly coincident.
-    var snapTol = Math.Max(tol * 1000, 1.0);
+    if(n<3)return false;
+    // Use real connections: a broad snap would shortcut small chamfers and create false branches.
     var adj = new List<int>[n];
     for (var i = 0; i < n; i++) adj[i] = new List<int>();
     for (var i = 0; i < n; i++)
       for (var j = i + 1; j < n; j++)
-        if (CurvesConnect(input[i].Crv, input[j].Crv, snapTol, tol))
+        if (CurvesConnect(input[i].Crv, input[j].Crv, tol, tol))
         { adj[i].Add(j); adj[j].Add(i); }
 
     // Must be a simple linear chain: exactly 2 nodes with degree=1, rest degree=2, none degree=0.
@@ -600,16 +605,33 @@ public sealed class vFacing : vToolsCommand
     }
     if (order.Count != n) return false;
 
-    // Endpoint curves are the two sides; everything in between is the base.
-    var s1Idx  = order[0];
-    var s2Idx  = order[n - 1];
-    var bIdxs  = order.Skip(1).Take(n - 2).ToList();
-
-    Log.Write("vFacing", $"chain-grouping: side1=curve[{s1Idx}] base=curve[{string.Join(",", bIdxs)}] side2=curve[{s2Idx}]");
-
-    side1Parts = new List<(Curve, int)> { (input[s1Idx].Crv, input[s1Idx].Layer) };
-    side2Parts = new List<(Curve, int)> { (input[s2Idx].Crv, input[s2Idx].Layer) };
-    baseParts  = bIdxs.Select(i => (input[i].Crv, input[i].Layer)).ToList();
+    // Smooth segments at either free end belong to that side, not to the base.
+    var oriented=new List<Curve>();
+    int firstCorner=0,lastCorner=n-2;
+    try
+    {
+      var first=input[order[0]].Crv;var next=input[order[1]].Crv;
+      double Distance(Point3d point,Curve curve)=>Math.Min(point.DistanceTo(curve.PointAtStart),point.DistanceTo(curve.PointAtEnd));
+      var current=Distance(first.PointAtStart,next)>Distance(first.PointAtEnd,next)?first.PointAtStart:first.PointAtEnd;
+      foreach(int index in order)
+      {
+        var curve=input[index].Crv.DuplicateCurve();
+        if(curve.PointAtEnd.DistanceTo(current)<curve.PointAtStart.DistanceTo(current))curve.Reverse();
+        oriented.Add(curve);current=curve.PointAtEnd;
+      }
+      var corners=Enumerable.Range(0,n-1).Where(index=>
+        oriented[index].PointAtEnd.DistanceTo(oriented[index+1].PointAtStart)>tol*2||
+        Vector3d.VectorAngle(oriented[index].TangentAtEnd,oriented[index+1].TangentAtStart)>=RhinoMath.ToRadians(AutomaticRoleCornerAngleDegrees)).ToArray();
+      if(corners.Length>=2){firstCorner=corners[0];lastCorner=corners[^1];}
+    }
+    finally{foreach(var curve in oriented)curve.Dispose();}
+    var s1Idxs=order.Take(firstCorner+1).ToArray();
+    var bIdxs=order.Skip(firstCorner+1).Take(lastCorner-firstCorner).ToArray();
+    var s2Idxs=order.Skip(lastCorner+1).ToArray();
+    Log.Write("vFacing", $"chain-grouping: side1=curve[{string.Join(",",s1Idxs)}] base=curve[{string.Join(",",bIdxs)}] side2=curve[{string.Join(",",s2Idxs)}]");
+    side1Parts=s1Idxs.Select(index=>(input[index].Crv,input[index].Layer)).ToList();
+    baseParts=bIdxs.Select(index=>(input[index].Crv,input[index].Layer)).ToList();
+    side2Parts=s2Idxs.Select(index=>(input[index].Crv,input[index].Layer)).ToList();
     return true;
   }
 

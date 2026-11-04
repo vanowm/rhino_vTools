@@ -59,7 +59,6 @@ namespace vTools.Commands
   {
     // Defaults and customizable constants; the enabled default is shared with vTogglePerpGumball.
     internal const string ApplyProxyCommandName = "vPerpGumballProxy"; // Hidden script-runner name; Rhino excludes Proxy commands from dynamic help.
-    private const string CallbackCommandName = "RhinoCommonProxyCommand"; // Native command used by Command.RunProxyCommand; never exposed as the user's repeat target.
     private const string RelocateCommandName = "GumballRelocate"; // Native gumball frame command nested under the automatic callback.
     private const string ResetCommandName = "GumballReset"; // Native gumball reset command nested under the automatic callback.
     private const string RelocateMacroFormat = "-_"+RelocateCommandName+" {0} {1} {2}"; // Three world-coordinate points: origin, X-axis point, Y-axis point; the third completes the command.
@@ -69,7 +68,6 @@ namespace vTools.Commands
     private const string EnabledKey = "enabled";
     private const int IdlePollMs = 100; // Monitor polling interval in milliseconds; greater than zero.
     private const int IdleSettleTicks = 2; // Unchanged polls required before reorienting the gumball.
-    private const int CallbackTimeoutMilliseconds = 5000; // Idle milliseconds allowed for a queued callback before discarding it; positive.
     private const string BadgeLabel = "PG"; // Viewport badge text while the monitor is enabled.
     private const int BadgeFontSize = 14; // Viewport badge font height in display pixels.
 
@@ -89,21 +87,14 @@ namespace vTools.Commands
     private static bool _applyQueued;
     private static bool _applyingCommand;
     private static bool _selectionDirty;
-    private static object? _callbackToken;
-    private static int _callbackQueuedAt;
-    private static int? _callbackRegularDepth;
+    private static bool _dispatchingCommand;
+    private static int? _dispatchRegularDepth;
+    private static PendingGumballCommand? _failedCommand;
 
-    internal static bool IsAutomaticGumballCommand(string name) => _callbackToken!=null&&
-      (string.Equals(name,CallbackCommandName,StringComparison.OrdinalIgnoreCase)||_callbackRegularDepth.HasValue&&
-       (string.Equals(name,RelocateCommandName,StringComparison.OrdinalIgnoreCase)||string.Equals(name,ResetCommandName,StringComparison.OrdinalIgnoreCase)));
-
-    private static void ExpireQueuedCallback(RhinoDoc doc,int now)
-    {
-      if(_callbackToken==null||!_applyQueued||_applyingCommand||IsCommandRunning(doc)||
-        unchecked(now-_callbackQueuedAt)<CallbackTimeoutMilliseconds)return;
-      _callbackToken=null;_pendingCommand=null;_applyQueued=false;
-      InvalidateLastApplyState();Log.Write(Tag,"expired an unconsumed gumball callback");
-    }
+    internal static bool IsAutomaticGumballCommand(string name) => _dispatchingCommand &&
+      (string.Equals(name,ApplyProxyCommandName,StringComparison.OrdinalIgnoreCase)||
+       string.Equals(name,RelocateCommandName,StringComparison.OrdinalIgnoreCase)||
+       string.Equals(name,ResetCommandName,StringComparison.OrdinalIgnoreCase));
 
     private static EventHandler? _idleHandler;
     private static EventHandler<RhinoObjectSelectionEventArgs>? _selectHandler;
@@ -140,8 +131,7 @@ namespace vTools.Commands
       {
         _enabled = false;
         _pendingCommand = null;
-        _callbackToken = null;
-        _callbackRegularDepth = null;
+        _dispatchRegularDepth = null;
         RhinoApp.Idle -= OnApplyIdle;
         _applyQueued = false;
         DetachHandlers();
@@ -215,6 +205,7 @@ namespace vTools.Commands
       _lastIdleTick = null;
       _idleSettle = 0;
       _selectionDirty = false;
+      _failedCommand = null;
     }
 
     private static void AttachHandlers()
@@ -252,6 +243,7 @@ namespace vTools.Commands
         return;
 
       _selectionDirty = true;
+      _failedCommand = null;
     }
 
     private static void OnDeselect(object? sender, RhinoObjectSelectionEventArgs e)
@@ -260,6 +252,7 @@ namespace vTools.Commands
         return;
 
       _selectionDirty = true;
+      _failedCommand = null;
     }
 
     private static void OnIdle(object? sender, EventArgs e)
@@ -280,8 +273,6 @@ namespace vTools.Commands
       }
 
       _lastIdleTick = now;
-
-      ExpireQueuedCallback(doc,now);
 
       if (IsCommandRunning(doc) || _applyQueued || _applyingCommand)
         return;
@@ -372,7 +363,8 @@ namespace vTools.Commands
 
     private static void UpdateGumballForActiveGrip(RhinoDoc doc, bool force, GripContext ctx, bool allowCommandFallback)
     {
-      if (!_enabled || _applyingCommand)
+      if (!_enabled || _applyingCommand || !Rhino.ApplicationSettings.ModelAidSettings.AutoGumballEnabled ||
+          !doc.GetGumballPlane(out _))
         return;
 
       var plane = ComputePlaneForContext(ctx, doc.ModelAbsoluteTolerance);
@@ -798,7 +790,9 @@ namespace vTools.Commands
 
     private static bool QueueGumballCommand(RhinoDoc doc, string script,string? contextKey=null)
     {
-      _pendingCommand = new(doc.RuntimeSerialNumber, script,contextKey);
+      var pending = new PendingGumballCommand(doc.RuntimeSerialNumber, script,contextKey);
+      if (pending == _failedCommand) return false;
+      _pendingCommand = pending;
       if (_applyQueued)
         return true;
 
@@ -823,61 +817,55 @@ namespace vTools.Commands
       }
       try
       {
-        EnsureProxyDoesNotRepeat();
-        _callbackToken=new object();_callbackQueuedAt=System.Environment.TickCount;
-        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-callback-queued",CallbackCommandName);
-        Command.RunProxyCommand(ApplyFromCallback,doc,_callbackToken);
+        using var repeat = new GumballRepeatScope();
+        _dispatchingCommand = true;
+        _dispatchRegularDepth = doc.InCommand(true);
+        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-transparent-call",ApplyProxyCommandName);
+        var result = RhinoApp.ExecuteCommand(doc,"_"+ApplyProxyCommandName);
+        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-transparent-return",ApplyProxyCommandName,result==Result.Success);
+        if (result == Result.Failure || result == Result.UnknownCommand)
+          _failedCommand = pending;
       }
       catch (Exception ex)
       {
-        _callbackToken=null;_applyQueued=false;_pendingCommand=null;
-        Log.Write(Tag, "gumball callback dispatch failed: {0}", ex);
+        _failedCommand=pending;
+        Log.Write(Tag, "gumball transparent dispatch failed: {0}", ex);
         InvalidateLastApplyState();
       }
-    }
-
-    private static Result ApplyFromCallback(RhinoDoc doc,RunMode mode,object data)
-    {
-      if(!ReferenceEquals(data,_callbackToken))return Result.Cancel;
-      var pending=_pendingCommand;
-      try
-      {
-        if(pending==null||RhinoDoc.ActiveDoc?.RuntimeSerialNumber!=doc.RuntimeSerialNumber||
-          pending.DocumentSerial!=doc.RuntimeSerialNumber||RhinoGet.InGet(doc)||
-          doc.InCommand(false)!=1||DeferredNativeCommand.IsDispatching||!PendingContextIsCurrent(doc,pending))
-        { InvalidateLastApplyState();return Result.Cancel; }
-        _callbackRegularDepth=doc.InCommand(true);
-        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-proxy-nested-call",ApplyProxyCommandName);
-        // Retain a nested ScriptRunner for synchronous coordinate input; the native outer callback preserves Repeat.
-        var result=RhinoApp.ExecuteCommand(doc,ApplyProxyCommandName);
-        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-proxy-nested-return",ApplyProxyCommandName,result==Result.Success);
-        return result;
-      }
-      catch(Exception ex)
-      { InvalidateLastApplyState();Log.Write(Tag,"nested gumball dispatch failed: {0}",ex);return Result.Failure; }
       finally
       {
-        _callbackRegularDepth=null;
-        if(ReferenceEquals(_callbackToken,data))_callbackToken=null;
+        _dispatchRegularDepth=null;
+        _dispatchingCommand=false;
         if(ReferenceEquals(_pendingCommand,pending))_pendingCommand=null;
         if(_pendingCommand==null)_applyQueued=false;
       }
     }
 
-    private static void EnsureProxyDoesNotRepeat()
+    private sealed class GumballRepeatScope : IDisposable
     {
-      // Customized Rhino lists override command flags; retain every user entry and add only our proxy.
-      if (!Rhino.ApplicationSettings.NeverRepeatList.UseNeverRepeatList) return;
-      var existing = Rhino.ApplicationSettings.NeverRepeatList.CommandNames();
-      var updated = IncludeProxyInNeverRepeatList(existing);
-      if (ReferenceEquals(existing, updated)) return;
-      Rhino.ApplicationSettings.NeverRepeatList.SetList(updated);
-      Log.Write(Tag, "excluded internal gumball commands from the active custom never-repeat list");
+      readonly bool _wasEnabled = Rhino.ApplicationSettings.NeverRepeatList.UseNeverRepeatList;
+      readonly string[] _previous = Rhino.ApplicationSettings.NeverRepeatList.CommandNames();
+
+      public GumballRepeatScope()
+      {
+        // The default mode honors command flags and cannot be restored through SetList.
+        if (!_wasEnabled) return;
+        try
+        {
+          Rhino.ApplicationSettings.NeverRepeatList.SetList(IncludeProxyInNeverRepeatList(_previous));
+        }
+        catch { Dispose(); throw; }
+      }
+
+      public void Dispose()
+      {
+        if (_wasEnabled) Rhino.ApplicationSettings.NeverRepeatList.SetList(_previous);
+      }
     }
 
     private static string[] IncludeProxyInNeverRepeatList(string[] existing)
     {
-      var missing=new[]{ApplyProxyCommandName,CallbackCommandName}.Where(command=>
+      var missing=new[]{ApplyProxyCommandName,RelocateCommandName,ResetCommandName}.Where(command=>
         !existing.Any(name=>string.Equals(name.TrimStart('_'),command,StringComparison.OrdinalIgnoreCase))).ToArray();
       return missing.Length==0?existing:existing.Concat(missing).ToArray();
     }
@@ -891,7 +879,7 @@ namespace vTools.Commands
       _pendingCommand = null;
       var doc = RhinoDoc.ActiveDoc;
       if (doc == null || doc.RuntimeSerialNumber != pending.DocumentSerial ||
-          RhinoGet.InGet(doc) || doc.InCommand(true) != (_callbackRegularDepth??0) || DeferredNativeCommand.IsDispatching||!PendingContextIsCurrent(doc,pending))
+          RhinoGet.InGet(doc) || !_dispatchingCommand || doc.InCommand(true) != _dispatchRegularDepth || DeferredNativeCommand.IsDispatching||!PendingContextIsCurrent(doc,pending))
       {
         InvalidateLastApplyState();
         return Result.Cancel;
@@ -904,12 +892,16 @@ namespace vTools.Commands
         var applied = RhinoApp.RunScript(pending.DocumentSerial, pending.Script, false);
         IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-native-return", pending.Script, applied);
         if (!applied)
+        {
+          _failedCommand = pending;
           InvalidateLastApplyState();
+        }
         Log.Write(Tag, $"gumball command applied={applied} document={pending.DocumentSerial}");
         return applied ? Result.Success : Result.Failure;
       }
       catch (Exception ex)
       {
+        _failedCommand = pending;
         InvalidateLastApplyState();
         Log.Write(Tag, $"gumball command failed: {ex}");
         return Result.Failure;

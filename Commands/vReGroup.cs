@@ -51,56 +51,10 @@ public sealed class vReGroup : vToolsCommand
     if (ids.Count == 0)
       return Result.Nothing;
 
-    // Re-use the existing group when exactly one group spans the selection
-    // and every member of that group is already selected.
-    if (groupsInUse.Count == 1)
-    {
-      int reuseGroup = 0;
-      foreach (var x in groupsInUse) reuseGroup = x;
-
-      var existing    = doc.Objects.FindByGroup(reuseGroup);
-      var selectedSet = new HashSet<System.Guid>(ids);
-      bool allPresent = existing != null && existing.Length > 0
-                        && System.Array.TrueForAll(existing, o => selectedSet.Contains(o.Id));
-
-      if (allPresent)
-      {
-        var memberSet = new HashSet<System.Guid>(System.Array.ConvertAll(existing!, o => o.Id));
-        foreach (var id in ids)
-        {
-          if (memberSet.Contains(id)) continue;
-          var obj = doc.Objects.FindId(id);
-          if (obj == null) continue;
-          obj.Attributes.AddToGroup(reuseGroup);
-          obj.CommitChanges();
-        }
-        doc.Views.Redraw();
-        RhinoApp.WriteLine(ResultSummary(ids.Count, groupsInUse.Count));
-        return Result.Success;
-      }
-    }
-
-    // General case: dissolve all groups and create a new one.
-    foreach (var id in ids)
-    {
-      var obj = doc.Objects.FindId(id);
-      if (obj == null) continue;
-
-      obj.Attributes.RemoveFromAllGroups();
-      obj.CommitChanges();
-    }
-
-    // Delete groups that are now empty (no remaining members outside the selection).
-    foreach (var g in groupsInUse)
-    {
-      var remaining = doc.Objects.FindByGroup(g);
-      if (remaining == null || remaining.Length == 0)
-        doc.Groups.Delete(g);
-    }
-
-    // Collect all objects in a single new group.
-    var newGroup = doc.Groups.Add(ids);
-    if (newGroup < 0)
+    var data = PartGroupData.Capture(doc, ids);
+    var candidates = PartGroupData.Candidates(data, new HashSet<System.Guid>(ids));
+    if (!PartGroupData.TryChooseSource(doc, candidates, out var source)) return Result.Cancel;
+    if (!PartGroupData.ApplyGroup(doc, ids, source, flatten: true, out _))
     {
       RhinoApp.WriteLine("vReGroup: failed to create group.");
       return Result.Failure;

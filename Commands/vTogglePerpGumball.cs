@@ -10,7 +10,7 @@ namespace vTools.Commands
   public sealed class vTogglePerpGumball : vToolsCommand
   {
     // Defaults
-    [global::vTools.CommandDefault("vTogglePerpGumball", "vTools.Commands.vTogglePerpGumball.DefaultEnabled", "true auto-orients eligible gumballs at startup; false leaves them unchanged.")] internal const bool DefaultEnabled = false; // true auto-orients eligible gumballs at startup; false leaves them unchanged.
+    [global::vTools.CommandDefault("vTogglePerpGumball", "vTools.Commands.vTogglePerpGumball.DefaultEnabled", "true auto-orients eligible gumballs at startup; false leaves them unchanged.", OptionKeys = "enabled")] internal const bool DefaultEnabled = false; // true auto-orients eligible gumballs at startup; false leaves them unchanged.
 
     internal static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("vTogglePerpGumball", "vTools.Commands.vTogglePerpGumball.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
 

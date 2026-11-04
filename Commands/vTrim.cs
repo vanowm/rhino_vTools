@@ -19,10 +19,10 @@ namespace vTools.Commands;
 public sealed class vTrim : vToolsCommand
 {
   // Defaults and customizable constants
-  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultExtendAsLine", "true extends with a tangent line; false extends the native curve form.")] private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultExtendAsLine", "true extends with a tangent line; false extends the native curve form.", OptionKeys = "extendAsLine")] private const bool DefaultExtendAsLine = true; // true extends with a tangent line; false extends the native curve form.
 
   private static readonly bool ConfiguredDefaultExtendAsLine = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.DefaultExtendAsLine", DefaultExtendAsLine); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultJoinAfterTrim", "true joins touching trim results; false keeps them separate.")] private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
+  [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.DefaultJoinAfterTrim", "true joins touching trim results; false keeps them separate.", OptionKeys = "joinAfterTrim")] private const bool DefaultJoinAfterTrim = true; // true joins touching trim results; false keeps them separate.
 
   private static readonly bool ConfiguredDefaultJoinAfterTrim = global::vTools.CommandDefaults.Get("vTrim", "vTools.Commands.vTrim.DefaultJoinAfterTrim", DefaultJoinAfterTrim); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vTrim", "vTools.Commands.vTrim.MinimumHoverPickRadiusPixels", "Minimum screen-space radius, in pixels, for retaining the curve under the cursor.")] private const double MinimumHoverPickRadiusPixels = 6.0; // Minimum screen-space radius, in pixels, for retaining the curve under the cursor.

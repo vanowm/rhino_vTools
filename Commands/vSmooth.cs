@@ -24,19 +24,19 @@ public sealed class vSmooth : vToolsCommand
   private const string Tag              = "vSmooth";
 
   // Option defaults
-  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthStart", "Start smoothing strength; 0 through 2.")] private const double DefaultStrengthStart = 1.0; // Start smoothing strength; 0 through 2.
+  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthStart", "Start smoothing strength; 0 through 2.", OptionKeys = "strengthStart")] private const double DefaultStrengthStart = 1.0; // Start smoothing strength; 0 through 2.
 
   private static readonly double ConfiguredDefaultStrengthStart = global::vTools.CommandDefaults.Get("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthStart", DefaultStrengthStart); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthEnd", "End smoothing strength; 0 through 2.")] private const double DefaultStrengthEnd = 1.0; // End smoothing strength; 0 through 2.
+  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthEnd", "End smoothing strength; 0 through 2.", OptionKeys = "strengthEnd")] private const double DefaultStrengthEnd = 1.0; // End smoothing strength; 0 through 2.
 
   private static readonly double ConfiguredDefaultStrengthEnd = global::vTools.CommandDefaults.Get("vSmooth", "vTools.Commands.vSmooth.DefaultStrengthEnd", DefaultStrengthEnd); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultCopy", "true smooths copies and keeps inputs; false modifies the originals.")] private const bool DefaultCopy = false; // true smooths copies and keeps inputs; false modifies the originals.
+  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultCopy", "true smooths copies and keeps inputs; false modifies the originals.", OptionKeys = "copy")] private const bool DefaultCopy = false; // true smooths copies and keeps inputs; false modifies the originals.
 
   private static readonly bool ConfiguredDefaultCopy = global::vTools.CommandDefaults.Get("vSmooth", "vTools.Commands.vSmooth.DefaultCopy", DefaultCopy); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultJoin", "true joins smoothed results; false keeps curves separate.")] private const bool DefaultJoin = false; // true joins smoothed results; false keeps curves separate.
+  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultJoin", "true joins smoothed results; false keeps curves separate.", OptionKeys = "join")] private const bool DefaultJoin = false; // true joins smoothed results; false keeps curves separate.
 
   private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vSmooth", "vTools.Commands.vSmooth.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultSmoothAll", "true spreads kink smoothing across all curves; false smooths one transition curve.")] private const bool DefaultSmoothAll = false; // true spreads kink smoothing across all curves; false smooths one transition curve.
+  [global::vTools.CommandDefault("vSmooth", "vTools.Commands.vSmooth.DefaultSmoothAll", "true spreads kink smoothing across all curves; false smooths one transition curve.", OptionKeys = "smoothAll")] private const bool DefaultSmoothAll = false; // true spreads kink smoothing across all curves; false smooths one transition curve.
 
   private static readonly bool ConfiguredDefaultSmoothAll = global::vTools.CommandDefaults.Get("vSmooth", "vTools.Commands.vSmooth.DefaultSmoothAll", DefaultSmoothAll); // Resolved once from advanced defaults; restart Rhino after changes.
 

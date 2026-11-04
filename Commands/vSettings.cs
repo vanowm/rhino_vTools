@@ -70,13 +70,16 @@ public sealed class vSettings : vToolsCommand
     internal bool HasFactory { get; set; }
     internal JsonNode? Before { get; set; }
     internal bool Existed { get; set; }
+    internal bool HasInherited { get; init; }
+    internal JsonNode? Inherited { get; init; }
     private JsonNode? _value;
     internal JsonNode? Value { get => _value; set { _value = value; Notify(); } }
     internal CommandDefaults.Entry? Advanced { get; init; }
-    internal Type? SavedEnum { get; init; }
+    internal string OptionDescription { get; set; } = string.Empty;
+    internal Type? SavedEnum { get; set; }
     internal Type? EnumType => Advanced?.Type.IsEnum == true ? Advanced.Type : SavedEnum;
     internal Choice[] Choices { get; set; } = [];
-    internal bool Dirty => !ToolsOptionStore.SameValue(Value, Existed ? Before : Factory);
+    internal bool Dirty => !ToolsOptionStore.SameValue(Value, Existed ? Before : HasInherited ? Inherited : Factory);
     public bool Customized => HasFactory && !Equivalent(Value, Factory);
     public bool Unsaved => Dirty;
     public bool Modified => Customized || Dirty;
@@ -85,13 +88,16 @@ public sealed class vSettings : vToolsCommand
       Value is JsonValue value && value.TryGetValue<string>(out var text) ? text : Value?.ToJsonString() ?? "Automatic";
     internal string FactoryText => !HasFactory ? "-" : ChoiceIndex(Factory) is var index && index >= 0 ? Choices[index].Label :
       Factory is JsonValue value && value.TryGetValue<string>(out var text) ? text : Factory?.ToJsonString() ?? "Automatic";
-    internal string Description => Advanced?.Description ?? string.Empty;
+    internal string Description => Advanced?.Description ?? OptionDescription;
+    public string ToolTipText => Description + "\nBuilt-in default: " + FactoryText +
+      (Choices.Length > 0 ? "\nChoices: " + string.Join(", ", Choices.Select(choice => choice.Label)) : "") +
+      (Advanced != null ? "\nRestart Rhino after applying advanced defaults." : "\nSaved preference; commands may retain document-specific overrides.");
     internal Type? ValueType => Advanced?.Type;
     internal ToolsOptionStore.Change Change => new(Path, Existed, ToolsOptionStore.Clone(Before), ToolsOptionStore.Clone(Value));
     public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
     internal void Notify()
     {
-      foreach (string property in new[] { nameof(Customized), nameof(Unsaved), nameof(Modified), nameof(DisplayName), nameof(DisplayValue), nameof(FactoryText) })
+      foreach (string property in new[] { nameof(Customized), nameof(Unsaved), nameof(Modified), nameof(DisplayName), nameof(DisplayValue), nameof(FactoryText), nameof(ToolTipText) })
         PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(property));
     }
     internal int ChoiceIndex(JsonNode? value)
@@ -112,10 +118,39 @@ public sealed class vSettings : vToolsCommand
   {
     var rows = new List<SettingRow>();
     var named = CommandChoices.All();
+    static (bool Found, JsonNode? Value) InheritedOption(string section, string key, JsonObject current)
+    {
+      string? legacy = (section, key) switch
+      {
+        ("vSeam", "partSeam" or "edgeSeam") => "allowance",
+        ("vExportDXF", "notch_split_layer") => "notch_trim_layer",
+        ("vShade", "finishedLayer") => "layer",
+        ("vMiddleCurve", "lines") => "tangentLines",
+        ("vMiddleCurve", "lineInterval") => "tangentLineInterval",
+        ("vPart", "cleanup") => "removeInteriorLines",
+        ("vMatch", "startFrom") => "randStart",
+        ("vNest", "showGapMode") => "showGap",
+        ("vNest", "tableGridMode") => "tableGrid",
+        ("vUzip", "createParts") => "parts",
+        _ => null
+      };
+      if (legacy == null || current[legacy] is not JsonValue value) return (false, null);
+      if ((section, key) is ("vMatch", "startFrom") or ("vNest", "showGapMode" or "tableGridMode") or ("vUzip", "createParts"))
+      {
+        if (!value.TryGetValue<bool>(out bool enabled)) return (false, null);
+        return (true, section == "vUzip" ? JsonValue.Create(enabled) : JsonValue.Create(section == "vMatch" ? enabled ? "Random" : "Pick" : key == "showGapMode" ? enabled ? "Current" : "No" : enabled ? "3Feet" : "Off"));
+      }
+      return (true, ToolsOptionStore.Clone(value));
+    }
     void AddOptions(string section, JsonObject current, JsonObject defaults, string[] path)
     {
       foreach (string key in current.Select(pair => pair.Key).Union(defaults.Select(pair => pair.Key)).OrderBy(key => key))
       {
+        if ((section, key) is ("vMatch", "randStart") or ("vLine", "angleLock") or ("vCleanup", "preselectShort") or
+          ("vPart", "removeInteriorLines") or ("vExportDXF", "notch_trim_layer") or
+          ("vShade", "layer" or "length") or
+          ("vMiddleCurve", "tangentLines" or "tangentLineInterval") or ("vNotches", "label_side_flip") or
+          ("vNest", "stack" or "showGap" or "tableGrid")) continue; // Superseded encodings remain in profiles for command-owned migration, not as competing editor controls.
         var location = path.Append(key).ToArray();
         var value = current[key];
         var original = defaults[key];
@@ -124,12 +159,14 @@ public sealed class vSettings : vToolsCommand
         string normalized = key.Replace("_", "", StringComparison.Ordinal).ToLowerInvariant();
         var enumType = advanced.FirstOrDefault(entry => entry.Section == section && entry.Type.IsEnum &&
           new[] { normalized, normalized + "mode" }.Contains(entry.Key.Split('.').Last().Replace("Default", "", StringComparison.Ordinal).ToLowerInvariant()))?.Type;
+        var inherited = current.ContainsKey(key) ? (Found: false, Value: (JsonNode?)null) : InheritedOption(section, key, current);
         rows.Add(new SettingRow
         {
           Section = section, Key = string.Join(".", location.Skip(1)), Path = location,
           Factory = ToolsOptionStore.Clone(original), HasFactory = defaults.ContainsKey(key),
           Before = ToolsOptionStore.Clone(value), Existed = current.ContainsKey(key),
-          Value = ToolsOptionStore.Clone(current.ContainsKey(key) ? value : original), SavedEnum = enumType
+          HasInherited = inherited.Found, Inherited = ToolsOptionStore.Clone(inherited.Value),
+          Value = ToolsOptionStore.Clone(current.ContainsKey(key) ? value : inherited.Found ? inherited.Value : original), SavedEnum = enumType
         });
       }
     }
@@ -153,6 +190,13 @@ public sealed class vSettings : vToolsCommand
     foreach (var row in rows)
     {
       string key = Normalize(row.Key.Split('.').Last());
+      var metadata = advanced.FirstOrDefault(entry => entry.Section == row.Section && entry.DescribesOption(row.Key)) ??
+        advanced.FirstOrDefault(entry => entry.Section == row.Section && entry.Key.Split('.').Last().StartsWith("Default", StringComparison.Ordinal) &&
+          (Normalize(entry.Key.Split('.').Last()) == key || Normalize(entry.Key.Split('.').Last()) == key + "mode"));
+      row.OptionDescription = metadata?.Description ?? DescribeStoredOption(row.Section, row.Key);
+      if (row.Advanced == null && metadata?.Type.IsEnum == true) row.SavedEnum = metadata.Type;
+      if (row.Section == "vNest" && row.Key is "showGapMode" or "tableGridMode")
+        row.OptionDescription = DescribeStoredOption(row.Section, row.Key);
       var definition = named.FirstOrDefault(entry => entry.Section == row.Section &&
         (Normalize(entry.Key) == key || Normalize(entry.Key) + "mode" == key));
       if (definition != null)
@@ -169,8 +213,7 @@ public sealed class vSettings : vToolsCommand
       }
       if (!row.HasFactory && row.Advanced == null && row.Path.Length == 2)
       {
-        var fallback = advanced.FirstOrDefault(entry => entry.Section == row.Section && entry.Key.Split('.').Last().StartsWith("Default", StringComparison.Ordinal) &&
-          (Normalize(entry.Key.Split('.').Last()) == key || Normalize(entry.Key.Split('.').Last()) == key + "mode"));
+        var fallback = metadata;
         if (fallback != null)
         {
           row.Factory = fallback.FactoryNode; row.HasFactory = true;
@@ -183,6 +226,26 @@ public sealed class vSettings : vToolsCommand
   }
 
   internal static string Friendly(string value) => Regex.Replace(value.Replace('_', ' '), "(?<=[a-z0-9])(?=[A-Z])", " ");
+
+  internal static string DescribeStoredOption(string section, string key) => (section, key) switch
+  {
+    ("HistoryHighlight", "enabled") => "true highlights objects with broken Rhino history; false leaves history feedback to Rhino. Read at plug-in startup.",
+    ("vNest", "showGapMode") => "No hides clearance guides; Current shows the selected parts' guides; All shows guides for every placed preview part. Display only; never exported.",
+    ("vNest", "tableGridMode") => "Off hides grid lines; 3Feet uses the indeterminate spacing; 4Feet uses the checked spacing and first-line offset. Physical-inch distances are editable in Advanced defaults. Display only; never exported.",
+    ("vMirror", "textReplacements") => "Text pairs swapped when mirroring. Each rule defines a/b, literal or regex matching, whole-word matching and case preservation.",
+    ("vNotches", "curve_sides") => "Remembered curve IDs and their notch-side choices in this profile; this is placement history, not a global side rule.",
+    ("vUzip", "label") => "Starting label for the generated zipper parts; an empty value omits the label.",
+    ("vUzip", "tail") => "Extra zipper-tail length in model units.",
+    ("vUzip", "parts") => "Zipper part recipes: names, center layers, end treatment, notes, mirroring and offset bands. The createParts checkbox separately controls whether these outputs are generated.",
+    ("vUzip", var path) when path.StartsWith("layers.", StringComparison.Ordinal) => path.EndsWith(".color", StringComparison.Ordinal)
+      ? "Color used when creating this output layer, as #RRGGBB; existing layer colors are retained."
+      : "Name or full path of the output layer for this zipper component.",
+    (_, "windowPlacement") => "Remembered window position and size; reset to let the command choose its initial placement.",
+    ("vNest", "materialPresets" or "materialDrafts" or "retiredMaterials" or "materialDatabaseMigrated") => "Material-library migration or draft data. Edit material properties with vMaterialManager rather than changing this stored record.",
+    ("vNest", "selectedMaterial") => "Name of the material selected when vNest last closed; it must exist in the global material library.",
+    ("vRectangle", var coordinate) when coordinate.StartsWith("lastB", StringComparison.Ordinal) => "Remembered coordinate of the last rectangle placement in model units; used for repeat placement, not rectangle dimensions.",
+    _ => $"Stored {Friendly(key.Split('.').Last()).ToLowerInvariant()} preference for {section}; structured records must retain their existing JSON keys and value types."
+  };
 
   internal static bool TryValue(SettingRow row, string text, out JsonNode? value, out string error)
   {
@@ -256,6 +319,12 @@ public sealed class vSettings : vToolsCommand
       MinimumSize = MinimumWindowSize;
       Padding = PaddingSize;
       _mode.ToolTip = "Command options are saved command preferences. Advanced defaults control internal appearance, timing, sampling and tolerances and require restarting Rhino.";
+      _search.ToolTip = "Find settings by command, option name, explanation or current value.";
+      _sections.ToolTip = "Choose a command or shared service. An asterisk marks customized or unapplied settings.";
+      _apply.ToolTip = "Save changed settings to the loaded plug-in profile. Advanced defaults require a Rhino restart.";
+      _reset.ToolTip = "Restore this setting's built-in value; click Apply to save the reset.";
+      _resetSection.ToolTip = "Restore built-in values for this command in the current settings mode; click Apply to save.";
+      _close.ToolTip = "Close settings; unapplied changes require confirmation.";
       _grid.Columns.Add(new GridColumn { HeaderText = "Setting", Width = 260, Sortable = true,
         DataCell = new TextBoxCell { Binding = Binding.Property<SettingRow, string>(row => row.DisplayName) } });
       _grid.Columns.Add(new GridColumn { HeaderText = "Value", Width = 220, Sortable = true, Editable = true,
@@ -337,7 +406,7 @@ public sealed class vSettings : vToolsCommand
     {
       _current = row;
       _description.Text = row?.Description ?? "";
-      _description.ToolTip = row == null ? "" : string.Join(" / ", row.Path);
+      _description.ToolTip = row?.ToolTipText ?? "";
       UpdateStatus();
     }
     private void UpdateStatus()
@@ -477,7 +546,7 @@ public sealed class vSettings : vToolsCommand
           }
           else if (kind is JsonValueKind.Array or JsonValueKind.Object) editor = _json;
           else { _text.Text = kind == JsonValueKind.String ? row.DisplayValue : raw; editor = _text; }
-          editor.ToolTip = row.Description.Length > 0 ? row.Description : row.Section + " / " + row.Key;
+          editor.ToolTip = row.ToolTipText;
           if (!ReferenceEquals(Content, editor)) Content = editor;
           SetEditorContrast(editor);
         }
@@ -496,6 +565,7 @@ public sealed class vSettings : vToolsCommand
       {
         var basis = column.CellStyle ?? native.CellStyle ?? native.TryFindResource(typeof(System.Windows.Controls.DataGridCell)) as System.Windows.Style;
         var style = new System.Windows.Style(typeof(System.Windows.Controls.DataGridCell), basis);
+        style.Setters.Add(new System.Windows.Setter(System.Windows.FrameworkElement.ToolTipProperty, new System.Windows.Data.Binding(nameof(SettingRow.ToolTipText))));
         foreach (var state in new[] { (Property: nameof(SettingRow.Customized), Color: CustomizedBackground), (Property: nameof(SettingRow.Unsaved), Color: UnsavedBackground) })
         {
           var trigger = new System.Windows.DataTrigger { Binding = new System.Windows.Data.Binding(state.Property), Value = true };

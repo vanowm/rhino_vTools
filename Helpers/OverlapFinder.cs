@@ -13,7 +13,7 @@ internal static class OverlapFinder
 {
   // Detection defaults and customizable limits
   private const double MinimumCurveLength = 1e-12; // Model-unit length below which a curve item is ignored; greater than zero.
-  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumLengthTolerance", "Model-unit floor used when comparing duplicate lengths; greater than zero.")] private const double MinimumLengthTolerance = 1e-6; // Model-unit floor used when comparing duplicate lengths; greater than zero.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumLengthTolerance", "Model-unit floor for duplicate-length comparisons and nonempty partial overlap spans; greater than zero.")] private const double MinimumLengthTolerance = 1e-6; // Model-unit floor for duplicate-length comparisons and nonempty partial overlap spans; greater than zero.
 
   private static readonly double ConfiguredMinimumLengthTolerance = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumLengthTolerance", MinimumLengthTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int SparseSampleMinimum = 40; // Minimum samples used for one-way coverage checks; integer four or greater.
@@ -68,6 +68,10 @@ internal static class OverlapFinder
     double InteriorParameter,
     double EndParameter);
 
+  internal static bool IsDetectionObject(RhinoObject obj)=>
+    !NestTableMetadata.HasDecorationRole(obj.Attributes)&&
+    !(obj.Document is {} doc&&NestTableMetadata.IsCleanupDecoration(doc,obj));
+
   internal static Result Find(
     IReadOnlyCollection<RhinoObject> inputObjects,
     double tolerance,
@@ -80,7 +84,7 @@ internal static class OverlapFinder
     var parentByKey = new Dictionary<uint, RhinoObject>();
     var parametersMatchSourceByKey = new Dictionary<uint, bool>();
     var connectivityCurves = (connectivityObjects ?? inputObjects)
-      .Where(obj => obj.Geometry is Curve)
+      .Where(obj => obj.Geometry is Curve&&IsDetectionObject(obj))
       .Select(obj => new ConnectivityCurve(
         obj.Id,
         (Curve)obj.Geometry,
@@ -90,7 +94,7 @@ internal static class OverlapFinder
     uint key = 1;
     foreach (var obj in inputObjects)
     {
-      if (obj.Geometry is not Curve curve)
+      if (obj.Geometry is not Curve curve||!IsDetectionObject(obj))
         continue;
 
       foreach (var segment in ExplodeSegments(curve))
@@ -175,12 +179,8 @@ internal static class OverlapFinder
             objectByKey,
             parentByKey,
             tolerance);
-          AddObjectId(
-            segmentOverlapKey,
-            objectByKey,
-            parentByKey,
-            partiallyOverlappingObjectIds);
-          if (segmentNativeOverlap.Spans.Count > 0)
+          var previousSpanCount = partialOverlapSpans.Count;
+          if (segmentNativeOverlap.HasLengthOverlap && segmentNativeOverlap.Spans.Count > 0)
           {
             AddOverlapSpans(
               segmentOverlapKey,
@@ -192,7 +192,7 @@ internal static class OverlapFinder
               parentByKey,
               partialOverlapSpans);
           }
-          else if (samePath)
+          if (partialOverlapSpans.Count == previousSpanCount && samePath)
           {
             AddFullOverlapSpan(
               segmentOverlapKey,
@@ -202,7 +202,7 @@ internal static class OverlapFinder
               parentByKey,
               partialOverlapSpans);
           }
-          else
+          else if (partialOverlapSpans.Count == previousSpanCount && (firstCovered || secondCovered))
           {
             var coveredKey = firstCovered ? firstKey : secondKey;
             AddProjectedCoverageSpan(
@@ -214,6 +214,13 @@ internal static class OverlapFinder
               parentByKey,
               partialOverlapSpans);
           }
+          if (partialOverlapSpans.Count == previousSpanCount)
+            continue;
+          AddObjectId(
+            segmentOverlapKey,
+            objectByKey,
+            parentByKey,
+            partiallyOverlappingObjectIds);
           if (samePath)
             coverHits += 2;
           else if (firstCovered || secondCovered ||
@@ -400,7 +407,7 @@ internal static class OverlapFinder
 
       var start = Math.Max(curve.Domain.Min, interval.Min);
       var end = Math.Min(curve.Domain.Max, interval.Max);
-      if (end <= start || curve.GetLength(new Interval(start, end)) < MinimumCurveLength)
+      if (end <= start || curve.GetLength(new Interval(start, end)) <= ConfiguredMinimumLengthTolerance)
         continue;
 
       var interior = (start + end) * 0.5;
@@ -474,6 +481,11 @@ internal static class OverlapFinder
     for (var index = 0; index < samplePoints.Length; index++)
       if (!selectedCurve.ClosestPoint(samplePoints[index], out selectedParameters[index]))
         return;
+
+    var start = Math.Min(selectedParameters[0], Math.Min(selectedParameters[1], selectedParameters[2]));
+    var end = Math.Max(selectedParameters[0], Math.Max(selectedParameters[1], selectedParameters[2]));
+    if (end <= start || selectedCurve.GetLength(new Interval(start, end)) <= ConfiguredMinimumLengthTolerance)
+      return;
 
     result.Add(new OverlapSpan(
       objectId,

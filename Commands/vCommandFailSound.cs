@@ -16,13 +16,13 @@ namespace vTools.Commands
   public sealed class vCommandFailSound : vToolsCommand
   {
     // Defaults
-    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultEnabled", "true plays a sound after command failure; false stays silent.")] internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultEnabled", "true plays a sound after command failure; false stays silent.", OptionKeys = "enabled")] internal const bool DefaultEnabled = true; // true plays a sound after command failure; false stays silent.
 
     internal static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultSoundIndex", "Zero-based SoundNames index.")] internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultSoundIndex", "Zero-based SoundNames index.", OptionKeys = "sound")] internal const int DefaultSoundIndex = 0; // Zero-based SoundNames index.
 
     internal static readonly int ConfiguredDefaultSoundIndex = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultSoundIndex", DefaultSoundIndex); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultAudioFile", "Relative or absolute audio path; empty uses the selected system sound.")] internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
+    [global::vTools.CommandDefault("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultAudioFile", "Relative or absolute audio path; empty uses the selected system sound.", OptionKeys = "audioFile")] internal const string DefaultAudioFile = ""; // Relative or absolute audio path; empty uses the selected system sound.
 
     internal static readonly string ConfiguredDefaultAudioFile = global::vTools.CommandDefaults.Get("vCommandFailSound", "vTools.Commands.vCommandFailSound.DefaultAudioFile", DefaultAudioFile); // Resolved once from advanced defaults; restart Rhino after changes.
 

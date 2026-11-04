@@ -18,23 +18,23 @@ namespace vTools.Commands;
 public sealed class vOutline : vToolsCommand
 {
   // Defaults and customizable constants
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultParts", "true groups each source part separately; false groups all generated outlines together.")] private const bool DefaultParts = true; // true groups each source part separately; false groups all generated outlines together.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultParts", "true groups each source part separately; false groups all generated outlines together.", OptionKeys = "parts")] private const bool DefaultParts = true; // true groups each source part separately; false groups all generated outlines together.
 
   private static readonly bool ConfiguredDefaultParts = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultParts", DefaultParts); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultInternalEdges", "true includes interior edges; false requests silhouettes without internal edges.")] private const bool DefaultInternalEdges = false; // true includes interior edges; false requests silhouettes without internal edges.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultInternalEdges", "true includes interior edges; false requests silhouettes without internal edges.", OptionKeys = "internalEdges")] private const bool DefaultInternalEdges = false; // true includes interior edges; false requests silhouettes without internal edges.
 
   private static readonly bool ConfiguredDefaultInternalEdges = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultInternalEdges", DefaultInternalEdges); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultFlatten", "true projects output to the active construction plane; false preserves native 3D silhouettes.")] private const bool DefaultFlatten = false; // true projects output to the active construction plane; false preserves native 3D silhouettes.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultFlatten", "true projects output to the active construction plane; false preserves native 3D silhouettes.", OptionKeys = "flatten")] private const bool DefaultFlatten = false; // true projects output to the active construction plane; false preserves native 3D silhouettes.
 
   private static readonly bool ConfiguredDefaultFlatten = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultFlatten", DefaultFlatten); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultCleanup", "true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.")] private const bool DefaultCleanup = false; // true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultCleanup", "true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.", OptionKeys = "cleanup")] private const bool DefaultCleanup = false; // true simplifies output and removes overlaps at document tolerance; false preserves curve structure and overlaps.
 
   private static readonly bool ConfiguredDefaultCleanup = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultCleanup", DefaultCleanup); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultJoin", "true joins touching output curves within each source part; false leaves separate native curves.")] private const bool DefaultJoin = false; // true joins touching output curves within each source part; false leaves separate native curves.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultJoin", "true joins touching output curves within each source part; false leaves separate native curves.", OptionKeys = "join")] private const bool DefaultJoin = false; // true joins touching output curves within each source part; false leaves separate native curves.
 
   private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int MaximumCleanupPasses = 100; // Maximum overlap split/delete passes per source; positive integer guarding against stalled cleanup.
-  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultLayer", "Current, Inherit, or a document layer's full path.")] private const string DefaultLayer = CurrentLayer; // Current, Inherit, or a document layer's full path.
+  [global::vTools.CommandDefault("vOutline", "vTools.Commands.vOutline.DefaultLayer", "Current, Inherit, or a document layer's full path.", OptionKeys = "layer")] private const string DefaultLayer = CurrentLayer; // Current, Inherit, or a document layer's full path.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vOutline", "vTools.Commands.vOutline.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string FallbackGroupName = "Outline"; // Group name for unnamed sources or a combined output with different source names.

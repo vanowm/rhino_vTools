@@ -25,25 +25,25 @@ public sealed class vPart : vToolsCommand
   public override string EnglishName => "vPart";
 
   // Option defaults
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultGroup", "true groups created part geometry; false leaves output ungrouped.")] private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultGroup", "true groups created part geometry; false leaves output ungrouped.", OptionKeys = "group")] private const bool DefaultGroup = false; // true groups created part geometry; false leaves output ungrouped.
 
   private static readonly bool ConfiguredDefaultGroup = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultGroup", DefaultGroup); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultJoinPerimeter", "true joins perimeter curves; false preserves separate boundary curves.")] private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultJoinPerimeter", "true joins perimeter curves; false preserves separate boundary curves.", OptionKeys = "joinPerim")] private const bool DefaultJoinPerimeter = false; // true joins perimeter curves; false preserves separate boundary curves.
 
   private static readonly bool ConfiguredDefaultJoinPerimeter = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultJoinPerimeter", DefaultJoinPerimeter); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultCleanup", "true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.")] private const bool DefaultCleanup = true; // true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultCleanup", "true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.", OptionKeys = "cleanup")] private const bool DefaultCleanup = true; // true omits eligible straight interior pieces on actual perimeter layers; false preserves every collected interior curve.
 
   private static readonly bool ConfiguredDefaultCleanup = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultCleanup", DefaultCleanup); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabel", "true prompts for a label after placement; false creates the part without a new label.")] private const bool DefaultLabel = false; // true prompts for a label after placement; false creates the part without a new label.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabel", "true prompts for a label after placement; false creates the part without a new label.", OptionKeys = "label")] private const bool DefaultLabel = false; // true prompts for a label after placement; false creates the part without a new label.
 
   private static readonly bool ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelText", "Last-entered plain label offered for the next part.")] private const string DefaultLabelText = "A"; // Last-entered plain label offered for the next part.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelText", "Last-entered plain label offered for the next part.", OptionKeys = "labelText")] private const string DefaultLabelText = "A"; // Last-entered plain label offered for the next part.
 
   private static readonly string ConfiguredDefaultLabelText = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelText", DefaultLabelText); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelLayer", "Label layer path or the current-layer sentinel.")] private const string DefaultLabelLayer = "Reference"; // Label layer path or the current-layer sentinel.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelLayer", "Label layer path or the current-layer sentinel.", OptionKeys = "labelLayer")] private const string DefaultLabelLayer = "Reference"; // Label layer path or the current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLabelLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelLayer", DefaultLabelLayer); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelSize", "Label height in model units; positive.")] private const double DefaultLabelSize = 1.0; // Label height in model units; positive.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelSize", "Label height in model units; positive.", OptionKeys = "labelSize")] private const double DefaultLabelSize = 1.0; // Label height in model units; positive.
 
   private static readonly double ConfiguredDefaultLabelSize = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelSize", DefaultLabelSize); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelInteriorGridSamples", "Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.")] private const int LabelInteriorGridSamples = 25; // Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.
@@ -56,7 +56,7 @@ public sealed class vPart : vToolsCommand
 
   private static readonly double ConfiguredLabelSizePixelsPerUnit = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", LabelSizePixelsPerUnit); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string LabelObjectName = "PartLabel"; // Object name for the part's primary identifying label.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string SourceLayerOption = "*Source*"; // Sentinel that preserves each perimeter segment's source layer; joined output and bridges use the first actual boundary source layer.

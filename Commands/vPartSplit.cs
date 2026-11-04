@@ -32,25 +32,25 @@ namespace vTools.Commands
   internal static class PartSplitWorkflow
   {
     // Option defaults and customizable interaction/output settings
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", "Material width in model units; must exceed twice Seam.")] internal const double DefaultWidth = 60.0; // Material width in model units; must exceed twice Seam.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", "Material width in model units; must exceed twice Seam.", OptionKeys = "width")] internal const double DefaultWidth = 60.0; // Material width in model units; must exceed twice Seam.
 
     internal static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", "Extra model-unit allowance on each part at each common cut; zero disables overlap.")] internal const double DefaultSeam = 0.5; // Extra model-unit allowance on each part at each common cut; zero disables overlap.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", "Extra model-unit allowance on each part at each common cut; zero disables overlap.", OptionKeys = "seam")] internal const double DefaultSeam = 0.5; // Extra model-unit allowance on each part at each common cut; zero disables overlap.
 
     internal static readonly double ConfiguredDefaultSeam = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", DefaultSeam); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultMode", "Mode index: 0 balances physical piece lengths; 1 fills each material width before the final remainder.")] internal const int DefaultMode = 0; // Mode index: 0 balances physical piece lengths; 1 fills material width before the final remainder.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultMode", "Mode index: 0 balances physical piece lengths; 1 fills each material width before the final remainder.", OptionKeys = "mode")] internal const int DefaultMode = 0; // Mode index: 0 balances physical piece lengths; 1 fills material width before the final remainder.
 
     internal static readonly int ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLayout", "Layout index: 0 preserves original alignment; 1 aligns rotated copies side by side.")] private const int DefaultLayout = 1; // Layout index: 0 preserves original alignment; 1 aligns rotated copies side by side.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLayout", "Layout index: 0 preserves original alignment; 1 aligns rotated copies side by side.", OptionKeys = "layout")] private const int DefaultLayout = 1; // Layout index: 0 preserves original alignment; 1 aligns rotated copies side by side.
 
     private static readonly int ConfiguredDefaultLayout = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLayout", DefaultLayout); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDistance", "Clear model-unit distance between neighboring final cut edges; zero permits touching edges.")] private const double DefaultDistance = 1.0; // Clear model-unit distance between neighboring final cut edges; zero permits touching edges.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDistance", "Clear model-unit distance between neighboring final cut edges; zero permits touching edges.", OptionKeys = "distance")] private const double DefaultDistance = 1.0; // Clear model-unit distance between neighboring final cut edges; zero permits touching edges.
 
     private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int OriginalLayoutIndex = 0; // Fixed Original index in LayoutNames, independent of the default.
     [global::vTools.CommandChoicesAttribute("vPartSplit", "layout", true, "Original", "Vertical")] private static readonly string[] LayoutNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(LayoutNames)); // Available copy-arrangement modes.
     private const int EvenModeIndex = 0; // Fixed index of Even in ModeNames, independent of the configurable default mode.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDirection", "Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.")] private const SplitDirection DefaultDirection = SplitDirection.Start; // Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDirection", "Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.", OptionKeys = "direction")] private const SplitDirection DefaultDirection = SplitDirection.Start; // Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.
 
     private static readonly SplitDirection ConfiguredDefaultDirection = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDirection", DefaultDirection); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandChoicesAttribute("vPartSplit", "direction", false, "Start", "End", "Inward", "Outward")] private static readonly string[] DirectionNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(DirectionNames)); // Per-part cut-placement and copy-order choices.
@@ -65,7 +65,9 @@ namespace vTools.Commands
     private const int NormalAlignmentPasses = 6; // Maximum tangent-bisector updates for each automatic cross-cut; positive integer.
     private const double MinimumProgressCosine = 0.1; // Minimum absolute dot product of a local cut normal with the part's overall progression; zero through one.
     private const double LocalWidthReduction = 0.9; // Effective-width multiplier when a MaxWidth cross-cut panel is too wide; greater than zero and less than one.
-    private const double CoverageToleranceFactor = 2.0; // Model-tolerance times source perimeter accepted as nominal clipping-area error; positive multiplier.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.CoverageToleranceFactor", "Model-tolerance times source perimeter accepted as nominal clipping-area error; positive multiplier.")] private const double CoverageToleranceFactor = 2.0; // Model-tolerance times source perimeter accepted as nominal clipping-area error; positive multiplier.
+
+    private static readonly double ConfiguredCoverageToleranceFactor = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.CoverageToleranceFactor", CoverageToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.PreviewAlpha", "Preview stroke opacity, zero invisible through 255 opaque.")] private const int PreviewAlpha = 200; // Preview stroke opacity, zero invisible through 255 opaque.
 
     private static readonly int ConfiguredPreviewAlpha = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.PreviewAlpha", PreviewAlpha); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -87,14 +89,20 @@ namespace vTools.Commands
     private const string CutName = "PartSplitCut"; // Object name for a nominal Reference-layer cut on the original part.
     private const string SewName = "PartSplitSewLine"; // Object name for nominal split lines included inside each output part.
     private const string SewLayer = "PLOT"; // Existing or new Rhino layer for the split parts' sew lines.
-    private const double MinimumFinishedAreaRatio = 0.5; // Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", "true adds matching seam labels using vNotches settings; false omits new seam labels.")]
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.MinimumFinishedAreaRatio", "Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.")] private const double MinimumFinishedAreaRatio = 0.5; // Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.
+
+    private static readonly double ConfiguredMinimumFinishedAreaRatio = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.MinimumFinishedAreaRatio", MinimumFinishedAreaRatio); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", "true adds matching seam labels using vNotches settings; false omits new seam labels.", OptionKeys = "label")]
     private const bool DefaultLabel = false; // true labels mating seams; false retains the unlabeled split workflow.
     private static readonly bool ConfiguredDefaultLabel = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults.
     private const string SeamLabelName = "PartSplitSeamLabel"; // Object name identifying new matching seam annotations.
     private const string ReferenceLabelName = "PartSplitReferenceLabel"; // Object name for opposing seam annotations on the retained source part's Reference layer.
-    private const double AllowanceLabelPositionFactor = 0.5; // Fraction of Seam from the nominal split toward the allowance cut edge; zero through one.
-    private const double LabelInsetHeightFactor = 1.0; // Positive text-height inset into the finished panel only when Seam is zero.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.AllowanceLabelPositionFactor", "Fraction of Seam from the nominal split toward the allowance cut edge; zero through one.")] private const double AllowanceLabelPositionFactor = 0.5; // Fraction of Seam from the nominal split toward the allowance cut edge; zero through one.
+
+    private static readonly double ConfiguredAllowanceLabelPositionFactor = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.AllowanceLabelPositionFactor", AllowanceLabelPositionFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.LabelInsetHeightFactor", "Positive text-height inset into the finished panel only when Seam is zero.")] private const double LabelInsetHeightFactor = 1.0; // Positive text-height inset into the finished panel only when Seam is zero.
+
+    private static readonly double ConfiguredLabelInsetHeightFactor = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.LabelInsetHeightFactor", LabelInsetHeightFactor); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int LabelInsetAttempts = 8; // Maximum offset halvings when a narrow panel limits label placement.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSewColor", "RGB sew-line color when PLOT must be created.", "#FF0F8A8A")] private static readonly Color DefaultSewColor = global::vTools.CommandDefaults.GetColor("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSewColor", Color.FromArgb(15,138,138)); // RGB sew-line color when PLOT must be created.
     private const string GroupPrefix = "vPartSplit_"; // Group-name prefix followed by a session identifier and one-based part number.
@@ -668,7 +676,7 @@ namespace vTools.Commands
           finally{foreach(var curve in nominal.Concat(expanded))curve.Dispose();}
         }
         if(panels.Count==0||panels.Count>settings.MaxParts||
-          Math.Abs(nominalArea-source.Area)>tolerance*part.Outline.GetLength()*CoverageToleranceFactor)
+          Math.Abs(nominalArea-source.Area)>tolerance*part.Outline.GetLength()*ConfiguredCoverageToleranceFactor)
           throw new InvalidOperationException("cross-cuts do not preserve the complete source area");
         // Trial layouts that fail the width limit never need expensive detail clipping.
         if(maximumWidth<=settings.Width+tolerance)
@@ -712,7 +720,7 @@ namespace vTools.Commands
         var finished=loops.Where(loop=>loop.IsClosed&&loop.IsInPlane(source.Plane,tolerance))
           .Select(loop=>{using var properties=AreaMassProperties.Compute(loop);return (Loop:loop,Area:properties?.Area??0);})
           .Where(candidate=>candidate.Area<=area+tolerance*source.Outline.GetLength()&&
-            (candidate.Area>=area*MinimumFinishedAreaRatio||sewItems.Any(item=>item.Attributes.GetUserString("vSeam.sourceRoot")!=null)))
+            (candidate.Area>=area*ConfiguredMinimumFinishedAreaRatio||sewItems.Any(item=>item.Attributes.GetUserString("vSeam.sourceRoot")!=null)))
           .Where(candidate=>Coincident(candidate.Loop,source.Outline,tolerance)||
             source.Outline.Contains(candidate.Loop.PointAtNormalizedLength(0.5),source.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident)
           .OrderByDescending(candidate=>candidate.Area).FirstOrDefault().Loop;
@@ -1079,7 +1087,7 @@ namespace vTools.Commands
                     var origin=midpoint;
                     bool allowance=_seam>tolerance;
                     var offsetDirection=allowance?-inward:inward;
-                    double inset=allowance?_seam*AllowanceLabelPositionFactor:style.Height*LabelInsetHeightFactor;
+                    double inset=allowance?_seam*ConfiguredAllowanceLabelPositionFactor:style.Height*ConfiguredLabelInsetHeightFactor;
                     for(int attempt=0;attempt<LabelInsetAttempts;attempt++,inset*=0.5)
                     {
                       var candidate=midpoint+offsetDirection*inset;

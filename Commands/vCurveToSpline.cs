@@ -25,16 +25,16 @@ public sealed class vCurveToSpline : vToolsCommand
   private const string SmoothKey = "smooth";
 
   // Option defaults
-  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultJoinModeIndex", "Zero-based JoinModes index: None, Connected, or All.")] private const int DefaultJoinModeIndex = 2; // Zero-based JoinModes index: None, Connected, or All.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultJoinModeIndex", "Zero-based JoinModes index: None, Connected, or All.", OptionKeys = "joinMode")] private const int DefaultJoinModeIndex = 2; // Zero-based JoinModes index: None, Connected, or All.
 
   private static readonly int ConfiguredDefaultJoinModeIndex = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultJoinModeIndex", DefaultJoinModeIndex); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmoothClose", "true closes joined output smoothly; false preserves a closing kink.")] private const bool DefaultSmoothClose = false; // true closes joined output smoothly; false preserves a closing kink.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmoothClose", "true closes joined output smoothly; false preserves a closing kink.", OptionKeys = "smoothClose")] private const bool DefaultSmoothClose = false; // true closes joined output smoothly; false preserves a closing kink.
 
   private static readonly bool ConfiguredDefaultSmoothClose = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmoothClose", DefaultSmoothClose); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultReplaceOriginal", "true deletes converted inputs; false keeps them.")] private const bool DefaultReplaceOriginal = false; // true deletes converted inputs; false keeps them.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultReplaceOriginal", "true deletes converted inputs; false keeps them.", OptionKeys = "replaceOriginal")] private const bool DefaultReplaceOriginal = false; // true deletes converted inputs; false keeps them.
 
   private static readonly bool ConfiguredDefaultReplaceOriginal = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultReplaceOriginal", DefaultReplaceOriginal); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmooth", "true smooths joins between segments; false preserves segment transitions.")] private const bool DefaultSmooth = true; // true smooths joins between segments; false preserves segment transitions.
+  [global::vTools.CommandDefault("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmooth", "true smooths joins between segments; false preserves segment transitions.", OptionKeys = "smooth")] private const bool DefaultSmooth = true; // true smooths joins between segments; false preserves segment transitions.
 
   private static readonly bool ConfiguredDefaultSmooth = global::vTools.CommandDefaults.Get("vCurveToSpline", "vTools.Commands.vCurveToSpline.DefaultSmooth", DefaultSmooth); // Resolved once from advanced defaults; restart Rhino after changes.
 

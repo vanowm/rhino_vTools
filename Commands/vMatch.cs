@@ -23,10 +23,10 @@ namespace vTools.Commands
   public sealed partial class vMatch : vToolsCommand
   {
     // Option defaults
-    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultDistance", "Separation in model units; zero or greater.")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultDistance", "Separation in model units; zero or greater.", OptionKeys = "distance")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater.
 
     private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultStartFrom", "Random chooses the first part; Pick requests a stationary center part and alternates outward sides.")] private const AutoStartMode DefaultStartFrom = AutoStartMode.Pick; // Random chooses the first part; Pick requests a stationary center part and alternates outward sides.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultStartFrom", "Random chooses the first part; Pick requests a stationary center part and alternates outward sides.", OptionKeys = "startFrom")] private const AutoStartMode DefaultStartFrom = AutoStartMode.Pick; // Random chooses the first part; Pick requests a stationary center part and alternates outward sides.
 
     private static readonly AutoStartMode ConfiguredDefaultStartFrom = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultStartFrom", DefaultStartFrom); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandChoicesAttribute("vMatch", "startFrom", false, "Random", "Pick")] private static readonly string[] StartFromNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vMatch), nameof(StartFromNames)); // Auto start modes in AutoStartMode enum order.
@@ -36,7 +36,7 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.CenteredAxisTolerance", "Model-unit threshold for treating root mate-dot positions as coincident.")] private const double CenteredAxisTolerance = 1e-10; // Model-unit threshold for treating root mate-dot positions as coincident.
 
     private static readonly double ConfiguredCenteredAxisTolerance = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.CenteredAxisTolerance", CenteredAxisTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultRandNext", "In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.")] private const bool DefaultRandNext = true; // In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.
+    [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.DefaultRandNext", "In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.", OptionKeys = "randNext")] private const bool DefaultRandNext = true; // In Random start mode, true randomizes subsequent parts and false is deterministic; Pick always alternates deterministically.
 
     private static readonly bool ConfiguredDefaultRandNext = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.DefaultRandNext", DefaultRandNext); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.AutoLiveRefreshMilliseconds", "Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.")] private const int AutoLiveRefreshMilliseconds = 150; // Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.

@@ -17,22 +17,22 @@ namespace vTools.Commands;
 public sealed class vTextAligned : vToolsCommand
 {
   // Defaults and customizable constants
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultText", "Plain text content.")] private const string DefaultText = "Text"; // Plain text content.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultText", "Plain text content.", OptionKeys = "text")] private const string DefaultText = "Text"; // Plain text content.
 
   private static readonly string ConfiguredDefaultText = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultText", DefaultText); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultHeight", "Text height in model units; greater than zero.")] private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultHeight", "Text height in model units; greater than zero.", OptionKeys = "height")] private const double DefaultHeight = 5.0; // Text height in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultOffset", "Curve-normal offset in model units; signed values allowed.")] private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultOffset", "Curve-normal offset in model units; signed values allowed.", OptionKeys = "offset")] private const double DefaultOffset = 0.0; // Curve-normal offset in model units; signed values allowed.
 
   private static readonly double ConfiguredDefaultOffset = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultOffset", DefaultOffset); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultRotate90", "Quarter turns; normalized to an integer from 0 through 3.")] private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultRotate90", "Quarter turns; normalized to an integer from 0 through 3.", OptionKeys = "rotate90")] private const int DefaultRotate90 = 0; // Quarter turns; normalized to an integer from 0 through 3.
 
   private static readonly int ConfiguredDefaultRotate90 = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultRotate90", DefaultRotate90); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultBothSides", "true creates text on both sides of the curve; false uses the picked side only.")] private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultBothSides", "true creates text on both sides of the curve; false uses the picked side only.", OptionKeys = "bothSides")] private const bool DefaultBothSides = false; // true creates text on both sides of the curve; false uses the picked side only.
 
   private static readonly bool ConfiguredDefaultBothSides = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultBothSides", DefaultBothSides); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultAutoIncrement", "true advances the label after new placements; false repeats the same text.")] private const bool DefaultAutoIncrement = false; // true advances the label after new placements; false repeats the same text.
+  [global::vTools.CommandDefault("vTextAligned", "vTools.Commands.vTextAligned.DefaultAutoIncrement", "true advances the label after new placements; false repeats the same text.", OptionKeys = "autoIncrement")] private const bool DefaultAutoIncrement = false; // true advances the label after new placements; false repeats the same text.
 
   private static readonly bool ConfiguredDefaultAutoIncrement = global::vTools.CommandDefaults.Get("vTextAligned", "vTools.Commands.vTextAligned.DefaultAutoIncrement", DefaultAutoIncrement); // Resolved once from advanced defaults; restart Rhino after changes.
 

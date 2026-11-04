@@ -17,19 +17,19 @@ namespace vTools.Commands;
 public sealed class vTitle : vToolsCommand
 {
   // Option defaults
-  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultText", "Plain title text; empty prompts for text.")] private const string DefaultText = ""; // Plain title text; empty prompts for text.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultText", "Plain title text; empty prompts for text.", OptionKeys = "text")] private const string DefaultText = ""; // Plain title text; empty prompts for text.
 
   private static readonly string ConfiguredDefaultText = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultText", DefaultText); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultSize", "Text height in model units; greater than zero.")] private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultSize", "Text height in model units; greater than zero.", OptionKeys = "size")] private const double DefaultSize = 20.0; // Text height in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultPadding", "Box padding as a percentage of text height; zero or greater.")] private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultPadding", "Box padding as a percentage of text height; zero or greater.", OptionKeys = "padding")] private const double DefaultPadding = 50.0; // Box padding as a percentage of text height; zero or greater.
 
   private static readonly double ConfiguredDefaultPadding = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultPadding", DefaultPadding); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultBox", "true draws a padded title box; false creates text only.")] private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultBox", "true draws a padded title box; false creates text only.", OptionKeys = "box")] private const bool DefaultBox = true; // true draws a padded title box; false creates text only.
 
   private static readonly bool ConfiguredDefaultBox = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultBox", DefaultBox); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultLayer", "Rhino layer name or full layer path.")] private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
+  [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultLayer", "Rhino layer name or full layer path.", OptionKeys = "layer")] private const string DefaultLayer = "Reference"; // Rhino layer name or full layer path.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vTitle", "vTools.Commands.vTitle.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vTitle", "vTools.Commands.vTitle.DefaultDimensionScale", "Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.")] private const double DefaultDimensionScale = 1.0; // Positive fallback annotation display scale when Rhino cannot resolve the active viewport scale.

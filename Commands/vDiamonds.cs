@@ -33,46 +33,46 @@ public sealed class vDiamonds : vToolsCommand
   private const string LayerRefKey     = "layerRef";
 
   // Option defaults
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerPlot", "Rhino layer name or full layer path.")] private const string DefaultLayerPlot = "PLOT"; // Rhino layer name or full layer path.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerPlot", "Rhino layer name or full layer path.", OptionKeys = "layerPlot")] private const string DefaultLayerPlot = "PLOT"; // Rhino layer name or full layer path.
 
   private static readonly string ConfiguredDefaultLayerPlot = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerPlot", DefaultLayerPlot); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerCut", "Rhino layer name or full layer path.")] private const string DefaultLayerCut = "CUT1"; // Rhino layer name or full layer path.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerCut", "Rhino layer name or full layer path.", OptionKeys = "layerCut")] private const string DefaultLayerCut = "CUT1"; // Rhino layer name or full layer path.
 
   private static readonly string ConfiguredDefaultLayerCut = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerCut", DefaultLayerCut); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerReference", "Rhino layer name or full layer path.")] private const string DefaultLayerReference = "Reference"; // Rhino layer name or full layer path.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerReference", "Rhino layer name or full layer path.", OptionKeys = "layerRef")] private const string DefaultLayerReference = "Reference"; // Rhino layer name or full layer path.
 
   private static readonly string ConfiguredDefaultLayerReference = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLayerReference", DefaultLayerReference); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultWidth", "Diamond width in model units; greater than zero.")] private const double DefaultWidth  = 2.0; // Diamond width in model units; greater than zero.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultWidth", "Diamond width in model units; greater than zero.", OptionKeys = "width")] private const double DefaultWidth  = 2.0; // Diamond width in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultHeight", "Diamond height in model units; greater than zero.")] private const double DefaultHeight = 2.0; // Diamond height in model units; greater than zero.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultHeight", "Diamond height in model units; greater than zero.", OptionKeys = "height")] private const double DefaultHeight = 2.0; // Diamond height in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCW", "Number of diamonds across; one or greater.")] private const double DefaultCW     = 3.0; // Number of diamonds across; one or greater.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCW", "Number of diamonds across; one or greater.", OptionKeys = "countWidth")] private const double DefaultCW     = 3.0; // Number of diamonds across; one or greater.
 
   private static readonly double ConfiguredDefaultCW = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultCW", DefaultCW); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCH", "Number of diamonds high; one or greater.")] private const double DefaultCH     = 3.0; // Number of diamonds high; one or greater.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultCH", "Number of diamonds high; one or greater.", OptionKeys = "countHeight")] private const double DefaultCH     = 3.0; // Number of diamonds high; one or greater.
 
   private static readonly double ConfiguredDefaultCH = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultCH", DefaultCH); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowBoundary", "true creates the bounding rectangle; false omits it.")] private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowBoundary", "true creates the bounding rectangle; false omits it.", OptionKeys = "showBoundary")] private const bool DefaultShowBoundary = true; // true creates the bounding rectangle; false omits it.
 
   private static readonly bool ConfiguredDefaultShowBoundary = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowBoundary", DefaultShowBoundary); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowSize", "true creates the size label; false omits it.")] private const bool DefaultShowSize = true; // true creates the size label; false omits it.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowSize", "true creates the size label; false omits it.", OptionKeys = "showSize")] private const bool DefaultShowSize = true; // true creates the size label; false omits it.
 
   private static readonly bool ConfiguredDefaultShowSize = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowSize", DefaultShowSize); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowCount", "true includes diamond counts in the label; false omits them.")] private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowCount", "true includes diamond counts in the label; false omits them.", OptionKeys = "showCount")] private const bool DefaultShowCount = true; // true includes diamond counts in the label; false omits them.
 
   private static readonly bool ConfiguredDefaultShowCount = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultShowCount", DefaultShowCount); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLabelInside", "FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.")] private const LabelInsideMode DefaultLabelInside = LabelInsideMode.No; // FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultLabelInside", "FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.", OptionKeys = "labelInside")] private const LabelInsideMode DefaultLabelInside = LabelInsideMode.No; // FitAll fits the stack within both padded dimensions; Fit fits padded width and bottom-aligns; No places labels above.
 
   private static readonly LabelInsideMode ConfiguredDefaultLabelInside = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultLabelInside", DefaultLabelInside); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeWidth", "Boundary width in model units; zero means unset.")] private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeWidth", "Boundary width in model units; zero means unset.", OptionKeys = "bySizeW")] private const double DefaultBySizeWidth = 0.0; // Boundary width in model units; zero means unset.
 
   private static readonly double ConfiguredDefaultBySizeWidth = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeWidth", DefaultBySizeWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeHeight", "Boundary height in model units; zero means unset.")] private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeHeight", "Boundary height in model units; zero means unset.", OptionKeys = "bySizeH")] private const double DefaultBySizeHeight = 0.0; // Boundary height in model units; zero means unset.
 
   private static readonly double ConfiguredDefaultBySizeHeight = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultBySizeHeight", DefaultBySizeHeight); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultRoundToDiamond", "Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.")] private const DiamondRoundingMode DefaultRoundToDiamond = DiamondRoundingMode.None; // Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.
+  [global::vTools.CommandDefault("vDiamonds", "vTools.Commands.vDiamonds.DefaultRoundToDiamond", "Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.", OptionKeys = "roundToDiamond")] private const DiamondRoundingMode DefaultRoundToDiamond = DiamondRoundingMode.None; // Full rounds upward by whole diamonds; Half rounds upward by half diamonds; None preserves the requested boundary.
 
   private static readonly DiamondRoundingMode ConfiguredDefaultRoundToDiamond = global::vTools.CommandDefaults.Get("vDiamonds", "vTools.Commands.vDiamonds.DefaultRoundToDiamond", DefaultRoundToDiamond); // Resolved once from advanced defaults; restart Rhino after changes.
 

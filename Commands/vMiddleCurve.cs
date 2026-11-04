@@ -32,22 +32,22 @@ public sealed class vMiddleCurve : vToolsCommand
   [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.MaxSampleCount", "Maximum station samples used for long curves.")] private const int MaxSampleCount = 2000; // Maximum station samples used for long curves.
 
   private static readonly int ConfiguredMaxSampleCount = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.MaxSampleCount", MaxSampleCount); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineInterval", "Connector spacing in model units; greater than zero.")] private const double DefaultLineInterval = 0.5; // Connector spacing in model units; greater than zero.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineInterval", "Connector spacing in model units; greater than zero.", OptionKeys = "lineInterval")] private const double DefaultLineInterval = 0.5; // Connector spacing in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultLineInterval = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineInterval", DefaultLineInterval); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultSeamAllowance", "Offset in model units; zero or greater.")] private const double DefaultSeamAllowance = 0.5; // Offset in model units; zero or greater.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultSeamAllowance", "Offset in model units; zero or greater.", OptionKeys = "seamAllowance")] private const double DefaultSeamAllowance = 0.5; // Offset in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultSeamAllowance = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultSeamAllowance", DefaultSeamAllowance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultMinimumLength", "Minimum output length in model units; zero or greater.")] private const double DefaultMinimumLength = 0.25; // Minimum output length in model units; zero or greater.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultMinimumLength", "Minimum output length in model units; zero or greater.", OptionKeys = "minimumLength")] private const double DefaultMinimumLength = 0.25; // Minimum output length in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultMinimumLength = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultMinimumLength", DefaultMinimumLength); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultAddLines", "true adds transverse construction lines; false creates only the middle curve.")] private const bool DefaultAddLines = false; // true adds transverse construction lines; false creates only the middle curve.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultAddLines", "true adds transverse construction lines; false creates only the middle curve.", OptionKeys = "lines")] private const bool DefaultAddLines = false; // true adds transverse construction lines; false creates only the middle curve.
 
   private static readonly bool ConfiguredDefaultAddLines = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultAddLines", DefaultAddLines); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineMode", "ConnectorLineMode enum: Normal or EqualDistance.")] private const ConnectorLineMode DefaultLineMode = ConnectorLineMode.EqualDistance; // ConnectorLineMode enum: Normal or EqualDistance.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineMode", "ConnectorLineMode enum: Normal or EqualDistance.", OptionKeys = "lineMode")] private const ConnectorLineMode DefaultLineMode = ConnectorLineMode.EqualDistance; // ConnectorLineMode enum: Normal or EqualDistance.
 
   private static readonly ConnectorLineMode ConfiguredDefaultLineMode = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLineMode", DefaultLineMode); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vMiddleCurve", "vTools.Commands.vMiddleCurve.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
 

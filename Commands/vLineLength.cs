@@ -16,13 +16,13 @@ namespace vTools.Commands;
 public sealed class vLineLength : vToolsCommand
 {
   // Defaults and customizable constants
-  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultDesiredLength", "Length in model units; greater than zero.")] private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultDesiredLength", "Length in model units; greater than zero.", OptionKeys = "desiredLength")] private const double DefaultDesiredLength = 10.0; // Length in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultDesiredLength = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultDesiredLength", DefaultDesiredLength); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultExtendWithLine", "true adds straight extensions; false extends the source curve geometry.")] private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultExtendWithLine", "true adds straight extensions; false extends the source curve geometry.", OptionKeys = "extendWithLine")] private const bool DefaultExtendWithLine = false; // true adds straight extensions; false extends the source curve geometry.
 
   private static readonly bool ConfiguredDefaultExtendWithLine = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultExtendWithLine", DefaultExtendWithLine); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultMode", "Mode constant: ModeTotal, ModeAdd, or ModeSubtract.")] private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
+  [global::vTools.CommandDefault("vLineLength", "vTools.Commands.vLineLength.DefaultMode", "Mode constant: ModeTotal, ModeAdd, or ModeSubtract.", OptionKeys = "mode")] private const int DefaultMode = ModeTotal; // Mode constant: ModeTotal, ModeAdd, or ModeSubtract.
 
   private static readonly int ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vLineLength", "vTools.Commands.vLineLength.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int BoxDragThreshold = 4; // Screen-pixel movement distinguishing a click from an endpoint-selection drag.

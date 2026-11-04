@@ -90,7 +90,7 @@ public sealed class vBiminiParts : vToolsCommand
   [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleLength", "Extra rectangle extension in model units; zero or greater.")] private const double DefaultExtraRectangleLength = 1.0; // Extra rectangle extension in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultExtraRectangleLength = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultExtraRectangleLength", DefaultExtraRectangleLength); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSize", "Pipe diameter in model units; greater than zero.")] private const double DefaultPipeSize = 1.0; // Pipe diameter in model units; greater than zero.
+  [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSize", "Pipe diameter in model units; greater than zero.", OptionKeys = "pipeSizeIdx")] private const double DefaultPipeSize = 1.0; // Pipe diameter in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultPipeSize = global::vTools.CommandDefaults.Get("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeSize", DefaultPipeSize); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vBiminiParts", "vTools.Commands.vBiminiParts.DefaultPipeLabel", "Plain display label for the pipe preset.")] private const string DefaultPipeLabel = "1"; // Plain display label for the pipe preset.

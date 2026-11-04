@@ -19,22 +19,22 @@ namespace vTools.Commands;
 public sealed class vCleanup : vToolsCommand
 {
   // Option defaults
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultThreshold", "Maximum short-geometry length in model units; zero or greater.")] private const double DefaultThreshold = 0.02; // Maximum short-geometry length in model units; zero or greater.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultThreshold", "Maximum short-geometry length in model units; zero or greater.", OptionKeys = "threshold")] private const double DefaultThreshold = 0.02; // Maximum short-geometry length in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultThreshold = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultThreshold", DefaultThreshold); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultHighlightShort", "true draws short findings in magenta; false uses no cleanup overlay.")] private const bool DefaultHighlightShort = false; // true draws short findings in magenta; false uses no cleanup overlay.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultHighlightShort", "true draws short findings in magenta; false uses no cleanup overlay.", OptionKeys = "highlightShort")] private const bool DefaultHighlightShort = false; // true draws short findings in magenta; false uses no cleanup overlay.
 
   private static readonly bool ConfiguredDefaultHighlightShort = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultHighlightShort", DefaultHighlightShort); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultPreselectMode", "Short, Overlaps, All, or No findings selected after cleanup.")] private const CleanupTargetMode DefaultPreselectMode = CleanupTargetMode.Short; // Short, Overlaps, All, or No findings selected after cleanup.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultPreselectMode", "Short, Overlaps, All, or No findings selected after cleanup.", OptionKeys = "preselect")] private const CleanupTargetMode DefaultPreselectMode = CleanupTargetMode.Short; // Short, Overlaps, All, or No findings selected after cleanup.
 
   private static readonly CleanupTargetMode ConfiguredDefaultPreselectMode = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultPreselectMode", DefaultPreselectMode); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultAutoDeleteMode", "Short, Overlaps, All, or No findings deleted during cleanup.")] private const CleanupTargetMode DefaultAutoDeleteMode = CleanupTargetMode.No; // Short, Overlaps, All, or No findings deleted during cleanup.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultAutoDeleteMode", "Short, Overlaps, All, or No findings deleted during cleanup.", OptionKeys = "autoDelete")] private const CleanupTargetMode DefaultAutoDeleteMode = CleanupTargetMode.No; // Short, Overlaps, All, or No findings deleted during cleanup.
 
   private static readonly CleanupTargetMode ConfiguredDefaultAutoDeleteMode = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultAutoDeleteMode", DefaultAutoDeleteMode); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultSimplifyCurves", "true simplifies scoped curves before analysis; false preserves their existing structure.")] private const bool DefaultSimplifyCurves = true; // true simplifies scoped curves before analysis; false preserves their existing structure.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultSimplifyCurves", "true simplifies scoped curves before analysis; false preserves their existing structure.", OptionKeys = "simplifyCrv")] private const bool DefaultSimplifyCurves = true; // true simplifies scoped curves before analysis; false preserves their existing structure.
 
   private static readonly bool ConfiguredDefaultSimplifyCurves = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultSimplifyCurves", DefaultSimplifyCurves); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", "true runs shared vOverlaps detection before the short scan; false skips overlap detection.")] private const bool DefaultFindOverlaps = true; // true runs shared vOverlaps detection before the short scan; false skips overlap detection.
+  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", "true runs shared vOverlaps detection before the short scan; false skips overlap detection.", OptionKeys = "overlaps")] private const bool DefaultFindOverlaps = true; // true runs shared vOverlaps detection before the short scan; false skips overlap detection.
 
   private static readonly bool ConfiguredDefaultFindOverlaps = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", DefaultFindOverlaps); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool ProtectOpenCurveEnds = true; // true excludes open-curve endpoint segments and endpoint control points; false permits them.

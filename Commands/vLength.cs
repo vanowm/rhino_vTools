@@ -14,22 +14,24 @@ namespace vTools.Commands;
 public sealed class vLength : vToolsCommand
 {
   // Defaults and customizable constants
-  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultOffset", "Nonnegative gap from the curve tangent to the nearest text bounds, in model units.")]
+  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultOffset", "Nonnegative gap from the curve tangent to the nearest text bounds, in model units.", OptionKeys = "offset")]
   private const double DefaultOffset = 0.2; // Nonnegative model-unit gap to the visible label bounds.
-  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultSize", "Positive label height in model units.")]
+  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultSize", "Positive label height in model units.", OptionKeys = "size")]
   private const double DefaultSize = 0.25; // Positive model-unit text height, independent of annotation scale.
-  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultRounding", "Nonnegative displayed rounding increment in model units; zero uses document display precision.")]
+  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultRounding", "Nonnegative displayed rounding increment in model units; zero uses document display precision.", OptionKeys = "rounding")]
   private const double DefaultRounding = 0; // Zero means Default/document display precision; positive values are rounding increments.
-  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultFraction", "true displays reduced mixed fractions; false displays decimal lengths.")]
+  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultFraction", "true displays reduced mixed fractions; false displays decimal lengths.", OptionKeys = "fraction")]
   private const bool DefaultFraction = true; // true uses reduced mixed fractions; false uses decimal numbers.
-  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultRotation", "Quarter turns from the local tangent, normalized from zero through three.")]
+  [CommandDefault("vLength", "vTools.Commands.vLength.DefaultRotation", "Quarter turns from the local tangent, normalized from zero through three.", OptionKeys = "rotate90")]
   private const int DefaultRotation = 0; // Quarter turns: zero is parallel to the curve, one is perpendicular.
   private const int MaximumFractionPrecision = 8; // Largest document fractional precision index, giving a denominator of 256.
   private const int MaximumDecimalPrecision = 15; // Largest document decimal precision accepted for display rounding.
-  private const double DisplayScale = 1; // Positive fixed annotation display scale so Size is in model units.
+  [global::vTools.CommandDefault("vLength", "vTools.Commands.vLength.DisplayScale", "Positive fixed annotation display scale so Size is in model units.")] private const double DisplayScale = 1; // Positive fixed annotation display scale so Size is in model units.
+
+  private static readonly double ConfiguredDisplayScale = global::vTools.CommandDefaults.Get("vLength", "vTools.Commands.vLength.DisplayScale", DisplayScale); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool PlacementObjectSnaps = false; // false follows the cursor continuously; true lets native object snaps pull the length label to snap points.
   private const string LabelName = "LengthLabel"; // Object name assigned to newly placed annotations.
-  private static readonly Color PreviewColor = Color.DodgerBlue; // RGB color of the temporary length annotation.
+  [global::vTools.CommandDefault("vLength", "vTools.Commands.vLength.PreviewColor", "RGB color of the temporary length annotation.", "#FF1E90FF")] private static readonly Color PreviewColor = global::vTools.CommandDefaults.GetColor("vLength", "vTools.Commands.vLength.PreviewColor", Color.DodgerBlue); // RGB color of the temporary length annotation.
   private static readonly Options Defaults = new(
     CommandDefaults.Get("vLength", "vTools.Commands.vLength.DefaultOffset", DefaultOffset),
     CommandDefaults.Get("vLength", "vTools.Commands.vLength.DefaultSize", DefaultSize),
@@ -195,9 +197,9 @@ public sealed class vLength : vToolsCommand
     var text = new TextEntity
     {
       Plane = Plane.WorldXY, PlainText = value, TextHeight = size, DrawForward = false,
-      Justification = TextJustification.MiddleCenter, DimensionStyleId = doc.DimStyles.Current.Id, DimensionScale = DisplayScale
+      Justification = TextJustification.MiddleCenter, DimensionStyleId = doc.DimStyles.Current.Id, DimensionScale = ConfiguredDisplayScale
     };
-    if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(doc, text, doc.Views.ActiveView?.ActiveViewport, size, DisplayScale))
+    if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(doc, text, doc.Views.ActiveView?.ActiveViewport, size, ConfiguredDisplayScale))
     { text.Dispose(); throw new InvalidOperationException("Cannot set the label's model-unit height."); }
     using var style = text.GetDimensionStyle(doc.DimStyles.Current);
     style.TextOrientation = TextOrientation.InPlane; style.TextRotation = 0;
@@ -264,7 +266,7 @@ public sealed class vLength : vToolsCommand
     protected override void OnDynamicDraw(GetPointDrawEventArgs e)
     {
       Update(e.CurrentPoint, e.Viewport.ConstructionPlane());
-      if (Preview != null) e.Display.DrawText(Preview, PreviewColor, DisplayScale);
+      if (Preview != null) e.Display.DrawText(Preview, PreviewColor, ConfiguredDisplayScale);
       base.OnDynamicDraw(e);
     }
     protected override void Dispose(bool disposing)

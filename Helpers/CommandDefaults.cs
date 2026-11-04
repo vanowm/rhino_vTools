@@ -15,6 +15,8 @@ internal sealed class CommandDefaultAttribute(string section, string key, string
   internal string Key { get; } = key;
   internal string Description { get; } = description;
   internal string? FactoryColor { get; } = factoryColor;
+  public string? OptionKeys { get; set; } // Pipe-separated saved option keys using this factory and explanation; null means advanced-only metadata.
+  public string? OptionText { get; set; } // Explicit saved choice name when its persisted string encoding differs from the advanced constant's type; null uses the constant.
 }
 
 /// <summary>Cached advanced overrides shared by command implementations and vSettings.</summary>
@@ -31,8 +33,9 @@ internal static class CommandDefaults
   }
   private static Cache _cache = new();
 
-  internal sealed record Entry(string Section, string Key, string Description, Type Type, object? Factory)
+  internal sealed record Entry(string Section, string Key, string Description, Type Type, object? Factory, string? OptionKeys = null, string? OptionText = null)
   {
+    internal bool DescribesOption(string key) => OptionKeys?.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(key, StringComparer.Ordinal) == true;
     internal JsonNode? FactoryNode => Factory == null || Factory is double d && !double.IsFinite(d)
       || Factory is float f && !float.IsFinite(f) ? null
       : Type == typeof(System.Drawing.Color) ? JsonValue.Create((string)Factory)
@@ -51,7 +54,7 @@ internal static class CommandDefaults
     {
       var metadata = field.GetCustomAttribute<CommandDefaultAttribute>()!;
       return new Entry(metadata.Section, metadata.Key, metadata.Description, field.FieldType,
-        metadata.FactoryColor != null ? metadata.FactoryColor : field.GetRawConstantValue());
+        metadata.FactoryColor != null ? metadata.FactoryColor : field.GetRawConstantValue(), metadata.OptionKeys, metadata.OptionText);
     }).OrderBy(entry => entry.Section, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Key).ToArray();
   }
 
@@ -59,7 +62,25 @@ internal static class CommandDefaults
   {
     using var stream = typeof(CommandDefaults).Assembly.GetManifestResourceStream(DefaultsResource)
       ?? throw new InvalidDataException("The built-in command defaults resource is missing.");
-    return JsonNode.Parse(stream) as JsonObject ?? throw new InvalidDataException("Invalid built-in command defaults.");
+    var options = JsonNode.Parse(stream) as JsonObject ?? throw new InvalidDataException("Invalid built-in command defaults.");
+    var choices = CommandChoices.All();
+    foreach (var entry in Entries().Where(entry => entry.OptionKeys != null))
+    {
+      if (options[entry.Section] is not JsonObject section) options[entry.Section] = section = new JsonObject();
+      foreach (string key in entry.OptionKeys!.Split('|', StringSplitOptions.RemoveEmptyEntries))
+      {
+        var previous = section[key];
+        if (previous is JsonArray or JsonObject) continue; // Structured output recipes must never be replaced by a similarly named scalar preference.
+        var value = entry.OptionText != null ? JsonValue.Create(entry.OptionText) : entry.FactoryNode;
+        var definition = choices.FirstOrDefault(choice => choice.Section == entry.Section && choice.Key == key);
+        if (entry.Type == typeof(int) && definition is { Indexed: false } && entry.Factory is int index && index >= 0 && index < definition.Names.Length)
+          value = JsonValue.Create(definition.Names[index]);
+        else if (entry.Type.IsEnum && (definition?.Indexed == true || previous is JsonValue number && number.TryGetValue<double>(out _)))
+          value = JsonValue.Create(Convert.ToInt32(entry.Factory, System.Globalization.CultureInfo.InvariantCulture));
+        section[key] = ToolsOptionStore.Clone(value);
+      }
+    }
+    return options;
   }
 
   internal static (double, double) Bounds(Entry entry)

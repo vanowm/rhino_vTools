@@ -28,19 +28,19 @@ public sealed class vScallop : vToolsCommand
   private const string AutoKey = "auto";
   private const string SizePercentKey = "sizePercent";
 
-  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSize", "Scallop size in model units; greater than zero.")] private const double DefaultSize = 1.0; // Scallop size in model units; greater than zero.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSize", "Scallop size in model units; greater than zero.", OptionKeys = "size")] private const double DefaultSize = 1.0; // Scallop size in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSizePercent", "Automatic size as a percentage of span; greater than zero.")] private const double DefaultSizePercent = 5.0; // Automatic size as a percentage of span; greater than zero.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultSizePercent", "Automatic size as a percentage of span; greater than zero.", OptionKeys = "sizePercent")] private const double DefaultSizePercent = 5.0; // Automatic size as a percentage of span; greater than zero.
 
   private static readonly double ConfiguredDefaultSizePercent = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultSizePercent", DefaultSizePercent); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultDeleteOriginal", "true deletes source curves after scalloping; false keeps them.")] private const bool DefaultDeleteOriginal = false; // true deletes source curves after scalloping; false keeps them.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultDeleteOriginal", "true deletes source curves after scalloping; false keeps them.", OptionKeys = "deleteOriginal")] private const bool DefaultDeleteOriginal = false; // true deletes source curves after scalloping; false keeps them.
 
   private static readonly bool ConfiguredDefaultDeleteOriginal = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultDeleteOriginal", DefaultDeleteOriginal); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultFree", "true allows unconstrained placement; false anchors scallops to the curve.")] private const bool DefaultFree = false; // true allows unconstrained placement; false anchors scallops to the curve.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultFree", "true allows unconstrained placement; false anchors scallops to the curve.", OptionKeys = "free")] private const bool DefaultFree = false; // true allows unconstrained placement; false anchors scallops to the curve.
 
   private static readonly bool ConfiguredDefaultFree = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultFree", DefaultFree); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultAuto", "true derives size from the selected span; false uses the configured size.")] private const bool DefaultAuto = true; // true derives size from the selected span; false uses the configured size.
+  [global::vTools.CommandDefault("vScallop", "vTools.Commands.vScallop.DefaultAuto", "true derives size from the selected span; false uses the configured size.", OptionKeys = "auto")] private const bool DefaultAuto = true; // true derives size from the selected span; false uses the configured size.
 
   private static readonly bool ConfiguredDefaultAuto = global::vTools.CommandDefaults.Get("vScallop", "vTools.Commands.vScallop.DefaultAuto", DefaultAuto); // Resolved once from advanced defaults; restart Rhino after changes.
 

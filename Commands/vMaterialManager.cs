@@ -17,7 +17,9 @@ public sealed class vMaterialManager : vToolsCommand
   private static readonly Size InitialSize = new(1020, 460); // Initial client size in logical pixels.
   private static readonly Size MinimumWindowSize = new(760, 320); // Minimum usable window size in logical pixels.
   private const int Spacing = 6; // Logical-pixel spacing between controls.
-  private const int WindowPadding = 10; // Logical-pixel window-edge padding.
+  [global::vTools.CommandDefault("vMaterialManager", "vTools.Commands.vMaterialManager.WindowPadding", "Logical-pixel window-edge padding.")] private const int WindowPadding = 10; // Logical-pixel window-edge padding.
+
+  private static readonly int ConfiguredWindowPadding = global::vTools.CommandDefaults.Get("vMaterialManager", "vTools.Commands.vMaterialManager.WindowPadding", WindowPadding); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int RowHeight = 26; // Logical-pixel material-list row height.
   private const int NameWidth = 200; // Initial material-name column width in logical pixels; expands with the window.
   private const int NumberWidth = 90; // Initial numeric-column width in logical pixels.
@@ -35,6 +37,9 @@ public sealed class vMaterialManager : vToolsCommand
   public override string EnglishName => CommandName;
 
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
+    => Open(doc);
+
+  internal static Result Open(RhinoDoc doc)
   {
     if (_window is { IsDisposed: false }) { _window.BringToFront(); _window.Focus(); return Result.Success; }
     if (!MaterialLibrary.TrySnapshot(out var snapshot, out var error))
@@ -86,7 +91,7 @@ public sealed class vMaterialManager : vToolsCommand
       Title = CommandName;
       ClientSize = InitialSize;
       MinimumSize = MinimumWindowSize;
-      Padding = WindowPadding;
+      Padding = ConfiguredWindowPadding;
       _grid.Columns.Add(new GridColumn { HeaderText = "Material", DataCell = new TextBoxCell(0), Width = NameWidth, Expand = true, Editable = true, Sortable = true });
       foreach (var field in new[] { ("Width", 1), ("Gap", 2) })
         _grid.Columns.Add(new GridColumn { HeaderText = field.Item1, DataCell = new TextBoxCell(field.Item2), Width = NumberWidth, Editable = true, Sortable = true });

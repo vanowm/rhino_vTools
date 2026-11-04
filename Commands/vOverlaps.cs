@@ -19,10 +19,10 @@ namespace vTools.Commands;
 public sealed class vOverlaps : vToolsCommand
 {
   // Option defaults
-  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultTolerance", "Comparison tolerance in model units; greater than zero.")] private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultTolerance", "Comparison tolerance in model units; greater than zero.", OptionKeys = "tolerance")] private const double DefaultTolerance = 0.001; // Comparison tolerance in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultTolerance = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.DefaultTolerance", DefaultTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultOverlapSegments", "true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.")] private const bool DefaultOverlapSegments = true; // true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.
+  [global::vTools.CommandDefault("vOverlaps", "vTools.Commands.vOverlaps.DefaultOverlapSegments", "true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.", OptionKeys = "overlapSegments")] private const bool DefaultOverlapSegments = true; // true splits partial findings and selects only their overlapping pieces; false selects the chosen whole source curves.
 
   private static readonly bool ConfiguredDefaultOverlapSegments = global::vTools.CommandDefaults.Get("vOverlaps", "vTools.Commands.vOverlaps.DefaultOverlapSegments", DefaultOverlapSegments); // Resolved once from advanced defaults; restart Rhino after changes.
 

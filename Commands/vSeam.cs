@@ -15,17 +15,17 @@ namespace vTools.Commands;
 public sealed class vSeam : vToolsCommand
 {
   // Defaults and customizable geometry settings
-  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultAllowance", "Seam allowance in model units; zero converts the chosen finished edges to cutting edges.")]
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultAllowance", "Seam allowance in model units; zero converts the chosen finished edges to cutting edges.", OptionKeys = "allowance|edgeSeam|partSeam")]
   private const double DefaultAllowance = 0.5; // Nonnegative seam distance in model units; zero converts source edges.
-  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultType", "Part offsets the complete boundary; Edge offsets the picked section between kinks.")]
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultType", "Part offsets the complete boundary; Edge offsets the picked section between kinks.", OptionKeys = "type")]
   private const SeamType DefaultType = SeamType.Part; // Part or Edge.
-  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultLayer", "Output layer path or *Current*.")]
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultLayer", "Output layer path or *Current*.", OptionKeys = "layer")]
   private const string DefaultLayer = "CUT1"; // Existing or new output layer path.
-  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultChamfer", "true clips acute convex corners at the allowance distance from the finished vertex; false keeps miters.")]
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.DefaultChamfer", "true clips acute convex corners at the allowance distance from the finished vertex; false keeps miters.", OptionKeys = "chamfer")]
   private const bool DefaultChamfer = true; // true chamfers pointy corners; false keeps extended/trimmed miters.
   [CommandDefault("vSeam", "vTools.Commands.vSeam.KinkAngleDegrees", "Minimum tangent change defining a selectable section, in degrees; positive.")]
   private const double KinkAngleDegrees = 1.0; // Positive G1 kink threshold in degrees.
-  [CommandDefault("vSeam", "vTools.Commands.vSeam.ChamferInteriorDegrees", "Maximum convex interior angle to chamfer, in degrees from 0 through 180; zero disables angle-based chamfering.")]
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.ChamferInteriorDegrees", "Maximum convex interior angle to chamfer, in degrees from 0 through 180; zero disables angle-based chamfering.", OptionKeys = "chamferAngle")]
   private const double ChamferInteriorDegrees = 70; // Maximum chamfered interior angle in degrees, inclusive; zero through 180.
   [CommandDefault("vSeam", "vTools.Commands.vSeam.ExtensionFactor", "Maximum corner-extension reach as a multiple of allowance; positive.")]
   private const double ExtensionFactor = 64; // Positive allowance multiplier for natural curve extensions.
@@ -33,23 +33,39 @@ public sealed class vSeam : vToolsCommand
   private const double MatchAngleDegrees = 5; // Positive legacy allowance recognition angle.
   [CommandDefault("vSeam", "vTools.Commands.vSeam.MatchRelativeDistance", "Maximum relative variation when recognizing an existing allowance; positive and less than one.")]
   private const double MatchRelativeDistance = 0.015; // Fraction of allowance accepted as distance variation.
-  private const int MatchSamples = 9; // Interior samples for recognition and boundary membership; three or greater.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.MatchSamples", "Interior samples for recognition and boundary membership; three or greater.")] private const int MatchSamples = 9; // Interior samples for recognition and boundary membership; three or greater.
+
+  private static readonly int ConfiguredMatchSamples = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.MatchSamples", MatchSamples); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double MinimumMatchCoverage = 0.1; // Minimum source-edge arc-length fraction covered by an adopted allowance; zero through one.
   private const double ParameterFraction = 1e-12; // Domain-relative parameter merging/endpoint tolerance; positive.
-  private const double LegacySearchFactor = 8; // Allowance multiplier for nearby ungrouped existing-CUT1 searches; positive.
-  private const double BoundaryToleranceFactor = 2; // Document-tolerance multiplier for source membership; positive.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.LegacySearchFactor", "Allowance multiplier for nearby ungrouped existing-CUT1 searches; positive.")] private const double LegacySearchFactor = 8; // Allowance multiplier for nearby ungrouped existing-CUT1 searches; positive.
+
+  private static readonly double ConfiguredLegacySearchFactor = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.LegacySearchFactor", LegacySearchFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.BoundaryToleranceFactor", "Document-tolerance multiplier for source membership; positive.")] private const double BoundaryToleranceFactor = 2; // Document-tolerance multiplier for source membership; positive.
+
+  private static readonly double ConfiguredBoundaryToleranceFactor = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.BoundaryToleranceFactor", BoundaryToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
   [CommandDefault("vSeam", "vTools.Commands.vSeam.BoundaryJoinToleranceFactor", "Boundary joining tolerance as a positive multiple of document absolute tolerance; 2.1 matches Rhino's default curve joining.")]
   private const double BoundaryJoinToleranceFactor = 2.1; // Positive document-tolerance multiplier for temporary boundary joining only; source geometry and offset accuracy are unchanged.
   private static readonly PreviewDisplay.ObjectHighlightStyle GapHighlightStyle = new(System.Drawing.Color.Red, System.Drawing.Color.Black, System.Drawing.Color.Red, 1); // Red endpoint markers with black outlines for gaps beyond joining tolerance; no surface fill.
   private const CurveExtensionStyle CornerExtensionStyle = CurveExtensionStyle.Line; // Tangent-line extensions join offset ends without curling or changing existing curved sections.
-  private const int BoxDragThresholdPixels = 4; // Screen-pixel movement separating a click from a selection-box drag; positive.
-  private const int BoxPreviewIntervalMilliseconds = 80; // Minimum time between box-selection previews in milliseconds; nonnegative.
-  private const int BoxLineThicknessPixels = 1; // Selection-box stroke width in screen pixels; positive.
-  private const int PreviewStrokeEmphasis = 0; // Extra pixels above Rhino's normal curve width for the allowance preview; nonnegative.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.BoxDragThresholdPixels", "Screen-pixel movement separating a click from a selection-box drag; positive.")] private const int BoxDragThresholdPixels = 4; // Screen-pixel movement separating a click from a selection-box drag; positive.
+
+  private static readonly int ConfiguredBoxDragThresholdPixels = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.BoxDragThresholdPixels", BoxDragThresholdPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.BoxPreviewIntervalMilliseconds", "Minimum time between box-selection previews in milliseconds; nonnegative.")] private const int BoxPreviewIntervalMilliseconds = 80; // Minimum time between box-selection previews in milliseconds; nonnegative.
+
+  private static readonly int ConfiguredBoxPreviewIntervalMilliseconds = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.BoxPreviewIntervalMilliseconds", BoxPreviewIntervalMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.BoxLineThicknessPixels", "Selection-box stroke width in screen pixels; positive.")] private const int BoxLineThicknessPixels = 1; // Selection-box stroke width in screen pixels; positive.
+
+  private static readonly int ConfiguredBoxLineThicknessPixels = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.BoxLineThicknessPixels", BoxLineThicknessPixels); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.PreviewStrokeEmphasis", "Extra pixels above Rhino's normal curve width for the allowance preview; nonnegative.")] private const int PreviewStrokeEmphasis = 0; // Extra pixels above Rhino's normal curve width for the allowance preview; nonnegative.
+
+  private static readonly int ConfiguredPreviewStrokeEmphasis = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.PreviewStrokeEmphasis", PreviewStrokeEmphasis); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool PickerObjectSnaps = false; // false prevents native snap highlighting of labels/whole curves; true permits object snaps during picking.
-  private static readonly System.Drawing.Color BoxColor = System.Drawing.Color.DodgerBlue; // RGB color of the temporary selection rectangle.
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.BoxColor", "RGB color of the temporary selection rectangle.", "#FF1E90FF")]
+  private static readonly System.Drawing.Color BoxColor = CommandDefaults.GetColor("vSeam", "vTools.Commands.vSeam.BoxColor", System.Drawing.Color.DodgerBlue); // RGB color of the temporary selection rectangle; restart after advanced edits.
   private const string FinishedLayerName = "PLOT"; // Preferred leaf layer for finished boundaries, without excluding other source layers.
-  private static readonly System.Drawing.Color NewCutLayerColor = System.Drawing.Color.FromArgb(204, 51, 51); // RGB for newly created output layers only.
+  [CommandDefault("vSeam", "vTools.Commands.vSeam.NewCutLayerColor", "RGB color assigned to newly created seam output layers; existing layer colors are retained.", "#FFCC3333")]
+  private static readonly System.Drawing.Color NewCutLayerColor = CommandDefaults.GetColor("vSeam", "vTools.Commands.vSeam.NewCutLayerColor", System.Drawing.Color.FromArgb(204, 51, 51)); // RGB for new output layers only; restart after advanced edits.
   private static readonly SeamOptions Defaults = new(
     CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.DefaultAllowance", DefaultAllowance),
     CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.DefaultType", DefaultType),
@@ -207,7 +223,7 @@ public sealed class vSeam : vToolsCommand
         ? doc.Layers.CurrentLayerIndex : doc.Layers.FindByFullPath(_settings.Layer, -1);
       var color = layer >= 0 ? doc.Layers[layer].Color : NewCutLayerColor;
       var style = new PreviewDisplay.ObjectHighlightStyle(color, color, color, 0)
-      { StrokeEmphasis = PreviewStrokeEmphasis, OutlineEmphasis = PreviewStrokeEmphasis };
+      { StrokeEmphasis = ConfiguredPreviewStrokeEmphasis, OutlineEmphasis = ConfiguredPreviewStrokeEmphasis };
       _display = new PreviewDisplay.ObjectHighlighter(doc, style) { RedrawOnChange = false, DrawOnTop = true };
       _cull = new ReplacedAllowanceCull(doc);
     }
@@ -851,10 +867,10 @@ public sealed class vSeam : vToolsCommand
         if (clickedViewport?.Id == e.Viewport.Id && e.LeftButtonDown)
         {
           boxEnd = e.WindowPoint;
-          dragging |= Math.Abs(boxEnd.X - clickedPoint.X) >= BoxDragThresholdPixels || Math.Abs(boxEnd.Y - clickedPoint.Y) >= BoxDragThresholdPixels;
+          dragging |= Math.Abs(boxEnd.X - clickedPoint.X) >= ConfiguredBoxDragThresholdPixels || Math.Abs(boxEnd.Y - clickedPoint.Y) >= ConfiguredBoxDragThresholdPixels;
           if (dragging)
           {
-            if (System.Environment.TickCount64 - previewTick >= BoxPreviewIntervalMilliseconds)
+            if (System.Environment.TickCount64 - previewTick >= ConfiguredBoxPreviewIntervalMilliseconds)
             {
               var targets = picker.ResolveBox(e.Viewport, SelectionRectangle(clickedPoint, boxEnd), boxEnd.X < clickedPoint.X);
               Show(targets);
@@ -870,7 +886,7 @@ public sealed class vSeam : vToolsCommand
       getter.DynamicDraw += (_, e) =>
       {
         if (dragging && clickedViewport?.Id == e.Viewport.Id)
-          e.Display.Draw2dRectangle(SelectionRectangle(clickedPoint, boxEnd), BoxColor, BoxLineThicknessPixels, System.Drawing.Color.Transparent);
+          e.Display.Draw2dRectangle(SelectionRectangle(clickedPoint, boxEnd), BoxColor, ConfiguredBoxLineThicknessPixels, System.Drawing.Color.Transparent);
       };
       var controls = new Controls(getter);
       if (lastViewport != null)
@@ -1231,7 +1247,7 @@ public sealed class vSeam : vToolsCommand
     {
       var eligible = loops.Where(curve => curve.IsClosed && curve.TryGetPlane(out _, tolerance)).ToArray();
       var choices = eligible.Where(curve =>
-        (OnBoundary(selected, curve, tolerance) || pickPoint.IsValid && Distance(curve, pickPoint) <= tolerance * BoundaryToleranceFactor ||
+        (OnBoundary(selected, curve, tolerance) || pickPoint.IsValid && Distance(curve, pickPoint) <= tolerance * ConfiguredBoundaryToleranceFactor ||
           allowContaining && curve.TryGetPlane(out var plane, tolerance) &&
           curve.Contains(pickPoint.IsValid ? pickPoint : selected.PointAtNormalizedLength(0.5), plane, tolerance) != PointContainment.Outside));
       var best = choices.OrderByDescending(curve => { using var mass = AreaMassProperties.Compute(curve); return mass?.Area ?? 0; }).FirstOrDefault();
@@ -1242,8 +1258,8 @@ public sealed class vSeam : vToolsCommand
     finally { foreach (var curve in curves.Concat(joined).Concat(loops).Distinct()) curve.Dispose(); }
   }
 
-  private static bool OnBoundary(Curve curve, Curve outline, double tolerance) => Enumerable.Range(0, MatchSamples).All(index =>
-    Distance(outline, curve.PointAtNormalizedLength((double)index / (MatchSamples - 1))) <= tolerance * BoundaryToleranceFactor);
+  private static bool OnBoundary(Curve curve, Curve outline, double tolerance) => Enumerable.Range(0, ConfiguredMatchSamples).All(index =>
+    Distance(outline, curve.PointAtNormalizedLength((double)index / (ConfiguredMatchSamples - 1))) <= tolerance * ConfiguredBoundaryToleranceFactor);
 
   private static List<Curve> SplitEdges(Curve outline, IEnumerable<Curve> sources, double tolerance)
   {
@@ -1340,7 +1356,7 @@ public sealed class vSeam : vToolsCommand
         profile.Distances.Any(value => !double.IsFinite(value) || value < 0)) return false;
       int anchor = ProfileAnchor(part, roots[0]);
       bool matches = profile.Lengths.Length == part.Edges.Count && Enumerable.Range(0, part.Edges.Count).All(i =>
-        Math.Abs(profile.Lengths[i] - part.Edges[(i + anchor) % part.Edges.Count].GetLength()) <= doc.ModelAbsoluteTolerance * BoundaryToleranceFactor);
+        Math.Abs(profile.Lengths[i] - part.Edges[(i + anchor) % part.Edges.Count].GetLength()) <= doc.ModelAbsoluteTolerance * ConfiguredBoundaryToleranceFactor);
       if (!matches)
       {
         // A uniform assignment survives section splits/merges without guessing which edge had which allowance.
@@ -1461,7 +1477,7 @@ public sealed class vSeam : vToolsCommand
           throw new InvalidOperationException("Existing seam metadata is inconsistent; use Part mode to rebuild it.");
         bool Matches(int index) => index >= 0 && index < part.Edges.Count &&
           MatchAllowance((Curve)obj.Geometry, part.Edges[index], part, doc.ModelAbsoluteTolerance, out double measured, out _) &&
-          Math.Abs(measured - distance) <= Math.Max(doc.ModelAbsoluteTolerance * BoundaryToleranceFactor, distance * MatchVariation);
+          Math.Abs(measured - distance) <= Math.Max(doc.ModelAbsoluteTolerance * ConfiguredBoundaryToleranceFactor, distance * MatchVariation);
         int edge = sameSource && int.TryParse(obj.Attributes.GetUserString(EdgeKey), NumberStyles.Integer, CultureInfo.InvariantCulture, out int saved) && Matches(saved)
           ? saved : Enumerable.Range(0, part.Edges.Count).Where(Matches).DefaultIfEmpty(-1).First();
         if (edge < 0) continue; // Joined legacy pieces still use the conservative recognition path below.
@@ -1473,7 +1489,7 @@ public sealed class vSeam : vToolsCommand
     }
     var candidates = new List<LegacyCandidate>();
     double tolerance = doc.ModelAbsoluteTolerance;
-    var search = part.Outline.GetBoundingBox(true); search.Inflate(Math.Max(_settings.Allowance, Defaults.Allowance) * LegacySearchFactor);
+    var search = part.Outline.GetBoundingBox(true); search.Inflate(Math.Max(_settings.Allowance, Defaults.Allowance) * ConfiguredLegacySearchFactor);
     int partGroup = part.Groups.FirstOrDefault(-1);
     try
     {
@@ -1507,7 +1523,7 @@ public sealed class vSeam : vToolsCommand
       {
         var offsetEnds = active.SelectMany(candidate => candidate.Pieces.Where((_, index) => candidate.Edges[index] >= 0))
           .Concat(state.Curves.OfType<Curve>()).SelectMany(curve => new[] { curve.PointAtStart, curve.PointAtEnd }).ToArray();
-        bool Near(Point3d point, IEnumerable<Point3d> values) => values.Any(value => value.DistanceTo(point) <= tolerance * BoundaryToleranceFactor);
+        bool Near(Point3d point, IEnumerable<Point3d> values) => values.Any(value => value.DistanceTo(point) <= tolerance * ConfiguredBoundaryToleranceFactor);
         bool Connector(Curve curve) => curve.IsLinear(tolerance) &&
           (Near(curve.PointAtStart, offsetEnds) && (Near(curve.PointAtEnd, offsetEnds) || Near(curve.PointAtEnd, sourceCorners)) ||
            Near(curve.PointAtEnd, offsetEnds) && Near(curve.PointAtStart, sourceCorners));
@@ -1540,9 +1556,9 @@ public sealed class vSeam : vToolsCommand
   {
     allowance = coverage = 0;
     var distances = new List<double>(); var parameters = new List<double>();
-    for (int i = 1; i <= MatchSamples; i++)
+    for (int i = 1; i <= ConfiguredMatchSamples; i++)
     {
-      if (!candidate.NormalizedLengthParameter((double)i / (MatchSamples + 1), out double t)) continue;
+      if (!candidate.NormalizedLengthParameter((double)i / (ConfiguredMatchSamples + 1), out double t)) continue;
       var point = candidate.PointAt(t);
       if (!source.ClosestPoint(point, out double s)) continue;
       var nearest = source.PointAt(s); var delta = point - nearest;
@@ -1553,9 +1569,9 @@ public sealed class vSeam : vToolsCommand
         Unit(delta) * Outward(tangent, part.Plane.Normal) < MatchCosine) continue;
       distances.Add(delta.Length); parameters.Add(s);
     }
-    if (distances.Count < Math.Max(3, MatchSamples / 2)) return false;
+    if (distances.Count < Math.Max(3, ConfiguredMatchSamples / 2)) return false;
     allowance = distances.Average();
-    if (distances.Max() - distances.Min() > Math.Max(tolerance * BoundaryToleranceFactor, allowance * MatchVariation)) return false;
+    if (distances.Max() - distances.Min() > Math.Max(tolerance * ConfiguredBoundaryToleranceFactor, allowance * MatchVariation)) return false;
     double length = source.GetLength();
     if (length <= tolerance) return false;
     coverage = source.GetLength(new Interval(parameters.Min(), parameters.Max())) / length;
@@ -1577,8 +1593,8 @@ public sealed class vSeam : vToolsCommand
   }
 
   private static bool OnTargets(Curve curve, IReadOnlyList<Curve> targets, double tolerance) =>
-    Enumerable.Range(0, MatchSamples).All(index => targets.Any(target =>
-      Distance(target, curve.PointAtNormalizedLength((double)index / (MatchSamples - 1))) <= tolerance * BoundaryToleranceFactor));
+    Enumerable.Range(0, ConfiguredMatchSamples).All(index => targets.Any(target =>
+      Distance(target, curve.PointAtNormalizedLength((double)index / (ConfiguredMatchSamples - 1))) <= tolerance * ConfiguredBoundaryToleranceFactor));
 
   private static void PartitionSource(SourceEdit edit, IReadOnlyList<Curve> targets, double tolerance)
   {

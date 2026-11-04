@@ -22,7 +22,7 @@ public sealed class vCenter : vToolsCommand
   private const string MethodKey = "method";
 
   // Option defaults
-  [global::vTools.CommandDefault("vCenter", "vTools.Commands.vCenter.DefaultMethod", "CenterMethod enum: BoundingBox, Mass, or Objects.")] private const CenterMethod DefaultMethod = CenterMethod.BoundingBox; // CenterMethod enum: BoundingBox, Mass, or Objects.
+  [global::vTools.CommandDefault("vCenter", "vTools.Commands.vCenter.DefaultMethod", "CenterMethod enum: BoundingBox, Mass, or Objects.", OptionKeys = "method")] private const CenterMethod DefaultMethod = CenterMethod.BoundingBox; // CenterMethod enum: BoundingBox, Mass, or Objects.
 
   private static readonly CenterMethod ConfiguredDefaultMethod = global::vTools.CommandDefaults.Get("vCenter", "vTools.Commands.vCenter.DefaultMethod", DefaultMethod); // Resolved once from advanced defaults; restart Rhino after changes.
 

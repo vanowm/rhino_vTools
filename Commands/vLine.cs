@@ -38,29 +38,29 @@ namespace vTools.Commands
     private const int PriorityKeepCurrent = 3; // Persisted index preferring the current solution branch.
 
     // Option defaults
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultChainMode", "Mode constant: Single, Multiple, Chained, or Polyline.")] private const int DefaultChainMode = ModeSingle; // Mode constant: Single, Multiple, Chained, or Polyline.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultChainMode", "Mode constant: Single, Multiple, Chained, or Polyline.", OptionKeys = "chainMode")] private const int DefaultChainMode = ModeSingle; // Mode constant: Single, Multiple, Chained, or Polyline.
 
     private static readonly int ConfiguredDefaultChainMode = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultChainMode", DefaultChainMode); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPriority", "Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.")] private const int DefaultPriority = PriorityClosest; // Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPriority", "Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.", OptionKeys = "priority")] private const int DefaultPriority = PriorityClosest; // Priority constant: Closest, PerpFirst, TanFirst, or KeepCurrent.
 
     private static readonly int ConfiguredDefaultPriority = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultPriority", DefaultPriority); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPersistConstraint", "true carries the active constraint to the next line; false resets it.")] private const bool DefaultPersistConstraint = false; // true carries the active constraint to the next line; false resets it.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultPersistConstraint", "true carries the active constraint to the next line; false resets it.", OptionKeys = "persistConstraint")] private const bool DefaultPersistConstraint = false; // true carries the active constraint to the next line; false resets it.
 
     private static readonly bool ConfiguredDefaultPersistConstraint = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultPersistConstraint", DefaultPersistConstraint); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLength", "Model units; zero leaves line length unlocked.")] private const double DefaultLength = 0.0; // Model units; zero leaves line length unlocked.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLength", "Model units; zero leaves line length unlocked.", OptionKeys = "length")] private const double DefaultLength = 0.0; // Model units; zero leaves line length unlocked.
 
     private static readonly double ConfiguredDefaultLength = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultLength", DefaultLength); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngle", "Angle in degrees.")] private const double DefaultAngle = 0.0; // Angle in degrees.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngle", "Angle in degrees.", OptionKeys = "angle")] private const double DefaultAngle = 0.0; // Angle in degrees.
 
     private static readonly double ConfiguredDefaultAngle = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultAngle", DefaultAngle); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngleRelative", "true measures angle from the prior direction; false uses the CPlane axis.")] private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultAngleRelative", "true measures angle from the prior direction; false uses the CPlane axis.", OptionKeys = "angleRelative")] private const bool DefaultAngleRelative = false; // true measures angle from the prior direction; false uses the CPlane axis.
 
     private static readonly bool ConfiguredDefaultAngleRelative = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultAngleRelative", DefaultAngleRelative); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLayer", "Rhino layer path or *Current*.")] private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultLayer", "Rhino layer path or *Current*.", OptionKeys = "layer")] private const string DefaultLayer = CurrentLayerOption; // Rhino layer path or *Current*.
 
     private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int ConstraintSpace3D = 1; // Saved option index for true spatial endpoint tangency/perpendicularity; index zero is CPlane.
-    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultConstraintSpace", "CPlane by default; one selects true 3D for explicit endpoint modes.")] private const int DefaultConstraintSpace = 0; // CPlane by default; one selects true 3D for explicit endpoint modes.
+    [global::vTools.CommandDefault("vLine", "vTools.Commands.vLine.DefaultConstraintSpace", "CPlane by default; one selects true 3D for explicit endpoint modes.", OptionKeys = "constraintSpace")] private const int DefaultConstraintSpace = 0; // CPlane by default; one selects true 3D for explicit endpoint modes.
 
     private static readonly int ConfiguredDefaultConstraintSpace = global::vTools.CommandDefaults.Get("vLine", "vTools.Commands.vLine.DefaultConstraintSpace", DefaultConstraintSpace); // Resolved once from advanced defaults; restart Rhino after changes.
     private const bool DefaultSolveIn3D = false; // false retains legacy CPlane solver calls; true evaluates full spatial directions.

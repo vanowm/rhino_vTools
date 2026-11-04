@@ -23,13 +23,23 @@ public sealed class vSelSame : vToolsCommand
   private static readonly Size InitialDialogSize = new(560, 570); // Initial filter-window dimensions in logical pixels.
   private static readonly Size MinimumDialogSize = new(430, 280); // Smallest filter-window dimensions in logical pixels.
   private static readonly Size FilterEditorSize = new(480, 350); // Initial condition-editor dimensions in logical pixels.
-  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultMatchTolerance", "Absolute dimension-matching tolerance in model units; -1 uses document absolute tolerance, zero is roundoff-only matching.")] private const double DefaultMatchTolerance = -1; // -1 follows document tolerance; zero or greater overrides numeric dimension matching in model units.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.DefaultMatchTolerance", "Absolute dimension-matching tolerance in model units; -1 uses document absolute tolerance, zero is roundoff-only matching.", OptionKeys = "matchTolerance")] private const double DefaultMatchTolerance = -1; // -1 follows document tolerance; zero or greater overrides numeric dimension matching in model units.
   private static readonly double ConfiguredDefaultMatchTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.DefaultMatchTolerance", DefaultMatchTolerance); // Saved-default fallback; -1 follows each document.
-  private const double MatchToleranceIncrement = 0.0001; // Model-unit step for the matching-tolerance spinner; positive.
-  private const double MinimumMatchTolerance = 0; // Minimum absolute dimension tolerance in model units; zero allows only numerical roundoff.
-  private const double MaximumMatchTolerance = double.MaxValue; // Largest finite absolute dimension tolerance in model units.
-  private const int MatchToleranceDecimalPlaces = 8; // Maximum decimal digits shown and entered for matching tolerance; zero through fifteen.
-  private const int MatchToleranceInputWidth = 124; // Logical-pixel width including the reset overlay and spinner arrows.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MatchToleranceIncrement", "Model-unit step for the matching-tolerance spinner; positive.")] private const double MatchToleranceIncrement = 0.0001; // Model-unit step for the matching-tolerance spinner; positive.
+
+  private static readonly double ConfiguredMatchToleranceIncrement = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MatchToleranceIncrement", MatchToleranceIncrement); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MinimumMatchTolerance", "Minimum absolute dimension tolerance in model units; zero allows only numerical roundoff.")] private const double MinimumMatchTolerance = 0; // Minimum absolute dimension tolerance in model units; zero allows only numerical roundoff.
+
+  private static readonly double ConfiguredMinimumMatchTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MinimumMatchTolerance", MinimumMatchTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MaximumMatchTolerance", "Largest finite absolute dimension tolerance in model units.")] private const double MaximumMatchTolerance = double.MaxValue; // Largest finite absolute dimension tolerance in model units.
+
+  private static readonly double ConfiguredMaximumMatchTolerance = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MaximumMatchTolerance", MaximumMatchTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MatchToleranceDecimalPlaces", "Maximum decimal digits shown and entered for matching tolerance; zero through fifteen.")] private const int MatchToleranceDecimalPlaces = 8; // Maximum decimal digits shown and entered for matching tolerance; zero through fifteen.
+
+  private static readonly int ConfiguredMatchToleranceDecimalPlaces = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MatchToleranceDecimalPlaces", MatchToleranceDecimalPlaces); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("vSelSame", "vTools.Commands.vSelSame.MatchToleranceInputWidth", "Logical-pixel width including the reset overlay and spinner arrows.")] private const int MatchToleranceInputWidth = 124; // Logical-pixel width including the reset overlay and spinner arrows.
+
+  private static readonly int ConfiguredMatchToleranceInputWidth = global::vTools.CommandDefaults.Get("vSelSame", "vTools.Commands.vSelSame.MatchToleranceInputWidth", MatchToleranceInputWidth); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string SettingsSection = "vSelSame"; // Global saved matching preferences; does not modify document geometry tolerance.
   private const string MatchToleranceKey = "matchTolerance"; // Saved absolute matching tolerance; -1 means document default.
   private const int IconButtonWidth = 26; // Fixed logical-pixel width for condition edit/remove and value add/remove controls.
@@ -979,17 +989,17 @@ private sealed class SelSameDialog : Dialog<bool>
     _doc = doc; _references = references; _referenceCount = references.Count; _preview = preview;
     _matchTolerance = new NumericStepper
     {
-      MinValue = MinimumMatchTolerance, MaxValue = MaximumMatchTolerance, Increment = MatchToleranceIncrement,
-      DecimalPlaces = 0, MaximumDecimalPlaces = MatchToleranceDecimalPlaces,
-      CultureInfo = CultureInfo.InvariantCulture, Width = MatchToleranceInputWidth,
+      MinValue = ConfiguredMinimumMatchTolerance, MaxValue = ConfiguredMaximumMatchTolerance, Increment = ConfiguredMatchToleranceIncrement,
+      DecimalPlaces = 0, MaximumDecimalPlaces = ConfiguredMatchToleranceDecimalPlaces,
+      CultureInfo = CultureInfo.InvariantCulture, Width = ConfiguredMatchToleranceInputWidth,
       ToolTip = "Absolute matching tolerance in model units for dimensions. Counts, IDs, text and angular rules are unchanged.",
       Value = LoadMatchTolerance(doc),
     };
-    _matchToleranceHost = new Panel { Content = _matchTolerance, Width = MatchToleranceInputWidth };
+    _matchToleranceHost = new Panel { Content = _matchTolerance, Width = ConfiguredMatchToleranceInputWidth };
     _catalog = SimilarObjectMatcher.CreateCriteria(doc, references, typeName, rectangleSize, true);
     double defaultTolerance = ResolveMatchTolerance(doc, ConfiguredDefaultMatchTolerance);
     _matchToleranceReset = new FieldResetOverlay(_matchToleranceHost,
-      () => FieldResetOverlay.NumberChanged(_matchTolerance.Value, defaultTolerance, MatchToleranceDecimalPlaces),
+      () => FieldResetOverlay.NumberChanged(_matchTolerance.Value, defaultTolerance, ConfiguredMatchToleranceDecimalPlaces),
       () => { _matchTolerance.Value = defaultTolerance; SaveMatchTolerance(ConfiguredDefaultMatchTolerance); },
       "Reset matching tolerance to its default");
     _matchTolerance.ValueChanged += (_, _) =>

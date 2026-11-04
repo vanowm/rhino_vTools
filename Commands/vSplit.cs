@@ -22,7 +22,7 @@ public sealed class vSplit : vToolsCommand
   [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.DefaultPointRadius", "Split-point marker radius in pixels; greater than zero.")] private const int DefaultPointRadius = 5; // Split-point marker radius in pixels; greater than zero.
 
   private static readonly int ConfiguredDefaultPointRadius = global::vTools.CommandDefaults.Get("vSplit", "vTools.Commands.vSplit.DefaultPointRadius", DefaultPointRadius); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.DefaultPointDisplayMode", "PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.")] private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
+  [global::vTools.CommandDefault("vSplit", "vTools.Commands.vSplit.DefaultPointDisplayMode", "PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.", OptionKeys = "pointDisplay")] private const PointDisplayMode DefaultPointDisplayMode = PointDisplayMode.Default; // PointDisplayMode enum: Default, ControlPoints, EditPoints, or Hidden.
 
   private static readonly PointDisplayMode ConfiguredDefaultPointDisplayMode = global::vTools.CommandDefaults.Get("vSplit", "vTools.Commands.vSplit.DefaultPointDisplayMode", DefaultPointDisplayMode); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int PointOutlineWidth = 1; // Split-point outline width in display pixels; zero or greater.

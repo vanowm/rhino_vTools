@@ -22,13 +22,15 @@ namespace vTools.Commands;
 public sealed class vFacing : vToolsCommand
 {
   // Option defaults
-  [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.DefaultSize", "Facing offset in model units; greater than zero.")] private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
+  [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.DefaultSize", "Facing offset in model units; greater than zero.", OptionKeys = "size")] private const double DefaultSize = 3.0; // Facing offset in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultSize = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.DefaultSize", DefaultSize); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", "Samples used to preserve fully contained curves before perimeter clipping; three or greater.")] private const int InteriorCurveContainmentSamples = 17; // Samples used to preserve fully contained curves before perimeter clipping; three or greater.
 
   private static readonly int ConfiguredInteriorCurveContainmentSamples = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.InteriorCurveContainmentSamples", InteriorCurveContainmentSamples); // Resolved once from advanced defaults; restart Rhino after changes.
-  private const double AutomaticRoleCornerAngleDegrees = 30.0; // Minimum tangent change in degrees separating smooth end-side chains from the multi-curve base.
+  [global::vTools.CommandDefault("vFacing", "vTools.Commands.vFacing.AutomaticRoleCornerAngleDegrees", "Minimum tangent change in degrees separating smooth end-side chains from the multi-curve base.")] private const double AutomaticRoleCornerAngleDegrees = 30.0; // Minimum tangent change in degrees separating smooth end-side chains from the multi-curve base.
+
+  private static readonly double ConfiguredAutomaticRoleCornerAngleDegrees = global::vTools.CommandDefaults.Get("vFacing", "vTools.Commands.vFacing.AutomaticRoleCornerAngleDegrees", AutomaticRoleCornerAngleDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
 
   private const string SectionName = "vFacing";
   private const string SizeKey     = "size";
@@ -621,7 +623,7 @@ public sealed class vFacing : vToolsCommand
       }
       var corners=Enumerable.Range(0,n-1).Where(index=>
         oriented[index].PointAtEnd.DistanceTo(oriented[index+1].PointAtStart)>tol*2||
-        Vector3d.VectorAngle(oriented[index].TangentAtEnd,oriented[index+1].TangentAtStart)>=RhinoMath.ToRadians(AutomaticRoleCornerAngleDegrees)).ToArray();
+        Vector3d.VectorAngle(oriented[index].TangentAtEnd,oriented[index+1].TangentAtStart)>=RhinoMath.ToRadians(ConfiguredAutomaticRoleCornerAngleDegrees)).ToArray();
       if(corners.Length>=2){firstCorner=corners[0];lastCorner=corners[^1];}
     }
     finally{foreach(var curve in oriented)curve.Dispose();}

@@ -15,43 +15,43 @@ namespace vTools.Commands;
 public sealed class vOffset : vToolsCommand
 {
   // Option defaults
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultAutoTrim", "true trims or extends offset ends at touching cutters; false keeps raw offsets.")] private const bool DefaultAutoTrim = false; // true trims or extends offset ends at touching cutters; false keeps raw offsets.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultAutoTrim", "true trims or extends offset ends at touching cutters; false keeps raw offsets.", OptionKeys = "autoTrim")] private const bool DefaultAutoTrim = false; // true trims or extends offset ends at touching cutters; false keeps raw offsets.
 
   private static readonly bool ConfiguredDefaultAutoTrim = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultAutoTrim", DefaultAutoTrim); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultDeleteSource", "true deletes the whole input curve after every output is created; false retains the original.")] private const bool DefaultDeleteSource = false; // true deletes the whole input curve after every output is created; false retains the original.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultDeleteSource", "true deletes the whole input curve after every output is created; false retains the original.", OptionKeys = "deleteSource")] private const bool DefaultDeleteSource = false; // true deletes the whole input curve after every output is created; false retains the original.
 
   private static readonly bool ConfiguredDefaultDeleteSource = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultDeleteSource", DefaultDeleteSource); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultGroupMode", "Zero-based GroupNames index; Auto inherits existing source groups and leaves ungrouped sources ungrouped.")] private const int DefaultGroupMode = 1; // Zero-based GroupNames index; Auto inherits existing source groups and leaves ungrouped sources ungrouped.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultGroupMode", "Zero-based GroupNames index; Auto inherits existing source groups and leaves ungrouped sources ungrouped.", OptionKeys = "group")] private const int DefaultGroupMode = 1; // Zero-based GroupNames index; Auto inherits existing source groups and leaves ungrouped sources ungrouped.
 
   private static readonly int ConfiguredDefaultGroupMode = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultGroupMode", DefaultGroupMode); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultDistance", "Offset distance in model units; zero or greater.")] private const double DefaultDistance = 0.5; // Offset distance in model units; zero or greater.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultDistance", "Offset distance in model units; zero or greater.", OptionKeys = "distance")] private const double DefaultDistance = 0.5; // Offset distance in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultLoose", "true offsets by control points; false uses tolerance-based accurate offsetting.")] private const bool DefaultLoose = false; // true offsets by control points; false uses tolerance-based accurate offsetting.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultLoose", "true offsets by control points; false uses tolerance-based accurate offsetting.", OptionKeys = "loose")] private const bool DefaultLoose = false; // true offsets by control points; false uses tolerance-based accurate offsetting.
 
   private static readonly bool ConfiguredDefaultLoose = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultLoose", DefaultLoose); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultCorner", "Zero-based CornerNames index.")] private const int DefaultCorner = 1; // Zero-based CornerNames index.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultCorner", "Zero-based CornerNames index.", OptionKeys = "corner")] private const int DefaultCorner = 1; // Zero-based CornerNames index.
 
   private static readonly int ConfiguredDefaultCorner = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultCorner", DefaultCorner); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultThroughPoint", "true derives distance from the picked point; false uses the numeric distance.")] private const bool DefaultThroughPoint = false; // true derives distance from the picked point; false uses the numeric distance.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultThroughPoint", "true derives distance from the picked point; false uses the numeric distance.", OptionKeys = "throughPoint")] private const bool DefaultThroughPoint = false; // true derives distance from the picked point; false uses the numeric distance.
 
   private static readonly bool ConfiguredDefaultThroughPoint = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultThroughPoint", DefaultThroughPoint); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultTrim", "true trims offset self-intersections; false keeps the complete offset result.")] private const bool DefaultTrim = true; // true trims offset self-intersections; false keeps the complete offset result.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultTrim", "true trims offset self-intersections; false keeps the complete offset result.", OptionKeys = "trim")] private const bool DefaultTrim = true; // true trims offset self-intersections; false keeps the complete offset result.
 
   private static readonly bool ConfiguredDefaultTrim = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultTrim", DefaultTrim); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultTolerance", "Intersection tolerance in model units; greater than zero.")] private const double DefaultTolerance = 0.001; // Intersection tolerance in model units; greater than zero.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultTolerance", "Intersection tolerance in model units; greater than zero.", OptionKeys = "tolerance")] private const double DefaultTolerance = 0.001; // Intersection tolerance in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultTolerance = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultTolerance", DefaultTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultBothSides", "true creates offsets on both sides; false creates only the cursor side.")] private const bool DefaultBothSides = false; // true creates offsets on both sides; false creates only the cursor side.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultBothSides", "true creates offsets on both sides; false creates only the cursor side.", OptionKeys = "bothSides")] private const bool DefaultBothSides = false; // true creates offsets on both sides; false creates only the cursor side.
 
   private static readonly bool ConfiguredDefaultBothSides = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultBothSides", DefaultBothSides); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultInCPlane", "true offsets in the active CPlane; false uses the curve's best-fit plane.")] private const bool DefaultInCPlane = true; // true offsets in the active CPlane; false uses the curve's best-fit plane.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultInCPlane", "true offsets in the active CPlane; false uses the curve's best-fit plane.", OptionKeys = "inCPlane")] private const bool DefaultInCPlane = true; // true offsets in the active CPlane; false uses the curve's best-fit plane.
 
   private static readonly bool ConfiguredDefaultInCPlane = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultInCPlane", DefaultInCPlane); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultCap", "Zero-based CapNames index.")] private const int DefaultCap = 0; // Zero-based CapNames index.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultCap", "Zero-based CapNames index.", OptionKeys = "cap")] private const int DefaultCap = 0; // Zero-based CapNames index.
 
   private static readonly int ConfiguredDefaultCap = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultCap", DefaultCap); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultOutputLayer", "Zero-based OutputLayerNames index.")] private const int DefaultOutputLayer = 0; // Zero-based OutputLayerNames index.
+  [global::vTools.CommandDefault("vOffset", "vTools.Commands.vOffset.DefaultOutputLayer", "Zero-based OutputLayerNames index.", OptionKeys = "outputLayer")] private const int DefaultOutputLayer = 0; // Zero-based OutputLayerNames index.
 
   private static readonly int ConfiguredDefaultOutputLayer = global::vTools.CommandDefaults.Get("vOffset", "vTools.Commands.vOffset.DefaultOutputLayer", DefaultOutputLayer); // Resolved once from advanced defaults; restart Rhino after changes.
 

@@ -31,16 +31,16 @@ public sealed class vRectangle : vToolsCommand
   private const string LastBrZKey = "lastBrZ";
 
   // Option defaults
-  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultWidth", "Rectangle width in model units; greater than zero.")] private const double DefaultWidth = 10.0; // Rectangle width in model units; greater than zero.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultWidth", "Rectangle width in model units; greater than zero.", OptionKeys = "width")] private const double DefaultWidth = 10.0; // Rectangle width in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultHeight", "Rectangle height in model units; greater than zero.")] private const double DefaultHeight = 5.0; // Rectangle height in model units; greater than zero.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultHeight", "Rectangle height in model units; greater than zero.", OptionKeys = "height")] private const double DefaultHeight = 5.0; // Rectangle height in model units; greater than zero.
 
   private static readonly double ConfiguredDefaultHeight = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultHeight", DefaultHeight); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLabel", "true creates a fitted dimension label; false creates only the rectangle.")] private const bool DefaultLabel = false; // true creates a fitted dimension label; false creates only the rectangle.
+  [global::vTools.CommandDefault("vRectangle", "vTools.Commands.vRectangle.DefaultLabel", "true creates a fitted dimension label; false creates only the rectangle.", OptionKeys = "label")] private const bool DefaultLabel = false; // true creates a fitted dimension label; false creates only the rectangle.
 
   private static readonly bool ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vRectangle", "vTools.Commands.vRectangle.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string LabelLayerName = "Reference"; // Rhino layer name used for rectangle dimension labels.

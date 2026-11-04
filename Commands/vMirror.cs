@@ -18,16 +18,16 @@ namespace vTools.Commands
   public sealed class vMirror : vToolsCommand
   {
     // Option defaults
-    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultCopy", "true mirrors copies and keeps originals; false moves originals across the mirror plane.")] private const bool DefaultCopy = true; // true mirrors copies and keeps originals; false moves originals across the mirror plane.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultCopy", "true mirrors copies and keeps originals; false moves originals across the mirror plane.", OptionKeys = "copy")] private const bool DefaultCopy = true; // true mirrors copies and keeps originals; false moves originals across the mirror plane.
 
     private static readonly bool ConfiguredDefaultCopy = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultCopy", DefaultCopy); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultFlipText", "true keeps mirrored text readable; false mirrors text geometry literally.")] private const bool DefaultFlipText = true; // true keeps mirrored text readable; false mirrors text geometry literally.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultFlipText", "true keeps mirrored text readable; false mirrors text geometry literally.", OptionKeys = "flipText")] private const bool DefaultFlipText = true; // true keeps mirrored text readable; false mirrors text geometry literally.
 
     private static readonly bool ConfiguredDefaultFlipText = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultFlipText", DefaultFlipText); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultChangeText", "true swaps mirrored vTitle text using the configured replacements; false preserves its text.")] private const bool DefaultChangeText = false; // true swaps mirrored vTitle text using the configured replacements; false preserves its text.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultChangeText", "true swaps mirrored vTitle text using the configured replacements; false preserves its text.", OptionKeys = "changeText")] private const bool DefaultChangeText = false; // true swaps mirrored vTitle text using the configured replacements; false preserves its text.
 
     private static readonly bool ConfiguredDefaultChangeText = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultChangeText", DefaultChangeText); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultDistance", "Gap between original and directional mirrored bounds in model units; zero or greater.")] private const double DefaultDistance = 30.0; // Gap between original and directional mirrored bounds in model units; zero or greater.
+    [global::vTools.CommandDefault("vMirror", "vTools.Commands.vMirror.DefaultDistance", "Gap between original and directional mirrored bounds in model units; zero or greater.", OptionKeys = "distance")] private const double DefaultDistance = 30.0; // Gap between original and directional mirrored bounds in model units; zero or greater.
 
     private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vMirror", "vTools.Commands.vMirror.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string NativeFailureIdlePrompt = "Command"; // Idle command-line text restored when Rhino fails to execute the native mirror macro.

@@ -39,13 +39,13 @@ public sealed class vFitBox : vToolsCommand
   private static readonly double ConfiguredFlatOutputShortSideScale = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.FlatOutputShortSideScale", FlatOutputShortSideScale); // Resolved once from advanced defaults; restart Rhino after changes.
 
   // Option defaults
-  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultAngleStepDeg", "Search increment in degrees; 0.1 through 45.")] private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultAngleStepDeg", "Search increment in degrees; 0.1 through 45.", OptionKeys = "angleStepDeg")] private const double DefaultAngleStepDeg = 5.0; // Search increment in degrees; 0.1 through 45.
 
   private static readonly double ConfiguredDefaultAngleStepDeg = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultAngleStepDeg", DefaultAngleStepDeg); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultRotate", "true rotates selected geometry into the fitted frame; false only creates the box.")] private const bool DefaultRotate = false; // true rotates selected geometry into the fitted frame; false only creates the box.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultRotate", "true rotates selected geometry into the fitted frame; false only creates the box.", OptionKeys = "rotate")] private const bool DefaultRotate = false; // true rotates selected geometry into the fitted frame; false only creates the box.
 
   private static readonly bool ConfiguredDefaultRotate = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultRotate", DefaultRotate); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultFitMode", "Fit mode name: height, volume, or area.")] private const string DefaultFitMode = "height"; // Fit mode name: height, volume, or area.
+  [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultFitMode", "Fit mode name: height, volume, or area.", OptionKeys = "fitMode")] private const string DefaultFitMode = "height"; // Fit mode name: height, volume, or area.
 
   private static readonly string ConfiguredDefaultFitMode = global::vTools.CommandDefaults.Get("vFitBox", "vTools.Commands.vFitBox.DefaultFitMode", DefaultFitMode); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vFitBox", "vTools.Commands.vFitBox.DefaultCandidateMode", "Internal candidate mode name: 3d or 2d.")] private const string DefaultCandidateMode = "3d"; // Internal candidate mode name: 3d or 2d.

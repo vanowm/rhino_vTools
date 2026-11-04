@@ -38,7 +38,7 @@ namespace vTools.Commands
   public sealed partial class vSetPt : vToolsCommand
   {
     // Defaults and customizable constants
-    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultPreviewMode", "Off hides previews; Curves previews curves only; All also updates their history results when supported.")] private const PreviewMode DefaultPreviewMode = PreviewMode.All; // Off hides previews; Curves previews curves only; All also updates their history results when supported.
+    [global::vTools.CommandDefault("vSetPt", "vTools.Commands.vSetPt.DefaultPreviewMode", "Off hides previews; Curves previews curves only; All also updates their history results when supported.", OptionKeys = "preview")] private const PreviewMode DefaultPreviewMode = PreviewMode.All; // Off hides previews; Curves previews curves only; All also updates their history results when supported.
 
     private static readonly PreviewMode ConfiguredDefaultPreviewMode = global::vTools.CommandDefaults.Get("vSetPt", "vTools.Commands.vSetPt.DefaultPreviewMode", DefaultPreviewMode); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandChoicesAttribute("vSetPt", "preview", false, "Off", "Curves", "All")] private static readonly string[] PreviewValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vSetPt), nameof(PreviewValues)); // PreviewMode option names, in enum order.

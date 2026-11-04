@@ -16,10 +16,10 @@ namespace vTools.Commands;
 public sealed class vAlign : vToolsCommand
 {
   // Defaults and customizable constants
-  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultDistance", "Separation in model units; zero or greater, or None at the prompt.")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultDistance", "Separation in model units; zero or greater, or None at the prompt.", OptionKeys = "distance")] private const double DefaultDistance = 2.0; // Separation in model units; zero or greater, or None at the prompt.
 
   private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultLoop", "true repeats object/reference/target selection after each alignment; false completes one alignment.")] private const bool DefaultLoop = true; // true repeats object/reference/target selection after each alignment; false completes one alignment.
+  [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultLoop", "true repeats object/reference/target selection after each alignment; false completes one alignment.", OptionKeys = "loop")] private const bool DefaultLoop = true; // true repeats object/reference/target selection after each alignment; false completes one alignment.
 
   private static readonly bool ConfiguredDefaultLoop = global::vTools.CommandDefaults.Get("vAlign", "vTools.Commands.vAlign.DefaultLoop", DefaultLoop); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vAlign", "vTools.Commands.vAlign.DefaultSaveDefaults", "true saves accepted option changes; false uses temporary values for this run only.")] private const bool DefaultSaveDefaults = true; // true saves accepted option changes; false uses temporary values for this run only.

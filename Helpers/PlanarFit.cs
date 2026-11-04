@@ -6,16 +6,36 @@ namespace vTools;
 internal static class PlanarFit
 {
   // Shared vFitBox planar-search defaults and numeric limits
-  internal const double CoarseStepDegrees = 0.25; // Maximum planar coarse yaw step in degrees; positive.
-  private const double MinimumCoarseStepDegrees = 0.1; // Minimum accepted coarse yaw step in degrees; positive.
-  private const double MinimumLocalStepDegrees = 0.01; // Minimum local evaluation increment in degrees, matching vFitBox.
-  private const double FinalStepDegrees = 0.001; // Final requested planar refinement increment in degrees; positive.
-  private const double InitialRefineFactor = 0.25; // Fraction of the coarse increment used for the first local pass; zero through one.
-  private const double MinimumWindowDegrees = 0.5; // Minimum half-window for the first local search, in degrees.
-  private const double InitialWindowFactor = 1.5; // Coarse-increment multiplier for the first half-window; positive.
-  private const double RefineStepFactor = 0.2; // Increment reduction per local pass; greater than zero and less than one.
-  private const double RefineWindowFactor = 3.0; // Refined-increment multiplier for subsequent half-windows; positive.
-  private const double ScoreTolerance = 1e-12; // Absolute score comparison tolerance; nonnegative.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.CoarseStepDegrees", "Maximum planar coarse yaw step in degrees; positive.")] internal const double CoarseStepDegrees = 0.25; // Maximum planar coarse yaw step in degrees; positive.
+
+  internal static readonly double ConfiguredCoarseStepDegrees = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.CoarseStepDegrees", CoarseStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.MinimumCoarseStepDegrees", "Minimum accepted coarse yaw step in degrees; positive.")] private const double MinimumCoarseStepDegrees = 0.1; // Minimum accepted coarse yaw step in degrees; positive.
+
+  private static readonly double ConfiguredMinimumCoarseStepDegrees = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.MinimumCoarseStepDegrees", MinimumCoarseStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.MinimumLocalStepDegrees", "Minimum local evaluation increment in degrees, matching vFitBox.")] private const double MinimumLocalStepDegrees = 0.01; // Minimum local evaluation increment in degrees, matching vFitBox.
+
+  private static readonly double ConfiguredMinimumLocalStepDegrees = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.MinimumLocalStepDegrees", MinimumLocalStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.FinalStepDegrees", "Final requested planar refinement increment in degrees; positive.")] private const double FinalStepDegrees = 0.001; // Final requested planar refinement increment in degrees; positive.
+
+  private static readonly double ConfiguredFinalStepDegrees = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.FinalStepDegrees", FinalStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.InitialRefineFactor", "Fraction of the coarse increment used for the first local pass; zero through one.")] private const double InitialRefineFactor = 0.25; // Fraction of the coarse increment used for the first local pass; zero through one.
+
+  private static readonly double ConfiguredInitialRefineFactor = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.InitialRefineFactor", InitialRefineFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.MinimumWindowDegrees", "Minimum half-window for the first local search, in degrees.")] private const double MinimumWindowDegrees = 0.5; // Minimum half-window for the first local search, in degrees.
+
+  private static readonly double ConfiguredMinimumWindowDegrees = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.MinimumWindowDegrees", MinimumWindowDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.InitialWindowFactor", "Coarse-increment multiplier for the first half-window; positive.")] private const double InitialWindowFactor = 1.5; // Coarse-increment multiplier for the first half-window; positive.
+
+  private static readonly double ConfiguredInitialWindowFactor = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.InitialWindowFactor", InitialWindowFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.RefineStepFactor", "Increment reduction per local pass; greater than zero and less than one.")] private const double RefineStepFactor = 0.2; // Increment reduction per local pass; greater than zero and less than one.
+
+  private static readonly double ConfiguredRefineStepFactor = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.RefineStepFactor", RefineStepFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.RefineWindowFactor", "Refined-increment multiplier for subsequent half-windows; positive.")] private const double RefineWindowFactor = 3.0; // Refined-increment multiplier for subsequent half-windows; positive.
+
+  private static readonly double ConfiguredRefineWindowFactor = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.RefineWindowFactor", RefineWindowFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+  [global::vTools.CommandDefault("PlanarFit", "vTools.PlanarFit.ScoreTolerance", "Absolute score comparison tolerance; nonnegative.")] private const double ScoreTolerance = 1e-12; // Absolute score comparison tolerance; nonnegative.
+
+  private static readonly double ConfiguredScoreTolerance = global::vTools.CommandDefaults.Get("PlanarFit", "vTools.PlanarFit.ScoreTolerance", ScoreTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double HalfTurnDegrees = 180.0; // Unique planar rectangle orientations span one half-turn in degrees.
 
   internal sealed record Fit(Plane Plane,BoundingBox Bounds,double Angle)
@@ -28,7 +48,7 @@ internal static class PlanarFit
   internal static T? Refine<T>(Func<double,T?> evaluate,Func<T,T,bool> better,Func<T,double> angle,
     double stepDegrees,out int tested,T? seed=null) where T:class
   {
-    double coarse=Math.Clamp(Math.Min(stepDegrees,CoarseStepDegrees),MinimumCoarseStepDegrees,CoarseStepDegrees);
+    double coarse=Math.Clamp(Math.Min(stepDegrees,ConfiguredCoarseStepDegrees),ConfiguredMinimumCoarseStepDegrees,ConfiguredCoarseStepDegrees);
     T? best=seed;tested=0;int testedCount=0;
     void Evaluate(double yaw)
     {
@@ -39,16 +59,16 @@ internal static class PlanarFit
     }
     for(double yaw=0;yaw<HalfTurnDegrees+0.5*coarse;yaw+=coarse)Evaluate(yaw);
     if(best==null){tested=testedCount;return null;}
-    double step=Math.Max(MinimumLocalStepDegrees,Math.Min(CoarseStepDegrees,coarse*InitialRefineFactor));
-    double window=Math.Max(MinimumWindowDegrees,coarse*InitialWindowFactor);
+    double step=Math.Max(ConfiguredMinimumLocalStepDegrees,Math.Min(ConfiguredCoarseStepDegrees,coarse*ConfiguredInitialRefineFactor));
+    double window=Math.Max(ConfiguredMinimumWindowDegrees,coarse*ConfiguredInitialWindowFactor);
     while(true)
     {
       double center=angle(best);
-      double localStep=Math.Max(MinimumLocalStepDegrees,step),span=Math.Max(localStep,window);
+      double localStep=Math.Max(ConfiguredMinimumLocalStepDegrees,step),span=Math.Max(localStep,window);
       for(double offset=-span;offset<=span+0.5*localStep;offset+=localStep)Evaluate(center+offset);
-      if(step<=FinalStepDegrees+ScoreTolerance)break;
-      step=Math.Max(FinalStepDegrees,step*RefineStepFactor);
-      window=Math.Max(step*RefineWindowFactor,MinimumLocalStepDegrees);
+      if(step<=ConfiguredFinalStepDegrees+ConfiguredScoreTolerance)break;
+      step=Math.Max(ConfiguredFinalStepDegrees,step*ConfiguredRefineStepFactor);
+      window=Math.Max(step*ConfiguredRefineWindowFactor,ConfiguredMinimumLocalStepDegrees);
     }
     tested=testedCount;return best;
   }
@@ -90,10 +110,10 @@ internal static class PlanarFit
     }
     bool Better(Fit candidate,Fit current)
     {
-      if(candidate.Area<current.Area-ScoreTolerance)return true;
-      if(candidate.Area>current.Area+ScoreTolerance)return false;
-      return Math.Max(candidate.Width,candidate.Height)<Math.Max(current.Width,current.Height)-ScoreTolerance;
+      if(candidate.Area<current.Area-ConfiguredScoreTolerance)return true;
+      if(candidate.Area>current.Area+ConfiguredScoreTolerance)return false;
+      return Math.Max(candidate.Width,candidate.Height)<Math.Max(current.Width,current.Height)-ConfiguredScoreTolerance;
     }
-    return Refine(Evaluate,Better,fit=>fit.Angle,CoarseStepDegrees,out _,Evaluate(0));
+    return Refine(Evaluate,Better,fit=>fit.Angle,ConfiguredCoarseStepDegrees,out _,Evaluate(0));
   }
 }

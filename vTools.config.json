@@ -6,34 +6,34 @@
     "enabled": true
   },
   "vPartSplit": {
-    "width": 60.0,
+    "width": 60,
     "seam": 0.5,
     "mode": 0,
     "layout": 1,
-    "distance": 1.0
+    "distance": 1
   },
   "vNest": {
-    "width": 60.0,
-    "length": 315.0,
-    "gap": 0.0,
+    "width": 60,
+    "length": 315,
+    "gap": 0,
     "grain": "Auto",
     "rotationMode": "Step180",
-    "rotationStep": 45.0,
+    "rotationStep": 45,
     "obeyGrain": true,
-    "grainDeviation": 0.0,
+    "grainDeviation": 0,
     "allowReverse": true
   },
   "vPointAlongCurve": {
-    "distance": 1.0,
+    "distance": 1,
     "project": "Skip"
   },
   "vCenter": {
     "method": "BoundingBox"
   },
   "vChamfer": {
-    "length": 0.1,
+    "length": 1,
     "trim": true,
-    "join": false
+    "join": true
   },
   "vCommandFailSound": {
     "enabled": true,
@@ -52,15 +52,15 @@
     "joinMode": "All"
   },
   "vDiamonds": {
-    "width": 2.0,
-    "height": 2.0,
-    "countWidth": 3.0,
-    "countHeight": 3.0,
+    "width": 2,
+    "height": 2,
+    "countWidth": 3,
+    "countHeight": 3,
     "showBoundary": true,
     "showSize": true,
     "showCount": true,
-    "bySizeW": 0.0,
-    "bySizeH": 0.0,
+    "bySizeW": 0,
+    "bySizeH": 0,
     "layerPlot": "PLOT",
     "layerCut": "CUT1",
     "layerRef": "Reference"
@@ -75,10 +75,10 @@
     "layer": "*Current*"
   },
   "vFacing": {
-    "size": 3.0
+    "size": 3
   },
   "vFitBox": {
-    "angleStepDeg": 5.0,
+    "angleStepDeg": 5,
     "rotate": false,
     "fitMode": "height"
   },
@@ -91,7 +91,6 @@
     "priority": 0,
     "persistConstraint": false,
     "length": 0,
-    "angleLock": false,
     "angle": 0,
     "angleRelative": false,
     "layer": "*Current*"
@@ -99,17 +98,17 @@
   "vLength": {
     "offset": 0.2,
     "size": 0.25,
-    "rounding": 0.0,
+    "rounding": 0,
     "fraction": true,
     "rotate90": 0
   },
   "vLineLength": {
-    "desiredLength": 10.0,
+    "desiredLength": 10,
     "extendWithLine": false,
     "mode": 0
   },
   "vGroup": {
-    "flattenGroups": true
+    "flattenGroups": false
   },
   "vGroupsManager": {
     "autoSelect": false,
@@ -120,15 +119,14 @@
     "layer": "Source"
   },
   "vMatch": {
-    "distance": 2.0,
-    "randStart": true,
+    "distance": 2,
     "randNext": true
   },
   "vMirror": {
     "copy": true,
     "flipText": true,
     "changeText": false,
-    "distance": 30.0,
+    "distance": 30,
     "textReplacements": [
       {
         "a": "OUTSIDE",
@@ -147,9 +145,9 @@
     ]
   },
   "vMiddleCurve": {
-    "lines": true,
+    "lines": false,
     "lineMode": "EqualDistance",
-    "lineInterval": 1,
+    "lineInterval": 0.5,
     "seamAllowance": 0.5,
     "minimumLength": 0.25
   },
@@ -168,16 +166,15 @@
     "label_size_pct": 75,
     "notch_layer": "*[Current]*",
     "label_layer": "PLOT",
-    "label_offset": 0.125,
-    "label_offset_y": 0.0,
-    "label_side_flip": false,
+    "label_offset": null,
+    "label_offset_y": 0,
     "keep_selection": false,
-    "multiple_start_offset": 2.0,
-    "multiple_end_offset": 2.0,
+    "multiple_start_offset": 2,
+    "multiple_end_offset": 2,
     "multiple_start_offset_enabled": true,
     "multiple_end_offset_enabled": true,
     "multiple_number": 2,
-    "multiple_distance": 0.0,
+    "multiple_distance": 0,
     "multiple_use_distance": false,
     "multiple_auto": false,
     "multiple_curvature_sensitivity": 10,
@@ -215,18 +212,18 @@
     "label": false,
     "labelText": "A",
     "labelLayer": "Reference",
-    "labelSize": 1.0
+    "labelSize": 1
   },
   "vRectangle": {
-    "width": 10.0,
-    "height": 5.0
+    "width": 10,
+    "height": 5
   },
   "vScallop": {
-    "size": 1.0,
+    "size": 1,
     "deleteOriginal": false,
     "free": false,
     "auto": true,
-    "sizePercent": 5.0
+    "sizePercent": 5
   },
   "vSetPt": {
     "preview": "All"
@@ -238,8 +235,8 @@
     "chamfer": true
   },
   "vSmooth": {
-    "strengthStart": 1.0,
-    "strengthEnd": 1.0,
+    "strengthStart": 1,
+    "strengthEnd": 1,
     "copy": false,
     "join": false,
     "smoothAll": false
@@ -248,21 +245,21 @@
     "pointDisplay": "Default"
   },
   "vSplitAtCorners": {
-    "angle": 30,
+    "angle": 45,
     "minLength": 0,
     "ignoreNotches": true
   },
   "vTextAligned": {
     "text": "Text",
-    "height": 5.0,
-    "offset": 0.0,
-    "rotate90": 0.0,
+    "height": 5,
+    "offset": 0,
+    "rotate90": 0,
     "bothSides": false
   },
   "vTitle": {
     "text": "",
-    "size": 20.0,
-    "padding": 50.0,
+    "size": 20,
+    "padding": 50,
     "box": true,
     "layer": "Reference"
   },
@@ -284,8 +281,8 @@
     "splitFaces": false,
     "keepPropSurface": false,
     "keepPropFollowing": true,
-    "layoutSpacing": 1.0,
-    "xExtents": 0.0,
+    "layoutSpacing": 1,
+    "xExtents": 0,
     "surfaceLayer": "Unrolled_surface",
     "labelLayer": "Unrolled_label",
     "dotLayer": "Unrolled_dot"
@@ -315,8 +312,16 @@
         "note": "FACE DOWN",
         "mirrorPart": false,
         "offsets": [
-          { "name": "", "offset": -0.75, "layer": null },
-          { "name": "", "offset": 0.75,  "layer": null }
+          {
+            "name": "",
+            "offset": -0.75,
+            "layer": null
+          },
+          {
+            "name": "",
+            "offset": 0.75,
+            "layer": null
+          }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
@@ -328,8 +333,16 @@
         "note": "",
         "mirrorPart": false,
         "offsets": [
-          { "name": "", "offset": -0.75,  "layer": null },
-          { "name": "", "offset": 1.125,  "layer": null }
+          {
+            "name": "",
+            "offset": -0.75,
+            "layer": null
+          },
+          {
+            "name": "",
+            "offset": 1.125,
+            "layer": null
+          }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
@@ -341,9 +354,21 @@
         "note": "",
         "mirrorPart": true,
         "offsets": [
-          { "name": "", "offset": -0.75,  "layer": "PLOT" },
-          { "name": "", "offset": -1.5,   "layer": null },
-          { "name": "", "offset": 1.125,  "layer": null }
+          {
+            "name": "",
+            "offset": -0.75,
+            "layer": "PLOT"
+          },
+          {
+            "name": "",
+            "offset": -1.5,
+            "layer": null
+          },
+          {
+            "name": "",
+            "offset": 1.125,
+            "layer": null
+          }
         ],
         "bandInsideName": "",
         "bandOutsideName": ""
@@ -354,7 +379,7 @@
     "left": 2.375,
     "right": 2.375,
     "bottom": 1.125,
-    "radius": 12.0,
+    "radius": 12,
     "glass": false,
     "glassOffset": 0.25,
     "glassLayer": "Glass",

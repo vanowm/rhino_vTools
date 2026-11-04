@@ -21,7 +21,7 @@ public sealed class vGroup : vToolsCommand
   [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.DefaultStoredBoundaryTolerance", "Model units; zero selects the document-derived tolerance.")] private const double DefaultStoredBoundaryTolerance = 0.0; // Model units; zero selects the document-derived tolerance.
 
   private static readonly double ConfiguredDefaultStoredBoundaryTolerance = global::vTools.CommandDefaults.Get("vGroup", "vTools.Commands.vGroup.DefaultStoredBoundaryTolerance", DefaultStoredBoundaryTolerance); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.DefaultFlattenGroups", "true replaces nested memberships with one group; false preserves existing groups.")] private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
+  [global::vTools.CommandDefault("vGroup", "vTools.Commands.vGroup.DefaultFlattenGroups", "true replaces nested memberships with one group; false preserves existing groups.", OptionKeys = "flattenGroups")] private const bool DefaultFlattenGroups = false; // true replaces nested memberships with one group; false preserves existing groups.
 
   private static readonly bool ConfiguredDefaultFlattenGroups = global::vTools.CommandDefaults.Get("vGroup", "vTools.Commands.vGroup.DefaultFlattenGroups", DefaultFlattenGroups); // Resolved once from advanced defaults; restart Rhino after changes.
 

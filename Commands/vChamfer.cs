@@ -38,13 +38,13 @@ public sealed class vChamfer : vToolsCommand
   private const string JoinKey     = "join";
 
   // Option defaults and solver settings
-  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultLength", "Chamfer line length in model units; zero or greater.")] private const double DefaultLength = 1.0; // Chamfer line length in model units; zero or greater.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultLength", "Chamfer line length in model units; zero or greater.", OptionKeys = "length")] private const double DefaultLength = 1.0; // Chamfer line length in model units; zero or greater.
 
   private static readonly double ConfiguredDefaultLength = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultLength", DefaultLength); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultTrim", "true trims source curves to the chamfer; false adds only the chamfer line.")] private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultTrim", "true trims source curves to the chamfer; false adds only the chamfer line.", OptionKeys = "trim")] private const bool DefaultTrim = true; // true trims source curves to the chamfer; false adds only the chamfer line.
 
   private static readonly bool ConfiguredDefaultTrim = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultTrim", DefaultTrim); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultJoin", "true joins trimmed curves with the chamfer; false keeps the results separate.")] private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
+  [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.DefaultJoin", "true joins trimmed curves with the chamfer; false keeps the results separate.", OptionKeys = "join")] private const bool DefaultJoin = true; // true joins trimmed curves with the chamfer; false keeps the results separate.
 
   private static readonly bool ConfiguredDefaultJoin = global::vTools.CommandDefaults.Get("vChamfer", "vTools.Commands.vChamfer.DefaultJoin", DefaultJoin); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vChamfer", "vTools.Commands.vChamfer.MiddleTangentSolveSamples", "Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.")] private const int MiddleTangentSolveSamples = 32; // Arc-length samples used to bracket the perpendicular-to-middle-tangent solution; eight or greater.

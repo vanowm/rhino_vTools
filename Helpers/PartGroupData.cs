@@ -18,7 +18,9 @@ internal static class PartGroupData
   internal const string SourceSettingsKey = "vNest.sourceSettings"; // Object user-string linking placed output to a source part identity.
   private const string GroupPrefix = "group-"; // Part key prefix followed by a group GUID in N format.
   private const string BoundaryPrefix = "boundary-"; // Part key prefix followed by a boundary object GUID in N format.
-  private const int DialogPadding = 10; // Conflict-dialog padding in device-independent pixels.
+  [global::vTools.CommandDefault("PartGroupData", "vTools.PartGroupData.DialogPadding", "Conflict-dialog padding in device-independent pixels.")] private const int DialogPadding = 10; // Conflict-dialog padding in device-independent pixels.
+
+  private static readonly int ConfiguredDialogPadding = global::vTools.CommandDefaults.Get("PartGroupData", "vTools.PartGroupData.DialogPadding", DialogPadding); // Resolved once from advanced defaults; restart Rhino after changes.
   private const int ChoiceWidth = 380; // Part-data source list width in device-independent pixels.
   private const int ChoiceHeight = 180; // Part-data source list height in device-independent pixels.
   private const int DisplayNameLimit = 80; // Maximum displayed source-name characters; stored data is never truncated.
@@ -70,7 +72,7 @@ internal static class PartGroupData
   internal static bool TryChooseSource(RhinoDoc doc, IReadOnlyList<Snapshot> candidates, out Snapshot? source)
   {
     if (TryAutomaticSource(candidates, out source)) return true;
-    using var dialog = new Dialog<Snapshot?> { Title = "Keep Part Data", Padding = new Padding(DialogPadding), Resizable = true };
+    using var dialog = new Dialog<Snapshot?> { Title = "Keep Part Data", Padding = new Padding(ConfiguredDialogPadding), Resizable = true };
     var descriptions = candidates.Select(Description).ToArray();
     var list = new ListBox { DataStore = descriptions.Select((name, index) => descriptions.Count(value => value == name) > 1
       ? name + " [" + candidates[index].Key[^8..] + "]" : name).ToArray(), SelectedIndex = 0, Width = ChoiceWidth, Height = ChoiceHeight };
@@ -83,7 +85,7 @@ internal static class PartGroupData
     keep.Click += (_, _) => { if (list.SelectedIndex >= 0) dialog.Close(candidates[list.SelectedIndex]); };
     cancel.Click += (_, _) => dialog.Close(null);
     dialog.DefaultButton = keep; dialog.AbortButton = cancel;
-    var layout = new DynamicLayout { Spacing = new Size(DialogPadding, DialogPadding) };
+    var layout = new DynamicLayout { Spacing = new Size(ConfiguredDialogPadding, ConfiguredDialogPadding) };
     layout.AddRow(new Label { Text = "Keep data from:" });
     layout.AddRow(list); layout.AddRow(null, keep, cancel); dialog.Content = layout;
     HighlightSource();

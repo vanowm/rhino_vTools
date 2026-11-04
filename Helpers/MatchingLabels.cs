@@ -17,7 +17,9 @@ internal static class MatchingLabels
   internal const bool DefaultAutoSize = false; // true sizes from notch offset and percentage; false uses manual height.
   internal const int DefaultSizePercent = 75; // Auto-size percentage, from 20 through 100.
   internal const double DefaultNotchOffset = 0.5; // Nonnegative model-unit offset used by notch auto-sizing.
-  internal const double DimensionScale = 0.9; // Positive annotation scale shared by notch and seam text.
+  [global::vTools.CommandDefault("MatchingLabels", "vTools.MatchingLabels.DimensionScale", "Positive annotation scale shared by notch and seam text.")] internal const double DimensionScale = 0.9; // Positive annotation scale shared by notch and seam text.
+
+  internal static readonly double ConfiguredDimensionScale = global::vTools.CommandDefaults.Get("MatchingLabels", "vTools.MatchingLabels.DimensionScale", DimensionScale); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string Section = "vNotches"; // Existing global and document label settings owner.
   private const string DocumentSection = "vTools"; // Existing Rhino document-string section.
   private static readonly Style Defaults = new(
@@ -97,7 +99,7 @@ internal static class MatchingLabels
     var text = new TextEntity
     {
       Plane = plane, PlainText = LabelSequences.FormatDisplayLabel(value), TextHeight = height,
-      Justification = TextJustification.MiddleCenter, DimensionScale = DimensionScale
+      Justification = TextJustification.MiddleCenter, DimensionScale = ConfiguredDimensionScale
     };
     return text;
   }

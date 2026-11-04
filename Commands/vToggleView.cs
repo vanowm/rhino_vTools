@@ -20,7 +20,7 @@ public sealed class vToggleView : vToolsCommand
   [global::vTools.CommandDefault("vToggleView", "vTools.Commands.vToggleView.DefaultMode", "Toggle follows the current tab; Projection toggles its projection only; named modes force a view.")] private const ViewMode DefaultMode = ViewMode.Toggle; // Toggle follows the current tab; Projection toggles its projection only; named modes force a view.
 
   private static readonly ViewMode ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vToggleView", "vTools.Commands.vToggleView.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vToggleView", "vTools.Commands.vToggleView.DefaultNewTab", "true creates missing named model-view tabs; false changes an existing view instead.")] private const bool DefaultNewTab = false; // true creates missing named model-view tabs; false changes an existing view instead.
+  [global::vTools.CommandDefault("vToggleView", "vTools.Commands.vToggleView.DefaultNewTab", "true creates missing named model-view tabs; false changes an existing view instead.", OptionKeys = "newTab")] private const bool DefaultNewTab = false; // true creates missing named model-view tabs; false changes an existing view instead.
 
   private static readonly bool ConfiguredDefaultNewTab = global::vTools.CommandDefaults.Get("vToggleView", "vTools.Commands.vToggleView.DefaultNewTab", DefaultNewTab); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool FloatingNewView = false; // true creates a floating viewport; false creates a docked model-view tab.

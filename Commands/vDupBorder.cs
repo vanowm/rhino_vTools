@@ -21,13 +21,13 @@ public sealed class vDupBorder : vToolsCommand
   private const string LayerKey = "layer";
 
   // Option defaults
-  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultGroupIfNone", "true groups output with an ungrouped source; false leaves both ungrouped.")] private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
+  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultGroupIfNone", "true groups output with an ungrouped source; false leaves both ungrouped.", OptionKeys = "groupIfNone")] private const bool DefaultGroupIfNone = false; // true groups output with an ungrouped source; false leaves both ungrouped.
 
   private static readonly bool ConfiguredDefaultGroupIfNone = global::vTools.CommandDefaults.Get("vDupBorder", "vTools.Commands.vDupBorder.DefaultGroupIfNone", DefaultGroupIfNone); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultRemoveSource", "true deletes the source after duplication; false keeps it.")] private const bool DefaultRemoveSource = false; // true deletes the source after duplication; false keeps it.
+  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultRemoveSource", "true deletes the source after duplication; false keeps it.", OptionKeys = "removeSource")] private const bool DefaultRemoveSource = false; // true deletes the source after duplication; false keeps it.
 
   private static readonly bool ConfiguredDefaultRemoveSource = global::vTools.CommandDefaults.Get("vDupBorder", "vTools.Commands.vDupBorder.DefaultRemoveSource", DefaultRemoveSource); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
+  [global::vTools.CommandDefault("vDupBorder", "vTools.Commands.vDupBorder.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vDupBorder", "vTools.Commands.vDupBorder.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
 

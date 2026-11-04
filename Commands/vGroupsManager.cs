@@ -18,11 +18,11 @@ namespace vTools.Commands
     // Defaults and customizable constants
     private const string SettingsSection = "vGroupsManager"; // JSON object name used for persistent command settings.
     private const string AutoSelectKey = "autoSelect"; // JSON boolean key controlling automatic document selection from tree rows.
-    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultAutoSelect", "true selects highlighted tree members automatically; false only highlights until Select is clicked.")] private const bool DefaultAutoSelect = false; // true selects highlighted tree members automatically; false only highlights until Select is clicked.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultAutoSelect", "true selects highlighted tree members automatically; false only highlights until Select is clicked.", OptionKeys = "autoSelect")] private const bool DefaultAutoSelect = false; // true selects highlighted tree members automatically; false only highlights until Select is clicked.
 
     private static readonly bool ConfiguredDefaultAutoSelect = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultAutoSelect", DefaultAutoSelect); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string ShowChildrenKey = "showChildrenGroups"; // Persistent JSON boolean controlling inferred child-group display for all groups.
-    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultShowChildren", "true nests strictly contained groups and their objects; false retains the flat group list.")] private const bool DefaultShowChildren = false; // true nests strictly contained groups and their objects; false retains the flat group list.
+    [global::vTools.CommandDefault("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultShowChildren", "true nests strictly contained groups and their objects; false retains the flat group list.", OptionKeys = "showChildrenGroups")] private const bool DefaultShowChildren = false; // true nests strictly contained groups and their objects; false retains the flat group list.
 
     private static readonly bool ConfiguredDefaultShowChildren = global::vTools.CommandDefaults.Get("vGroupsManager", "vTools.Commands.vGroupsManager.DefaultShowChildren", DefaultShowChildren); // Resolved once from advanced defaults; restart Rhino after changes.
     private const string WindowTitle = "Groups Manager"; // Modeless window title shown in the native window chrome.

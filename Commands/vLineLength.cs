@@ -106,7 +106,7 @@ public sealed class vLineLength : vToolsCommand
         history.Push(changes.ToArray());
         SavePersistedOptions();
         if (pick.Curves.Count > 1)
-          RhinoApp.WriteLine($"vLineLength: resized {changes.Count} curves; {pick.Curves.Count - changes.Count} unchanged.");
+          RhinoApp.WriteLine($"vLineLength: resized {CountText.Format(changes.Count, "curve")}; {pick.Curves.Count - changes.Count} unchanged.");
         else
           RhinoApp.WriteLine($"vLineLength: curve length set to {ComputeTargetLength(changes[0].OriginalCurve.GetLength(), _desiredLength, _mode):g}");
         doc.Views.Redraw();

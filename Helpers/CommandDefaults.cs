@@ -19,12 +19,31 @@ internal sealed class CommandDefaultAttribute(string section, string key, string
   public string? OptionText { get; set; } // Explicit saved choice name when its persisted string encoding differs from the advanced constant's type; null uses the constant.
 }
 
+/// <summary>Describes an editable highlight palette without evaluating its owner's static initializer.</summary>
+[AttributeUsage(AttributeTargets.Field)]
+internal sealed class CommandHighlightDefaultAttribute(string section,string key,string label,string body,string outline,string dot,double opacity) : Attribute
+{
+  // Palette schema defaults; colors are #AARRGGBB and opacity is zero through one.
+  internal string Section {get;}=section;
+  internal string Key {get;}=key;
+  internal string Label {get;}=label;
+  internal string Body {get;}=body;
+  internal string Outline {get;}=outline;
+  internal string Dot {get;}=dot;
+  internal double Opacity {get;}=opacity;
+  public int StrokeEmphasis {get;set;}=1; // Nonnegative extra stroke pixels; one preserves the shared factory style.
+  public int OutlineEmphasis {get;set;}=3; // Nonnegative total outline emphasis in pixels; three preserves the shared factory style.
+  public bool UseObjectCurveColor {get;set;}=false; // true preserves source curve colors; false uses the palette's stroke color.
+  public bool CurveOnly {get;set;}=false; // true exposes only curve colors/widths; false also exposes fill, dot and source-color behavior.
+}
+
 /// <summary>Cached advanced overrides shared by command implementations and vSettings.</summary>
 internal static class CommandDefaults
 {
   // Defaults and customizable constants
   internal const string Section = "CommandDefaults"; // JSON section containing advanced overrides, grouped by command/service.
   private const string DefaultsResource = "vTools.Configuration.Defaults.json"; // Embedded repository defaults, never a user's installed profile.
+  private static readonly Lazy<Entry[]> Catalog = new(BuildEntries);
   private sealed class Cache
   {
     internal readonly Lazy<JsonObject> Overrides = new(() => ToolsOptionStore.Read(Section,
@@ -35,6 +54,8 @@ internal static class CommandDefaults
 
   internal sealed record Entry(string Section, string Key, string Description, Type Type, object? Factory, string? OptionKeys = null, string? OptionText = null)
   {
+    internal string? Label {get;init;}
+    internal string? SourceName {get;init;}
     internal bool DescribesOption(string key) => OptionKeys?.Split('|', StringSplitOptions.RemoveEmptyEntries).Contains(key, StringComparer.Ordinal) == true;
     internal JsonNode? FactoryNode => Factory == null || Factory is double d && !double.IsFinite(d)
       || Factory is float f && !float.IsFinite(f) ? null
@@ -43,20 +64,51 @@ internal static class CommandDefaults
       : JsonSerializer.SerializeToNode(Factory);
   }
 
-  internal static Entry[] Entries()
+  internal static Entry[] Entries() => Catalog.Value.ToArray();
+
+  private static Entry[] BuildEntries()
   {
     // GetTypes also resolves base types in command-private packing types, even before vNest has run.
     EmbeddedDependencies.EnsureAll();
-    return typeof(CommandDefaults).Assembly.GetTypes()
-    .SelectMany(type => type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+    var fields=typeof(CommandDefaults).Assembly.GetTypes()
+    .SelectMany(type => type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)).ToArray();
+    return fields
     .Where(field => field.GetCustomAttribute<CommandDefaultAttribute>() is { } metadata && (field.IsLiteral || metadata.FactoryColor != null))
     .Select(field =>
     {
       var metadata = field.GetCustomAttribute<CommandDefaultAttribute>()!;
-      return new Entry(metadata.Section, metadata.Key, metadata.Description, field.FieldType,
-        metadata.FactoryColor != null ? metadata.FactoryColor : field.GetRawConstantValue(), metadata.OptionKeys, metadata.OptionText);
-    }).OrderBy(entry => entry.Section, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Key).ToArray();
+      return new Entry(metadata.Section, metadata.Key, metadata.Description, metadata.FactoryColor != null ? typeof(System.Drawing.Color) : field.FieldType,
+        metadata.FactoryColor != null ? metadata.FactoryColor : field.GetRawConstantValue(), metadata.OptionKeys, metadata.OptionText)
+        {SourceName=field.DeclaringType!.FullName+"."+field.Name};
+    }).Concat(fields.Where(field=>field.IsDefined(typeof(CommandHighlightDefaultAttribute)))
+      .SelectMany(field=>HighlightEntries(field.GetCustomAttribute<CommandHighlightDefaultAttribute>()!,field.DeclaringType!.FullName+"."+field.Name)))
+      .OrderBy(entry => entry.Section, StringComparer.OrdinalIgnoreCase).ThenBy(entry => entry.Key).ToArray();
   }
+
+  private static IEnumerable<Entry> HighlightEntries(CommandHighlightDefaultAttribute style,string sourceName)
+  {
+    Entry Item(string name,string label,string description,Type type,object factory)=>
+      new(style.Section,style.Key+"."+name,style.Label+": "+description,type,factory){Label=style.Label+" - "+label,SourceName=sourceName+"."+name};
+    yield return Item(style.CurveOnly?"StrokeColor":"BodyColor","Color","ARGB body/stroke highlight color; original curve colors can take precedence.",typeof(System.Drawing.Color),style.Body);
+    yield return Item("OutlineColor","Outline color","ARGB highlight outline color; visible only when outline emphasis exceeds stroke emphasis.",typeof(System.Drawing.Color),style.Outline);
+    yield return Item("StrokeEmphasis","Stroke emphasis","Extra stroke width in screen pixels; zero or greater, zero keeps normal curve width.",typeof(int),style.StrokeEmphasis);
+    yield return Item("OutlineEmphasis","Outline emphasis","Total outline emphasis in screen pixels; zero or greater, zero omits outlines.",typeof(int),style.OutlineEmphasis);
+    if(style.CurveOnly)yield break;
+    yield return Item("DotBackground","Dot background","ARGB background color of highlighted text dots.",typeof(System.Drawing.Color),style.Dot);
+    yield return Item("Opacity","Fill opacity","Shaded fill opacity from zero through one; zero omits fill, one is opaque. Overrides shared opacity defaults when specified.",typeof(double),style.Opacity);
+    yield return Item("UseObjectCurveColor","Original curve colors","true preserves each curve's original color; false uses the palette's color. Fill keeps the palette color.",typeof(bool),style.UseObjectCurveColor);
+  }
+
+  internal static PreviewDisplay.ObjectHighlightStyle Highlight(string section,string key,PreviewDisplay.ObjectHighlightStyle factory)=>factory with
+  {
+    BodyColor=GetColor(section,key+".BodyColor",factory.BodyColor),
+    OutlineColor=GetColor(section,key+".OutlineColor",factory.OutlineColor),
+    DotBackground=GetColor(section,key+".DotBackground",factory.DotBackground),
+    Transparency=1-Math.Clamp(Get(section,key+".Opacity",1-factory.Transparency),0,1),
+    StrokeEmphasis=Math.Max(0,Get(section,key+".StrokeEmphasis",factory.StrokeEmphasis)),
+    OutlineEmphasis=Math.Max(0,Get(section,key+".OutlineEmphasis",factory.OutlineEmphasis)),
+    UseObjectCurveColor=Get(section,key+".UseObjectCurveColor",factory.UseObjectCurveColor)
+  };
 
   internal static JsonObject FactoryOptions()
   {
@@ -123,7 +175,7 @@ internal static class CommandDefaults
         return true;
       }
       var result = value.Deserialize(entry.Type);
-      if (entry.Type == typeof(int) || entry.Type == typeof(double) || entry.Type == typeof(float))
+      if (entry.Type == typeof(int) || entry.Type == typeof(long) || entry.Type == typeof(double) || entry.Type == typeof(float))
       {
         double number = Convert.ToDouble(result, System.Globalization.CultureInfo.InvariantCulture);
         var (minimum, maximum) = Bounds(entry);
@@ -149,6 +201,13 @@ internal static class CommandDefaults
     return value.Length == 9 && value[0] == '#' && uint.TryParse(value[1..],
       System.Globalization.NumberStyles.HexNumber, System.Globalization.CultureInfo.InvariantCulture, out uint argb)
       ? System.Drawing.Color.FromArgb(unchecked((int)argb)) : factory;
+  }
+
+  internal static Eto.Drawing.Color GetEtoColor(string section,string key,Eto.Drawing.Color factory)
+  {
+    int original=factory.ToArgb();
+    var value=GetColor(section,key,System.Drawing.Color.FromArgb(original));
+    return value.ToArgb()==original?factory:Eto.Drawing.Color.FromArgb(value.ToArgb());
   }
 
   internal static T Get<T>(string section, string key, T factory)

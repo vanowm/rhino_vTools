@@ -86,9 +86,15 @@ internal static class PlanarPartSelection
     try
     {
       // Preserve distinct group identities even when two part boundaries touch.
+      var groupSizes=new Dictionary<int,int>();
+      int GroupSize(int index)
+      {
+        if(!groupSizes.TryGetValue(index,out int size))groupSizes[index]=size=doc.Groups.GroupObjectCount(index);
+        return size;
+      }
       var buckets=selected.GroupBy(obj=>(obj.Attributes.GetGroupList()??[])
         .Where(index=>doc.Groups[index] is {IsDeleted:false})
-        .OrderBy(index=>doc.Groups.GroupObjectCount(index)).FirstOrDefault(-1));
+        .OrderBy(GroupSize).FirstOrDefault(-1));
       foreach(var bucket in buckets)
       {
         var objects=bucket.ToList();
@@ -96,12 +102,17 @@ internal static class PlanarPartSelection
         if(curves.Length==0) continue;
         var loops=BoundaryLoops(doc,objects,tolerance,requirePlanarDetails);
         var candidates=loops.Where(curve=>curve.IsClosed && curve.TryGetPlane(out _,tolerance)).ToList();
+        var areas=new Dictionary<Curve,double?>();
+        foreach(var candidate in candidates)
+        {
+          using var mass=AreaMassProperties.Compute(candidate);
+          areas[candidate]=mass?.Area;
+        }
         foreach(var candidate in candidates)
         {
           candidate.TryGetPlane(out var plane,tolerance);
-          using var mass=AreaMassProperties.Compute(candidate);
-          if(mass==null || mass.Area<=tolerance*tolerance) continue;
-          bool nested=candidates.Any(other=>!ReferenceEquals(candidate,other) && ContainsCurve(other,candidate,plane,tolerance,!requirePlanarDetails));
+          if(areas[candidate] is not {} area || area<=tolerance*tolerance) continue;
+          bool nested=candidates.Any(other=>!ReferenceEquals(candidate,other) && ContainsCurve(other,candidate,plane,tolerance,!requirePlanarDetails,areas[other],area));
           if(!nested) regions.Add(new Region(candidate.DuplicateCurve(),AlignedPlane(plane,doc.Views.ActiveView?.ActiveViewport.ConstructionPlane()??plane),objects));
         }
         foreach(var loop in loops) loop.Dispose();
@@ -179,15 +190,13 @@ internal static class PlanarPartSelection
     return closed.Length>0?closed.Select(obj=>((Curve)obj.Geometry).DuplicateCurve()).ToList():GroupBoundaryTopology.PlanarRegions(curves,tolerance,tolerance);
   }
 
-  private static bool ContainsCurve(Curve outer,Curve inner,Plane plane,double tolerance,bool projectInner)
+  private static bool ContainsCurve(Curve outer,Curve inner,Plane plane,double tolerance,bool projectInner,double? outerArea,double innerArea)
   {
+    if(outerArea==null || !(outerArea.Value>innerArea+tolerance*tolerance))return false;
     if(projectInner&&outer.TryGetPlane(out var outerPlane,tolerance)) plane=outerPlane;
     using var projection=projectInner?Curve.ProjectToPlane(inner,plane):null;
     var candidate=projection??inner;
-    using var outerMass=AreaMassProperties.Compute(outer);
-    using var innerMass=AreaMassProperties.Compute(inner);
-    return outerMass!=null && innerMass!=null && outerMass.Area>innerMass.Area+tolerance*tolerance &&
-      Enumerable.Range(0,ConfiguredBoundarySamples).All(index=>outer.Contains(candidate.PointAtNormalizedLength((double)index/(ConfiguredBoundarySamples-1)),plane,tolerance)
+    return Enumerable.Range(0,ConfiguredBoundarySamples).All(index=>outer.Contains(candidate.PointAtNormalizedLength((double)index/(ConfiguredBoundarySamples-1)),plane,tolerance)
         is PointContainment.Inside or PointContainment.Coincident);
   }
 

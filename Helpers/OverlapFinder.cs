@@ -33,6 +33,11 @@ internal static class OverlapFinder
 
   private static readonly double ConfiguredMinimumPartialOverlapToleranceMultiplier = global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.MinimumPartialOverlapToleranceMultiplier", MinimumPartialOverlapToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
   private const double MinimumPartialOverlapLengthFraction = 1e-8; // Shorter-curve length fraction required for a native partial-overlap interval; positive fraction below one.
+  [global::vTools.CommandDefault("OverlapFinder", "vTools.Commands.OverlapFinder.OverlapDirectionToleranceDegrees", "Maximum tangent-direction difference for coincident curve paths, in degrees from zero through less than 90; reversed directions are equivalent.")]
+  private const double OverlapDirectionToleranceDegrees = 0.5; // Degrees, zero through less than 90; rejects angled point contacts even when their entire short curve lies inside distance tolerance.
+  private static readonly double ConfiguredOverlapDirectionCosine = Math.Cos(Rhino.RhinoMath.ToRadians(Math.Clamp(global::vTools.CommandDefaults.Get("OverlapFinder", "vTools.Commands.OverlapFinder.OverlapDirectionToleranceDegrees", OverlapDirectionToleranceDegrees),0,90-Rhino.RhinoMath.ZeroTolerance))); // Cosine threshold resolved once; accepts either travel direction.
+  private const int OverlapDirectionSamples = 3; // Positive interior samples per candidate overlap interval; avoids ambiguous endpoint tangents at kinks.
+  private const double MinimumProjectedCoverageFraction = 0.25; // Positive fraction below one half; three interior samples must traverse a real path rather than all projecting to the same touching endpoint.
 
   private sealed record NativeOverlapResult(
     bool HasLengthOverlap,
@@ -47,7 +52,7 @@ internal static class OverlapFinder
   private sealed record ConnectivityCurve(
     Guid ObjectId,
     Curve Curve,
-    BoundingBox Bounds);
+    BoundingBox Bounds,string? Partition);
 
   internal sealed record Result(
     HashSet<Guid> CoveredObjectIds,
@@ -76,6 +81,10 @@ internal static class OverlapFinder
     IReadOnlyCollection<RhinoObject> inputObjects,
     double tolerance,
     IReadOnlyCollection<RhinoObject>? connectivityObjects = null)
+    =>FindResponsive(inputObjects,tolerance,connectivityObjects,null);
+
+  internal static Result FindResponsive(IReadOnlyCollection<RhinoObject> inputObjects,double tolerance,
+    IReadOnlyCollection<RhinoObject>? connectivityObjects,Action? keepResponsive)
   {
     var curveCache = new Dictionary<uint, Curve>();
     var lengthCache = new Dictionary<uint, double>();
@@ -88,7 +97,7 @@ internal static class OverlapFinder
       .Select(obj => new ConnectivityCurve(
         obj.Id,
         (Curve)obj.Geometry,
-        obj.Geometry.GetBoundingBox(accurate: true)))
+        obj.Geometry.GetBoundingBox(accurate: true),obj.Attributes.GetUserString(vExportDXF.CleanupPartitionKey)))
       .ToList();
 
     uint key = 1;
@@ -143,6 +152,7 @@ internal static class OverlapFinder
           var secondCurve = curveCache[secondKey];
           var secondLength = lengthCache[secondKey];
           pairChecks++;
+          keepResponsive?.Invoke();
 
           if (!BoundingBoxesOverlap(
                 boundsCache[firstKey], boundsCache[secondKey], tolerance))
@@ -152,6 +162,9 @@ internal static class OverlapFinder
           var secondObjectId = SourceObjectId(secondKey, objectByKey, parentByKey);
           if (firstObjectId == Guid.Empty || firstObjectId == secondObjectId)
             continue;
+          var firstPartition=parentByKey[firstKey].Attributes.GetUserString(vExportDXF.CleanupPartitionKey);
+          var secondPartition=parentByKey[secondKey].Attributes.GetUserString(vExportDXF.CleanupPartitionKey);
+          if(!string.Equals(firstPartition,secondPartition,StringComparison.Ordinal))continue;
 
           var samePath = CurvesAreSamePathSameSize(
             firstCurve, secondCurve, firstLength, secondLength, tolerance);
@@ -308,7 +321,21 @@ internal static class OverlapFinder
           point.DistanceTo(target.PointAt(parameter)) > tolerance)
         return false;
     }
-    return true;
+    return DirectionsFollowPath(source,source.Domain,target);
+  }
+
+  private static bool DirectionsFollowPath(Curve source,Interval interval,Curve target)
+  {
+    Point3d? previous=null;double projectedLength=0;
+    for(int index=1;index<=OverlapDirectionSamples;index++)
+    {
+      double parameter=interval.ParameterAt((double)index/(OverlapDirectionSamples+1));
+      if(!target.ClosestPoint(source.PointAt(parameter),out double other))return false;
+      var first=source.TangentAt(parameter);var second=target.TangentAt(other);
+      if(!first.Unitize()||!second.Unitize()||Math.Abs(first*second)<ConfiguredOverlapDirectionCosine)return false;
+      var point=target.PointAt(other);if(previous is {} last)projectedLength+=last.DistanceTo(point);previous=point;
+    }
+    return projectedLength>Math.Min(ConfiguredMinimumLengthTolerance,source.GetLength(interval)*MinimumProjectedCoverageFraction);
   }
 
   private static bool CurveIsFullyCoveredBy(
@@ -356,7 +383,8 @@ internal static class OverlapFinder
     var overlapSpans = new List<NativeOverlapSpan>();
     foreach (var intersection in intersections)
     {
-      if (!intersection.IsOverlap)
+      if (!intersection.IsOverlap||!DirectionsFollowPath(first,intersection.OverlapA,second)||
+          !DirectionsFollowPath(second,intersection.OverlapB,first))
         continue;
 
       firstIntervals.Add(intersection.OverlapA);
@@ -596,9 +624,8 @@ internal static class OverlapFinder
     IReadOnlyCollection<ConnectivityCurve> connectivityCurves,
     double tolerance)
   {
-    var source = connectivityCurves
-      .FirstOrDefault(candidate => candidate.ObjectId == sourceObjectId)
-      ?.Curve ?? curves[sourceKey];
+    var sourceData=connectivityCurves.FirstOrDefault(candidate=>candidate.ObjectId==sourceObjectId);
+    var source = sourceData?.Curve ?? curves[sourceKey];
     if (source.IsClosed)
       return 2;
 
@@ -609,6 +636,7 @@ internal static class OverlapFinder
       {
         if (candidate.ObjectId == sourceObjectId ||
             candidate.ObjectId == excludedOverlapObjectId ||
+            !string.Equals(sourceData?.Partition,candidate.Partition,StringComparison.Ordinal)||
             !BoundingBoxContains(candidate.Bounds, endpoint, tolerance) ||
             !candidate.Curve.ClosestPoint(endpoint, out var parameter) ||
             endpoint.DistanceTo(candidate.Curve.PointAt(parameter)) > tolerance)

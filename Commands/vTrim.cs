@@ -74,9 +74,10 @@ public sealed class vTrim : vToolsCommand
   private const uint TabCharacterMessage = 0x0102; // Windows WM_CHAR message; prevents a handled Tab from reaching command-line text.
   private const uint TabRootAncestor = 2; // Windows GA_ROOT flag; excludes dialogs and unrelated application windows.
   private const long TabPreviousKeyState = 1L << 30; // Windows key-message bit 30; held-key autorepeat must not queue extra cycles.
-  private static readonly PreviewDisplay.ObjectHighlightStyle TargetHighlightStyle = new(
+  [CommandHighlightDefault("vTrim","vTools.Commands.vTrim.TargetHighlightStyle","Trim or extend target","#FF808080","#00FFFFFF","#00FFFFFF",0,StrokeEmphasis=2,OutlineEmphasis=0,UseObjectCurveColor=true)]
+  private static readonly PreviewDisplay.ObjectHighlightStyle TargetHighlightStyle = CommandDefaults.Highlight("vTrim","vTools.Commands.vTrim.TargetHighlightStyle",new(
     Color.Gray, Color.Transparent, Color.Transparent, 1.0)
-    { StrokeEmphasis = 2, OutlineEmphasis = 0, UseObjectCurveColor = true }; // Source-colored wires, two pixels bolder, no outline/fill; red/green trim/extend previews remain on top.
+    { StrokeEmphasis = 2, OutlineEmphasis = 0, UseObjectCurveColor = true }); // Source-colored wires, two pixels bolder, no outline/fill; red/green trim/extend previews remain on top.
 
   private const string OptionsSectionName = "vTrim";
   private const string ExtendAsLineKey = "extendAsLine";

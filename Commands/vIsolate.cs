@@ -128,11 +128,11 @@ public sealed class vIsolate : vToolsCommand
     if (hiddenCount != objectsToHide.Count)
     {
       RhinoApp.WriteLine(
-        $"vIsolate: hid {hiddenCount} of {objectsToHide.Count} object(s).");
+        $"vIsolate: hid {hiddenCount} of {CountText.Format(objectsToHide.Count, "object")}.");
       return hiddenCount > 0 ? Result.Success : Result.Failure;
     }
 
-    RhinoApp.WriteLine($"vIsolate: hidden {hiddenCount} object(s).");
+    RhinoApp.WriteLine($"vIsolate: hidden {CountText.Format(hiddenCount, "object")}.");
     return Result.Success;
   }
 

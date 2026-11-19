@@ -128,7 +128,8 @@ public sealed class vPerpendicularTo : vToolsCommand
 
     if (aTangent == Vector3d.Unset || bTangent == Vector3d.Unset)
     {
-      RhinoApp.WriteLine("vPerpendicularTo: could not evaluate endpoint tangent(s).");
+      int failed=(aTangent==Vector3d.Unset?1:0)+(bTangent==Vector3d.Unset?1:0);
+      RhinoApp.WriteLine($"vPerpendicularTo: could not evaluate {CountText.Format(failed, "endpoint tangent")}.");
       return Result.Failure;
     }
 

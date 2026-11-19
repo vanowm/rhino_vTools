@@ -3013,7 +3013,7 @@ namespace vTools.Commands
         }
         proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
 
-        RhinoApp.WriteLine($"vShade: proposed {panels.Count} part(s), {proposal.MaterialLength:G5} material length. Drag an orange cut to adjust it; Enter accepts the cuts.");
+        RhinoApp.WriteLine($"vShade: proposed {CountText.Format(panels.Count, "part")}, {proposal.MaterialLength:G5} material length. Drag an orange cut to adjust it; Enter accepts the cuts.");
         while (true)
         {
           using var getter = new GetPoint();
@@ -3191,7 +3191,7 @@ namespace vTools.Commands
           if (CommitSplit(doc, source, sessionId,
                 outputIds, proposal, panels, cplane, placementAnchor, tolerance, beginSplitUndo))
           {
-            RhinoApp.WriteLine($"vShade: created {panels.Count} split part(s) within width {_splitWidth:G5}; material length {proposal.MaterialLength:G5}.");
+            RhinoApp.WriteLine($"vShade: created {CountText.Format(panels.Count, "split part")} within width {_splitWidth:G5}; material length {proposal.MaterialLength:G5}.");
             return true;
           }
           return false;

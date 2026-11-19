@@ -211,7 +211,7 @@ public sealed class vDir : vToolsCommand
       if (failedOperations > 0)
       {
         RhinoApp.WriteLine(
-          $"vDir: failed to apply {failedOperations} operation(s). Check vTools.log.");
+          $"vDir: failed to apply {CountText.Format(failedOperations, "operation")}. Check vTools.log.");
         return Result.Failure;
       }
 
@@ -219,9 +219,9 @@ public sealed class vDir : vToolsCommand
     }
 
     var failureLabel = failedOperations > 0
-      ? $"; failed to apply {failedOperations} operation(s)"
+      ? $"; failed to apply {CountText.Format(failedOperations, "operation")}"
       : string.Empty;
-    RhinoApp.WriteLine($"vDir: flipped {flippedFaces} face(s){failureLabel}.");
+    RhinoApp.WriteLine($"vDir: flipped {CountText.Format(flippedFaces, "face")}{failureLabel}.");
     Log.Write(
       "vDir",
       $"complete flipped_faces={flippedFaces} failed_operations={failedOperations}");

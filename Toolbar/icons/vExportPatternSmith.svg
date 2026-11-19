@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <title>Export PatternSmith</title>
+  <defs>
+    <linearGradient id="parts" x2=".8" y2="1"><stop stop-color="#d0ebff"/><stop offset=".55" stop-color="#74c0fc"/><stop offset="1" stop-color="#339af0"/></linearGradient>
+    <linearGradient id="paper" x2=".8" y2="1"><stop stop-color="#fff"/><stop offset="1" stop-color="#e3edf5"/></linearGradient>
+    <linearGradient id="gold" x2="0" y2="1"><stop stop-color="#fff3a3"/><stop offset="1" stop-color="#fcc419"/></linearGradient>
+  </defs>
+  <path d="M2 8.5h11.5v12H2l3-6zM2.5 27h11v12h-11z" fill="url(#parts)" stroke="#0e3a67" stroke-width="1.3" stroke-linejoin="round"/>
+  <path d="M24 4h14.5l8 8v31H24z" fill="url(#paper)" stroke="#273d50" stroke-width="1.25" stroke-linejoin="round"/>
+  <path d="M38.5 4v8h8" fill="#a7d8f7" stroke="#273d50" stroke-width="1.25" stroke-linejoin="round"/>
+  <path d="M12.5 21.5h8.7v-4.2l8 6.7-8 6.7v-4.2h-8.7z" fill="url(#gold)" stroke="#986000" stroke-width="1.15" stroke-linejoin="round"/>
+  <path d="M0 10V0h4.2c5.5 0 5.5 5.5 0 5.5H0 M21.3 1c-2.7-1.8-7.8-1.7-7.8 1.6 0 3.9 8.2 1.2 8.2 5 0 3.1-5.4 3.5-8.3 1.4" transform="translate(27.1 28.7) scale(.81 1.08)" fill="none" stroke="#182b3a" stroke-width="2.05" stroke-linejoin="round" stroke-linecap="square"/>
+</svg>

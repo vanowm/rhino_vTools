@@ -171,16 +171,16 @@ public sealed class vAlign : vToolsCommand
 
         if (failed > 0)
           RhinoApp.WriteLine(
-            $"vAlign: transformed {outputIds.Count} object(s); {failed} operation(s) failed.");
+            $"vAlign: transformed {CountText.Format(outputIds.Count, "object")}; {CountText.Format(failed, "operation")} failed.");
         else if (reference == null)
           RhinoApp.WriteLine(
-            $"vAlign: rotated {outputIds.Count} object(s) to World Ortho.");
+            $"vAlign: rotated {CountText.Format(outputIds.Count, "object")} to World Ortho.");
         else if (distance.HasValue)
           RhinoApp.WriteLine(
-            $"vAlign: aligned {outputIds.Count} object(s) at distance {distance.Value:G}.");
+            $"vAlign: aligned {CountText.Format(outputIds.Count, "object")} at distance {distance.Value:G}.");
         else
           RhinoApp.WriteLine(
-            $"vAlign: rotated {outputIds.Count} object(s) around their center of mass.");
+            $"vAlign: rotated {CountText.Format(outputIds.Count, "object")} around {CountText.Form(outputIds.Count, "its", "their")} center of mass.");
         return Result.Success;
       }
     }

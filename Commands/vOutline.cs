@@ -143,7 +143,7 @@ public sealed class vOutline : vToolsCommand
       DuplicateCommandSupport.SelectCreated(doc, created);
       completed = true;
       SetOutlinePrompt(FormatProgress(sources.Length, sources.Length, string.Empty), true);
-      RhinoApp.WriteLine($"vOutline: created {created.Count} curves in {groups.Count} groups; sources retained.");
+      RhinoApp.WriteLine($"vOutline: created {CountText.Format(created.Count, "curve")} in {CountText.Format(groups.Count, "group")}; sources retained.");
       Log.Write(EnglishName, $"sources={sources.Length} curves={created.Count} groups={groups.Count} parts={_parts} internalEdges={_internalEdges} flatten={_flatten} cleanup={_cleanup} join={_join} layer={_layer}");
       return Result.Success;
     }

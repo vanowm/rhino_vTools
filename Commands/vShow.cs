@@ -118,7 +118,7 @@ public sealed class vShow : vToolsCommand
       $"  shown={shownCount}/{hiddenIds.Count}" +
       $" cleared={clearedCount}" +
       $" hideSet={(showAllNamedSets ? "<all named>" : hideSetName)}");
-    RhinoApp.WriteLine($"vShow: shown {shownCount} object(s).");
+    RhinoApp.WriteLine($"vShow: shown {CountText.Format(shownCount, "object")}.");
 
     return shownCount > 0 ? Result.Success : Result.Failure;
   }

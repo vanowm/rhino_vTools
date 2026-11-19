@@ -38,21 +38,13 @@ public sealed class vCleanup : vToolsCommand
 
   private static readonly bool ConfiguredDefaultFindOverlaps = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.DefaultFindOverlaps", DefaultFindOverlaps); // Resolved once from advanced defaults; restart Rhino after changes.
   private const bool ProtectOpenCurveEnds = true; // true excludes open-curve endpoint segments and endpoint control points; false permits them.
-  private const int MaximumExportCleanupPasses = 100; // Positive hard limit on geometry-changing export cleanup passes; unchanged geometry stops immediately.
+  private const int MaximumExportCleanupPasses = 100; // Positive limit on export deletion passes; stalled or exhausted cleanup returns to review.
   private const string OrphanPartDataOption = "OrphanPartData"; // Explicit cleanup-only action; never persisted or run automatically with geometry/export cleanup.
   private const string OrphanPartDataUndoName = "vCleanup orphaned part data"; // Native Undo/Redo record description for confirmed part-data removal.
   private static readonly string[] PartDataSections = [PartGroupData.NestSection, PartGroupData.CustomSection, PartGroupData.NamesSection]; // Only these part-data namespaces are eligible for orphan cleanup.
 
   // Customizable appearance, output, limits, tolerance, and sampling
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", "ARGB viewport color used for all short-geometry overlays.", "#FFFF00FF")] private static readonly Color ShortHighlightColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.ShortHighlightColor", Color.Magenta); // ARGB viewport color used for all short-geometry overlays.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.OverlapHighlightColor", "ARGB viewport color used for covered-curve overlap overlays.", "#FF00FFFF")] private static readonly Color OverlapHighlightColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.OverlapHighlightColor", Color.Cyan); // ARGB viewport color used for covered-curve overlap overlays.
   [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.CandidatePointColor", "ARGB object color used for unmatched control-point helpers.", "#FF00FF00")] private static readonly Color CandidatePointColor = global::vTools.CommandDefaults.GetColor("vCleanup", "vTools.Commands.vCleanup.CandidatePointColor", Color.Lime); // ARGB object color used for unmatched control-point helpers.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ShortHighlightThicknessPixels", "Viewport pixel width for magenta short-curve overlays; integer one or greater.")] private const int ShortHighlightThicknessPixels = 7; // Viewport pixel width for magenta short-curve overlays; integer one or greater.
-
-  private static readonly int ConfiguredShortHighlightThicknessPixels = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.ShortHighlightThicknessPixels", ShortHighlightThicknessPixels); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.CandidatePointSizePixels", "Viewport pixel diameter for control-point candidates; integer one or greater.")] private const int CandidatePointSizePixels = 10; // Viewport pixel diameter for control-point candidates; integer one or greater.
-
-  private static readonly int ConfiguredCandidatePointSizePixels = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.CandidatePointSizePixels", CandidatePointSizePixels); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vCleanup", "vTools.Commands.vCleanup.ControlPointImpactSamples", "Samples used to estimate curve change from candidate removal; integer four or greater.")] private const int ControlPointImpactSamples = 32; // Samples used to estimate curve change from candidate removal; integer four or greater.
 
   private static readonly int ConfiguredControlPointImpactSamples = global::vTools.CommandDefaults.Get("vCleanup", "vTools.Commands.vCleanup.ControlPointImpactSamples", ControlPointImpactSamples); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -89,7 +81,7 @@ public sealed class vCleanup : vToolsCommand
   private static CleanupTargetMode _autoDeleteMode = ConfiguredDefaultAutoDeleteMode;
   private static bool _simplifyCurves = ConfiguredDefaultSimplifyCurves;
   private static bool _findOverlaps = ConfiguredDefaultFindOverlaps;
-  private static ShortGeometryConduit? _activeConduit;
+  private static CleanupFindingDisplay? _activeConduit;
 
   private enum CleanupTargetMode
   {
@@ -147,10 +139,25 @@ public sealed class vCleanup : vToolsCommand
 
   internal enum ExportCleanupAction { Ask, Delete, Ignore }
 
+  internal readonly record struct LiveFindingSettings(double Threshold, bool FindOverlaps, double OverlapTolerance);
+  internal readonly record struct ExportGeometrySettings(double Threshold,bool SimplifyCurves,bool FindOverlaps,double OverlapTolerance,bool OverlapSegments);
+
+  internal static LiveFindingSettings CaptureLiveFindingSettings() =>
+    new(_threshold, _findOverlaps, vOverlaps.GetDetectionSettings().Tolerance);
+
   internal static Result OptimizeForExport(
     RhinoDoc doc, HashSet<Guid> sourceIds, ExportCleanupAction action = ExportCleanupAction.Ask)
+    => OptimizeExportCopies(doc, sourceIds, action, null);
+
+  internal static Result OptimizeExportCopies(RhinoDoc doc, HashSet<Guid> sourceIds,
+    ExportCleanupAction action,
+    Action<IReadOnlyCollection<Guid>, IReadOnlyCollection<(Guid SourceId, Curve Curve, Point3d Point)>>? showFindings,
+    Action? refreshScope = null,ExportGeometrySettings? settings=null,Func<int,int,string?,ExportCleanupAction?>? reviewFindings=null,
+    Action? keepResponsive=null,Action<int,int>? findingsChanged=null,bool previewOnly=false)
   {
-    LoadOptions();
+    if(settings==null)LoadOptions();
+    double threshold=settings?.Threshold??_threshold;
+    bool simplify=settings?.SimplifyCurves??_simplifyCurves,findOverlaps=settings?.FindOverlaps??_findOverlaps;
     var curves = sourceIds
       .Select(id => doc.Objects.FindId(id))
       .Where(obj => obj?.Geometry is Curve)
@@ -161,10 +168,12 @@ public sealed class vCleanup : vToolsCommand
 
     var selection = doc.Objects.GetSelectedObjects(false, false).Select(obj => obj.Id).ToArray();
     var gripStates = curves.ToDictionary(obj => obj.Id, obj => obj.GripsOn);
+    var cleanupClock = System.Diagnostics.Stopwatch.StartNew();
+    double reviewMilliseconds = 0;
     try
     {
-      var overlapSettings = vOverlaps.GetDetectionSettings();
-      if (_simplifyCurves)
+      var overlapSettings = settings is {} own?(Tolerance:own.OverlapTolerance,OverlapSegments:own.OverlapSegments):vOverlaps.GetDetectionSettings();
+      if (simplify)
       {
         var historyRecords = curves
           .SelectMany(obj => HistoryBreakWarning.CaptureAffectedRecords(doc, obj.Id))
@@ -172,17 +181,20 @@ public sealed class vCleanup : vToolsCommand
         if (!HistoryBreakWarning.Confirm(doc, "vExportDXF Optimize", historyRecords))
           return Result.Cancel;
       }
-      int simplified = _simplifyCurves ? SimplifyCurves(doc, curves) : 0;
+      var phaseClock = System.Diagnostics.Stopwatch.StartNew();
+      int simplified = simplify ? SimplifyCurvesResponsive(doc, curves,keepResponsive) : 0;
+      Log.Write("vExportDXF", "cleanup simplify curves={0} elapsedMs={1:F1}", curves.Count, phaseClock.Elapsed.TotalMilliseconds);
+      phaseClock.Restart();
       curves = sourceIds
         .Select(id => doc.Objects.FindId(id))
         .Where(obj => obj?.Geometry is Curve)
         .Cast<RhinoObject>()
         .ToList();
-      var overlapResult = _findOverlaps
-        ? OverlapFinder.Find(curves, overlapSettings.Tolerance,
-            curves)
+      var overlapResult = findOverlaps
+        ? OverlapFinder.FindResponsive(curves, overlapSettings.Tolerance,
+            curves,keepResponsive)
         : new OverlapFinder.Result([], [], [], 0, 0, 0, 0);
-      var overlapTargets = _findOverlaps
+      var overlapTargets = findOverlaps
         ? ResolveOverlapTargets(doc, overlapResult, (overlapSettings.Tolerance, false),
             sourceIds, out _)
         : [];
@@ -191,79 +203,108 @@ public sealed class vCleanup : vToolsCommand
         .Where(obj => obj?.Geometry is Curve)
         .Cast<RhinoObject>()
         .ToList();
-      var shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
+      Log.Write("vExportDXF", "cleanup overlap scan curves={0} elapsedMs={1:F1}", curves.Count, phaseClock.Elapsed.TotalMilliseconds);
+      phaseClock.Restart();
+      var shortAnalysis = AnalyzeShortGeometryResponsive(curves, threshold,keepResponsive);
+      Log.Write("vExportDXF", "cleanup short scan curves={0} elapsedMs={1:F1}", curves.Count, phaseClock.Elapsed.TotalMilliseconds);
       int removedOverlaps = 0;
       int removedShort = 0;
       int overlaps = overlapTargets.Count;
       int shortCount = shortAnalysis.Hits.Count;
+      findingsChanged?.Invoke(overlaps,shortCount);
       bool ignored = false;
+      string? deletionNotice = null;
       try
       {
         for (int pass = 0; overlaps > 0 || shortCount > 0; pass++)
         {
-          using var highlight = new PreviewDisplay.ObjectHighlighter(doc);
-          highlight.SetObjects(overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId)));
+          using var highlight = showFindings == null ? new PreviewDisplay.ObjectHighlighter(doc) : null;
+          var findingIds = overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId)).Distinct().ToArray();
+          // Finding geometry is borrowed during this callback; retained feedback must duplicate it.
+          if (showFindings != null) showFindings(overlapTargets,
+            shortAnalysis.Hits.Select(hit => (hit.SourceId, hit.HighlightCurve, hit.CandidatePoint)).ToArray());
+          else highlight!.SetObjects(findingIds);
           doc.Views.Redraw();
-          var choice = action;
+          if (pass >= MaximumExportCleanupPasses)
+            deletionNotice = "Cleanup reached its deletion limit. Ignore the remaining findings to continue, or cancel export.";
+          var choice = deletionNotice == null ? action : ExportCleanupAction.Ask;
           if (choice == ExportCleanupAction.Ask)
           {
+            var reviewClock = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+            if(reviewFindings!=null)
+            {
+              var response=reviewFindings(overlaps,shortCount,deletionNotice);if(response==null)return Result.Cancel;choice=response.Value;
+            }
+            else
+            {
             using var getter = new GetOption();
-            getter.SetCommandPrompt($"Cleanup found {overlaps} overlaps and {shortCount} short findings");
-            int deleteOption = getter.AddOption("Delete");
+            getter.SetCommandPrompt($"{(showFindings == null ? "Cleanup" : "Export-copy cleanup")} found {CountText.Format(overlaps, "overlap")} and {CountText.Format(shortCount, "short finding")}");
+            if (deletionNotice != null) RhinoApp.WriteLine(deletionNotice);
+            int deleteOption = deletionNotice == null ? getter.AddOption("Delete") : 0;
             getter.AddOption("Ignore");
             if (getter.Get() != GetResult.Option)
               return Result.Cancel;
             choice = getter.OptionIndex() == deleteOption
               ? ExportCleanupAction.Delete : ExportCleanupAction.Ignore;
+            }
+            }
+            finally { reviewMilliseconds += reviewClock.Elapsed.TotalMilliseconds; }
           }
           if (choice == ExportCleanupAction.Ignore)
           {
             ignored = true;
             break;
           }
-          if (pass >= MaximumExportCleanupPasses)
-            throw new InvalidOperationException("Cleanup deletion did not resolve the findings. Choose Ignore to export them.");
+          if (deletionNotice != null) return Result.Cancel;
           var previousGeometry = CaptureExportCleanupGeometry(doc, sourceIds);
           var historyRecords = overlapTargets.Concat(shortAnalysis.Hits.Select(hit => hit.SourceId))
             .SelectMany(id => HistoryBreakWarning.CaptureAffectedRecords(doc, id)).ToHashSet();
           if (!HistoryBreakWarning.Confirm(doc, "vExportDXF cleanup deletion", historyRecords))
             return Result.Cancel;
-          if (_findOverlaps && overlapSettings.OverlapSegments)
+          if (findOverlaps && overlapSettings.OverlapSegments)
           {
             overlapTargets = ResolveOverlapTargets(doc, overlapResult, overlapSettings, sourceIds, out _);
             DisposeHits(shortAnalysis.Hits);
             curves = sourceIds.Select(id => doc.Objects.FindId(id))
               .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
-            shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
+            shortAnalysis = AnalyzeShortGeometryResponsive(curves, threshold,keepResponsive);
           }
           doc.Objects.UnselectAll();
           int deletedOverlaps = DeleteExportOverlapObjects(doc, overlapTargets, sourceIds);
-          int selectedShort = SelectShortHits(doc, shortAnalysis.Hits, [], false);
-          if (deletedOverlaps + selectedShort == 0 ||
-              selectedShort > 0 && !RhinoApp.RunScript(doc.RuntimeSerialNumber, "_Delete", false))
-            throw new InvalidOperationException("Cleanup findings could not be deleted.");
+          var wholeShortIds = shortAnalysis.Hits.Where(hit => hit.Kind == ShortHitKind.Object).Select(hit => hit.SourceId).Distinct().ToArray();
+          int deletedShortObjects = DeleteExportOverlapObjects(doc, wholeShortIds, sourceIds);
+          int deletedShortComponents = DeleteExportShortComponents(doc, shortAnalysis.Hits, sourceIds);
           removedOverlaps += deletedOverlaps;
-          removedShort += selectedShort;
+          removedShort += deletedShortObjects + deletedShortComponents;
           doc.Objects.UnselectAll();
+          refreshScope?.Invoke();
           DisposeHits(shortAnalysis.Hits);
           curves = sourceIds.Select(id => doc.Objects.FindId(id))
             .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
-          overlapResult = _findOverlaps
-            ? OverlapFinder.Find(curves, overlapSettings.Tolerance, curves)
+          overlapResult = findOverlaps
+            ? OverlapFinder.FindResponsive(curves, overlapSettings.Tolerance, curves,keepResponsive)
             : new OverlapFinder.Result([], [], [], 0, 0, 0, 0);
-          overlapTargets = _findOverlaps
+          overlapTargets = findOverlaps
             ? ResolveOverlapTargets(doc, overlapResult, (overlapSettings.Tolerance, false), sourceIds, out _)
             : [];
           curves = sourceIds.Select(id => doc.Objects.FindId(id))
             .Where(obj => obj?.Geometry is Curve).Cast<RhinoObject>().ToList();
-          shortAnalysis = AnalyzeShortGeometry(curves, _threshold);
+          shortAnalysis = AnalyzeShortGeometryResponsive(curves, threshold,keepResponsive);
           overlaps = overlapTargets.Count;
           shortCount = shortAnalysis.Hits.Count;
+          findingsChanged?.Invoke(overlaps,shortCount);
           Log.Write("vExportDXF", $"cleanup review delete pass={pass + 1} remainingOverlaps={overlaps} remainingShort={shortCount}");
           if ((overlaps > 0 || shortCount > 0) &&
               previousGeometry.SetEquals(CaptureExportCleanupGeometry(doc, sourceIds)))
-            throw new InvalidOperationException("Cleanup deletion made no geometry changes. Choose Ignore to export the remaining findings.");
+          {
+            deletionNotice = "The remaining findings could not be deleted safely. Ignore them to continue, or cancel export.";
+            Log.Write("vExportDXF", "cleanup deletion stalled; returning to review with originals unchanged");
+          }
         }
+        showFindings?.Invoke(overlapTargets,
+          shortAnalysis.Hits.Select(hit => (hit.SourceId, hit.HighlightCurve, hit.CandidatePoint)).ToArray());
       }
       finally
       {
@@ -272,16 +313,17 @@ public sealed class vCleanup : vToolsCommand
       Log.Write("vExportDXF", $"optimize scope={curves.Count} simplified={simplified} " +
         $"removedOverlaps={removedOverlaps} removedShort={removedShort} " +
         $"remainingOverlaps={overlaps}/{overlapResult.ItemCount} " +
-        $"remainingShort={shortCount} ignored={ignored} threshold={_threshold}");
-      RhinoApp.WriteLine($"vExportDXF: Optimize simplified {simplified} curves, " +
-        $"removed {removedOverlaps} overlaps and {removedShort} short findings; " +
-        (ignored ? $"ignored {overlaps} overlaps and {shortCount} short findings." : "no cleanup findings remain."));
+        $"remainingShort={shortCount} ignored={ignored} threshold={threshold}");
+      if(!previewOnly)RhinoApp.WriteLine($"vExportDXF: {(showFindings == null ? "Optimize" : "Export-copy cleanup")} simplified {CountText.Format(simplified, "curve")}, " +
+        $"removed {CountText.Format(removedOverlaps, "overlap")} and {CountText.Format(removedShort, "short finding")}; " +
+        (ignored ? $"ignored {CountText.Format(overlaps, "overlap")} and {CountText.Format(shortCount, "short finding")}." : "no cleanup findings remain."));
       return Result.Success;
     }
     catch (Exception ex)
     {
       Log.Write("vExportDXF", $"optimization failed: {ex}");
-      RhinoApp.WriteLine("vExportDXF: Optimize failed; see vTools log.");
+      if(!previewOnly)RhinoApp.WriteLine(showFindings == null ? "vExportDXF: Optimize failed; see vTools log." :
+        "vExportDXF: export-copy cleanup failed; originals unchanged. See vTools log.");
       return Result.Failure;
     }
     finally
@@ -293,6 +335,7 @@ public sealed class vCleanup : vToolsCommand
       foreach (Guid id in selection)
         doc.Objects.Select(id);
       doc.Views.Redraw();
+      Log.Write("vExportDXF", "cleanup timing workMs={0:F1} reviewMs={1:F1}", cleanupClock.Elapsed.TotalMilliseconds - reviewMilliseconds, reviewMilliseconds);
     }
   }
 
@@ -334,9 +377,39 @@ public sealed class vCleanup : vToolsCommand
     return removed;
   }
 
+  private static int DeleteExportShortComponents(
+    RhinoDoc doc, IReadOnlyCollection<ShortHit> hits, HashSet<Guid> sourceIds)
+  {
+    int removed = 0;
+    uint undoRecord = doc.BeginUndoRecord("vExportDXF Cleanup");
+    try
+    {
+      foreach (var group in hits.Where(hit => hit.Kind != ShortHitKind.Object).GroupBy(hit => hit.SourceId))
+      {
+        if (!sourceIds.Contains(group.Key))
+          throw new InvalidOperationException("Short geometry is outside the export scope; cleanup was cancelled.");
+        var obj = doc.Objects.FindId(group.Key);
+        if (obj is not { IsDeleted: false }) continue;
+        if (obj.IsLocked || obj.IsReference)
+          throw new InvalidOperationException("Short geometry could not be deleted; check whether it is locked or reference geometry.");
+        // Delete grips in one native call: selected-subobject Delete can be a no-op inside an export dialog.
+        var indices = group.Where(hit => hit.Kind == ShortHitKind.ControlPoint)
+          .Select(hit => FindMatchingGrip(doc, obj, hit)?.Index)
+          .Where(index => index.HasValue).Select(index => index!.Value).Distinct().ToArray();
+        if (indices.Length > 0)
+          removed += doc.Objects.DeleteGrips(doc.Objects.FindId(group.Key), indices);
+      }
+    }
+    finally
+    {
+      if (undoRecord != 0) doc.EndUndoRecord(undoRecord);
+    }
+    return removed;
+  }
+
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
-    DisableHighlight(doc);
+    CleanupFindingDisplay.ClearAll();
     LoadOptions();
     var overlapSettings = vOverlaps.GetDetectionSettings();
     var overlapSegments = overlapSettings.OverlapSegments;
@@ -494,22 +567,19 @@ public sealed class vCleanup : vToolsCommand
       foreach (var helperId in helperIds)
         doc.Objects.Select(helperId);
 
-    var conduitOwnsShortHits = false;
-    if (_highlightShort &&
-        (availableShortHits.Count > 0 || availableOverlapIds.Count > 0))
+    try
     {
-      _activeConduit = new ShortGeometryConduit(
-        doc,
-        availableShortHits,
-        availableOverlapIds)
+      if (_highlightShort && (availableShortHits.Count > 0 || availableOverlapIds.Count > 0))
       {
-        Enabled = true
-      };
-      conduitOwnsShortHits = true;
+        var display = new CleanupFindingDisplay(doc);
+        _activeConduit = display;
+        display.Disposed += () => { if (ReferenceEquals(_activeConduit, display)) _activeConduit = null; };
+        display.SetFindings(availableOverlapIds,
+          availableShortHits.Select(hit => (hit.SourceId, hit.HighlightCurve, hit.CandidatePoint)).ToArray());
+        display.Track(inputCurves.Select(obj => obj.Id), new(_threshold, _findOverlaps, overlapSettings.Tolerance));
+      }
     }
-
-    if (!conduitOwnsShortHits)
-      DisposeHits(availableShortHits);
+    finally { DisposeHits(availableShortHits); }
 
     doc.Views.Redraw();
     Log.Write("vCleanup",
@@ -522,13 +592,13 @@ public sealed class vCleanup : vToolsCommand
       $"segments={shortAnalysis.ScannedSegments} controlSpans={shortAnalysis.ScannedControlSpans} " +
       $"helpers={helperIds.Count}");
     var resultAction = autoDeleteEnabled
-      ? $"deleted {deletedOverlapCount} overlaps and {deletedShortCount} short findings"
+      ? $"deleted {CountText.Format(deletedOverlapCount, "overlap")} and {CountText.Format(deletedShortCount, "short finding")}"
       : foundOverlapCount + foundShortCount == 0
         ? "no cleanup findings"
         : $"saved '{ShortSelectionName}' and '{OverlapSelectionName}'";
     QueueResultOutput(
-      $"vCleanup: simplified {simplifiedCount}; found {foundOverlapCount} overlaps " +
-      $"and {foundShortCount} short findings; {resultAction}.");
+      $"vCleanup: simplified {simplifiedCount}; found {CountText.Format(foundOverlapCount, "overlap")} " +
+      $"and {CountText.Format(foundShortCount, "short finding")}; {resultAction}.");
     return Result.Success;
   }
 
@@ -700,7 +770,7 @@ public sealed class vCleanup : vToolsCommand
     if (records.Count == 0)
     { RhinoApp.WriteLine("vCleanup: no orphaned part data found."); return Result.Success; }
     using var getter = new GetOption();
-    getter.SetCommandPrompt($"Found {records.Count} orphaned part records ({records.Sum(record => record.Values.Count)} entries)");
+    getter.SetCommandPrompt($"Found {CountText.Format(records.Count, "orphaned part record")} ({CountText.Format(records.Sum(record => record.Values.Count), "entry", "entries")})");
     int delete = getter.AddOption("Delete"); getter.AddOption("Cancel"); getter.AcceptNothing(true);
     if (getter.Get() != GetResult.Option || getter.OptionIndex() != delete) return Result.Cancel;
     int removed = DeleteOrphanPartData(doc, records);
@@ -851,6 +921,8 @@ public sealed class vCleanup : vToolsCommand
   }
 
   private static int SimplifyCurves(RhinoDoc doc, IReadOnlyCollection<RhinoObject> curves)
+    =>SimplifyCurvesResponsive(doc,curves,null);
+  private static int SimplifyCurvesResponsive(RhinoDoc doc,IReadOnlyCollection<RhinoObject> curves,Action? keepResponsive)
   {
     var undoRecord = doc.BeginUndoRecord("vCleanup SimplifyCrv");
     var simplified = 0;
@@ -858,6 +930,7 @@ public sealed class vCleanup : vToolsCommand
     {
       foreach (var obj in curves)
       {
+        keepResponsive?.Invoke();
         if (obj.Geometry is not Curve source)
           continue;
 
@@ -881,10 +954,15 @@ public sealed class vCleanup : vToolsCommand
 
   private static AnalysisResult AnalyzeShortGeometry(
     IReadOnlyCollection<RhinoObject> objects, double threshold)
+    =>AnalyzeShortGeometryResponsive(objects,threshold,null);
+  private static AnalysisResult AnalyzeShortGeometryResponsive(IReadOnlyCollection<RhinoObject> objects,double threshold,Action? keepResponsive)
   {
     var analysis = new AnalysisResult();
+    try
+    {
     foreach (var obj in objects)
     {
+      keepResponsive?.Invoke();
       if (obj.Geometry is not Curve curve)
         continue;
 
@@ -893,6 +971,8 @@ public sealed class vCleanup : vToolsCommand
       ScanShortControlSpans(obj, curve, threshold, shortSpanKeys, analysis);
     }
     return analysis;
+    }
+    catch{DisposeHits(analysis.Hits);throw;}
   }
 
   private static HashSet<string> ScanShortSegments(
@@ -1439,7 +1519,7 @@ public sealed class vCleanup : vToolsCommand
     attributes.Name = HelperName;
     attributes.RemoveFromAllGroups();
     attributes.ColorSource = ObjectColorSource.ColorFromObject;
-    attributes.ObjectColor = ShortHighlightColor;
+    attributes.ObjectColor = CleanupFindingDisplay.ShortHighlightColor;
     attributes.SetUserString(HelperFlagKey, "1");
     return attributes;
   }
@@ -1496,17 +1576,6 @@ public sealed class vCleanup : vToolsCommand
     return string.Compare(firstKey, secondKey, StringComparison.Ordinal) <= 0
       ? $"{firstKey}|{secondKey}"
       : $"{secondKey}|{firstKey}";
-  }
-
-  private static void DisableHighlight(RhinoDoc doc)
-  {
-    if (_activeConduit != null)
-    {
-      _activeConduit.Enabled = false;
-      _activeConduit.Dispose();
-      _activeConduit = null;
-      doc.Views.Redraw();
-    }
   }
 
   private static void DisposeHits(IEnumerable<ShortHit> hits)
@@ -1581,49 +1650,107 @@ public sealed class vCleanup : vToolsCommand
       section[OverlapsKey] = _findOverlaps;
     });
 
-  private sealed class ShortGeometryConduit(
-    RhinoDoc doc,
-    IReadOnlyCollection<ShortHit> hits,
-    IReadOnlyCollection<Guid> overlapIds) : DisplayConduit, IDisposable
+  internal sealed class FindingTracker : IDisposable
   {
+    private readonly RhinoDoc _doc;
+    private readonly uint _documentSerial;
+    private readonly HashSet<Guid> _scope;
+    private readonly HashSet<Guid> _overlapSources;
+    private readonly HashSet<Guid> _shortSources;
+    private readonly LiveFindingSettings _settings;
+    private readonly Action<IEnumerable<Guid>, IReadOnlyCollection<(Guid SourceId, Curve Curve, Point3d Point)>> _show;
+    private readonly Action _closed;
+    private bool _pending;
     private bool _disposed;
+
+    internal FindingTracker(RhinoDoc doc, IEnumerable<Guid> scope, IEnumerable<Guid> overlaps,
+      IEnumerable<Guid> shorts, LiveFindingSettings settings,
+      Action<IEnumerable<Guid>, IReadOnlyCollection<(Guid SourceId, Curve Curve, Point3d Point)>> show, Action closed)
+    {
+      _doc = doc;
+      _documentSerial = doc.RuntimeSerialNumber;
+      _scope = scope.Concat(overlaps).Concat(shorts).ToHashSet();
+      _overlapSources = overlaps.ToHashSet();
+      _shortSources = shorts.ToHashSet();
+      _settings = settings;
+      _show = show;
+      _closed = closed;
+      RhinoDoc.AddRhinoObject += ObjectChanged;
+      RhinoDoc.DeleteRhinoObject += ObjectChanged;
+      RhinoDoc.UndeleteRhinoObject += ObjectChanged;
+      RhinoDoc.ReplaceRhinoObject += ObjectReplaced;
+      RhinoDoc.ModifyObjectAttributes += AttributesChanged;
+      RhinoDoc.CloseDocument += DocumentClosed;
+      RhinoApp.Closing += ApplicationClosing;
+      RhinoApp.Idle += Idle;
+    }
+
+    private void ObjectChanged(object? sender, RhinoObjectEventArgs e)
+    {
+      var owner = e.TheObject.Document;
+      if (owner != null && owner.RuntimeSerialNumber != _documentSerial) return;
+      if (e.TheObject.Geometry is Curve && (_scope.Contains(e.ObjectId) || owner != null && _overlapSources.Count > 0))
+        _pending = true;
+    }
+
+    private void ObjectReplaced(object? sender, RhinoReplaceObjectEventArgs e)
+    {
+      if (e.Document?.RuntimeSerialNumber == _documentSerial &&
+          (_scope.Contains(e.ObjectId) || _overlapSources.Count > 0)) _pending = true;
+    }
+
+    private void AttributesChanged(object? sender, RhinoModifyObjectAttributesEventArgs e)
+    {
+      if (e.Document?.RuntimeSerialNumber == _documentSerial && _scope.Contains(e.RhinoObject.Id)) _pending = true;
+    }
+
+    private void Idle(object? sender, EventArgs e)
+    {
+      if (!_disposed && _pending && !Command.InCommand() && !RhinoGet.InGet(_doc)) Refresh();
+    }
+
+    internal void Refresh()
+    {
+      if (_disposed) return;
+      _pending = false;
+      IReadOnlyCollection<ShortHit> hits = [];
+      try
+      {
+        var curves = _scope.Select(_doc.Objects.FindId)
+          .Where(obj => obj is { IsDeleted: false, Geometry: Curve }).Cast<RhinoObject>().ToList();
+        hits = AnalyzeShortGeometry(curves.Where(obj => _shortSources.Contains(obj.Id)).ToArray(), _settings.Threshold).Hits;
+        IEnumerable<Guid> overlaps = [];
+        if (_settings.FindOverlaps && _overlapSources.Count > 0 && curves.Count > 1)
+        {
+          var analysis = OverlapFinder.Find(curves, _settings.OverlapTolerance, ResolveConnectivityCurves(_doc));
+          overlaps = analysis.CoveredObjectIds.Concat(analysis.PartiallyOverlappingObjectIds)
+            .Where(_overlapSources.Contains).Distinct();
+        }
+        _show(overlaps, hits.Select(hit => (hit.SourceId, hit.HighlightCurve, hit.CandidatePoint)).ToArray());
+      }
+      catch (Exception ex) { Log.Write("vCleanup", $"live finding refresh failed: {ex}"); }
+      finally { DisposeHits(hits); }
+    }
+
+    private void DocumentClosed(object? sender, DocumentEventArgs e)
+    {
+      if (e.DocumentSerialNumber == _documentSerial) _closed();
+    }
+
+    private void ApplicationClosing(object? sender, EventArgs e) => _closed();
 
     public void Dispose()
     {
-      if (_disposed)
-        return;
-
+      if (_disposed) return;
       _disposed = true;
-      DisposeHits(hits);
-    }
-
-    protected override void DrawForeground(DrawEventArgs e)
-    {
-      foreach (var overlapId in overlapIds)
-      {
-        if (doc.Objects.FindId(overlapId)?.Geometry is not Curve overlapCurve)
-          continue;
-        e.Display.DrawCurve(
-          overlapCurve,
-          OverlapHighlightColor,
-          ConfiguredShortHighlightThicknessPixels);
-      }
-
-      foreach (var hit in hits)
-      {
-        if (doc.Objects.FindId(hit.SourceId) == null)
-          continue;
-        e.Display.DrawCurve(
-          hit.HighlightCurve,
-          ShortHighlightColor,
-          ConfiguredShortHighlightThicknessPixels);
-        if (hit.Kind == ShortHitKind.ControlPoint)
-          e.Display.DrawPoint(
-            hit.CandidatePoint,
-            PointStyle.ControlPoint,
-            ConfiguredCandidatePointSizePixels,
-            ShortHighlightColor);
-      }
+      RhinoDoc.AddRhinoObject -= ObjectChanged;
+      RhinoDoc.DeleteRhinoObject -= ObjectChanged;
+      RhinoDoc.UndeleteRhinoObject -= ObjectChanged;
+      RhinoDoc.ReplaceRhinoObject -= ObjectReplaced;
+      RhinoDoc.ModifyObjectAttributes -= AttributesChanged;
+      RhinoDoc.CloseDocument -= DocumentClosed;
+      RhinoApp.Closing -= ApplicationClosing;
+      RhinoApp.Idle -= Idle;
     }
   }
 }

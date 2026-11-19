@@ -56,6 +56,8 @@ public sealed class vPart : vToolsCommand
 
   private static readonly double ConfiguredLabelSizePixelsPerUnit = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", LabelSizePixelsPerUnit); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string LabelObjectName = "PartLabel"; // Object name for the part's primary identifying label.
+  private const string PrimaryLabelLayer = "LABEL"; // Conventional part-name layer preferred over other unmarked text.
+  private static readonly string[] DetailLabelNames = ["NotchLabel", "LengthLabel", "PartSplitSeamLabel", "PartSplitReferenceLabel", "ShadeOverlapLabel"]; // Detail annotations that must never be replaced as the part's primary label.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -129,6 +131,14 @@ public sealed class vPart : vToolsCommand
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadOptions();
+    using var existing = FindPreselectedPart(doc);
+    if (existing != null)
+    {
+      var id = PlaceOrUpdatePartLabel(doc, mode, existing.Part.Outline, existing.Part.Plane, existing.Label, existing.Groups);
+      if (id != Guid.Empty) doc.Objects.Select(existing.Part.Items.Select(item => item.Id).Append(id));
+      doc.Views.Redraw();
+      return id == Guid.Empty ? Result.Cancel : Result.Success;
+    }
     var layerSession = new DuplicateOutputLayerSession(doc, _layer, EnglishName);
     var tol = doc.ModelAbsoluteTolerance;
     L($"=== vPart {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
@@ -223,7 +233,7 @@ public sealed class vPart : vToolsCommand
       L($"  sel[{i}]: {Short(r.ObjectId)} component={component.ComponentIndexType}:{component.Index}");
     }
 
-    L($"final collection: {collectedMap.Count} curve reference(s)");
+    L($"final collection: {CountText.Format(collectedMap.Count, "curve reference")}");
     foreach (var key in collectedMap.Keys)
       L($"  collected: {Short(key.ObjectId)} component={key.Type}:{key.Index}");
 
@@ -261,7 +271,7 @@ public sealed class vPart : vToolsCommand
       }
     }
 
-    L($"perimList: {perimList.Count} curve(s)");
+    L($"perimList: {CountText.Format(perimList.Count, "curve")}");
     if (perimList.Count == 0)
     {
       RhinoApp.WriteLine("vPart: no curves selected.");
@@ -349,7 +359,7 @@ public sealed class vPart : vToolsCommand
     //  • Inside objects — on their original layers
 
     L($"trimmedPerimeter: all={rawTrimmedPerimeter.Count} " +
-      $"from {effectivePerimeter.Count} selected curve(s)");
+      $"from {CountText.Format(effectivePerimeter.Count, "selected curve")}");
 
     // ── 6. Base point = bounding box center of perimeter ─────────────────
 
@@ -599,7 +609,7 @@ public sealed class vPart : vToolsCommand
     var resolvedLayerDescription = IsSourceLayerOption(_layer)
       ? SourceLayerOption
       : layerSession.ResolvedLayerName(doc);
-    L($"committed: {addedIds.Count} object(s)  grouped={_group && addedIds.Count > 1} " +
+    L($"committed: {CountText.Format(addedIds.Count, "object")}  grouped={_group && addedIds.Count > 1} " +
       $"cleanup={_cleanup} removedLines={removedInteriorLines} " +
       $"layer={resolvedLayerDescription}");
     L("=== done ===");
@@ -636,22 +646,80 @@ public sealed class vPart : vToolsCommand
     return best.IsValid ? best : center;
   }
 
-  private static Guid PlacePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane)
+  private sealed record ExistingPart(PlanarPartSelection.Part Part, RhinoObject? Label, int[] Groups) : IDisposable
   {
-    var text = _labelText;
+    public void Dispose() => Part.Dispose();
+  }
+
+  private static ExistingPart? FindPreselectedPart(RhinoDoc doc)
+  {
+    var selected = doc.Objects.GetSelectedObjects(false, false).Where(obj => !obj.IsDeleted && obj.IsSelected(false) != 0).ToArray();
+    if (selected.Length == 0) return null;
+    var ids = selected.Select(obj => obj.Id).ToHashSet();
+    var common = selected.Select(obj => obj.Attributes.GetGroupList() ?? []).Aggregate((first, next) => first.Intersect(next).ToArray());
+    foreach (int group in common.OrderBy(doc.Groups.GroupObjectCount))
+    {
+      if (doc.Groups[group] is not { IsDeleted: false }) continue;
+      var members = doc.Groups.GroupMembers(group).Where(obj => !obj.IsDeleted).ToArray();
+      if (!members.Any(obj => obj.Geometry is Curve && !IsNotchCurve(obj.Attributes)) ||
+          members.Any(obj => NestTableMetadata.IsDecoration(doc, obj)) ||
+          members.Any(obj => obj.IsSelectable(true, false, false, false) && !ids.Contains(obj.Id))) continue;
+      var parts = PlanarPartSelection.Capture(doc, members.Select(obj => obj.Id).ToArray(), doc.ModelAbsoluteTolerance);
+      if (parts.Count != 1) { foreach (var part in parts) part.Dispose(); continue; }
+      var label = FindPartLabel(doc, members);
+      var groups = members.Select(obj => obj.Attributes.GetGroupList() ?? []).Aggregate((first, next) => first.Intersect(next).ToArray());
+      L($"preselected part: group={group} members={members.Length} label={label?.Id}");
+      return new(parts[0], label, groups);
+    }
+    if (selected.All(obj => (obj.Attributes.GetGroupList() ?? []).Length == 0) &&
+        selected.Any(obj => obj.Geometry is TextEntity && string.Equals(obj.Attributes.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase)))
+    {
+      var parts = PlanarPartSelection.Capture(doc, selected.Select(obj => obj.Id).ToArray(), doc.ModelAbsoluteTolerance);
+      if (parts.Count == 1) return new(parts[0], FindPartLabel(doc, selected), []);
+      foreach (var part in parts) part.Dispose();
+    }
+    return null;
+  }
+
+  private static RhinoObject? FindPartLabel(RhinoDoc doc, IEnumerable<RhinoObject> members) =>
+    members.Where(obj => obj.Geometry is TextEntity text && !string.IsNullOrWhiteSpace(text.PlainText) &&
+          !DetailLabelNames.Contains(obj.Attributes.Name, StringComparer.OrdinalIgnoreCase) &&
+          !string.Equals(obj.Attributes.GetUserString(NotchRoleKey), "label", StringComparison.OrdinalIgnoreCase) &&
+          string.IsNullOrEmpty(obj.Attributes.GetUserString("notch.label_id")))
+        .OrderByDescending(obj => string.Equals(obj.Attributes.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase))
+        .ThenByDescending(obj => string.Equals(doc.Layers[obj.Attributes.LayerIndex].Name, PrimaryLabelLayer, StringComparison.OrdinalIgnoreCase))
+        .ThenByDescending(obj => ((TextEntity)obj.Geometry).TextHeight).FirstOrDefault();
+
+  private static Guid PlacePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane) =>
+    PlaceOrUpdatePartLabel(doc, mode, perimeter, plane, null, []);
+
+  private static Guid PlaceOrUpdatePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane,
+    RhinoObject? existing, IReadOnlyList<int> groups)
+  {
+    if (existing != null && !existing.IsSelectable(true, false, false, false))
+    { RhinoApp.WriteLine("vPart: the existing label is hidden or locked; make it editable first."); return Guid.Empty; }
+    var original = existing?.Geometry as TextEntity;
+    var text = original?.PlainText ?? _labelText;
     if (RhinoGet.GetString("Part label", false, ref text) != Result.Success || string.IsNullOrWhiteSpace(text))
       return Guid.Empty;
+    if (original != null)
+    {
+      _labelSize = original.TextHeight;
+      _labelLayer = doc.Layers[existing!.Attributes.LayerIndex].FullPath;
+    }
     _labelText = text;
     SaveOptions();
-    var position = PartLabelCenter(perimeter, plane, doc.ModelAbsoluteTolerance);
-    double angle = 0;
-    using var entity = new TextEntity
+    var position = original?.Plane.Origin ?? PartLabelCenter(perimeter, plane, doc.ModelAbsoluteTolerance);
+    double angle = original == null ? 0 : Math.Atan2(original.Plane.XAxis * plane.YAxis, original.Plane.XAxis * plane.XAxis);
+    using var entity = original?.Duplicate() as TextEntity ?? new TextEntity
     {
       PlainText = text, Plane = new Plane(position, plane.XAxis, plane.YAxis),
       TextHeight = _labelSize, Justification = TextJustification.MiddleCenter, DrawForward = false,
       DimensionStyleId = doc.DimStyles.Current.Id
     };
-    using (var style = doc.DimStyles.Current.Duplicate())
+    entity.PlainText = text;
+    using var visibility = new PartLabelVisibility(doc, existing?.Id ?? Guid.Empty) { Enabled = existing != null };
+    if (original == null) using (var style = doc.DimStyles.Current.Duplicate())
     {
       style.TextHeight = _labelSize;
       style.DimensionScale = 1;
@@ -665,7 +733,6 @@ public sealed class vPart : vToolsCommand
       getter.SetCommandPrompt("Confirm label or drag to move; Alt rotates, Shift sizes");
       getter.AcceptNothing(true);
       getter.AcceptCustomMessage(true);
-      getter.SetDefaultPoint(position);
       getter.Constrain(plane, false);
       var size = new OptionDouble(_labelSize, RhinoMath.ZeroTolerance, double.MaxValue);
       int textOption = getter.AddOption("Text", entity.PlainText);
@@ -754,8 +821,48 @@ public sealed class vPart : vToolsCommand
       int outputLayer = LayerSelector.IsCurrentLayerValue(_labelLayer, DuplicateCommandSupport.CurrentLayerOption)
         ? doc.Layers.CurrentLayerIndex : UzipCommon.EnsureLayer(doc, _labelLayer, Color.White);
       if (outputLayer < 0) return Guid.Empty;
-      return doc.Objects.AddText(entity, new ObjectAttributes { Name = LabelObjectName, LayerIndex = outputLayer });
+      return CommitPartLabel(doc, entity, outputLayer, existing, groups);
     }
+  }
+
+  private static Guid CommitPartLabel(RhinoDoc doc, TextEntity entity, int layer, RhinoObject? existing, IReadOnlyList<int> groups)
+  {
+    using var attributes = existing?.Attributes.Duplicate() ?? new ObjectAttributes();
+    attributes.Name = LabelObjectName;
+    attributes.LayerIndex = layer;
+    if (existing == null)
+    {
+      foreach (int group in groups) attributes.AddToGroup(group);
+      var added = doc.Objects.AddText(entity, attributes);
+      if (added != Guid.Empty) L($"part label added: {added}");
+      return added;
+    }
+    var id = existing.Id;
+    using var before = ((TextEntity)existing.Geometry).Duplicate() as TextEntity;
+    using var beforeAttributes = existing.Attributes.Duplicate();
+    if (before == null || !doc.Objects.Replace(id, entity)) return Guid.Empty;
+    if (!doc.Objects.ModifyAttributes(id, attributes, true))
+    {
+      doc.Objects.Replace(id, before);
+      doc.Objects.ModifyAttributes(id, beforeAttributes, true);
+      L("part label update rolled back");
+      return Guid.Empty;
+    }
+    L($"part label updated: {id}");
+    return id;
+  }
+
+  private sealed class PartLabelVisibility(RhinoDoc doc, Guid id) : DisplayConduit, IDisposable
+  {
+    protected override void ObjectCulling(CullObjectEventArgs e)
+    {
+      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == id) e.CullObject = true;
+    }
+    protected override void PreDrawObject(DrawObjectEventArgs e)
+    {
+      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == id) e.DrawObject = false;
+    }
+    public void Dispose() { Enabled = false; doc.Views.Redraw(); }
   }
 
   private static double ShiftLabelSize(double startSize, double upwardPixels) =>
@@ -1000,7 +1107,7 @@ public sealed class vPart : vToolsCommand
     }
 
     // Log gap distances before bridging
-    log.Add($"vPart[perim]: {curves.Count} curve(s) — {openEnds.Count} open endpoints");
+    log.Add($"vPart[perim]: {CountText.Format(curves.Count, "curve")} — {CountText.Format(openEnds.Count, "open endpoint")}");
     for (var di = 0; di < openEnds.Count; di++)
       for (var dj = di + 1; dj < openEnds.Count; dj++)
       {
@@ -1035,17 +1142,17 @@ public sealed class vPart : vToolsCommand
       }
     }
 
-    log.Add($"vPart[perim]: {bridges.Count} bridge(s) added — {pieces.Count} pieces for join");
+    log.Add($"vPart[perim]: {CountText.Format(bridges.Count, "bridge")} added — {CountText.Format(pieces.Count, "piece")} for join");
 
     // Join copies (only for containment testing)
     var joined = Curve.JoinCurves(pieces.ToArray(), tol * 10);
-    log.Add($"vPart[perim]: join@tol×10 → {(joined == null ? "null" : $"{joined.Length} result(s), closed={joined.Any(c => c.IsClosed)}")} ");
+    log.Add($"vPart[perim]: join@tol×10 → {(joined == null ? "null" : $"{CountText.Format(joined.Length, "result")}, closed={joined.Any(c => c.IsClosed)}")} ");
     var joinedClosed = joined?.Where(c => c.IsClosed).OrderByDescending(ClosedCurveArea).FirstOrDefault();
     if (joinedClosed != null)
       return (joinedClosed, bridges, workingCurves, tol * 10.0);
 
     var final = Curve.JoinCurves(pieces.ToArray(), tol * 100);
-    log.Add($"vPart[perim]: join@tol×100 → {(final == null ? "null" : $"{final.Length} result(s), closed={final.Any(c => c.IsClosed)}")} ");
+    log.Add($"vPart[perim]: join@tol×100 → {(final == null ? "null" : $"{CountText.Format(final.Length, "result")}, closed={final.Any(c => c.IsClosed)}")} ");
     var finalClosed = final?.Where(c => c.IsClosed).OrderByDescending(ClosedCurveArea).FirstOrDefault();
     if (finalClosed != null)
       return (finalClosed, bridges, workingCurves, tol * 100.0);
@@ -1115,7 +1222,7 @@ public sealed class vPart : vToolsCommand
         }
       }
 
-      log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: {regions.RegionCount} region(s), closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}, clickedSide={bestPickRank < int.MaxValue}");
+      log.Add($"vPart[perim]: {stage}@tol×{multiplier:G}: {CountText.Format(regions.RegionCount, "region")}, closed={bestBoundary != null}, area={Math.Max(0.0, bestArea):G6}, clickedSide={bestPickRank < int.MaxValue}");
       if (bestBoundary != null)
       {
         usedTolerance = regionTolerance;
@@ -1250,7 +1357,7 @@ public sealed class vPart : vToolsCommand
         break;
     }
 
-    log.Add($"vPart[perim]: extended {extendedEnds} disconnected end(s)");
+    log.Add($"vPart[perim]: extended {CountText.Format(extendedEnds, "disconnected end")}");
     return extendedEnds;
   }
 

@@ -51,13 +51,22 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultMoveOrigin", "true moves export copies to the world origin; false preserves source drawing coordinates.", OptionKeys = "move_origin")] private const bool DefaultMoveOrigin = true; // true moves export copies to the world origin; false preserves source drawing coordinates.
 
     private static readonly bool ConfiguredDefaultMoveOrigin = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultMoveOrigin", DefaultMoveOrigin); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultEndTrim", "Length in drawing units removed from each open non-cutting curve end touching the part's outer cutting outline; zero or greater, 0 disables. Only export copies change.", OptionKeys = "end_trim")]
+    private const double DefaultEndTrim = 0.02; // Drawing units along each touching end; zero disables export-only shortening.
+    private static readonly double ConfiguredDefaultEndTrim = Math.Max(0, global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultEndTrim", DefaultEndTrim)); // Resolved through vSettings; restart after advanced-default changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.CutLayerPrefix", "Case-insensitive, nonempty leaf-layer prefix identifying cutting geometry protected from EndTrim; CUT includes CUT1 and CUT2.")]
+    private const string CutLayerPrefix = "CUT"; // Nonempty leaf-layer prefix; matching curves define cutting outlines and are never shortened by EndTrim.
+    private static readonly string ConfiguredCutLayerPrefix = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.CutLayerPrefix", CutLayerPrefix); // Resolved through vSettings; restart after changes.
     private const string GrainIdentifier = "GRAIN"; // Case-insensitive object name or leaf layer name identifying an open grain guide.
     private const string NestMetadataPrefix = "vNest."; // Internal nesting bookkeeping omitted from export-copy user text; originals retain all provenance.
+    private const string CleanupPieceKey = "vExportDXF.cleanupPiece"; // Temporary-only GUID in N format linking cleanup fragments to their original export piece; never written to source objects or export attributes.
+    internal const string CleanupPartitionKey = "vExportDXF.cleanupPart"; // Temporary-only export-part identity; duplicate cleanup must not compare independent native patterns.
+    private const bool DefaultIsolateCleanupParts=false; // false retains standalone DXF cleanup scope; true isolates native-project cleanup by the same groups and inferred parts used for export.
     private static readonly Regex NativeSkippedCounts = new(@"^[^:\r\n]+:\s*\d+\s+written,\s*(\d+)\s+skipped[^\S\r\n]*\r?$",RegexOptions.Multiline|RegexOptions.CultureInvariant|RegexOptions.IgnoreCase); // English native export totals; a nonzero skipped count rejects the temporary file.
-    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", "true runs vCleanup before export; false leaves the source document untouched.", OptionKeys = "optimize")] private const bool DefaultOptimize = true; // true runs vCleanup before export; false leaves the source document untouched.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", "true cleans temporary export copies with vCleanup; false skips cleanup. Neither changes source geometry.", OptionKeys = "optimize")] private const bool DefaultOptimize = true; // true cleans temporary export copies; false skips cleanup; source geometry stays unchanged in either case.
 
     private static readonly bool ConfiguredDefaultOptimize = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", DefaultOptimize); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultCleanupAction", "Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.", OptionKeys = "cleanup_action")] private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews findings; Delete removes them; Ignore exports them unchanged by deletion.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultCleanupAction", "Ask highlights findings on originals; Delete removes findings from export copies only; Ignore keeps them in export copies.", OptionKeys = "cleanup_action")] private const vCleanup.ExportCleanupAction DefaultCleanupAction = vCleanup.ExportCleanupAction.Ask; // Ask reviews original-object highlights; Delete cleans copies only; Ignore leaves export findings intact.
 
     private static readonly vCleanup.ExportCleanupAction ConfiguredDefaultCleanupAction = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.DefaultCleanupAction", DefaultCleanupAction); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandChoicesAttribute("vExportDXF", "cleanup_action", false, "Ask", "Delete", "Ignore")] private static readonly string[] CleanupActionNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vExportDXF), nameof(CleanupActionNames)); // Saved export-only cleanup behavior; independent of vCleanup's own deletion setting.
@@ -85,6 +94,7 @@ namespace vTools.Commands
     private const string TextBreakEntry = "vExportDXF.TextBreak"; // Document setting key for splitting multiline export text.
     private const string RemoveGrainEntry = "vExportDXF.RemoveGrain"; // Document setting key for export-only grain-guide removal.
     private const string MoveOriginEntry = "vExportDXF.MoveOrigin"; // Document setting key for export-only translation to the world origin.
+    private const string EndTrimEntry = "vExportDXF.EndTrim"; // Document setting key for non-cutting endpoint shortening in drawing units; zero disables.
     private const string OptimizeEntry = "vExportDXF.Optimize"; // Document setting key for export cleanup.
     private const string LegacyNotchTrimEntry = "vExportOptions.NotchTrim"; // Previous document key read for migration.
     private const string LegacyNotchTrimLayerEntry = "vExportOptions.NotchTrimLayer"; // Previous document key read for migration.
@@ -118,6 +128,15 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableExportLineHeightFactor", "Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.")] private const double TableExportLineHeightFactor = 1.25; // Minimum row clearance in nominal text heights, reserving font ascent/descent across DXF importers.
 
     private static readonly double ConfiguredTableExportLineHeightFactor = global::vTools.CommandDefaults.Get("vExportDXF", "vTools.Commands.vExportDXF.TableExportLineHeightFactor", TableExportLineHeightFactor); // Resolved once from advanced defaults; restart Rhino after changes.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableHeaderTextSizeMultiplier", "Export-only compact-header text height multiplier; positive, 1 retains the drawing's text size.")]
+    private const double TableHeaderTextSizeMultiplier = 1.15; // Positive multiplier of the source header's visible font height; does not change drawing text.
+    private static readonly double ConfiguredTableHeaderTextSizeMultiplier=Math.Max(0.01,global::vTools.CommandDefaults.Get("vExportDXF","vTools.Commands.vExportDXF.TableHeaderTextSizeMultiplier",TableHeaderTextSizeMultiplier)); // Resolved through vSettings.
+    [global::vTools.CommandDefault("vExportDXF","vTools.Commands.vExportDXF.TableHeaderTextSizeExtra","Additional compact exported-header text height in drawing units, after the size multiplier; zero or greater. Drawing annotations stay unchanged.")]
+    private const double TableHeaderTextSizeExtra=3.0; // Nonnegative drawing-unit increase; larger export text extends the compact label toward the parts.
+    private static readonly double ConfiguredTableHeaderTextSizeExtra=Math.Max(0,global::vTools.CommandDefaults.Get("vExportDXF","vTools.Commands.vExportDXF.TableHeaderTextSizeExtra",TableHeaderTextSizeExtra)); // Export-only size addition, configurable through vSettings.
+    [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.TableHeaderSpacingMultiplier", "Export-only compact-header row separation and text-padding multiplier; positive, 1 retains the source row separation and base padding.")]
+    private const double TableHeaderSpacingMultiplier = 1.2; // Positive multiplier for row-center separation and measured text padding in exported headers only.
+    private static readonly double ConfiguredTableHeaderSpacingMultiplier=Math.Max(0.01,global::vTools.CommandDefaults.Get("vExportDXF","vTools.Commands.vExportDXF.TableHeaderSpacingMultiplier",TableHeaderSpacingMultiplier)); // Resolved through vSettings.
     private const double TableLabelExportGapInches = 10.0; // Export-only outward displacement of the label block from its table, in inches converted to document units.
     private const int DxfMiddleCenterAttachment = 5; // DXF MTEXT attachment code: middle-centre, matching working notch/title insertion anchors.
     private const int BlockNamePrefixLength = 39; // Maximum retained stem before an eight-character collision suffix.
@@ -126,15 +145,35 @@ namespace vTools.Commands
 
     public override string EnglishName => "vExportDXF";
 
-    private readonly record struct ExportSettings(
+    internal readonly record struct ExportSettings(
       NotchTrimMode NotchTrim, string NotchSplitLayer, bool NotchJoin, bool TextBreak, bool Optimize, ExportExplodeMode Explode,
-      vCleanup.ExportCleanupAction CleanupAction = DefaultCleanupAction, bool RemoveGrain = DefaultRemoveGrain, bool MoveOrigin = DefaultMoveOrigin);
-    private enum ExportExplodeMode { No, SplitAtCorners, Full }
+      vCleanup.ExportCleanupAction CleanupAction = DefaultCleanupAction, bool RemoveGrain = DefaultRemoveGrain, bool MoveOrigin = DefaultMoveOrigin,
+      double EndTrim = DefaultEndTrim);
+    internal enum ExportExplodeMode { No, SplitAtCorners, Full }
+    private static ExportCleanupFeedback? _cleanupFeedback;
+    private static readonly Dictionary<uint, ExportDocumentState> _documentStates = [];
 
-    protected override Result RunCommand(RhinoDoc doc, RunMode mode)
+    internal sealed record PreparedExportEntry(
+      Guid Id, Guid[] SourceIds, string? GroupName, bool TableAnnotation);
+
+    internal delegate Result PreparedExportWriter(RhinoDoc doc,
+      IReadOnlyList<RhinoObject> sources, IReadOnlyList<PreparedExportEntry> entries,
+      Transform translation,bool removeGrain);
+
+    protected override Result RunCommand(RhinoDoc doc, RunMode mode) =>
+      RunPreparedExport(doc, mode, null);
+
+    internal static Result RunPreparedExport(RhinoDoc doc, RunMode mode,
+      PreparedExportWriter? writer,Action<string>? preparationStatus=null,ExportSettings? settingsOverride=null,
+      IReadOnlyList<RhinoObject>? sourcesOverride=null,vCleanup.ExportGeometrySettings? geometryOverride=null,
+      Func<int,int,string?,vCleanup.ExportCleanupAction?>? reviewFindings=null,
+      Action? keepResponsive=null,Action<int,int>? findingsChanged=null,Action<Exception>? preparationFailed=null,
+      Action<ExportCleanupFeedback>? cleanupReviewReady=null)
     {
-      var settings = LoadSettings(doc);
-      if (mode == RunMode.Scripted)
+      using var documentState = new ExportDocumentState(doc);
+      CleanupFindingDisplay.ClearAll();
+      var settings = settingsOverride??LoadSettings(doc);
+      if (mode == RunMode.Scripted&&settingsOverride==null)
       {
         var optionResult = GetRunOptions(doc, ref settings);
         if (optionResult != Result.Success)
@@ -143,7 +182,7 @@ namespace vTools.Commands
       var selection = doc.Objects.GetSelectedObjects(false, false)
         .Where(obj => obj != null).GroupBy(obj => obj.Id).Select(group => group.First())
         .ToArray();
-      var targets = selection.Length > 0 ? selection : doc.Objects.GetObjectList(
+      var targets = sourcesOverride?.Where(obj=>!obj.IsDeleted).ToArray()??(selection.Length > 0 ? selection : doc.Objects.GetObjectList(
         new ObjectEnumeratorSettings
         {
           NormalObjects = true,
@@ -152,57 +191,59 @@ namespace vTools.Commands
           IncludeLights = false,
           IncludeGrips = false,
           IncludePhantoms = false,
-        }).Where(obj => obj != null).ToArray();
+        }).Where(obj => obj != null).ToArray());
       targets = FilterExportGrain(doc, targets, settings.RemoveGrain);
       if (targets.Length == 0)
       {
         RhinoApp.WriteLine("vExportDXF: no objects to export.");
         return Result.Nothing;
       }
-      if (settings.Optimize)
-      {
-        var decorations = targets.Where(obj => NestTableMetadata.IsCleanupDecoration(doc, obj))
-          .Select(obj => obj.Id).ToHashSet();
-        var exportScope = targets.Where(obj => !decorations.Contains(obj.Id))
-          .Select(obj => obj.Id).ToHashSet();
-        var result = vCleanup.OptimizeForExport(doc, exportScope, settings.CleanupAction);
-        if (result != Result.Success)
-          return result;
-        exportScope.UnionWith(decorations);
-        targets = exportScope
-          .Select(id => doc.Objects.FindId(id))
-          .Where(obj => obj != null)
-          .Cast<RhinoObject>()
-          .ToArray();
-        if (targets.Length == 0)
-        {
-          RhinoApp.WriteLine("vExportDXF: Optimize removed all exportable objects.");
-          return Result.Nothing;
-        }
-      }
       string? tempPath = null;
       var originalSelection = selection.Select(obj => obj.Id).ToArray();
+      var originalGrips = doc.Objects.GetSelectedObjects(true, true).OfType<GripObject>().ToArray();
       var temporaryObjects = new List<Guid>();
       var temporaryDefinitions = new List<int>();
+      var preparedEntries = writer == null ? null : new List<PreparedExportEntry>();
       TemporaryBlockLayerScope? blockLayerScope = null;
+      ExportCleanupFeedback? cleanupFeedback = null;
       var notchTrimOverrides = new Dictionary<Guid, List<ExportCurvePiece>>();
       var textBreakOverrides = new Dictionary<Guid, List<TextEntity>>();
       try
       {
-        var options = CurrentDxfWriteOptions();
+        preparationStatus?.Invoke("Preparing notch and curve copies");
         notchTrimOverrides = BuildNotchTrimOverrides(
           doc, targets, settings.NotchTrim, settings.NotchSplitLayer, settings.NotchJoin);
+        ApplyNonCutEndTrim(doc, targets, notchTrimOverrides, settings.EndTrim);
+        if (settings.Optimize)
+        {
+          preparationStatus?.Invoke("Checking export geometry");
+          cleanupFeedback = new ExportCleanupFeedback(doc){KeepResponsive=keepResponsive,FindingsChanged=findingsChanged,ReviewReady=cleanupReviewReady};
+          var result = OptimizeExportPieces(doc, targets, notchTrimOverrides, settings.CleanupAction, cleanupFeedback,geometryOverride,reviewFindings,writer!=null);
+          if (result != Result.Success) return result;
+          targets = targets.Where(obj => obj.Geometry is not Curve || ExportPieces(obj, notchTrimOverrides).Any()).ToArray();
+          if (targets.Length == 0)
+          {
+            RhinoApp.WriteLine("vExportDXF: Optimize removed all exportable objects.");
+            return Result.Nothing;
+          }
+        }
+        preparationStatus?.Invoke("Preparing curves and labels");
         ApplyExportExplode(targets,notchTrimOverrides,settings.Explode);
         textBreakOverrides = BuildTextBreakOverrides(doc, targets, settings.TextBreak);
         var translation = settings.MoveOrigin
           ? OriginTranslation(targets.Where(obj => !NestTableMetadata.IsTableStructure(doc, obj)).ToArray())
           : Transform.Identity;
+        preparationStatus?.Invoke("Building temporary export parts");
         var exportIds = PrepareExportObjects(
           doc, targets, translation, notchTrimOverrides, textBreakOverrides,
-          temporaryObjects, temporaryDefinitions);
+          temporaryObjects, temporaryDefinitions, preparedEntries);
         if (exportIds.Count == 0)
           throw new InvalidOperationException("No exportable objects were prepared.");
 
+        if (writer != null)
+          return writer(doc, targets, preparedEntries!, translation,settings.RemoveGrain);
+
+        var options = CurrentDxfWriteOptions();
         blockLayerScope = new TemporaryBlockLayerScope(doc, exportIds);
         doc.Objects.UnselectAll();
         int selectedCount = 0;
@@ -224,7 +265,7 @@ namespace vTools.Commands
           return Result.Cancel;
         tempPath = MakeTemporaryPath(path);
         string beforeExport = RhinoApp.CommandHistoryWindowText ?? string.Empty;
-        using (CommandHistoryCleanup.BeginExport(EnglishName, tempPath))
+        using (CommandHistoryCleanup.BeginExport(nameof(vExportDXF), tempPath))
         {
           if (!doc.ExportSelected(tempPath, options.ToDictionary()))
             throw new InvalidOperationException("Rhino DXF export failed.");
@@ -236,16 +277,18 @@ namespace vTools.Commands
           NormalizeTableDxfAttachments(tempPath);
         CopyExportFile(tempPath, path);
         doc.Strings.SetString(LastPathKey, path);
-        RhinoApp.WriteLine($"vExportDXF: exported {targets.Length} object(s) to {path}.");
+        RhinoApp.WriteLine($"vExportDXF: exported {CountText.Format(targets.Length, "object")} to {path}.");
         Log.Write("vExportDXF", $"exported source={targets.Length} prepared={selectedCount} " +
-          $"groups={temporaryDefinitions.Count} explode={settings.Explode} textBreak={settings.TextBreak} removeGrain={settings.RemoveGrain} moveOrigin={settings.MoveOrigin} " +
+          $"groups={temporaryDefinitions.Count} explode={settings.Explode} textBreak={settings.TextBreak} removeGrain={settings.RemoveGrain} moveOrigin={settings.MoveOrigin} endTrim={settings.EndTrim} " +
           $"textObjectsSplit={textBreakOverrides.Count} textLines={textBreakOverrides.Values.Sum(lines => lines.Count)} " +
           $"selectedOnly={selection.Length > 0} path={path}");
         return Result.Success;
       }
+      catch(OperationCanceledException){return Result.Cancel;}
       catch (Exception ex)
       {
         Log.Write("vExportDXF", $"export failed: {ex}");
+        preparationFailed?.Invoke(ex);
         RhinoApp.WriteLine($"vExportDXF: {ex.Message}");
         return Result.Failure;
       }
@@ -262,6 +305,10 @@ namespace vTools.Commands
         finally { blockLayerScope?.Dispose(); }
         foreach (Guid id in originalSelection)
           doc.Objects.Select(id);
+        foreach (var grip in originalGrips)
+          if (grip.IsValid) grip.Select(true, true);
+        if (cleanupFeedback is { HasFindings: true }) cleanupFeedback.Retain();
+        else cleanupFeedback?.Dispose();
         doc.Views.Redraw();
         if (tempPath != null)
         {
@@ -272,6 +319,416 @@ namespace vTools.Commands
           foreach (var piece in pieces)
             piece.Geometry.Dispose();
         DisposeTextBreakOverrides(textBreakOverrides);
+      }
+    }
+
+    private static int EnsureExportLayer(RhinoDoc doc, string name)
+    {
+      var before = doc.Layers.Where(layer => !layer.IsDeleted).Select(layer => layer.Id).ToHashSet();
+      int index = UzipCommon.EnsureLayer(doc, name);
+      if (_documentStates.TryGetValue(doc.RuntimeSerialNumber, out var state) && doc.Layers.FindIndex(index) is { } layer)
+        while (layer != null && !before.Contains(layer.Id))
+        {
+          state.TemporaryLayers.Add(layer.Id);
+          layer = doc.Layers.FindId(layer.ParentLayerId);
+        }
+      return index;
+    }
+
+    private sealed class ExportDocumentState : IDisposable
+    {
+      private readonly RhinoDoc _doc;
+      private readonly bool _modified;
+      private readonly bool _undoRecording;
+      private readonly Dictionary<string, string>? _before;
+      private readonly ExportDocumentState? _previous;
+      private bool _disposed;
+      internal HashSet<Guid> TemporaryLayers { get; } = [];
+
+      internal ExportDocumentState(RhinoDoc doc)
+      {
+        _doc = doc;
+        _modified = doc.Modified;
+        _undoRecording = doc.UndoRecordingEnabled;
+        _before = _modified ? null : Snapshot(doc);
+        _documentStates.TryGetValue(doc.RuntimeSerialNumber, out _previous);
+        _documentStates[doc.RuntimeSerialNumber] = this;
+        doc.UndoRecordingEnabled = false;
+      }
+
+      private static Dictionary<string, string> Snapshot(RhinoDoc doc)
+      {
+        var result = new Dictionary<string, string>();
+        var serialization = new SerializationOptions { WriteRenderMeshes = false, WriteAnalysisMeshes = false };
+        var objects = new ObjectEnumeratorSettings
+        {
+          NormalObjects = true, HiddenObjects = true, LockedObjects = true, ActiveObjects = true,
+          ReferenceObjects = true, IncludeLights = true, IncludeGrips = false, IncludePhantoms = false
+        };
+        // Instance-definition filtering excludes normal objects; capture both sets explicitly.
+        foreach (var obj in doc.Objects.GetObjectList(objects).Concat(doc.InstanceDefinitions
+          .Where(definition => !definition.IsDeleted).SelectMany(definition => definition.GetObjects())))
+          result["object/" + obj.Id] = obj.RuntimeSerialNumber.ToString(CultureInfo.InvariantCulture) + ":" +
+            obj.Geometry.DataCRC(0).ToString(CultureInfo.InvariantCulture) + obj.Attributes.ToJSON(serialization);
+        void Components<T>(string prefix, IEnumerable<T> values) where T : ModelComponent
+        {
+          foreach (var value in values.Where(value => !value.IsDeleted)) result[prefix + value.Id] = value.ToJSON(serialization);
+        }
+        Components("layer/", doc.Layers);
+        Components("group/", doc.Groups);
+        Components("definition/", doc.InstanceDefinitions);
+        Components("dimstyle/", doc.DimStyles);
+        Components("linetype/", doc.Linetypes);
+        Components("hatch/", doc.HatchPatterns);
+        Components("material/", doc.Materials);
+        foreach (var group in doc.Groups.Where(group => !group.IsDeleted))
+          result["group-members/" + group.Id] = string.Join(",", doc.Groups.GroupMembers(group.Index).Select(obj => obj.Id).Order());
+        for (int index = 0; index < doc.Strings.Count; index++)
+        {
+          string key = doc.Strings.GetKey(index);
+          if (key == LastPathKey || key.StartsWith(DocumentSection + "\\vExportDXF.", StringComparison.Ordinal)) continue;
+          result["text/" + key] = doc.Strings.GetValue(index);
+        }
+        result["settings"] = System.Text.Json.JsonSerializer.Serialize(new
+        {
+          doc.ModelUnitSystem, doc.PageUnitSystem, doc.ModelAbsoluteTolerance,
+          doc.ModelRelativeTolerance, doc.ModelAngleToleranceRadians, doc.Notes
+        });
+        return result;
+      }
+
+      public void Dispose()
+      {
+        if (_disposed) return;
+        _disposed = true;
+        try
+        {
+          foreach (var layer in TemporaryLayers.Select(_doc.Layers.FindId).Where(layer => layer != null && !layer.IsDeleted).OrderByDescending(layer => layer!.Index))
+            _doc.Layers.Delete(layer!.Index, quiet: true);
+          if (_modified) _doc.Modified = true;
+          else
+          {
+            var after = Snapshot(_doc);
+            _doc.Modified = _before!.Count != after.Count || _before.Any(entry => !after.TryGetValue(entry.Key, out var value) || value != entry.Value);
+          }
+        }
+        catch (Exception ex)
+        {
+          _doc.Modified = true;
+          Log.Write("vExportDXF", $"could not verify unchanged document state: {ex}");
+        }
+        finally
+        {
+          _doc.UndoRecordingEnabled = _undoRecording;
+          if (_previous != null) _documentStates[_doc.RuntimeSerialNumber] = _previous;
+          else _documentStates.Remove(_doc.RuntimeSerialNumber);
+        }
+      }
+    }
+
+    private static Result OptimizeExportPieces(RhinoDoc doc, IReadOnlyList<RhinoObject> targets,
+      Dictionary<Guid, List<ExportCurvePiece>> overrides, vCleanup.ExportCleanupAction action, ExportCleanupFeedback feedback,
+      vCleanup.ExportGeometrySettings? geometrySettings=null,Func<int,int,string?,vCleanup.ExportCleanupAction?>? reviewFindings=null,bool isolateParts=DefaultIsolateCleanupParts)
+    {
+      using var copies = new ExportCleanupCopies(doc){IsolateParts=isolateParts};
+      copies.Add(targets, overrides);
+      doc.Objects.UnselectAll();
+      var result = vCleanup.OptimizeExportCopies(doc, copies.ObjectIds, action,
+        (ids, shortFindings) =>
+        {
+          if((ids.Count>0||shortFindings.Count>0)&&feedback.ReviewReady!=null&&geometrySettings is {} own)feedback.CaptureDeletionPreview(
+            copies.ObjectIds.Select(doc.Objects.FindId).Where(obj=>obj is {IsDeleted:false,Geometry:Curve}).Cast<RhinoObject>().OrderBy(obj=>obj.RuntimeSerialNumber).ToArray(),copies.SourceIds(copies.ObjectIds),own);
+          feedback.SetFindings(copies.SourceIds(ids), shortFindings
+            .Select(finding => (copies.SourceId(finding.SourceId), finding.Curve, finding.Point)).ToArray());
+          feedback.ReviewReady?.Invoke(feedback);
+        }, copies.Refresh,geometrySettings,reviewFindings,feedback.KeepResponsive,feedback.FindingsChanged);
+      feedback.ConfigureTracking(targets.Where(obj => obj.Geometry is Curve).Select(obj => obj.Id), geometrySettings is {} own
+        ?new vCleanup.LiveFindingSettings(own.Threshold,own.FindOverlaps,own.OverlapTolerance):vCleanup.CaptureLiveFindingSettings());
+      if (result == Result.Success)
+      {
+        try { copies.CopyResults(overrides); }
+        catch { feedback.SetSources(copies.SourceIds(copies.ObjectIds)); throw; }
+      }
+      else if (result == Result.Failure && !feedback.HasFindings) feedback.SetSources(copies.SourceIds(copies.ObjectIds));
+      return result;
+    }
+
+    private sealed class ExportCleanupCopies : Rhino.Display.DisplayConduit, IDisposable
+    {
+      private readonly RhinoDoc _doc;
+      private readonly bool _undoRecording;
+      private readonly bool _modified;
+      private readonly Dictionary<string, (Guid Source, ExportCurvePiece Piece)> _pieces = [];
+      private readonly Dictionary<Guid, Guid> _sources = [];
+      private readonly HashSet<Guid> _sourceIds = [];
+      private bool _disposed;
+      internal HashSet<Guid> ObjectIds { get; } = [];
+      internal bool IsolateParts {get;init;}=DefaultIsolateCleanupParts;
+
+      internal ExportCleanupCopies(RhinoDoc doc)
+      {
+        _doc = doc;
+        _undoRecording = doc.UndoRecordingEnabled;
+        _modified = doc.Modified;
+        doc.UndoRecordingEnabled = false;
+        RhinoDoc.AddRhinoObject += Added;
+        Enabled = true;
+      }
+
+      internal void Add(IReadOnlyList<RhinoObject> targets, IReadOnlyDictionary<Guid, List<ExportCurvePiece>> overrides)
+      {
+        var partitions=new Dictionary<Guid,string>();
+        if(IsolateParts)
+        {
+          var tables=NestTableMetadata.TableGroups(_doc);
+          foreach(var source in targets)
+          {
+            int group=(source.Attributes.GetGroupList()??[]).Where(index=>!tables.Contains(index)&&_doc.Groups[index] is {IsDeleted:false}).Order().FirstOrDefault(-1);
+            if(group>=0)partitions[source.Id]="group:"+_doc.Groups[group].Id.ToString("N");
+          }
+          var ungrouped=targets.Where(obj=>obj.Attributes.GroupCount==0&&!NestTableMetadata.IsCleanupDecoration(_doc,obj)).ToArray();
+          var inferred=UngroupedExportParts(ungrouped,_doc.ModelAbsoluteTolerance);
+          for(int index=0;index<inferred.Count;index++)foreach(var source in inferred[index])partitions[source.Id]="inferred:"+index.ToString(CultureInfo.InvariantCulture);
+        }
+        foreach (var source in targets.Where(obj => obj.Geometry is Curve && !NestTableMetadata.IsCleanupDecoration(_doc, obj)))
+        {
+          _sourceIds.Add(source.Id);
+          foreach (var piece in ExportPieces(source, overrides))
+          {
+            if (piece.Geometry is not Curve curve) continue;
+            string key = Guid.NewGuid().ToString("N");
+            _pieces.Add(key, (source.Id, new ExportCurvePiece(curve, piece.Attributes,
+              overrides.TryGetValue(source.Id, out var prepared) && prepared.Any(item => ReferenceEquals(item.Geometry, curve) && item.Between))));
+            using var attributes = piece.Attributes.Duplicate();
+            attributes.ObjectId = Guid.NewGuid();
+            attributes.RemoveFromAllGroups();
+            attributes.Mode = ObjectMode.Normal;
+            attributes.SetUserString(CleanupPieceKey, key);
+            if(IsolateParts)attributes.SetUserString(CleanupPartitionKey,partitions.GetValueOrDefault(source.Id,"object:"+source.Id.ToString("N")));
+            Guid id = _doc.Objects.AddCurve(curve, attributes);
+            if (id == Guid.Empty)
+              throw new InvalidOperationException("Could not create a temporary cleanup curve.");
+            ObjectIds.Add(id);
+            _sources[id] = source.Id;
+          }
+        }
+      }
+
+      private void Added(object? sender, RhinoObjectEventArgs e)
+      {
+        if (e.TheObject.Document is { } owner && owner.RuntimeSerialNumber != _doc.RuntimeSerialNumber ||
+            e.TheObject.Attributes.GetUserString(CleanupPieceKey) is not { } key || !_pieces.TryGetValue(key, out var origin)) return;
+        ObjectIds.Add(e.ObjectId);
+        _sources[e.ObjectId] = origin.Source;
+      }
+
+      internal void Refresh()
+      {
+        foreach (var obj in _doc.Objects.GetObjectList(ObjectType.Curve))
+          if (obj.Attributes.GetUserString(CleanupPieceKey) is { } key && _pieces.TryGetValue(key, out var origin))
+          {
+            ObjectIds.Add(obj.Id);
+            _sources[obj.Id] = origin.Source;
+          }
+      }
+
+      internal Guid[] SourceIds(IEnumerable<Guid> ids)
+      {
+        var requested = ids.ToArray();
+        if (requested.Any(id => !_sources.ContainsKey(id))) Refresh();
+        return requested.Where(_sources.ContainsKey).Select(id => _sources[id]).Distinct().ToArray();
+      }
+
+      internal Guid SourceId(Guid id) => _sources.GetValueOrDefault(id);
+
+      internal void CopyResults(Dictionary<Guid, List<ExportCurvePiece>> overrides)
+      {
+        Refresh();
+        var result = _sourceIds.ToDictionary(id => id, _ => new List<ExportCurvePiece>());
+        try
+        {
+          foreach (Guid id in ObjectIds)
+          {
+            var obj = _doc.Objects.FindId(id);
+            if (obj is not { IsDeleted: false, Geometry: Curve curve }) continue;
+            if (obj.Attributes.GetUserString(CleanupPieceKey) is not { } key || !_pieces.TryGetValue(key, out var origin))
+              throw new InvalidOperationException("A temporary cleanup curve lost its source association; export cancelled.");
+            result[origin.Source].Add(origin.Piece with { Geometry = curve.DuplicateCurve() });
+          }
+        }
+        catch
+        {
+          foreach (var list in result.Values) foreach (var piece in list) piece.Geometry.Dispose();
+          throw;
+        }
+        foreach (var entry in result)
+        {
+          if (overrides.TryGetValue(entry.Key, out var previous)) foreach (var piece in previous) piece.Geometry.Dispose();
+          overrides[entry.Key] = entry.Value;
+        }
+      }
+
+      protected override void ObjectCulling(Rhino.Display.CullObjectEventArgs e)
+      {
+        if (e.RhinoDoc.RuntimeSerialNumber == _doc.RuntimeSerialNumber &&
+            ObjectIds.Contains(e.RhinoObject is GripObject grip ? grip.OwnerId : e.RhinoObject.Id)) e.CullObject = true;
+      }
+
+      public void Dispose()
+      {
+        if (_disposed) return;
+        _disposed = true;
+        Refresh();
+        RhinoDoc.AddRhinoObject -= Added;
+        try
+        {
+          foreach (Guid id in ObjectIds)
+          {
+            if (_doc.Objects.FindId(id) is not { IsDeleted: false } obj) continue;
+            if (obj.GripsOn) obj.GripsOn = false;
+            if (!_doc.Objects.Delete(obj, quiet: true, ignoreModes: true) && !_doc.Objects.Purge(obj))
+              throw new InvalidOperationException("Could not remove a temporary cleanup curve.");
+          }
+        }
+        finally
+        {
+          Enabled = false;
+          _doc.UndoRecordingEnabled = _undoRecording;
+          _doc.Modified = _modified;
+        }
+      }
+    }
+
+    private sealed class ExportDeletionPreview : Rhino.Display.DisplayConduit,IDisposable
+    {
+      private readonly RhinoDoc _doc;
+      private readonly HashSet<Guid> _originals;
+      private readonly vCleanup.ExportGeometrySettings _settings;
+      private readonly List<(Guid Id,uint Crc,string AttributesJson,Curve Curve,ObjectAttributes Attributes)> _sources=[];
+      private readonly List<(int Index,string Path,Layer Layer)> _layers=[];
+      private readonly List<(Curve Curve,System.Drawing.Color Color)> _remaining=[];
+      private bool _built,_building,_wanted,_disposed;
+      internal ExportDeletionPreview(RhinoDoc doc,IReadOnlyList<RhinoObject> objects,IEnumerable<Guid> originals,vCleanup.ExportGeometrySettings settings)
+      {
+        _doc=doc;_originals=originals.ToHashSet();_settings=settings;
+        try
+        {
+          foreach(var obj in objects)_sources.Add((obj.Id,obj.Geometry.DataCRC(0),obj.Attributes.ToJSON(new SerializationOptions()),((Curve)obj.Geometry).DuplicateCurve(),obj.Attributes.Duplicate()));
+          foreach(var layer in doc.Layers.Where(layer=>!layer.IsDeleted).OrderBy(layer=>layer.FullPath.Count(c=>c==':')))
+          {var copy=new Layer();copy.CopyAttributesFrom(layer);copy.Name=layer.Name;copy.Id=layer.Id;copy.ParentLayerId=layer.ParentLayerId;_layers.Add((layer.Index,layer.FullPath,copy));}
+        }
+        catch{Dispose();throw;}
+      }
+      internal bool Matches(IReadOnlyList<RhinoObject> objects,vCleanup.ExportGeometrySettings settings)=>
+        !_disposed&&_settings==settings&&objects.Count==_sources.Count&&objects.Select((obj,index)=>obj.Id==_sources[index].Id&&
+          obj.Geometry.DataCRC(0)==_sources[index].Crc&&obj.Attributes.ToJSON(new SerializationOptions())==_sources[index].AttributesJson).All(same=>same);
+      internal void SetVisible(bool visible,Action? keepResponsive)
+      {
+        if(_disposed)return;
+        _wanted=visible;
+        if(!visible){Enabled=false;_doc.Views.Redraw();return;}
+        if(_building)return;
+        if(!_built)
+        {
+          _building=true;
+          try
+          {
+            using var shadow=RhinoDoc.CreateHeadless(null);
+            shadow.ModelUnitSystem=_doc.ModelUnitSystem;shadow.ModelAbsoluteTolerance=_doc.ModelAbsoluteTolerance;shadow.ModelAngleToleranceRadians=_doc.ModelAngleToleranceRadians;
+            var layers=new Dictionary<int,int>();var layerIds=new Dictionary<Guid,Guid>();
+            foreach(var layer in _layers)
+            {
+              var copy=new Layer();copy.CopyAttributesFrom(layer.Layer);copy.Name=layer.Layer.Name;
+              copy.ParentLayerId=layerIds.GetValueOrDefault(layer.Layer.ParentLayerId,Guid.Empty);
+              int index=shadow.Layers.FindByFullPath(layer.Path,-1);
+              if(index<0)index=shadow.Layers.Add(copy);
+              copy.Dispose();if(index<0)throw new InvalidOperationException("Could not copy a preview layer.");
+              layers[layer.Index]=index;layerIds[layer.Layer.Id]=shadow.Layers[index].Id;
+            }
+            var scope=new HashSet<Guid>();
+            foreach(var source in _sources)
+            {
+              using var attributes=source.Attributes.Duplicate();attributes.LayerIndex=layers[source.Attributes.LayerIndex];attributes.RemoveFromAllGroups();
+              var id=shadow.Objects.AddCurve(source.Curve,attributes);
+              if(id!=source.Id)throw new InvalidOperationException("Could not preserve a preview curve's identity.");
+              scope.Add(id);
+            }
+            // Replay the same cleanup on already-simplified snapshots; no live document objects participate.
+            var result=vCleanup.OptimizeExportCopies(shadow,scope,vCleanup.ExportCleanupAction.Delete,(_,_)=>{},settings:_settings with {SimplifyCurves=false},
+              reviewFindings:(_,_,_)=>vCleanup.ExportCleanupAction.Ignore,keepResponsive:keepResponsive,previewOnly:true);
+            if(result!=Result.Success||_disposed)throw new InvalidOperationException("Could not calculate the deletion preview safely.");
+            foreach(var obj in scope.Select(shadow.Objects.FindId).Where(obj=>obj is {IsDeleted:false,Geometry:Curve}).Cast<RhinoObject>())
+              _remaining.Add((((Curve)obj.Geometry).DuplicateCurve(),obj.Attributes.DrawColor(shadow)));
+            _built=true;
+          }
+          catch{foreach(var item in _remaining)item.Curve.Dispose();_remaining.Clear();throw;}
+          finally{_building=false;}
+        }
+        Enabled=_wanted&&!_disposed;_doc.Views.Redraw();
+      }
+      protected override void ObjectCulling(Rhino.Display.CullObjectEventArgs e)
+      {
+        if(e.RhinoDoc.RuntimeSerialNumber==_doc.RuntimeSerialNumber&&_originals.Contains(e.RhinoObject is GripObject grip?grip.OwnerId:e.RhinoObject.Id))e.CullObject=true;
+      }
+      protected override void CalculateBoundingBox(Rhino.Display.CalculateBoundingBoxEventArgs e)
+      {if(e.RhinoDoc.RuntimeSerialNumber==_doc.RuntimeSerialNumber)foreach(var item in _remaining)e.IncludeBoundingBox(item.Curve.GetBoundingBox(false));}
+      protected override void PostDrawObjects(Rhino.Display.DrawEventArgs e)
+      {if(e.RhinoDoc.RuntimeSerialNumber==_doc.RuntimeSerialNumber)foreach(var item in _remaining)PreviewDisplay.DrawCurve(e.Display,item.Curve,item.Color);}
+      public void Dispose()
+      {
+        if(_disposed)return;_disposed=true;Enabled=false;
+        foreach(var source in _sources){source.Curve.Dispose();source.Attributes.Dispose();}_sources.Clear();
+        foreach(var layer in _layers)layer.Layer.Dispose();_layers.Clear();
+        foreach(var item in _remaining)item.Curve.Dispose();_remaining.Clear();_doc.Views.Redraw();
+      }
+    }
+
+    internal sealed class ExportCleanupFeedback(RhinoDoc doc) : IDisposable
+    {
+      internal Action? KeepResponsive {get;init;}
+      internal Action<int,int>? FindingsChanged {get;init;}
+      internal Action<ExportCleanupFeedback>? ReviewReady {get;init;}
+      private readonly CleanupFindingDisplay _display = new(doc);
+      private Guid[]? _scope;
+      private vCleanup.LiveFindingSettings _settings;
+      private bool _retained;
+      private bool _disposed;
+      private ExportDeletionPreview? _deletionPreview;
+      internal bool HasFindings => _display.HasFindings;
+      internal bool CanPreview=>!_disposed&&_deletionPreview!=null;
+      internal void CaptureDeletionPreview(IReadOnlyList<RhinoObject> objects,IEnumerable<Guid> originals,vCleanup.ExportGeometrySettings settings)
+      {
+        if(_deletionPreview?.Matches(objects,settings)==true)return;
+        _deletionPreview?.Dispose();_deletionPreview=null;
+        _deletionPreview=new(doc,objects,originals,settings);
+      }
+      internal void SetHighlightsVisible(bool visible)=>_display.SetVisible(visible);
+      internal void SetDeletionPreview(bool visible)
+      {
+        if(_disposed)return;
+        _deletionPreview?.SetVisible(visible,KeepResponsive);
+      }
+      internal void SetSources(IEnumerable<Guid> ids) => SetFindings(ids, []);
+      internal void SetFindings(IEnumerable<Guid> ids, IReadOnlyCollection<(Guid SourceId, Curve Curve, Point3d Point)> shortFindings)
+        => _display.SetFindings(ids, shortFindings);
+      internal void ConfigureTracking(IEnumerable<Guid> scope, vCleanup.LiveFindingSettings settings)
+      { _scope = scope.ToArray(); _settings = settings; }
+      internal void Retain()
+      {
+        if (_retained) return;
+        _retained = true;
+        _cleanupFeedback = this;
+        _display.Disposed += Dispose;
+        _display.Track(_scope ?? [], _scope == null ? vCleanup.CaptureLiveFindingSettings() : _settings);
+      }
+      public void Dispose()
+      {
+        if (_disposed) return;
+        _disposed = true;
+        _display.Disposed -= Dispose;
+        _deletionPreview?.Dispose();_deletionPreview=null;
+        _display.Dispose();
+        if (ReferenceEquals(_cleanupFeedback, this)) _cleanupFeedback = null;
       }
     }
 
@@ -326,14 +783,12 @@ namespace vTools.Commands
     private static RhinoObject[] FilterExportGrain(RhinoDoc doc, IReadOnlyList<RhinoObject> targets, bool removeGrain)
     {
       if (!removeGrain) return targets.ToArray();
-      return targets.Where(obj =>
-      {
-        if (obj.Geometry is not Curve curve || curve.IsClosed) return true;
-        var layer = doc.Layers.FindIndex(obj.Attributes.LayerIndex)?.Name;
-        return !string.Equals(obj.Attributes.Name?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase) &&
-          !string.Equals(layer?.Trim(), GrainIdentifier, StringComparison.OrdinalIgnoreCase);
-      }).ToArray();
+      return targets.Where(obj=>!IsExportGrain(doc,obj)).ToArray();
     }
+
+    internal static bool IsExportGrain(RhinoDoc doc,RhinoObject obj)=>obj.Geometry is Curve {IsClosed:false}&&
+      (string.Equals(obj.Attributes.Name?.Trim(),GrainIdentifier,StringComparison.OrdinalIgnoreCase)||
+       string.Equals(doc.Layers.FindIndex(obj.Attributes.LayerIndex)?.Name.Trim(),GrainIdentifier,StringComparison.OrdinalIgnoreCase));
 
     private static ObjectAttributes ExportAttributes(ObjectAttributes source)
     {
@@ -361,7 +816,7 @@ namespace vTools.Commands
           !output.Contains("Error converting ", StringComparison.OrdinalIgnoreCase)) return;
       Log.Write("vExportDXF", "native export rejected: {0}", output);
       throw new InvalidOperationException(skipped > 0
-        ? $"Rhino skipped {skipped} object(s); the incomplete export was discarded and the destination was not replaced."
+        ? $"Rhino skipped {CountText.Format(skipped, "object")}; the incomplete export was discarded and the destination was not replaced."
         : "Rhino reported a conversion failure; the incomplete export was discarded and the destination was not replaced.");
     }
 
@@ -383,7 +838,8 @@ namespace vTools.Commands
           ReadOptimize(section, legacy.Optimize),ReadExplode(section,legacy.Explode),
           ReadCleanupAction(section, ConfiguredDefaultCleanupAction),
           ToolsOptionStore.TryGetBool(section, "remove_grain", out bool removeGrain) ? removeGrain : ConfiguredDefaultRemoveGrain,
-          ToolsOptionStore.TryGetBool(section, "move_origin", out bool moveOrigin) ? moveOrigin : ConfiguredDefaultMoveOrigin));
+          ToolsOptionStore.TryGetBool(section, "move_origin", out bool moveOrigin) ? moveOrigin : ConfiguredDefaultMoveOrigin,
+          ToolsOptionStore.TryGetDouble(section, "end_trim", out double endTrim) && double.IsFinite(endTrim) && endTrim >= 0 ? endTrim : ConfiguredDefaultEndTrim));
       try
       {
         var trim = doc.Strings.GetValue(DocumentSection, NotchTrimEntry)
@@ -396,6 +852,7 @@ namespace vTools.Commands
         var textBreak = doc.Strings.GetValue(DocumentSection, TextBreakEntry);
         var removeGrain = doc.Strings.GetValue(DocumentSection, RemoveGrainEntry);
         var moveOrigin = doc.Strings.GetValue(DocumentSection, MoveOriginEntry);
+        var endTrim = doc.Strings.GetValue(DocumentSection, EndTrimEntry);
         var optimize = doc.Strings.GetValue(DocumentSection, OptimizeEntry)
           ?? doc.Strings.GetValue(DocumentSection, LegacyOptimizeEntry);
         return new ExportSettings(
@@ -411,7 +868,8 @@ namespace vTools.Commands
           Enum.TryParse(explode,true,out ExportExplodeMode parsedExplode)&&Enum.IsDefined(parsedExplode)?parsedExplode:current.Explode,
           current.CleanupAction,
           bool.TryParse(removeGrain, out bool parsedRemoveGrain) ? parsedRemoveGrain : current.RemoveGrain,
-          bool.TryParse(moveOrigin, out bool parsedMoveOrigin) ? parsedMoveOrigin : current.MoveOrigin);
+          bool.TryParse(moveOrigin, out bool parsedMoveOrigin) ? parsedMoveOrigin : current.MoveOrigin,
+          double.TryParse(endTrim, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsedEndTrim) && double.IsFinite(parsedEndTrim) && parsedEndTrim >= 0 ? parsedEndTrim : current.EndTrim);
       }
       catch (Exception ex)
       {
@@ -469,6 +927,8 @@ namespace vTools.Commands
           "NotchTrim", NotchTrimNames, (int)settings.NotchTrim);
         int layerIndex = getter.AddOption("NotchSplitLayer", settings.NotchSplitLayer);
         int explodeIndex = getter.AddOptionList("Explode",ExplodeNames,(int)settings.Explode);
+        var endTrim = new OptionDouble(settings.EndTrim, 0, double.MaxValue);
+        getter.AddOptionDouble("EndTrim", ref endTrim);
         var join = new OptionToggle(settings.NotchJoin, "No", "Yes");
         var textBreak = new OptionToggle(settings.TextBreak, "No", "Yes");
         var removeGrain = new OptionToggle(settings.RemoveGrain, "No", "Yes");
@@ -499,7 +959,8 @@ namespace vTools.Commands
           TextBreak = textBreak.CurrentValue,
           RemoveGrain = removeGrain.CurrentValue,
           MoveOrigin = moveOrigin.CurrentValue,
-          Optimize = optimize.CurrentValue
+          Optimize = optimize.CurrentValue,
+          EndTrim = endTrim.CurrentValue
         };
         saveDefaults = save.CurrentValue;
         if (getter.Option()?.Index == trimIndex)
@@ -530,6 +991,7 @@ namespace vTools.Commands
         section["text_break"] = settings.TextBreak;
         section["remove_grain"] = settings.RemoveGrain;
         section["move_origin"] = settings.MoveOrigin;
+        section["end_trim"] = settings.EndTrim;
         section["optimize"] = settings.Optimize;
         section["cleanup_action"] = settings.CleanupAction.ToString();
       });
@@ -542,6 +1004,7 @@ namespace vTools.Commands
         doc.Strings.SetString(DocumentSection, TextBreakEntry, settings.TextBreak.ToString());
         doc.Strings.SetString(DocumentSection, RemoveGrainEntry, settings.RemoveGrain.ToString());
         doc.Strings.SetString(DocumentSection, MoveOriginEntry, settings.MoveOrigin.ToString());
+        doc.Strings.SetString(DocumentSection, EndTrimEntry, settings.EndTrim.ToString("R", CultureInfo.InvariantCulture));
         doc.Strings.SetString(DocumentSection, OptimizeEntry, settings.Optimize.ToString());
         return globalSaved;
       }
@@ -639,7 +1102,8 @@ namespace vTools.Commands
       IReadOnlyList<RhinoObject> targets, Transform translation,
       IReadOnlyDictionary<Guid, List<ExportCurvePiece>> notchTrimOverrides,
       IReadOnlyDictionary<Guid, List<TextEntity>> textBreakOverrides,
-      List<Guid> temporaryObjects, List<int> temporaryDefinitions)
+      List<Guid> temporaryObjects, List<int> temporaryDefinitions,
+      List<PreparedExportEntry>? preparedEntries = null)
     {
       var targetById = targets.ToDictionary(obj => obj.Id);
       var assigned = targets.Where(obj => NestTableMetadata.IsTableStructure(doc, obj)).Select(obj => obj.Id).ToHashSet();
@@ -653,6 +1117,8 @@ namespace vTools.Commands
       {
         var layoutMembers = annotations.ToList();
         var members = layoutMembers.Where(obj => !NestTableMetadata.IsTableStructure(doc, obj)).ToList();
+        bool header=layoutMembers.Any(obj=>NestTableMetadata.IsEnclosedHeader(obj.Geometry));
+        if(header)members.RemoveAll(obj=>obj.Attributes.GetUserString(NestTableMetadata.RoleKey)==NestTableMetadata.LabelFrameRole);
         if (members.Count == 0) continue;
         if (!members.Any(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.LabelFrameRole))
         {
@@ -677,8 +1143,24 @@ namespace vTools.Commands
           var texts = members.Select(obj => obj.Geometry).OfType<TextEntity>().ToArray();
           if (texts.Length > 0 && TryGetTableAnnotationArea(layoutMembers, texts[0].Plane, out var tabPlane, out var tabArea))
           { framePlane = tabPlane; bounds = tabArea; }
+          if(header)
+          {
+            var copies=texts.Select(text=>CreateTableExportText(doc,text)).ToArray();
+            try
+            {
+              if(!TryGetTableAnnotationArea(layoutMembers,texts[0].Plane,out framePlane,out bounds))
+              {
+                framePlane=texts[0].Plane;bounds=BoundingBox.Empty;
+                foreach(var text in copies)bounds.Union(ExportTableTextBounds(doc,text,framePlane));
+                bounds.Inflate(padding);
+              }
+              bounds=CompactHeaderAnnotations(doc,copies,framePlane,bounds);
+            }
+            finally{foreach(var text in copies)text.Dispose();}
+          }
           using var frame = new Rectangle3d(framePlane,
             new Interval(bounds.Min.X, bounds.Max.X), new Interval(bounds.Min.Y, bounds.Max.Y)).ToNurbsCurve();
+          if(header)frame.SetUserString(NestTableMetadata.LayoutKey,NestTableMetadata.EnclosedHeaderLayout);
           var attributes = members[0].Attributes.Duplicate();
           attributes.ObjectId = Guid.NewGuid();
           attributes.RemoveFromAllGroups();
@@ -700,6 +1182,8 @@ namespace vTools.Commands
         }
         finally { DisposeTextBreakOverrides(tableText); }
         exportIds.Add(labelInstance);
+        preparedEntries?.Add(new PreparedExportEntry(labelInstance,
+          annotations.Select(obj => obj.Id).ToArray(), name, true));
         foreach (var annotation in annotations)
           assigned.Add(annotation.Id);
       }
@@ -719,9 +1203,30 @@ namespace vTools.Commands
               temporaryObjects, temporaryDefinitions, out Guid instanceId))
           throw new InvalidOperationException($"Could not prepare group '{groupName}' as a DXF block.");
         exportIds.Add(instanceId);
+        preparedEntries?.Add(new PreparedExportEntry(instanceId,
+          members.Select(obj => obj.Id).ToArray(), groupName, false));
         foreach (var member in members)
           assigned.Add(member.Id);
       }
+
+      var ungrouped = targets.Where(obj => !assigned.Contains(obj.Id) &&
+        obj.Attributes.GroupCount == 0 && !NestTableMetadata.IsCleanupDecoration(doc, obj)).ToArray();
+      var inferredParts = UngroupedExportParts(ungrouped, doc.ModelAbsoluteTolerance);
+      for (int index = 0; index < inferredParts.Count; index++)
+      {
+        var members = inferredParts[index];
+        string name = UnnamedGroupPrefix + (doc.Groups.Count + index).ToString(CultureInfo.InvariantCulture);
+        if (!TryCreateGroupBlock(doc, name, members, translation, notchTrimOverrides, textBreakOverrides,
+              temporaryObjects, temporaryDefinitions, out Guid instanceId))
+          throw new InvalidOperationException("Could not prepare an ungrouped part as a DXF block.");
+        exportIds.Add(instanceId);
+        preparedEntries?.Add(new PreparedExportEntry(instanceId,
+          members.Select(obj => obj.Id).ToArray(), name, false));
+        foreach (var member in members)
+          assigned.Add(member.Id);
+      }
+      if (inferredParts.Count > 0)
+        Log.Write("vExportDXF", $"prepared ungrouped part blocks={inferredParts.Count} objects={inferredParts.Sum(part => part.Count)}");
 
       foreach (var source in targets)
       {
@@ -738,9 +1243,138 @@ namespace vTools.Commands
             throw new InvalidOperationException($"Could not add temporary copy of {source.Id}.");
           temporaryObjects.Add(copyId);
           exportIds.Add(copyId);
+          preparedEntries?.Add(new PreparedExportEntry(copyId, [source.Id], null, false));
         }
       }
       return exportIds;
+    }
+
+    private static List<List<RhinoObject>> UngroupedExportParts(IReadOnlyList<RhinoObject> objects, double tolerance)
+    {
+      var outer = ExportOuterLoops(objects.Select(obj => obj.Geometry).OfType<Curve>(), tolerance);
+      try
+      {
+        var members = outer.Select(_ => new List<RhinoObject>()).ToArray();
+        foreach (var obj in objects)
+        {
+          var owners = Enumerable.Range(0, outer.Count).Where(index =>
+            ExportPartContains(outer[index].Outline, outer[index].Plane, obj.Geometry, tolerance)).ToArray();
+          if (owners.Length == 1) members[owners[0]].Add(obj);
+        }
+        return members.Where(part => part.Any(obj => obj.Geometry is Curve)).ToList();
+      }
+      finally { foreach (var region in outer) region.Outline.Dispose(); }
+    }
+
+    private static List<(Curve Outline, Plane Plane)> ExportOuterLoops(IEnumerable<Curve> curves, double tolerance)
+    {
+      var source = curves.ToArray();
+      if (source.Length == 0) return [];
+      var joined = Curve.JoinCurves(source, tolerance, preserveDirection: false) ?? [];
+      try
+      {
+        var regions = new List<(Curve Outline, Plane Plane, double Area)>();
+        foreach (var curve in joined)
+        {
+          if (!curve.IsClosed || !curve.TryGetPlane(out var plane, tolerance)) continue;
+          using var mass = AreaMassProperties.Compute(curve);
+          if (mass?.Area > tolerance * tolerance) regions.Add((curve, plane, mass.Area));
+        }
+        // Nested closed curves are holes or internal seams, not additional part outlines.
+        return regions.Where(region => !regions.Any(other => other.Area > region.Area &&
+          region.Outline.IsInPlane(other.Plane, tolerance) && Curve.PlanarClosedCurveRelationship(
+            region.Outline, other.Outline, other.Plane, tolerance) == RegionContainment.AInsideB))
+          .Select(region => (region.Outline.DuplicateCurve(), region.Plane)).ToList();
+      }
+      finally { foreach (var curve in joined) curve.Dispose(); }
+    }
+
+    private static bool IsExportCuttingLayer(RhinoDoc doc, ObjectAttributes attributes)
+    {
+      string prefix = string.IsNullOrWhiteSpace(ConfiguredCutLayerPrefix) ? CutLayerPrefix : ConfiguredCutLayerPrefix.Trim();
+      return doc.Layers.FindIndex(attributes.LayerIndex)?.Name.Trim().StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true;
+    }
+
+    private static void ApplyNonCutEndTrim(RhinoDoc doc, IReadOnlyList<RhinoObject> targets,
+      Dictionary<Guid, List<ExportCurvePiece>> overrides, double distance)
+    {
+      if (!(distance > 0) || !double.IsFinite(distance)) return;
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+      var tables = NestTableMetadata.TableGroups(doc);
+      var scopes = targets.Where(obj => obj.Geometry is Curve && !NestTableMetadata.IsCleanupDecoration(doc, obj) &&
+          obj.Attributes.GetUserString(NotchMetadataPrefix + "object_role") != NotchRole)
+        .GroupBy(obj => (obj.Attributes.GetGroupList() ?? []).Where(index => !tables.Contains(index) &&
+          doc.Groups[index] is { IsDeleted: false }).Order().FirstOrDefault(-1));
+      int trimmedEnds = 0, shortCurves = 0;
+      foreach (var scope in scopes)
+      {
+        var outlines = ExportOuterLoops(scope.Where(obj => IsExportCuttingLayer(doc, obj.Attributes))
+          .Select(obj => (Curve)obj.Geometry), tolerance);
+        try
+        {
+          if (outlines.Count == 0) continue;
+          bool Touches(Point3d point) => outlines.Any(region => region.Outline.ClosestPoint(point, out double parameter) &&
+            region.Outline.PointAt(parameter).DistanceTo(point) <= tolerance);
+          foreach (var source in scope.Where(obj => !IsExportCuttingLayer(doc, obj.Attributes) && obj.Geometry is Curve { IsClosed: false }))
+          {
+            var originals = overrides.TryGetValue(source.Id, out var existing) ? existing :
+              [new ExportCurvePiece((Curve)source.Geometry, source.Attributes)];
+            var replacement = new List<ExportCurvePiece>();
+            bool changed = false;
+            try
+            {
+              foreach (var piece in originals)
+              {
+                bool eligible = !piece.Between && !piece.Geometry.IsClosed && !IsExportCuttingLayer(doc, piece.Attributes);
+                bool start = eligible && Touches(piece.Geometry.PointAtStart), end = eligible && Touches(piece.Geometry.PointAtEnd);
+                Curve? trimmed = null;
+                if (start || end)
+                {
+                  double length = piece.Geometry.GetLength();
+                  double first = start ? distance : 0, last = length - (end ? distance : 0);
+                  if (last > first + tolerance && piece.Geometry.LengthParameter(first, out double t0) &&
+                      piece.Geometry.LengthParameter(last, out double t1)) trimmed = piece.Geometry.Trim(t0, t1);
+                  if (trimmed == null) shortCurves++;
+                  else { changed = true; trimmedEnds += (start ? 1 : 0) + (end ? 1 : 0); }
+                }
+                replacement.Add(piece with { Geometry = trimmed ?? piece.Geometry.DuplicateCurve() });
+              }
+              if (!changed) { foreach (var piece in replacement) piece.Geometry.Dispose(); continue; }
+              overrides[source.Id] = replacement;
+              if (existing != null) foreach (var piece in existing) piece.Geometry.Dispose();
+            }
+            catch { foreach (var piece in replacement) piece.Geometry.Dispose(); throw; }
+          }
+        }
+        finally { foreach (var region in outlines) region.Outline.Dispose(); }
+      }
+      Log.Write("vExportDXF", $"EndTrim={distance} shortenedEnds={trimmedEnds} untrimmableCurves={shortCurves}");
+      if (shortCurves > 0)
+        RhinoApp.WriteLine($"vExportDXF: EndTrim left {CountText.Format(shortCurves, "curve")} unchanged because the requested trim would consume or could not trim them.");
+    }
+
+    private static bool ExportPartContains(Curve outline, Plane plane, GeometryBase geometry, double tolerance)
+    {
+      bool Contains(Point3d point) => Math.Abs(plane.DistanceTo(point)) <= tolerance &&
+        outline.Contains(point, plane, tolerance) is PointContainment.Inside or PointContainment.Coincident;
+      if (geometry is not Curve curve)
+        return geometry is AnnotationBase or TextDot or Rhino.Geometry.Point &&
+          Contains(PlanarPartSelection.RepresentativePoint(geometry));
+      if (!curve.IsInPlane(plane, tolerance) || !Contains(curve.PointAtStart) || !Contains(curve.PointAtEnd))
+        return false;
+      // Test every interval between crossings so an escaping curve is never assigned by its midpoint alone.
+      var parameters = new List<double> { curve.Domain.T0, curve.Domain.T1 };
+      using var intersections = Rhino.Geometry.Intersect.Intersection.CurveCurve(curve, outline, tolerance, tolerance);
+      if (intersections != null)
+        foreach (var hit in intersections)
+        {
+          parameters.Add(hit.ParameterA);
+          if (hit.IsOverlap) parameters.Add(hit.OverlapA.T1);
+        }
+      parameters.Sort();
+      for (int index = 1; index < parameters.Count; index++)
+        if (!Contains(curve.PointAt((parameters[index - 1] + parameters[index]) / 2))) return false;
+      return true;
     }
 
     private static Transform TableLabelExportTranslation(RhinoDoc doc, IReadOnlyList<RhinoObject> members, Transform translation)
@@ -748,7 +1382,8 @@ namespace vTools.Commands
       var text = members.Select(obj => obj.Geometry).OfType<TextEntity>().FirstOrDefault();
       if (text == null) return translation;
       double gap = TableLabelExportGapInches * RhinoMath.UnitScale(UnitSystem.Inches, doc.ModelUnitSystem);
-      return translation * Transform.Translation(-text.Plane.XAxis * gap);
+      bool header=members.Any(obj=>NestTableMetadata.IsEnclosedHeader(obj.Geometry));
+      return translation * Transform.Translation((header?text.Plane.YAxis:-text.Plane.XAxis)*gap);
     }
 
     private static bool TryCreateGroupBlock(RhinoDoc doc, string groupName,
@@ -787,7 +1422,7 @@ namespace vTools.Commands
           return false;
         temporaryDefinitions.Add(definitionIndex);
 
-        int layerIndex = UzipCommon.EnsureLayer(doc, BlockInsertLayer);
+        int layerIndex = EnsureExportLayer(doc, BlockInsertLayer);
         var instanceAttributes = new ObjectAttributes
         {
           ObjectId = Guid.NewGuid(),
@@ -1235,7 +1870,7 @@ namespace vTools.Commands
         $"unmatched={unmatched} curves={changed} between={between} " +
         $"NotchJoin={joinNotches} joined={joined}");
       if (unmatched > 0)
-        RhinoApp.WriteLine($"vExportDXF: {unmatched} V/U notch contact(s) did not match an export curve.");
+        RhinoApp.WriteLine($"vExportDXF: {CountText.Format(unmatched, "V/U notch contact")} did not match an export curve.");
       return overrides;
     }
 
@@ -1508,7 +2143,7 @@ namespace vTools.Commands
             continue;
           var attributes = target.Attributes.Duplicate();
           if (between && mode == NotchTrimMode.Split)
-            attributes.LayerIndex = UzipCommon.EnsureLayer(doc, layerName);
+            attributes.LayerIndex = EnsureExportLayer(doc, layerName);
           replacements.Add(new ExportCurvePiece(piece.DuplicateCurve(), attributes, between));
         }
         if (betweenCount == 0)
@@ -1679,6 +2314,8 @@ namespace vTools.Commands
         var texts = result.Values.SelectMany(lines => lines).ToArray();
         if (texts.Length == 0) return result;
         if (!TryGetTableAnnotationArea(members, texts[0].Plane, out var frame, out var area)) return result;
+        if(members.Any(obj=>NestTableMetadata.IsEnclosedHeader(obj.Geometry)))
+        {area=CompactHeaderAnnotations(doc,texts,frame,area);ValidateHeaderAnnotations(doc,texts,frame,area);return result;}
         // DXF middle-centre anchors belong to the row cells, not the source text's cached baseline bounds.
         texts = texts.OrderByDescending(text =>
         {
@@ -1720,13 +2357,74 @@ namespace vTools.Commands
       catch { DisposeTextBreakOverrides(result); throw; }
     }
 
+    private static BoundingBox CompactHeaderAnnotations(RhinoDoc doc,TextEntity[] texts,Plane frame,BoundingBox area)
+    {
+      var anchors=texts.Select(text=>
+      {frame.ClosestParameter(text.Plane.Origin,out double x,out double y);return new Point2d(x,y);}).ToArray();
+      foreach(var text in texts)text.TextHeight=text.TextHeight*ConfiguredTableHeaderTextSizeMultiplier+ConfiguredTableHeaderTextSizeExtra;
+      var bounds=texts.Select(text=>ExportTableTextBounds(doc,text,frame)).ToArray();
+      if(bounds.Any(box=>!box.IsValid))throw new InvalidOperationException("Could not measure compact table header text.");
+      double padding=Math.Max(doc.ModelAbsoluteTolerance,bounds.Max(box=>box.Diagonal.Y)*ConfiguredTableAnnotationPaddingFraction*ConfiguredTableHeaderSpacingMultiplier);
+      double tolerance=Math.Max(doc.ModelAbsoluteTolerance,ConfiguredTextBreakLayoutTolerance);
+      var rows=new List<List<int>>();
+      foreach(int index in Enumerable.Range(0,texts.Length).OrderBy(index=>anchors[index].Y).ThenBy(index=>anchors[index].X))
+      {
+        var row=rows.FirstOrDefault(row=>Math.Abs(anchors[row[0]].Y-anchors[index].Y)<=tolerance);
+        if(row==null){row=[];rows.Add(row);}row.Add(index);
+      }
+      var widths=bounds.Select((box,index)=>2*Math.Max(anchors[index].X-box.Min.X,box.Max.X-anchors[index].X)).ToArray();
+      double width=rows.Max(row=>row.Sum(index=>widths[index])+2*padding*(row.Count-1))+2*padding;
+      double left=area.Min.X,right=left+width;
+      double center=(anchors.Min(anchor=>anchor.Y)+anchors.Max(anchor=>anchor.Y))/2;
+      var rowCenters=new double[rows.Count];double previousTop=double.NegativeInfinity;
+      for(int index=0;index<rows.Count;index++)
+      {
+        var row=rows[index];double lower=row.Min(item=>bounds[item].Min.Y-anchors[item].Y),upper=row.Max(item=>bounds[item].Max.Y-anchors[item].Y);
+        double desired=center+(anchors[row[0]].Y-center)*ConfiguredTableHeaderSpacingMultiplier;
+        rowCenters[index]=Math.Max(desired,previousTop+2*padding-lower);previousTop=rowCenters[index]+upper;
+      }
+      double centerShift=center-(rowCenters[0]+rowCenters[^1])/2;
+      double bottom=double.PositiveInfinity,top=double.NegativeInfinity;
+      for(int rowIndex=0;rowIndex<rows.Count;rowIndex++)
+      {
+        var row=rows[rowIndex];
+        double edge=right-padding;
+        for(int at=row.Count-1;at>=0;at--)
+        {
+          int index=row[at];var plane=texts[index].Plane;
+          double x=at==0?left+padding+widths[index]/2:edge-widths[index]/2;
+          double y=rowCenters[rowIndex]+centerShift;
+          plane.Origin=frame.PointAt(x,y);texts[index].Plane=plane;
+          bottom=Math.Min(bottom,y+bounds[index].Min.Y-anchors[index].Y);
+          top=Math.Max(top,y+bounds[index].Max.Y-anchors[index].Y);
+          edge=x-widths[index]/2-2*padding;
+        }
+      }
+      return new BoundingBox(new Point3d(left,bottom-padding,0),new Point3d(right,top+padding,0));
+    }
+    private static void ValidateHeaderAnnotations(RhinoDoc doc,TextEntity[] texts,Plane frame,BoundingBox area)
+    {
+      var boxes=texts.Select(text=>ExportTableTextBounds(doc,text,frame)).ToArray();
+      if(boxes.Any(box=>!box.IsValid))throw new InvalidOperationException("Could not measure table header annotations.");
+      double padding=Math.Max(doc.ModelAbsoluteTolerance,boxes.Max(box=>box.Diagonal.Y)*ConfiguredTableAnnotationPaddingFraction);
+      double tolerance=Math.Max(doc.ModelAbsoluteTolerance,ConfiguredTextBreakLayoutTolerance);
+      foreach(var box in boxes)
+      {
+        if(box.Min.X<area.Min.X+padding-tolerance||box.Max.X>area.Max.X-padding+tolerance||
+          box.Min.Y<area.Min.Y+padding-tolerance||box.Max.Y>area.Max.Y-padding+tolerance)
+          throw new InvalidOperationException("A table header label exceeds its export frame.");
+      }
+    }
+
     private static bool TryGetTableAnnotationArea(IReadOnlyList<RhinoObject> members, Plane fallback,
       out Plane frame, out BoundingBox area)
     {
       frame = fallback;
       area = BoundingBox.Empty;
       var border = members.FirstOrDefault(obj => obj.Attributes.GetUserString(NestTableMetadata.RoleKey) == NestTableMetadata.BorderRole);
-      if (border?.Geometry is Curve outline && outline.TryGetPolyline(out var points) && points.Count is 8 or 9)
+      if(border?.Geometry is Curve headerOutline&&NestTableMetadata.TryHeaderFrame(headerOutline,out var header))
+      {frame=header.Plane;using var curve=header.ToNurbsCurve();area=curve.GetBoundingBox(frame);}
+      else if (border?.Geometry is Curve outline && outline.TryGetPolyline(out var points) && points.Count is 8 or 9)
       {
         frame = new Plane(points[0], points[1] - points[0], points[3] - points[0]);
         foreach (int index in points.Count == 8 ? new[] { 3, 4, 5, 6 } : new[] { 4, 5, 6, 7 })

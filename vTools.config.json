@@ -1,7 +1,4 @@
 {
-  "IsolationDiagnostics": {
-    "enabled": true
-  },
   "HistoryHighlight": {
     "enabled": true
   },
@@ -13,6 +10,7 @@
     "distance": 1
   },
   "vNest": {
+    "learnedSearch": false,
     "width": 60,
     "length": 315,
     "gap": 0,
@@ -200,6 +198,13 @@
   },
   "vExportDXF": {
     "cleanup_action": "Ask"
+  },
+  "vExportPatternSmith": {
+    "curve_mode": "NativeSpline",
+    "curve_error": 0.010,
+    "materials": {},
+    "layers": {},
+    "custom_colors": {}
   },
   "vOverlaps": {
     "tolerance": 0.001,

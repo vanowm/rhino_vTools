@@ -279,30 +279,30 @@ public sealed class vOverlaps : vToolsCommand
 
     var findings = new List<string>();
     if (curveOverlaps.CoveredObjectIds.Count > 0)
-      findings.Add($"selected {curveOverlaps.CoveredObjectIds.Count} covered curve(s)");
+      findings.Add($"selected {CountText.Format(curveOverlaps.CoveredObjectIds.Count, "covered curve")}");
     if (curveOverlaps.PartiallyOverlappingObjectIds.Count > 0)
     {
       if (_overlapSegments && materializedSegments.OverlapObjectIds.Count > 0)
         findings.Add(
-          $"selected {materializedSegments.OverlapObjectIds.Count} partial-overlap segment(s)");
+          $"selected {CountText.Format(materializedSegments.OverlapObjectIds.Count, "partial-overlap segment")}");
       if (!_overlapSegments && remainingPartialIds.Count > 0)
         findings.Add(
-          $"selected {remainingPartialIds.Count} partially overlapping curve(s)");
+          $"selected {CountText.Format(remainingPartialIds.Count, "partially overlapping curve")}");
       else if (_overlapSegments && remainingPartialIds.Count > 0)
         findings.Add(
-          $"skipped {remainingPartialIds.Count} partial curve(s) whose overlap could not be isolated");
+          $"skipped {CountText.Format(remainingPartialIds.Count, "partial curve")} whose overlap could not be isolated");
     }
     if (faceOverlaps.OverlappingFaces.Count > 0)
       findings.Add(
-        $"highlighted {highlightedAreaCount} overlapping face area(s)");
+        $"highlighted {CountText.Format(highlightedAreaCount, "overlapping face area")}");
 
     var resultLabel = findings.Count > 0
       ? string.Join("; ", findings)
       : "no overlaps found";
     RhinoApp.WriteLine(
       $"vOverlaps: {resultLabel} " +
-      $"({curveOverlaps.ItemCount} curve items, {curveOverlaps.PairChecks} curve pair checks; " +
-      $"{faceOverlaps.FaceCount} faces, {faceOverlaps.PairChecks} face pair checks).");
+      $"({CountText.Format(curveOverlaps.ItemCount, "curve item")}, {CountText.Format(curveOverlaps.PairChecks, "curve pair check")}; " +
+      $"{CountText.Format(faceOverlaps.FaceCount, "face")}, {CountText.Format(faceOverlaps.PairChecks, "face pair check")}).");
     Log.Write(
       "vOverlaps",
       $"curves={curveOverlaps.ItemCount} curve_pairs={curveOverlaps.PairChecks} curve_hits={curveOverlaps.CoverHits} " +
@@ -1082,5 +1082,5 @@ public sealed class vOverlaps : vToolsCommand
     new(ComponentIndexType.BrepFace, faceIndex);
 
   private static string SelectionLabel(int curveCount, int faceCount) =>
-    $"{curveCount} curve(s), {faceCount} face(s)";
+    $"{CountText.Format(curveCount, "curve")}, {CountText.Format(faceCount, "face")}";
 }

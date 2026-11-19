@@ -16,6 +16,8 @@ internal static class PartGroupData
   internal const string CustomSection = "vObjectPropertiesPlus.PartData"; // Document section holding custom fields per persistent part identity.
   internal const string NamesSection = "vTools.PartNames"; // Document section holding display-name overrides per persistent part identity.
   internal const string SourceSettingsKey = "vNest.sourceSettings"; // Object user-string linking placed output to a source part identity.
+  internal const string FaceDownKey = "vNest.faceDown"; // Placed-copy cutting-side marker; true means face down, false or absent means face up.
+  private const int MaximumNestRecordCharacters = 16384; // Maximum JSON characters accepted when reading the shared nesting record.
   private const string GroupPrefix = "group-"; // Part key prefix followed by a group GUID in N format.
   private const string BoundaryPrefix = "boundary-"; // Part key prefix followed by a boundary object GUID in N format.
   [global::vTools.CommandDefault("PartGroupData", "vTools.PartGroupData.DialogPadding", "Conflict-dialog padding in device-independent pixels.")] private const int DialogPadding = 10; // Conflict-dialog padding in device-independent pixels.
@@ -30,6 +32,20 @@ internal static class PartGroupData
     HashSet<Guid> Members, string Name, string?[] Values);
 
   internal static string GroupKey(Guid id) => GroupPrefix + id.ToString("N");
+  internal static bool ReadFaceDown(RhinoDoc doc,RhinoObject obj)
+  {
+    var keys=(obj.Attributes.GetGroupList()??[]).Where(index=>doc.Groups[index] is {IsDeleted:false})
+      .OrderBy(index=>doc.Groups.GroupObjectCount(index)).Select(index=>GroupKey(doc.Groups[index].Id))
+      .Concat(new[]{BoundaryPrefix+obj.Id.ToString("N"),obj.Attributes.GetUserString(SourceSettingsKey)});
+    foreach(var key in keys.Where(key=>!string.IsNullOrEmpty(key)))
+    {
+      string? saved=doc.Strings.GetValue(NestSection,key!);if(string.IsNullOrEmpty(saved))continue;
+      if(saved.Length>MaximumNestRecordCharacters)throw new InvalidOperationException("Saved part settings are too large.");
+      using var json=JsonDocument.Parse(saved);
+      return json.RootElement.TryGetProperty("FaceDown",out var face)&&face.GetBoolean();
+    }
+    return bool.TryParse(obj.Attributes.GetUserString(FaceDownKey),out bool down)&&down;
+  }
 
   internal static List<Snapshot> Capture(RhinoDoc doc, IEnumerable<Guid> ids)
   {

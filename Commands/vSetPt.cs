@@ -746,7 +746,7 @@ namespace vTools.Commands
         pair => pair.Value.ToArray());
       Log.Write(Tag,
         $"  preselected grips: {result.Values.Sum(grips => grips.Length)}" +
-        $" on {result.Count} curve(s)");
+        $" on {CountText.Format(result.Count, "curve")}");
       return result;
     }
 
@@ -951,7 +951,7 @@ namespace vTools.Commands
       UnselectObjectsAndGrips(doc);
       EnableGripsForHiddenEndpointPicks(doc, picks);
       SelectUsedGrips(doc, picks, includeDetectedEndpoints: true);
-      Log.Write(Tag, $"  committing -SetPt with {selectedCount} grip(s) selected");
+      Log.Write(Tag, $"  committing -SetPt with {CountText.Format(selectedCount, "grip")} selected");
 
       // Snapshot endpoints before SetPt; RunScript result is unreliable in Rhino 9 (true even on Escape).
       var endpointsBefore = picks.ToDictionary(

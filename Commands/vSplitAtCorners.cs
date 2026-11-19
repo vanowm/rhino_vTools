@@ -51,7 +51,7 @@ public sealed class vSplitAtCorners : vToolsCommand
 
     var getObject = new GetObject();
     getObject.EnableTransparentCommands(true);
-    getObject.SetCommandPrompt("Select curve(s) to split at corners");
+    getObject.SetCommandPrompt("Select curves to split at corners");
     getObject.GeometryFilter = ObjectType.Curve;
     getObject.SubObjectSelect = false;
     getObject.GroupSelect = false;

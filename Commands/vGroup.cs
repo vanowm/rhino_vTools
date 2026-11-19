@@ -515,7 +515,7 @@ public sealed class vGroup : vToolsCommand
         }
 
         if (log)
-          Log.Write(LogName, $"  split[{i}] {parameters.Count} params -> {split.Length} segments");
+          Log.Write(LogName, $"  split[{i}] {CountText.Format(parameters.Count, "parameter")} -> {CountText.Format(split.Length, "segment")}");
       }
       else
       {

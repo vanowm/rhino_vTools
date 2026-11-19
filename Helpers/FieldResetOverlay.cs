@@ -20,12 +20,14 @@ internal sealed class FieldResetOverlay : IDisposable
   private const double HoverOpacity = 0.12; // Foreground-colored hover tint opacity, zero through one, matching light and dark input themes.
   private const double PressedOpacity = 0.22; // Foreground-colored pressed tint opacity, zero through one.
   private const string IconPath = "M2,4 A4.25,4.25 0 1 1 2,8 M2,1 L2,4 L5,4"; // Balanced counterclockwise circular reset arrow on the 12-by-12 icon canvas.
+  private const string ClearIconPath = "M3,3 L9,9 M9,3 L3,9"; // Clear-field cross on the same 12-by-12 canvas.
   internal static double TextReserveWidth => ButtonSize + EdgeGap;
 
   private readonly EtoControl _control;
   private readonly Func<bool> _changed;
   private readonly Action _reset;
   private readonly string _toolTip;
+  private readonly bool _clear;
   private FrameworkElement? _host;
   private FrameworkElement? _editor;
   private System.Windows.Controls.Control? _paddingTarget;
@@ -34,12 +36,13 @@ internal sealed class FieldResetOverlay : IDisposable
   private ResetAdorner? _adorner;
   private bool _disposed;
 
-  internal FieldResetOverlay(EtoControl control, Func<bool> changed, Action reset, string toolTip)
+  internal FieldResetOverlay(EtoControl control, Func<bool> changed, Action reset, string toolTip, bool clear = false)
   {
     _control = control;
     _changed = changed;
     _reset = reset;
     _toolTip = toolTip;
+    _clear = clear;
     control.Load += OnLoaded;
   }
 
@@ -62,7 +65,7 @@ internal sealed class FieldResetOverlay : IDisposable
       if (_layer == null) return;
       _paddingTarget = _editor as System.Windows.Controls.Control;
       if (_paddingTarget != null) _padding = _paddingTarget.Padding;
-      _adorner = new ResetAdorner(_editor, _toolTip, () =>
+      _adorner = new ResetAdorner(_editor, _toolTip, _clear ? ClearIconPath : IconPath, () =>
       {
         if (!_control.Enabled || _host?.IsEnabled != true) return;
         _reset(); Refresh();
@@ -115,12 +118,12 @@ internal sealed class FieldResetOverlay : IDisposable
     private readonly Button _button;
     private readonly VisualCollection _visuals;
 
-    internal ResetAdorner(FrameworkElement editor, string toolTip, Action reset) : base(editor)
+    internal ResetAdorner(FrameworkElement editor, string toolTip, string iconPath, Action reset) : base(editor)
     {
       var icon = new System.Windows.Controls.Canvas { Width = IconSize, Height = IconSize };
       var path = new System.Windows.Shapes.Path
       {
-        Data = Geometry.Parse(IconPath),
+        Data = Geometry.Parse(iconPath),
         StrokeThickness = IconStroke,
         StrokeStartLineCap = PenLineCap.Round,
         StrokeEndLineCap = PenLineCap.Round,

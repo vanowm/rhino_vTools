@@ -84,6 +84,16 @@
     <Error Text="$(TargetFramework) requires its matching Rhino installation; RhinoCommon.dll was not found under '$(RhinoSystemDirectory)'." />
   </Target>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\PatternSmith\Builder.bin">
+      <LogicalName>vTools.PatternSmith.Builder.exe</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <Target Name="BuildPatternSmithBuilder" BeforeTargets="PrepareResourceNames;PrepareResources" Condition="'$(TargetFramework)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\BuildPatternSmithBuilder.ps1&quot;" />
+  </Target>
+
   <Import Project="Host.Build.targets" />
   <Import Project="Build.Release.targets" />
 </Project>

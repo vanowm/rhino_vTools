@@ -95,14 +95,28 @@ internal static class MaterialLibrary
 
   internal sealed record MaterialPreset(string Name,double Width,double Gap,double GrainDeviation=DefaultGrainDeviation)
   {
+    public PatternSmithReference? PatternSmith { get; init; } // Optional catalog identity; kept independently of locally customized nesting dimensions.
     public GrainMode Grain { get; init; }=ConfiguredDefaultGrain; // Auto, Force, On or Off, inherited by parts without a mode override.
     public bool ObeyGrain { get; init; }=ConfiguredDefaultObeyGrain; // true constrains inherited grain; false permits free-rotation rules.
     public bool AllowReverse { get; init; }=ConfiguredDefaultAllowReverse; // true permits opposite grain alignment; false only permits forward alignment.
   }
+  internal sealed record PatternSmithReference(string Id,string Name,string Group,string Catalog);
+  internal static JsonObject? PatternSmithJson(PatternSmithReference? source)=>source==null?null:
+    new JsonObject {["id"]=source.Id,["name"]=source.Name,["group"]=source.Group,["catalog"]=source.Catalog};
+  internal static PatternSmithReference? ReadPatternSmith(JsonNode? node)=>node is JsonObject value&&
+    ToolsOptionStore.TryGetString(value,"id",out var id)&&!string.IsNullOrWhiteSpace(id)&&
+    ToolsOptionStore.TryGetString(value,"name",out var name)&&!string.IsNullOrWhiteSpace(name)&&
+    ToolsOptionStore.TryGetString(value,"catalog",out var catalog)&&!string.IsNullOrWhiteSpace(catalog)
+    ?new(id,name,ToolsOptionStore.TryGetString(value,"group",out var group)?group:"",catalog):null;
+  internal static IReadOnlyDictionary<string,string> PatternSmithCustomIds(IEnumerable<string> names,IEnumerable<string> reservedIds)
+  {
+    return Commands.PatternSmithMaterialIdentity.Allocate(names,reservedIds,new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase));
+  }
   internal static System.Text.Json.Nodes.JsonArray MaterialPresetsJson(IEnumerable<MaterialPreset> presets)=>
     new(presets.Select(preset=>(System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
       {["name"]=preset.Name,["width"]=preset.Width,["gap"]=preset.Gap,["grainDeviation"]=preset.GrainDeviation,
-        ["grain"]=preset.Grain.ToString(),["obeyGrain"]=preset.ObeyGrain,["allowReverse"]=preset.AllowReverse}).ToArray());
+        ["grain"]=preset.Grain.ToString(),["obeyGrain"]=preset.ObeyGrain,["allowReverse"]=preset.AllowReverse,
+        ["patternSmith"]=PatternSmithJson(preset.PatternSmith)}).ToArray());
   internal static string MaterialPresetName(string name)=>System.Text.RegularExpressions.Regex.Replace(name,@"\s+"," ").Trim();
   internal static List<MaterialPreset> ReadMaterialPresets(System.Text.Json.Nodes.JsonObject? section)
     =>ReadMaterialRecords(section,MaterialPresetsKey);
@@ -128,7 +142,7 @@ internal static class MaterialLibrary
       if(preset.ContainsKey("grain")&&(!ToolsOptionStore.TryGetString(preset,"grain",out var grain)||!Enum.TryParse(grain,true,out mode)||!Enum.IsDefined(mode))) continue;
       if(preset.ContainsKey("obeyGrain")&&!ToolsOptionStore.TryGetBool(preset,"obeyGrain",out obey)) continue;
       if(preset.ContainsKey("allowReverse")&&!ToolsOptionStore.TryGetBool(preset,"allowReverse",out reverse)) continue;
-      result.Add(new MaterialPreset(name,width,gap,deviation) {Grain=mode,ObeyGrain=obey,AllowReverse=reverse});
+      result.Add(new MaterialPreset(name,width,gap,deviation) {Grain=mode,ObeyGrain=obey,AllowReverse=reverse,PatternSmith=ReadPatternSmith(preset["patternSmith"])});
     }
     return result.OrderBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase).ToList();
   }
@@ -162,7 +176,7 @@ internal static class MaterialLibrary
       if(index<0&&overwrite) throw new InvalidOperationException("The selected material preset no longer exists. Use Save As instead.");
       if(index>=0&&!overwrite) throw new InvalidOperationException("That material name already exists. Choose another name or overwrite the selected preset.");
       if(index<0) presets.Add(values with {Name=name});
-      else presets[index]=values with {Name=presets[index].Name};
+      else presets[index]=values with {Name=presets[index].Name,PatternSmith=values.PatternSmith??presets[index].PatternSmith};
       section[MaterialPresetsKey]=MaterialPresetsJson(presets);
       section[MaterialDraftsKey]=MaterialPresetsJson(ReadMaterialRecords(section,MaterialDraftsKey)
         .Where(draft=>!draft.Name.Equals(name,StringComparison.OrdinalIgnoreCase)));
@@ -234,7 +248,7 @@ internal static class MaterialLibrary
         }
         T result=action(root);
         if(write||!exists||migrate||recoveredCount>0)Save(path,root);
-        if(recoveredCount>0)Log.Write("vNest","recovered {0} drawing material preset(s) into the global library",recoveredCount);
+        if(recoveredCount>0)Log.Write("vNest","recovered {0} into the global library",CountText.Format(recoveredCount,"drawing material preset"));
         // Mark only after a durable import; retain the legacy arrays as a recovery copy.
         if(migrate&&!ToolsOptionStore.Update(Section,section=>section[MaterialDatabaseMigratedKey]=true))
           Log.Write("vNest","material library migrated, but the legacy import marker could not be saved: {0}",ToolsOptionStore.LastError);

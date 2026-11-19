@@ -325,7 +325,7 @@ public sealed class vFacing : vToolsCommand
     var crvs   = input.Select(t => t.Crv).ToArray();
     var layers = input.Select(t => t.Layer).ToArray();
 
-    Log.Write("vFacing", $"TryAnalyzeTopology: {input.Count} input curve(s), tol={tol:G4}");
+    Log.Write("vFacing", $"TryAnalyzeTopology: {CountText.Format(input.Count, "input curve")}, tol={tol:G4}");
     for (var _i = 0; _i < input.Count; _i++)
       Log.Write("vFacing", $"  [{_i}] layer={layers[_i]} len={crvs[_i].GetLength():F3} " +
                             $"start=({crvs[_i].PointAtStart.X:F3},{crvs[_i].PointAtStart.Y:F3}) " +
@@ -378,7 +378,7 @@ public sealed class vFacing : vToolsCommand
       }
       else if (input.Count > 3)
       {
-        Log.Write("vFacing", $"All curves on same layer ({input.Count} curves) — asking user to pick 2 sides");
+        Log.Write("vFacing", $"All curves on same layer ({CountText.Format(input.Count, "curve")}) — asking user to pick 2 sides");
         if (!TryPickSideCurves(doc, input, out var sideIdxs))
           return false;
         var s1i = sideIdxs![0];
@@ -520,7 +520,7 @@ public sealed class vFacing : vToolsCommand
     if (layerGroups.Count != 3)
     {
       RhinoApp.WriteLine(
-        $"vFacing: need curves on exactly 3 layers (base + 2 sides), found {layerGroups.Count} layer group(s). " +
+        $"vFacing: need curves on exactly 3 layers (base + 2 sides), found {CountText.Format(layerGroups.Count, "layer group")}. " +
         "Place base curves on one layer and each side on its own layer.");
       return false;
     }
@@ -849,7 +849,7 @@ public sealed class vFacing : vToolsCommand
 
     var n     = poly.SegmentCount;
     var count = poly.IsClosed ? n : n - 1;
-    Log.Write("vFacing", $"PolyCurve segments={n} IsClosed={poly.IsClosed} checking {count} junction(s) (min angle={minAngleDeg}°)");
+    Log.Write("vFacing", $"PolyCurve segments={n} IsClosed={poly.IsClosed} checking {CountText.Format(count, "junction")} (min angle={minAngleDeg}°)");
 
     for (var i = 0; i < count; i++)
     {
@@ -877,7 +877,7 @@ public sealed class vFacing : vToolsCommand
       }
     }
 
-    Log.Write("vFacing", $"FindCornerParams → {result.Count} corner(s) found");
+    Log.Write("vFacing", $"FindCornerParams → {CountText.Format(result.Count, "corner")} found");
     return result;
   }
 

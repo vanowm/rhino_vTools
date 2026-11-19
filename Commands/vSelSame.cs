@@ -53,7 +53,8 @@ public sealed class vSelSame : vToolsCommand
   private const int LabelWidth = 140; // Criterion checkbox column width in logical pixels.
   private const int LabelLimit = 25; // Maximum visible criterion-label characters; tooltip retains full text.
   private const int ValueLimit = 100; // Maximum visible criterion-value characters; tooltip retains full text.
-  private static readonly Color SeparatorColor = Color.FromArgb(222, 226, 233); // Faint section separator RGB.
+  [CommandDefault("vSelSame","vTools.Commands.vSelSame.SeparatorColor","ARGB color of separators between filter sections.","#FFDEE2E9")]
+  private static readonly Color SeparatorColor = Color.FromArgb(CommandDefaults.GetColor("vSelSame","vTools.Commands.vSelSame.SeparatorColor",System.Drawing.Color.FromArgb(222,226,233)).ToArgb()); // ARGB filter-section separators.
   private static readonly Size CellSpacing = new(6, 0); // Criterion column spacing in logical pixels.
   private static readonly Size DialogSpacing = new(6, 8); // Dialog column/row spacing in logical pixels.
   private const int ButtonSpacing = 6; // Footer button spacing in logical pixels.
@@ -206,8 +207,8 @@ public sealed class vSelSame : vToolsCommand
       if (!dialog.AddToSelection) doc.Objects.UnselectAll();
       doc.Objects.Select(ids);
       doc.Views.Redraw();
-      RhinoApp.WriteLine(dialog.AddToSelection ? "vSelSame: added {0} objects to selection." : "vSelSame: selected {0} objects.",
-        dialog.AddToSelection ? ids.Length - alreadySelected : ids.Length);
+      RhinoApp.WriteLine(dialog.AddToSelection ? "vSelSame: added {0} to selection." : "vSelSame: selected {0}.",
+        CountText.Format(dialog.AddToSelection ? ids.Length - alreadySelected : ids.Length, "object"));
       return Result.Success;
     }
     catch (Exception ex)

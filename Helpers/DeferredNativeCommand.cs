@@ -64,11 +64,8 @@ internal sealed class DeferredNativeCommand : IDisposable
       _dispatchDepth++;
       try
       {
-        IsolationDiagnostics.RecordNativeDispatch(doc, "direct-idle-call", _commandName);
         // Unlike a macro, ExecuteCommand returns the actual command result before returning.
         _result = RhinoApp.ExecuteCommand(doc, _commandName);
-        IsolationDiagnostics.RecordNativeDispatch(doc, "direct-idle-return", _commandName,
-          _result == Result.Success);
         Log.Write("NativeCommand", "{0} completed with {1}", _commandName, _result);
       }
       catch (Exception ex)

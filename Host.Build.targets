@@ -16,6 +16,11 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="ReportHostBuild" BeforeTargets="PrepareForBuild"
+          Condition="'$(TargetFramework)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <Message Importance="high" Text="Building $(MSBuildProjectName): $(Configuration), Rhino $(RhinoHostMajor), $(TargetFramework)..." />
+  </Target>
+
   <Target Name="SeedInstalledToolbar" AfterTargets="Build" BeforeTargets="CreateReleaseBackup"
           Condition="'$(TargetFramework)' != '' and Exists('$(MSBuildProjectDirectory)\Toolbar\$(MSBuildProjectName).rui') and !Exists('$(TargetDir)$(MSBuildProjectName).rui')">
     <Copy SourceFiles="$(MSBuildProjectDirectory)\Toolbar\$(MSBuildProjectName).rui" DestinationFiles="$(TargetDir)$(MSBuildProjectName).rui" />

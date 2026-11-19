@@ -84,6 +84,51 @@ $buttons = @(
     Icon = "vSetPt.svg"
     DarkIcon = "vSetPt_dark.svg"
     MainToolbar = $true
+  },
+  @{
+    Name = "vNest"
+    Tooltip = "Nest parts on material tables"
+    Id = "b4ece8ac-2396-49af-b754-c38ef7d49843"
+    LeftMacroId = "b4ece8ac-2396-49af-b754-c38ef7d49843"
+    LeftScript = '!_vNest'
+    Icon = "vNest.svg"
+    MainToolbar = $true
+  },
+  @{
+    Name = "vNotches"
+    Tooltip = "Place and manage notches"
+    Id = "c6dfd74f-f68f-43d4-b412-d92c4901a119"
+    LeftMacroId = "c6dfd74f-f68f-43d4-b412-d92c4901a119"
+    LeftScript = '!_vNotches'
+    Icon = "vNotches.svg"
+    MainToolbar = $true
+  },
+  @{
+    Name = "vSettings"
+    Tooltip = "Edit vTools settings"
+    Id = "ccde7906-34d0-46c5-b422-e33fb8fa96c4"
+    LeftMacroId = "ccde7906-34d0-46c5-b422-e33fb8fa96c4"
+    LeftScript = '!_vSettings'
+    Icon = "vSettings.svg"
+    MainToolbar = $true
+  },
+  @{
+    Name = "vExportDXF"
+    Tooltip = "Prepare and export geometry to DXF"
+    Id = "abfb5d5c-a0c2-48ad-8a9f-074e4538f317"
+    LeftMacroId = "abfb5d5c-a0c2-48ad-8a9f-074e4538f317"
+    LeftScript = '!_vExportDXF'
+    Icon = "vExportDXF.svg"
+    MainToolbar = $true
+  },
+  @{
+    Name = "vExportPatternSmith"
+    Tooltip = "Export native PatternSmith project"
+    Id = "12571132-a95d-4a92-bf5d-d54683f49061"
+    LeftMacroId = "12571132-a95d-4a92-bf5d-d54683f49061"
+    LeftScript = '!_vExportPatternSmith'
+    Icon = "vExportPatternSmith.svg"
+    MainToolbar = $true
   }
 )
 

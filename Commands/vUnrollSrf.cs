@@ -916,11 +916,11 @@ namespace vTools.Commands
           xLimit, doc.ModelUnitSystem);
       }
 
-      var msg = $"{EnglishName}: successfully unrolled {done}/{sources.Count} objects";
+      var msg = $"{EnglishName}: successfully unrolled {done}/{CountText.Format(sources.Count, "object")}";
       if (failed > 0)
-        msg += $" | Unable to unroll {failed} objects";
+        msg += $" | Unable to unroll {CountText.Format(failed, "object")}";
       if (assignment.Skipped > 0)
-        msg += $" | Skipped {assignment.Skipped} following object(s) not close to selected surfaces";
+        msg += $" | Skipped {CountText.Format(assignment.Skipped, "following object")} not close to selected surfaces";
       msg += $" | Labels {_labelMode} | RotateFlatParts {(_rotateFlatParts ? "Yes" : "No")} | EdgeDots {(_edgeDots ? "On" : "Off")}";
       RhinoApp.WriteLine(msg);
       Dbg($"run finished uv={_uv} completed={done} failed={failed} total={sources.Count} skipped={assignment.Skipped}");

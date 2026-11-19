@@ -18,6 +18,7 @@ internal static class CommandChoices
   // Fixed metadata conventions, not user-configurable defaults.
   private const char KeySeparator = '|'; // Separates persisted keys that share the same native choice list.
   private static readonly ConcurrentDictionary<(Type Owner, string Field), string[]> Cache = new();
+  private static readonly Lazy<Definition[]> Catalog = new(BuildDefinitions);
   internal sealed record Definition(string Section, string Key, bool Indexed, string[] Names);
 
   internal static string[] Values(Type owner, string field) => Cache.GetOrAdd((owner, field), key =>
@@ -25,7 +26,10 @@ internal static class CommandChoices
       ?.GetCustomAttribute<CommandChoicesAttribute>()?.Names.ToArray()
     ?? throw new InvalidOperationException($"Missing named-choice metadata for {owner.FullName}.{field}."));
 
-  internal static Definition[] All()
+  internal static Definition[] All() => Catalog.Value
+    .Select(entry => entry with { Names = entry.Names.ToArray() }).ToArray();
+
+  private static Definition[] BuildDefinitions()
   {
     EmbeddedDependencies.EnsureAll();
     return typeof(CommandChoices).Assembly.GetTypes()

@@ -5401,6 +5401,7 @@ namespace vTools.Commands
       Point3d PickPoint)
     {
       public bool IsCurve => Curve != null;
+      public Guid FeedbackId { get; } = Guid.NewGuid();
 
       public static ThreePointConstraint FromPoint(Point3d point) =>
         new(null, point, Guid.Empty, ComponentIndex.Unset, point);
@@ -5424,7 +5425,7 @@ namespace vTools.Commands
       if (fixedStart.HasValue)
         selected.Add(ThreePointConstraint.FromPoint(fixedStart.Value));
       ThreePointSolution? finalSolution = null;
-      using var highlighter = new PreviewDisplay.ObjectHighlighter(doc);
+      using var highlighter = new PreviewDisplay.ObjectHighlighter(doc, PreviewDisplay.WireOnlyObjectStyle);
       try
       {
         while (selected.Count < 3)
@@ -5434,8 +5435,7 @@ namespace vTools.Commands
           if (!picked.HasValue)
             return false;
           selected.Add(picked.Value);
-          highlighter.SetObjects(selected.Where(item => item.IsCurve)
-            .Select(item => item.ObjectId));
+          SetThreePointFeedback(highlighter, selected);
           Log.Write("vLine.3Point",
             $"constraint={selected.Count} kind={(picked.Value.IsCurve ? "curve" : "point")} " +
             $"id={picked.Value.ObjectId} pick={picked.Value.PickPoint}");
@@ -5497,8 +5497,7 @@ namespace vTools.Commands
       List<ThreePointSolution>? cachedFixedSolutions = null;
       ThreePointSolution? previewSolution = null;
       var lastPreviewUtc = DateTime.MinValue;
-      var selectedIds = selected.Where(item => item.IsCurve)
-        .Select(item => item.ObjectId).ToArray();
+      var hoverFeedbackId = Guid.NewGuid();
 
       void SetHover(ScreenCurvePick? pick)
       {
@@ -5527,19 +5526,20 @@ namespace vTools.Commands
             $"hover solve curve={pick?.ObjectId} solutions={cachedFixedSolutions.Count} " +
             $"elapsedMs={watch.ElapsedMilliseconds}");
         }
-        highlighter.SetObjects(pick.HasValue
-          ? selectedIds.Append(pick.Value.ObjectId)
-          : selectedIds);
+        SetThreePointFeedback(highlighter, selected, hoveredCurve, hoverFeedbackId);
       }
 
-      getPoint.MouseMove += (_, e) =>
+      void UpdateHover(GetPointMouseEventArgs e)
       {
         if (pointMode)
           return;
         var pick = PickCurveAtScreenPoint(
           doc, e.Viewport, e.WindowPoint, out var diagnostic);
-        SetHover(pick);
-      };
+        using var native = getPoint.PointOnObject();
+        SetHover(ResolveThreePointCurvePick(doc, pick, native, e.Point));
+      }
+      getPoint.MouseMove += (_, e) => UpdateHover(e);
+      getPoint.MouseDown += (_, e) => UpdateHover(e);
 
       getPoint.DynamicDraw += (_, e) =>
       {
@@ -5613,6 +5613,7 @@ namespace vTools.Commands
           pointMode ? $"Pick exact {ordinal} point" :
             $"Select {ordinal} curve or choose Point"));
         getPoint.ClearCommandOptions();
+        getPoint.EnableSnapToCurves(!pointMode);
         var toggle = getPoint.AddOption(pointMode ? "Curve" : "Point");
         var result = getPoint.Get();
         layerSession.ObserveCurrentLayer(doc);
@@ -5632,6 +5633,8 @@ namespace vTools.Commands
         if (pointMode)
           return ThreePointConstraint.FromPoint(getPoint.Point());
 
+        using var native = getPoint.PointOnObject();
+        SetHover(ResolveThreePointCurvePick(doc, hovered, native, getPoint.Point()));
         if (!hovered.HasValue || hoveredCurve == null)
         {
           RhinoApp.WriteLine("vLine: move over a curve to select it.");
@@ -5657,6 +5660,31 @@ namespace vTools.Commands
         }
         return candidate;
       }
+    }
+
+    private static ScreenCurvePick? ResolveThreePointCurvePick(
+      RhinoDoc doc, ScreenCurvePick? hovered, ObjRef? native, Point3d point)
+    {
+      if (hovered.HasValue && CurveFromScreenPick(doc, hovered.Value) != null)
+        return hovered;
+      if (native?.Curve() is not { } curve || !point.IsValid ||
+          !curve.ClosestPoint(point, out var parameter))
+        return null;
+      var pick = new ScreenCurvePick(native.ObjectId,
+        native.GeometryComponentIndex, curve.PointAt(parameter));
+      return CurveFromScreenPick(doc, pick) != null ? pick : null;
+    }
+
+    private static void SetThreePointFeedback(
+      PreviewDisplay.ObjectHighlighter highlighter,
+      IReadOnlyList<ThreePointConstraint> selected,
+      Curve? hovered = null, Guid hoverId = default)
+    {
+      var geometry = selected.Where(item => item.Curve != null)
+        .ToDictionary(item => item.FeedbackId, item => (GeometryBase)item.Curve!);
+      if (hovered != null)
+        geometry[hoverId] = hovered;
+      highlighter.SetObjects(geometry.Keys, geometry);
     }
 
     private static Point3d ClosestPointOnThreePointCurve(Curve curve, Point3d hint) =>

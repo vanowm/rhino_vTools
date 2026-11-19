@@ -42,8 +42,9 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vMatch", "vTools.Commands.vMatch.AutoLiveRefreshMilliseconds", "Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.")] private const int AutoLiveRefreshMilliseconds = 150; // Minimum milliseconds between automatic-match highlight/display updates; final results always refresh.
 
     private static readonly int ConfiguredAutoLiveRefreshMilliseconds = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.vMatch.AutoLiveRefreshMilliseconds", AutoLiveRefreshMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
-    private static readonly PreviewDisplay.ObjectHighlightStyle MiddlePartStyle = new( // Magenta body/dark outline and 0-1 transparency distinguish the fixed middle from selection and cyan matching.
-      Color.Magenta,Color.DarkMagenta,Color.White,0.45);
+    [CommandHighlightDefault("vMatch","vTools.Commands.vMatch.MiddlePartStyle","Middle part","#FFFF00FF","#FF8B008B","#FFFFFFFF",0.55)]
+    private static readonly PreviewDisplay.ObjectHighlightStyle MiddlePartStyle = CommandDefaults.Highlight("vMatch","vTools.Commands.vMatch.MiddlePartStyle",new( // Magenta body/dark outline and 0-1 transparency distinguish the fixed middle from selection and cyan matching.
+      Color.Magenta,Color.DarkMagenta,Color.White,0.45));
 
     // ── Constants shared with vUnrollSrf / MultiUnroll2.py ────────────────
     internal const string EdgeMateName        = "MultiUnroll_EdgeMate"; // Object name assigned to generated matching edge dots.
@@ -1339,11 +1340,12 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vMatch", "vTools.Commands.MatchOverlapPreview.FaceCoincidenceToleranceFactor", "Document absolute-tolerance multiplier for comparing face planes; one or greater.")] private const double FaceCoincidenceToleranceFactor = 5.0; // Document absolute-tolerance multiplier for comparing face planes; one or greater.
 
     private static readonly double ConfiguredFaceCoincidenceToleranceFactor = global::vTools.CommandDefaults.Get("vMatch", "vTools.Commands.MatchOverlapPreview.FaceCoincidenceToleranceFactor", FaceCoincidenceToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
-    private static readonly PreviewDisplay.ObjectHighlightStyle OverlapHighlightStyle = new( // Overlap-only palette; RGB colors and shading transparency distinguish it from the cyan matching preview.
+    [CommandHighlightDefault("vMatch","vTools.Commands.MatchOverlapPreview.OverlapHighlightStyle","Overlapping match","#FFFF8000","#FF5A2D00","#FF5A2D00",0.45)]
+    private static readonly PreviewDisplay.ObjectHighlightStyle OverlapHighlightStyle = CommandDefaults.Highlight("vMatch","vTools.Commands.MatchOverlapPreview.OverlapHighlightStyle",new( // Overlap-only palette; RGB colors and shading transparency distinguish it from the cyan matching preview.
       BodyColor: Color.FromArgb(255, 128, 0), // RGB orange face/wire overlay color.
       OutlineColor: Color.FromArgb(90, 45, 0), // RGB dark-orange outline around overlapping objects.
       DotBackground: Color.FromArgb(90, 45, 0), // RGB background for highlighted dots, if present.
-      Transparency: 0.55); // Shaded transparency from 0.0 opaque through 1.0 invisible.
+      Transparency: 0.55)); // Shaded transparency from 0.0 opaque through 1.0 invisible.
 
     private readonly RhinoDoc _doc;
     private readonly HashSet<int> _groups = [];

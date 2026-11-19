@@ -40,13 +40,13 @@ public class vToolsPlugIn : PlugIn
 
     Log.Initialize();
     Log.Write($"startup  rhino={RhinoApp.Version}  version={version}  dll={asm.Location}");
-    IsolationDiagnostics.Start(version);
     LocalUndoRedoShortcutSession.RepairStaleShortcutMacros();
     FpsDisplay.Start();
     CommandFailSoundMonitor.Start();
     HistoryBreakMonitor.Start();
     HideSetState.StartPolling();
     PerpGumballMonitor.Start();
+    NestTableSelectionDisplay.Start();
 
     var commandNames = CollectRegisteredCommandNames();
     EnsureRestoredCommandHelpPanelIsActive();
@@ -58,7 +58,6 @@ public class vToolsPlugIn : PlugIn
 
   protected override void OnShutdown()
   {
-    IsolationDiagnostics.Stop();
     StopCommandHelpPanelRestoreCheck();
     vFilterExec.StopPending();
     FpsDisplay.Stop();
@@ -66,6 +65,7 @@ public class vToolsPlugIn : PlugIn
     HistoryBreakMonitor.Stop();
     HideSetState.StopPolling();
     PerpGumballMonitor.Stop();
+    NestTableSelectionDisplay.Stop();
     base.OnShutdown();
   }
 

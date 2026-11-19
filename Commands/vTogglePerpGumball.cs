@@ -820,9 +820,7 @@ namespace vTools.Commands
         using var repeat = new GumballRepeatScope();
         _dispatchingCommand = true;
         _dispatchRegularDepth = doc.InCommand(true);
-        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-transparent-call",ApplyProxyCommandName);
         var result = RhinoApp.ExecuteCommand(doc,"_"+ApplyProxyCommandName);
-        IsolationDiagnostics.RecordNativeDispatch(doc,"gumball-transparent-return",ApplyProxyCommandName,result==Result.Success);
         if (result == Result.Failure || result == Result.UnknownCommand)
           _failedCommand = pending;
       }
@@ -888,9 +886,7 @@ namespace vTools.Commands
       try
       {
         // Native commands run nested inside the proxy, leaving top-level command help unchanged.
-        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-native-call", pending.Script);
         var applied = RhinoApp.RunScript(pending.DocumentSerial, pending.Script, false);
-        IsolationDiagnostics.RecordNativeDispatch(doc, "gumball-native-return", pending.Script, applied);
         if (!applied)
         {
           _failedCommand = pending;

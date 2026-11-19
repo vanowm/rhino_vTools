@@ -165,6 +165,8 @@ internal static class LayerSelector
   internal static bool IsDropDownUpdating(DropDown dropDown) =>
     DropDownStates.TryGetValue(dropDown, out var state) && state.IsUpdating;
 
+  internal static Bitmap CreateColorSwatch(Color color) => LayerListItem.CreateColorSwatch(color);
+
   internal static string GetDropDownValue(
     DropDown dropDown,
     string fallback)
@@ -849,7 +851,7 @@ internal static class LayerSelector
       SwatchMilliseconds = 0.0;
     }
 
-    private static Bitmap CreateColorSwatch(Color color)
+    internal static Bitmap CreateColorSwatch(Color color)
     {
       var bitmap = new Bitmap(SwatchSize, SwatchSize, PixelFormat.Format32bppRgba);
       using var pixels = bitmap.Lock();

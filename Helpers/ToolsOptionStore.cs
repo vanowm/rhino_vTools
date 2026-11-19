@@ -129,6 +129,7 @@ internal static bool Update(string sectionName, Action<JsonObject> updater)
       var root = LoadRoot();
 
       var section = root[sectionName] as JsonObject;
+      var previous = section?.ToJsonString();
       if (section == null)
       {
         section = new JsonObject();
@@ -136,6 +137,8 @@ internal static bool Update(string sectionName, Action<JsonObject> updater)
       }
 
       updater(section);
+      if (previous != null && string.Equals(previous, section.ToJsonString(), StringComparison.Ordinal))
+        return true;
       return SaveRoot(root);
     }
     catch (Exception ex)

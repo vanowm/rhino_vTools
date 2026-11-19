@@ -46,7 +46,8 @@ public sealed class vSeam : vToolsCommand
   private static readonly double ConfiguredBoundaryToleranceFactor = global::vTools.CommandDefaults.Get("vSeam", "vTools.Commands.vSeam.BoundaryToleranceFactor", BoundaryToleranceFactor); // Resolved once from advanced defaults; restart Rhino after changes.
   [CommandDefault("vSeam", "vTools.Commands.vSeam.BoundaryJoinToleranceFactor", "Boundary joining tolerance as a positive multiple of document absolute tolerance; 2.1 matches Rhino's default curve joining.")]
   private const double BoundaryJoinToleranceFactor = 2.1; // Positive document-tolerance multiplier for temporary boundary joining only; source geometry and offset accuracy are unchanged.
-  private static readonly PreviewDisplay.ObjectHighlightStyle GapHighlightStyle = new(System.Drawing.Color.Red, System.Drawing.Color.Black, System.Drawing.Color.Red, 1); // Red endpoint markers with black outlines for gaps beyond joining tolerance; no surface fill.
+  [CommandHighlightDefault("vSeam","vTools.Commands.vSeam.GapHighlightStyle","Open boundary gaps","#FFFF0000","#FF000000","#FFFF0000",0)]
+  private static readonly PreviewDisplay.ObjectHighlightStyle GapHighlightStyle = CommandDefaults.Highlight("vSeam","vTools.Commands.vSeam.GapHighlightStyle",new(System.Drawing.Color.Red, System.Drawing.Color.Black, System.Drawing.Color.Red, 1)); // Red endpoint markers with black outlines for gaps beyond joining tolerance; no surface fill.
   private const CurveExtensionStyle CornerExtensionStyle = CurveExtensionStyle.Line; // Tangent-line extensions join offset ends without curling or changing existing curved sections.
   [global::vTools.CommandDefault("vSeam", "vTools.Commands.vSeam.BoxDragThresholdPixels", "Screen-pixel movement separating a click from a selection-box drag; positive.")] private const int BoxDragThresholdPixels = 4; // Screen-pixel movement separating a click from a selection-box drag; positive.
 
@@ -410,8 +411,8 @@ public sealed class vSeam : vToolsCommand
           {
             applied++;
             RhinoApp.WriteLine(_settings.Allowance == 0
-              ? "vSeam: converted {0} finished edge(s) to cutting edges."
-              : "vSeam: Seam={1:G6} applied to {0} edge(s); finished geometry retained.", plan.AffectedEdges, _settings.Allowance);
+              ? $"vSeam: converted {CountText.Format(plan.AffectedEdges, "finished edge")} to {CountText.Form(plan.AffectedEdges, "a cutting edge", "cutting edges")}."
+              : $"vSeam: Seam={_settings.Allowance:G6} applied to {CountText.Format(plan.AffectedEdges, "edge")}; finished geometry retained.");
           }
         }
         catch (Exception ex)

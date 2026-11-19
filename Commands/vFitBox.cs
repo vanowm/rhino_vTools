@@ -101,7 +101,7 @@ public sealed class vFitBox : vToolsCommand
     _fitMode = NormalizeFitMode(fitMode);
     SavePersistedOptions();
 
-    Log.Write("vFitBox", $"RunCommand: {objectIds.Count} object(s) selected, angleStep={_angleStepDeg} fitMode={_fitMode} rotate={_rotate}");
+    Log.Write("vFitBox", $"RunCommand: {CountText.Format(objectIds.Count, "object")} selected, angleStep={_angleStepDeg} fitMode={_fitMode} rotate={_rotate}");
     using var geometryCopies = CollectGeometries(doc, objectIds);
     var geometries = geometryCopies.Geometries;
     if (geometries.Count == 0)
@@ -466,7 +466,7 @@ public sealed class vFitBox : vToolsCommand
     {
       var copies = ObjectTransformSelection.CopyGeometry(doc, objectIds);
       ExpandTextForFit(doc, copies);
-      Log.Write("vFitBox", "CollectGeometries: {0} fitting payload(s)", copies.Geometries.Count);
+      Log.Write("vFitBox", "CollectGeometries: {0}", CountText.Format(copies.Geometries.Count, "fitting payload"));
       return copies;
     }
     catch (Exception ex)

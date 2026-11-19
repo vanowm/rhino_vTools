@@ -2311,9 +2311,7 @@ namespace vTools.Commands
         Log.Write(Tag, $"native_request inputs={objectIds.Count} selected_inputs={selectedInputs} macro={script}");
         if (selectedInputs > 0)
         {
-          IsolationDiagnostics.RecordNativeDispatch(doc, "mirror-call", script);
           ran = RhinoApp.RunScript(script, false);
-          IsolationDiagnostics.RecordNativeDispatch(doc, "mirror-return", script, ran);
         }
       }
       finally

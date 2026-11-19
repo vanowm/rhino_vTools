@@ -11,7 +11,7 @@ namespace vTools.Commands
   public sealed class vFPS : vToolsCommand
   {
     // Option defaults
-    [global::vTools.CommandDefault("vFPS", "vTools.Commands.vFPS.DefaultEnabled", "true shows the FPS overlay at startup; false keeps it hidden.", OptionKeys = "enabled")] internal const bool DefaultEnabled = false; // true shows the FPS overlay at startup; false keeps it hidden.
+    [global::vTools.CommandDefault("vFPS", "vTools.Commands.vFPS.DefaultEnabled", "true shows the FPS overlay at startup; false keeps it hidden.", OptionKeys = "enabled")] internal const bool DefaultEnabled = true; // true shows the FPS overlay at startup; false keeps it hidden.
 
     internal static readonly bool ConfiguredDefaultEnabled = global::vTools.CommandDefaults.Get("vFPS", "vTools.Commands.vFPS.DefaultEnabled", DefaultEnabled); // Resolved once from advanced defaults; restart Rhino after changes.
 

@@ -10,7 +10,7 @@ internal static class PlanarPartSplitter
   private const int ScorePrecision = 6; // Decimal places retained by polygon clipping for approximate disconnected-panel scoring; zero through eight.
   [global::vTools.CommandDefault("PlanarPartSplitter", "vTools.PlanarPartSplitter.EvenBalanceWeight", "Nonnegative weight for balancing longest panel dimensions in Even mode; zero scores material length only.")]
   private const double EvenBalanceWeight = 1.0; // Model-unit length-imbalance penalty multiplier; zero disables physical-length balancing.
-  private static readonly double ConfiguredEvenBalanceWeight = global::vTools.CommandDefaults.Get("PlanarPartSplitter", "vTools.PlanarPartSplitter.EvenBalanceWeight", EvenBalanceWeight); // Resolved nonnegative imbalance multiplier; restart Rhino after advanced changes.
+  internal static readonly double ConfiguredEvenBalanceWeight = global::vTools.CommandDefaults.Get("PlanarPartSplitter", "vTools.PlanarPartSplitter.EvenBalanceWeight", EvenBalanceWeight); // Shared nonnegative physical-length balance multiplier; restart Rhino after advanced changes.
   internal const double DefaultAngleStep = 5.0; // Degrees between automatic orientation candidates; greater than zero through 90.
   internal const int DefaultSamples = 256; // Boundary subdivisions for approximate material-length scoring; three or greater.
   internal const int DefaultMaxParts = 32; // Maximum number of automatically proposed bands; positive integer.

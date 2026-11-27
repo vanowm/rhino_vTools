@@ -10,12 +10,12 @@
     "distance": 1
   },
   "vNest": {
-    "learnedSearch": false,
+    "nestEngine": "PackingSolver",
     "width": 60,
     "length": 315,
     "gap": 0,
     "grain": "Auto",
-    "rotationMode": "Step180",
+    "rotationMode": "Any",
     "rotationStep": 45,
     "obeyGrain": true,
     "grainDeviation": 0,

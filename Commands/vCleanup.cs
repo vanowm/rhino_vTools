@@ -153,7 +153,8 @@ public sealed class vCleanup : vToolsCommand
     ExportCleanupAction action,
     Action<IReadOnlyCollection<Guid>, IReadOnlyCollection<(Guid SourceId, Curve Curve, Point3d Point)>>? showFindings,
     Action? refreshScope = null,ExportGeometrySettings? settings=null,Func<int,int,string?,ExportCleanupAction?>? reviewFindings=null,
-    Action? keepResponsive=null,Action<int,int>? findingsChanged=null,bool previewOnly=false)
+    Action? keepResponsive=null,Action<int,int>? findingsChanged=null,bool previewOnly=false,
+    Func<Guid,bool>? canSimplify=null)
   {
     if(settings==null)LoadOptions();
     double threshold=settings?.Threshold??_threshold;
@@ -173,17 +174,18 @@ public sealed class vCleanup : vToolsCommand
     try
     {
       var overlapSettings = settings is {} own?(Tolerance:own.OverlapTolerance,OverlapSegments:own.OverlapSegments):vOverlaps.GetDetectionSettings();
-      if (simplify)
+      var simplifyScope=simplify?(canSimplify==null?curves:curves.Where(obj=>canSimplify(obj.Id)).ToList()):[];
+      if (simplifyScope.Count>0)
       {
-        var historyRecords = curves
+        var historyRecords = simplifyScope
           .SelectMany(obj => HistoryBreakWarning.CaptureAffectedRecords(doc, obj.Id))
           .ToHashSet();
         if (!HistoryBreakWarning.Confirm(doc, "vExportDXF Optimize", historyRecords))
           return Result.Cancel;
       }
       var phaseClock = System.Diagnostics.Stopwatch.StartNew();
-      int simplified = simplify ? SimplifyCurvesResponsive(doc, curves,keepResponsive) : 0;
-      Log.Write("vExportDXF", "cleanup simplify curves={0} elapsedMs={1:F1}", curves.Count, phaseClock.Elapsed.TotalMilliseconds);
+      int simplified = simplifyScope.Count>0 ? SimplifyCurvesResponsive(doc, simplifyScope,keepResponsive) : 0;
+      Log.Write("vExportDXF", "cleanup simplify eligible={0}/{1} elapsedMs={2:F1}", simplifyScope.Count,curves.Count,phaseClock.Elapsed.TotalMilliseconds);
       phaseClock.Restart();
       curves = sourceIds
         .Select(id => doc.Objects.FindId(id))

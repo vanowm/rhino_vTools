@@ -71,10 +71,12 @@ namespace vTools.Commands
     static readonly PreviewDisplay.ObjectHighlightStyle HoverNotchStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.HoverNotchStyle",new(System.Drawing.Color.Gold,System.Drawing.Color.Black,System.Drawing.Color.Gold,1)); // Gold hover feedback remains distinct from the active green notch.
     [CommandHighlightDefault("vNotches","vTools.Commands.vNotches.MatchedNotchStyle","Other matching notches","#FF1E90FF","#FF000000","#FF1E90FF",0)]
     static readonly PreviewDisplay.ObjectHighlightStyle MatchedNotchStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.MatchedNotchStyle",new(System.Drawing.Color.DodgerBlue,System.Drawing.Color.Black,System.Drawing.Color.DodgerBlue,1)); // Blue identifies the other physical notches in the active matched set.
-    [CommandHighlightDefault("vNotches","vTools.Commands.vNotches.AssignedCurveStyle","Assigned notch source curves","#FF00CED1","#FF000000","#FF00CED1",0)]
-    static readonly PreviewDisplay.ObjectHighlightStyle AssignedCurveStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.AssignedCurveStyle",new(System.Drawing.Color.DarkTurquoise,System.Drawing.Color.Black,System.Drawing.Color.DarkTurquoise,1)); // Cyan highlights every source segment assigned to the edit selection.
+    [CommandHighlightDefault("vNotches","vTools.Commands.vNotches.AssignedCurveStyle","Assigned notch source curves","#FF00CED1","#FF000000","#FF00CED1",0,UseObjectCurveColor=true)]
+    static readonly PreviewDisplay.ObjectHighlightStyle AssignedCurveStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.AssignedCurveStyle",
+      new PreviewDisplay.ObjectHighlightStyle(System.Drawing.Color.DarkTurquoise,System.Drawing.Color.Black,System.Drawing.Color.DarkTurquoise,1)
+      {UseObjectCurveColor=true}); // Outline each assigned curve in its original color, with cyan as the fallback for missing objects.
     [CommandHighlightDefault("vNotches","vTools.Commands.vNotches.HoveredSourceStyle","Source curve under a list row","#FFFFD700","#FF000000","#FF000000",0)]
-    static readonly PreviewDisplay.ObjectHighlightStyle HoveredSourceStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.HoveredSourceStyle",new(System.Drawing.Color.Gold,System.Drawing.Color.Black,System.Drawing.Color.Black,1)); // Gold overrides the cyan assigned-source highlight while a row is hovered.
+    static readonly PreviewDisplay.ObjectHighlightStyle HoveredSourceStyle=CommandDefaults.Highlight(Section,"vTools.Commands.vNotches.HoveredSourceStyle",new(System.Drawing.Color.Gold,System.Drawing.Color.Black,System.Drawing.Color.Black,1)); // Gold distinguishes a source under the list pointer.
     const string SourceStartCaption="Start",SourceEndCaption="End"; // Endpoint captions for the hovered logical curve direction; drawing geometry is not changed.
     [CommandDefault("vNotches","vTools.Commands.vNotches.LinkActiveBackground","Active picker-button background in ARGB HEX; used for Link and source/curve picking.","#FFFFD700")]
     static readonly System.Drawing.Color LinkActiveBackground=CommandDefaults.GetColor(Section,"vTools.Commands.vNotches.LinkActiveBackground",System.Drawing.Color.Gold); // ARGB background identifying active picker modes, not the add/edit switch.
@@ -101,13 +103,6 @@ namespace vTools.Commands
     const string NotchDataVersion   = MatchingNotches.Version; // Serialized notch metadata schema version.
     const string OpenVNotchType     = "\\/"; // Stored and displayed code for the Open Vee notch type.
     const string NotchObjectName = "Notch"; // Rhino object name assigned to every created notch component.
-    const string OffsetSplitReferenceLayer = "Reference"; // Rhino layer path assigned only to the segment between V/U notch legs.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.OffsetSplitContactToleranceScale", "Multiplier on document absolute tolerance for matching each leg endpoint and any shared curve endpoints.")] const double OffsetSplitContactToleranceScale = 2.0; // Multiplier on document absolute tolerance for matching each leg endpoint and any shared curve endpoints.
-
-     static readonly double ConfiguredOffsetSplitContactToleranceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.OffsetSplitContactToleranceScale", OffsetSplitContactToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.OffsetSplitZeroToleranceScale", "Minimum contact tolerance in Rhino zero-tolerance units.")] const double OffsetSplitZeroToleranceScale = 10.0; // Minimum contact tolerance in Rhino zero-tolerance units.
-
-     static readonly double ConfiguredOffsetSplitZeroToleranceScale = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.OffsetSplitZeroToleranceScale", OffsetSplitZeroToleranceScale); // Resolved once from advanced defaults; restart Rhino after changes.
     const string NotchLabelObjectName = "NotchLabel"; // Rhino object name assigned to every created notch label.
     const string NotchComponentSetKey = NotchDataPrefix + "component_set"; // Metadata key linking one notch's output components.
     const string NotchMatchSetKey = MatchingNotches.MatchSetKey; // GUID linking corresponding output from one placement across curves.
@@ -147,7 +142,7 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchWidth", "Notch width in model units; greater than zero.", OptionKeys = "notch_width")] const double DefaultNotchWidth = MatchingNotches.DefaultWidth; // Notch width in model units; greater than zero.
 
      static readonly double ConfiguredDefaultNotchWidth = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchWidth", DefaultNotchWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchType", "Notch code: I, V, \\/, U, or T.", OptionKeys = "notch_type")] const string DefaultNotchType = MatchingNotches.DefaultType; // Notch code: I, V, \/, U, or T.
+    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchType", "Notch code: I, V, \\/, U, T, VExternal, or UExternal.", OptionKeys = "notch_type")] const string DefaultNotchType = MatchingNotches.DefaultType; // Notch code; VExternal and UExternal point away from the sew curve.
 
      static readonly string ConfiguredDefaultNotchType = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchType", DefaultNotchType); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchEnabled", "true creates notch geometry; false creates labels only.", OptionKeys = "notch")] const bool DefaultNotchEnabled = true; // true creates notch geometry; false creates labels only.
@@ -156,13 +151,6 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultBothSides", "true places matching geometry on both sides of each curve; false uses its selected side.", OptionKeys = "both_sides")] const bool DefaultBothSides = false; // true places matching geometry on both sides of each curve; false uses its selected side.
 
      static readonly bool ConfiguredDefaultBothSides = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultBothSides", DefaultBothSides); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchTrim", "No leaves offset curves alone; Split moves the between-leg piece; Trim removes it.", OptionKeys = "notch_trim")] const NotchTrimMode DefaultNotchTrim = NotchTrimMode.No; // No leaves offset curves alone; Split moves the between-leg piece; Trim removes it.
-
-     static readonly NotchTrimMode ConfiguredDefaultNotchTrim = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchTrim", DefaultNotchTrim); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultNotchTrimLayer", "Named layer for split between-leg sections; created only when used.", OptionKeys = "notch_trim_layer")] const string DefaultNotchTrimLayer = "Reference"; // Named layer for split between-leg sections; created only when used.
-
-     static readonly string ConfiguredDefaultNotchTrimLayer = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultNotchTrimLayer", DefaultNotchTrimLayer); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandChoicesAttribute("vNotches", "notch_trim", false, "No", "Split", "Trim")] static readonly string[] NotchTrimNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vNotches), nameof(NotchTrimNames)); // Command-line choice order matching NotchTrimMode.
     [global::vTools.CommandDefault("vNotches", "vTools.Commands.vNotches.DefaultPercent", "true interprets placement as curve percentage; false uses model-unit distance.", OptionKeys = "percent")] const bool DefaultPercent = false; // true interprets placement as curve percentage; false uses model-unit distance.
 
      static readonly bool ConfiguredDefaultPercent = global::vTools.CommandDefaults.Get("vNotches", "vTools.Commands.vNotches.DefaultPercent", DefaultPercent); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -268,8 +256,6 @@ namespace vTools.Commands
     static string _notchType = ConfiguredDefaultNotchType;
     static bool _notch = ConfiguredDefaultNotchEnabled;
     static bool _bothSides = ConfiguredDefaultBothSides;
-    static NotchTrimMode _notchTrim = ConfiguredDefaultNotchTrim;
-    static string _notchTrimLayer = ConfiguredDefaultNotchTrimLayer;
     static bool _percent = ConfiguredDefaultPercent;
     static bool _group = ConfiguredDefaultGroup;
     static bool _associations=CommandDefaults.Get(Section,"vTools.Commands.vNotches.DefaultAssociations",DefaultAssociations);
@@ -348,8 +334,6 @@ namespace vTools.Commands
 
     static void LoadOptions(RhinoDoc doc)
     {
-      _notchTrim = ConfiguredDefaultNotchTrim;
-      _notchTrimLayer = ConfiguredDefaultNotchTrimLayer;
       ToolsOptionStore.Read<int>(Section, s =>
       {
         ApplyStoredOptions(s, includeUiSettings: true);
@@ -398,11 +382,6 @@ namespace vTools.Commands
       if (ToolsOptionStore.TryGetString(s, "notch_type",      out var t)) _notchType     = t;
       if (ToolsOptionStore.TryGetBool  (s, "notch",           out var b)) _notch         = b;
       if (ToolsOptionStore.TryGetBool  (s, "both_sides",      out b))     _bothSides     = b;
-      if (ToolsOptionStore.TryGetString(s, "notch_trim", out t) &&
-          Enum.TryParse(t, true, out NotchTrimMode trimMode) && Enum.IsDefined(trimMode))
-        _notchTrim = trimMode;
-      if (ToolsOptionStore.TryGetString(s, "notch_trim_layer", out t) &&
-          !string.IsNullOrWhiteSpace(t)) _notchTrimLayer = t;
       if (ToolsOptionStore.TryGetBool  (s, "percent",         out b))     _percent       = b;
       if (ToolsOptionStore.TryGetBool  (s, "group",           out b))     _group         = b;
       if (ToolsOptionStore.TryGetBool(s,"associations",out b)) _associations=b;
@@ -457,8 +436,6 @@ namespace vTools.Commands
       sec["notch_type"] = _notchType;
       sec["notch"] = _notch;
       sec["both_sides"] = _bothSides;
-      sec["notch_trim"] = _notchTrim.ToString();
-      sec["notch_trim_layer"] = _notchTrimLayer;
       sec["percent"] = _percent;
       sec["group"] = _group;
       sec["associations"] = _associations;
@@ -563,8 +540,6 @@ namespace vTools.Commands
     _notchType     = s.NotchTypeValues[s.NotchTypeIndex];
     _notch         = s.NotchToggle.CurrentValue;
     _bothSides     = s.BothSidesToggle.CurrentValue;
-    _notchTrim     = s.NotchTrim;
-    _notchTrimLayer = s.NotchTrimLayer;
 
     _percent       = s.PercentToggle.CurrentValue;
     _group         = s.GroupToggle.CurrentValue;
@@ -667,8 +642,6 @@ namespace vTools.Commands
       }
       ApplyAutomaticCurveSides(doc, session);
       session.ResetCurveDisplayNumbers();
-      session.NotchTrim = _notchTrim;
-      session.NotchTrimLayer = _notchTrimLayer;
 
       RunLoop(doc, session);
       SaveOptions(session);
@@ -676,7 +649,7 @@ namespace vTools.Commands
       // Deselect whole sources and individually selected parent-curve segments.
       foreach (var sourceId in session.PerCurveSourceIds.SelectMany(ids => ids))
         session.Sources.Select(doc, sourceId, false);
-      foreach (var id in OffsetSourceCurveIds(session))
+      foreach (var id in session.PerCurveSourceIds.SelectMany(ids=>ids).Select(session.Sources.ParentId).Distinct())
         doc.Objects.FindId(id)?.Select(false);
       doc.Views.Redraw();
 
@@ -1631,6 +1604,7 @@ namespace vTools.Commands
             else if(edit.Action=="link-stop")SetNotchLinkMode(doc,s,false);
             else if(edit.Action=="tool-stop")SetNotchTool(doc,s,NotchEditTool.None);
             else if(edit.Action=="link-complete"){if(s.RepairPairing)CompleteNotchLinkCycle(doc,s);}
+            else if(edit.Action is "external-on" or "external-off")SetEditedNotchesExternal(doc,s,edit.Action=="external-on");
             else {s.EditMode=!s.EditMode;s.RepairPairing=false;s.EditTool=NotchEditTool.None;s.EditedNotchId=Guid.Empty;s.SelectedNotches.Clear();s.EditedNotchObjects.Clear();s.Panel?.UpdateEditMode();}
             continue;
           }
@@ -1750,9 +1724,6 @@ namespace vTools.Commands
         ? gp.AddOption("Redo", string.Empty, true)
         : -1;
       s.TypeOptionIndex        = gp.AddOptionList("NotchType", s.NotchTypeOptionValues, s.NotchTypeIndex);
-      s.NotchTrimIndex         = gp.AddOptionList(
-        "NotchTrim", NotchTrimNames, (int)s.NotchTrim);
-      s.NotchTrimLayerIndex = gp.AddOption("NotchTrimLayer", s.NotchTrimLayer);
       s.NotchLayerOptionIndex  = gp.AddOption("NotchLayer", s.NotchLayerName);
       s.NotchEnabledIndex      = gp.AddOptionToggle("NotchEnabled", ref s.NotchToggle);
       s.BothSidesIndex          = gp.AddOption("BothSides");
@@ -1808,24 +1779,6 @@ namespace vTools.Commands
       else if (idx == s.TypeOptionIndex)
       {
         s.NotchTypeIndex = opt.CurrentListOptionIndex;
-      }
-      else if (idx == s.NotchTrimIndex)
-      {
-        SetNotchTrim(doc, s, (NotchTrimMode)opt.CurrentListOptionIndex);
-      }
-      else if (idx == s.NotchTrimLayerIndex)
-      {
-        string layer = s.NotchTrimLayer;
-        if (RhinoGet.GetString("Notch trim destination layer", false, ref layer) == Result.Success &&
-            !string.IsNullOrWhiteSpace(layer))
-        {
-          string previous = s.NotchTrimLayer;
-          s.NotchTrimLayer = layer.Trim();
-          if (!RefreshOffsetSplits(doc, s))
-            s.NotchTrimLayer = previous;
-          else
-            SaveOptions(s);
-        }
       }
       else if (idx == s.NotchLayerOptionIndex)
       {
@@ -2057,21 +2010,12 @@ namespace vTools.Commands
           referenceCurve, referenceLength, cursorPoint.Value);
       }
 
-      var splitPlans = canNotch
-        ? PrepareOffsetSplits(
-            doc, s, lengthsFromStart, placementCurveEnabled, notchLen, notchOff,
-            notchTyp, notchWid,
-            cursorPoint, referenceKinkChoice)
-        : [];
       var reuse = PrepareNotchReuse(doc,s,lengthsFromStart,placementCurveEnabled,
         canNotch,canLabel,referenceKinkChoice);
       if (reuse == null)
         return false;
-      var affectedHistory = splitPlans
-        .SelectMany(plan => HistoryBreakWarning.CaptureAffectedRecords(doc, plan.TargetId))
-        .ToHashSet();
-      foreach(var original in reuse.Originals)
-        affectedHistory.UnionWith(HistoryBreakWarning.CaptureAffectedRecords(doc,original.Attributes.ObjectId));
+      var affectedHistory=reuse.Originals.SelectMany(original=>
+        HistoryBreakWarning.CaptureAffectedRecords(doc,original.Attributes.ObjectId)).ToHashSet();
       if (!HistoryBreakWarning.Confirm(doc, "vNotches", affectedHistory))
         return false;
 
@@ -2086,7 +2030,6 @@ namespace vTools.Commands
 
       List<(Guid notch, Guid? label)>? newIds = null;
       Guid matchSetId = reuse.MatchSetId;
-      var splitEdits = new List<OffsetSplitEdit>();
       try
       {
         newIds = AddNotchesPerCurve(doc, s,
@@ -2099,14 +2042,6 @@ namespace vTools.Commands
         if (!ApplyNotchReuse(doc,s,reuse,newIds))
         {
           DeletePlacedNotches(doc,newIds);
-          RestoreNotchReuse(doc,s,reuse,false);
-          return false;
-        }
-        if (newIds.Any(item => item.notch != Guid.Empty) &&
-            !TryApplyOffsetSplits(doc, splitPlans, newIds, s.NotchTrim,
-              s.NotchTrimLayer, splitEdits))
-        {
-          DeletePlacedNotches(doc, newIds);
           RestoreNotchReuse(doc,s,reuse,false);
           return false;
         }
@@ -2147,7 +2082,6 @@ namespace vTools.Commands
         Percent          = percent,
         KinkChoice       = referenceKinkChoice,
       };
-      record.OffsetSplits.AddRange(splitEdits);
       for(int curveIndex=0;curveIndex<s.Curves.Count;curveIndex++)
       {
         var source=ResolvePlacementSourceCurveId(doc,s,curveIndex,lengthsFromStart[curveIndex],referenceKinkChoice);
@@ -3644,12 +3578,6 @@ namespace vTools.Commands
         foreach(var before in expected.Take(applied))Set(before.Snapshot,before.Exists);return false;
       }
       foreach(var edit in move.Records){edit.Record.LengthsFromStart=(forward?edit.After:edit.Before).ToList();edit.Record.Percent=forward?edit.AfterPercent:edit.BeforePercent;}
-      if(move.Records.Any(edit=>edit.Record.OffsetSplits.Count>0)&&!RefreshOffsetSplits(doc,s))
-      {
-        foreach(var before in expected)Set(before.Snapshot,before.Exists);
-        foreach(var edit in move.Records){edit.Record.LengthsFromStart=(forward?edit.Before:edit.After).ToList();edit.Record.Percent=forward?edit.BeforePercent:edit.AfterPercent;}
-        return false;
-      }
       SyncEditedNotchRecords(doc,s,move);
       if(s.EditMode&&s.EditedNotchObjects.Count>0)
       {
@@ -3672,6 +3600,9 @@ namespace vTools.Commands
       if(s.EditMode&&doc.Objects.FindId(s.EditedNotchId) is {} current&&move.Objects.Any(item=>
           item.Before.Attributes.GetUserString(NotchDataPrefix+"mode")!=item.After.Attributes.GetUserString(NotchDataPrefix+"mode")))
         s.PercentToggle.CurrentValue=current.Attributes.GetUserString(NotchDataPrefix+"mode")=="percent";
+      if(s.EditMode&&doc.Objects.FindId(s.EditedNotchId) is {} picked&&move.Objects.Any(item=>
+          item.Before.Attributes.GetUserString(NotchDataPrefix+"notch_type")!=item.After.Attributes.GetUserString(NotchDataPrefix+"notch_type")))
+        s.NotchTypeIndex=Math.Max(0,Array.IndexOf(s.NotchTypeValues,StoredNotchType(picked)));
       SyncPanelFromOptions(s);
       if(s.EditMode&&s.EditedNotchId!=Guid.Empty&&move.Objects.Any(item=>
           item.Before.Attributes.GetUserString(NotchMatchSetKey)!=item.After.Attributes.GetUserString(NotchMatchSetKey)))
@@ -3683,6 +3614,7 @@ namespace vTools.Commands
     }
     sealed class MovingNotchCulling(HashSet<uint> serials):DisplayConduit,IDisposable
     {protected override void ObjectCulling(CullObjectEventArgs e){if(serials.Contains(e.RhinoObjectSerialNumber))e.CullObject=true;}public void Dispose(){Enabled=false;}}
+
     static void ConfigureNotchPicking(GetPoint getter,bool editing)
     {
       getter.PermitObjectSnap(!editing);getter.EnableObjectSnapCursors(!editing);
@@ -3700,11 +3632,12 @@ namespace vTools.Commands
     {
       if(doc.Objects.FindId(id) is not {} picked||!TryNotchMoveCurve(doc,s,picked,out var curve,out double station))
       {Log.Write(Section,"edit move source unavailable: notch={0}",id);RhinoApp.WriteLine("vNotches: the notch's source curve is unavailable; it cannot be dragged safely.");return;}
+      var movingObjects=EditNotchObjects(doc,s,id);
       using(curve)
       using(var getter=new GetPoint())
       using(var highlight=new PreviewDisplay.ObjectHighlighter(doc,ActiveNotchStyle){RedrawOnChange=false,DrawOnTop=true,AutomaticForegroundDrawing=false})
       using(var relatedHighlight=new PreviewDisplay.ObjectHighlighter(doc,MatchedNotchStyle){RedrawOnChange=false,DrawOnTop=true,AutomaticForegroundDrawing=false})
-      using(var hidden=new MovingNotchCulling(EditNotchObjects(doc,s,id).Select(obj=>obj.RuntimeSerialNumber).ToHashSet()))
+      using(var hidden=new MovingNotchCulling(movingObjects.Select(obj=>obj.RuntimeSerialNumber).ToHashSet()))
       {
         NotchMove? preview=null;bool committed=false,valid=false,mouseDrag=s.NotchMouseDrag,moved=!mouseDrag,drawingMove=false;
         var local=PhysicalNotchObjects(EditNotchObjects(doc,s,id),picked).Select(obj=>obj.Id).ToHashSet();
@@ -3715,12 +3648,10 @@ namespace vTools.Commands
         {
           var next=BuildNotchMove(doc,s,id,point);valid=next!=null;if(next==null)return;
           highlight.SetObjects([]);relatedHighlight.SetObjects([]);preview?.Dispose();preview=next;
-          if(next!=null)
-          {
-            var geometry=next.Objects.Where(item=>local.Contains(item.After.Attributes.ObjectId)).ToDictionary(_=>Guid.NewGuid(),item=>item.After.Geometry);highlight.SetObjects(geometry.Keys,geometry);
-            var related=next.Objects.Where(item=>!local.Contains(item.After.Attributes.ObjectId)).ToDictionary(_=>Guid.NewGuid(),item=>item.After.Geometry);relatedHighlight.SetObjects(related.Keys,related);
-          }
-          var attributes=next!.Objects.First(item=>item.After.Attributes.ObjectId==id).After.Attributes;
+          var geometry=next.Objects.Where(item=>local.Contains(item.After.Attributes.ObjectId)).ToDictionary(_=>Guid.NewGuid(),item=>item.After.Geometry);
+          var related=next.Objects.Where(item=>!local.Contains(item.After.Attributes.ObjectId)).ToDictionary(_=>Guid.NewGuid(),item=>item.After.Geometry);
+          highlight.SetObjects(geometry.Keys,geometry);relatedHighlight.SetObjects(related.Keys,related);
+          var attributes=next.Objects.First(item=>item.After.Attributes.ObjectId==id).After.Attributes;
           current=NotchNumber(attributes,"length_from_start",station);
           if(MatchingNotches.TryPoint(doc,attributes,"curve_point",out var updated))feedbackPoint=updated;
           s.Panel?.UpdateDragPosition(DisplayStation(current),total,matchedDirection*(current-station));
@@ -4072,7 +4003,7 @@ namespace vTools.Commands
       {
         Mode=Text("mode","distance"),NotchLength=NotchNumber(attributes,"notch_length",ConfiguredDefaultNotchLength),
         NotchOffset=NotchNumber(attributes,"notch_offset",ConfiguredDefaultNotchOffset),NotchWidth=NotchNumber(attributes,"notch_width",ConfiguredDefaultNotchWidth),
-        NotchType=Text("notch_type",ConfiguredDefaultNotchType),NotchEnabled=Text("notch_enabled","1")=="1",LabelEnabled=Text("label_enabled","0")=="1",
+        NotchType=CanonicalNotchType(Text("notch_type",ConfiguredDefaultNotchType)),NotchEnabled=Text("notch_enabled","1")=="1",LabelEnabled=Text("label_enabled","0")=="1",
         LabelValues=Enumerable.Repeat(Text("label_value",Text("label_text","")),curves).ToList(),LabelPrefix=Text("label_prefix",ConfiguredDefaultLabelPrefix),
         LabelSize=NotchNumber(attributes,"label_size",ConfiguredDefaultLabelSize),LabelOffset=NotchNumber(attributes,"label_offset",0),
         LabelOffsetY=NotchNumber(attributes,"label_offset_y",ConfiguredDefaultLabelOffsetY),NotchLayer=Text("notch_layer",SpecialLayerCurrent),
@@ -4216,7 +4147,9 @@ namespace vTools.Commands
     {
       if(s.EditedNotchId==Guid.Empty)return;
       using var getter=CreateNotchSourcePicker();
-      using var feedback=new PreviewDisplay.ObjectHighlighter(doc,AssignedCurveStyle){DrawOnTop=true};
+      var colorSources=new Dictionary<Guid,Guid>();
+      using var feedback=new PreviewDisplay.ObjectHighlighter(doc,AssignedCurveStyle)
+      {DrawOnTop=true,CurveColorSourceId=id=>colorSources.GetValueOrDefault(id)};
       var geometry=new Dictionary<Guid,GeometryBase>();string[] previous=[];
       using var timer=new UITimer{Interval=ConfiguredRemovalModifierPollSeconds};
       void RefreshSelection()
@@ -4226,11 +4159,11 @@ namespace vTools.Commands
         {
           var keys=references.Select(item=>$"{item.ObjectId}:{item.GeometryComponentIndex.ComponentIndexType}:{item.GeometryComponentIndex.Index}").ToArray();
           if(keys.SequenceEqual(previous))return;previous=keys;
-          feedback.SetObjects([]);foreach(var item in geometry.Values)item.Dispose();geometry.Clear();
+          feedback.SetObjects([]);foreach(var item in geometry.Values)item.Dispose();geometry.Clear();colorSources.Clear();
           foreach(var item in references)
           {
             var curve=item.GeometryComponentIndex.Index>=0?NotchSourceSection(doc,item):item.Curve()?.DuplicateCurve();
-            if(curve!=null)geometry[Guid.NewGuid()]=curve;
+            if(curve!=null){var id=Guid.NewGuid();geometry.Add(id,curve);colorSources.Add(id,item.ObjectId);}
           }
           feedback.SetObjects(geometry.Keys,geometry);
         }
@@ -4326,6 +4259,80 @@ namespace vTools.Commands
         if(doc.Objects.FindId(id) is {} obj){obj.Select(false);obj.UnselectAllSubObjects();}
     }
     static bool EditStoredNotches(RhinoDoc doc,NotchSession s)=>EditStoredNotchesCore(doc,s,false);
+
+    static string StoredNotchType(RhinoObject obj)=>CanonicalNotchType(obj.Attributes.GetUserString(NotchDataPrefix+"notch_type")??DefaultNotchType);
+
+    static RhinoObject[] ExternalNotchSelection(RhinoDoc doc,NotchSession s)=>s.EditMode&&s.EditedNotchId!=Guid.Empty
+      ?EditNotchObjects(doc,s).Where(obj=>IsNotchGeometry(obj)&&MatchingNotches.CanSetExternal(StoredNotchType(obj))).ToArray():[];
+
+    static bool TryProfileMirror(Curve profile,double tolerance,out Transform mirror)
+    {
+      mirror=Transform.Unset;
+      var start=profile.PointAtStart;
+      var chord=profile.PointAtEnd-start;
+      if(chord.Length<=tolerance||!chord.Unitize())return false;
+      var rise=profile.PointAtNormalizedLength(0.5)-start;
+      var normal=rise-(rise*chord)*chord;
+      if(normal.Length<=tolerance||!normal.Unitize())return false;
+      // The mouth endpoints lie in the mirror plane, even on a curved cut edge.
+      mirror=Transform.Mirror(start,normal);
+      return mirror.IsValid;
+    }
+
+    static void SetEditedNotchesExternal(RhinoDoc doc,NotchSession s,bool external)
+    {
+      var edit=new NotchMove();
+      try
+      {
+        double tolerance=Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance);
+        foreach(var group in ExternalNotchSelection(doc,s).Where(obj=>MatchingNotches.IsExternalType(StoredNotchType(obj))!=external)
+          .GroupBy(obj=>(obj.Attributes.GetUserString(NotchDataPrefix+"component_set")??obj.Id.ToString("N"),
+            obj.Attributes.GetUserString(NotchDataPrefix+"curve_key"),MatchingNotches.StationKey(obj.Attributes))))
+        {
+          var members=group.ToArray();
+          var mirrors=new Transform[members.Length];
+          bool individual=true;
+          for(int i=0;i<members.Length;i++)
+            individual&=TryProfileMirror((Curve)members[i].Geometry,tolerance,out mirrors[i]);
+          if(!individual)
+          {
+            var joined=Curve.JoinCurves(members.Select(obj=>(Curve)obj.Geometry),tolerance);
+            try
+            {
+              if(joined.Length!=1||!TryProfileMirror(joined[0],tolerance,out var mirror))
+                throw new InvalidOperationException("Could not identify the two mouth endpoints of a notch.");
+              Array.Fill(mirrors,mirror);
+            }
+            finally{foreach(var profile in joined)profile.Dispose();}
+          }
+          for(int i=0;i<members.Length;i++)
+          {
+            var obj=members[i];
+            var before=CaptureDocObject(doc,obj.Id)??throw new InvalidOperationException("A notch is no longer available.");
+            var after=new DocObjectSnapshot(before.Geometry.Duplicate(),before.RestoreAttributes());
+            edit.Objects.Add(new(before,after));
+            if(!after.Geometry.Transform(mirrors[i]))throw new InvalidOperationException("A notch could not be flipped.");
+            after.Attributes.SetUserString(NotchDataPrefix+"notch_type",MatchingNotches.WithExternal(StoredNotchType(obj),external));
+            after.CaptureUserStrings();
+          }
+        }
+      }
+      catch(Exception ex)
+      {
+        edit.Dispose();
+        Log.Write(Section,"External notch conversion failed: {0}",ex.Message);
+        RhinoApp.WriteLine("vNotches: could not flip the selected notch profiles; no notches were changed.");
+        s.Panel?.UpdateEditMode();
+        return;
+      }
+      if(CommitNotchEdit(doc,s,edit))
+      {
+        if(doc.Objects.FindId(s.EditedNotchId) is {} picked)
+          s.NotchTypeIndex=Math.Max(0,Array.IndexOf(s.NotchTypeValues,StoredNotchType(picked)));
+        s.EditPicking?.RefreshAssociations();
+      }
+      s.Panel?.UpdateEditMode();
+    }
     static bool EditStoredNotchLabels(RhinoDoc doc,NotchSession s,bool enabled)
     {
       s.Panel?.CommitPendingValues();
@@ -4459,6 +4466,8 @@ namespace vTools.Commands
           obj.Attributes.GetUserString(NotchDataPrefix+"curve_key")==attributes.GetUserString(NotchDataPrefix+"curve_key")).ToArray();
         if(live.Length==0)continue;
         var primary=live.FirstOrDefault(IsNotchGeometry);var text=live.FirstOrDefault(obj=>obj.Geometry is TextEntity or TextDot);
+        if(text==null&&label!=Guid.Empty&&doc.Objects.FindId(label) is {IsDeleted:false,Geometry:TextEntity or TextDot} untouched)
+          text=untouched;
         s.PlacementIds[record][curve]=primary?.Id??Guid.Empty;s.NotchIdsByCurve[curve][record]=primary?.Id??Guid.Empty;
         s.PlacementLabelIds[record][curve]=text?.Id;s.LabelIdsByCurve[curve][record]=text?.Id;
         var style=ReadNotchStyle((primary??text)!.Attributes,s.Curves.Count);
@@ -4724,7 +4733,8 @@ namespace vTools.Commands
         _existingHighlight=new(doc,MoveHighlightStyle){RedrawOnChange=false,DrawOnTop=true};
         _editedHighlight=new(doc,ActiveNotchStyle){RedrawOnChange=false,DrawOnTop=true};
         _matchedHighlight=new(doc,MatchedNotchStyle){RedrawOnChange=false,DrawOnTop=true};
-        _sourceHighlight=new(doc,AssignedCurveStyle){RedrawOnChange=false,DrawOnTop=true};
+        _sourceHighlight=new(doc,AssignedCurveStyle)
+        {RedrawOnChange=false,DrawOnTop=true,CurveColorSourceId=session.Sources.ParentId};
         _cues=new(doc);
         _doubleClickInput=new(HandleDoubleClickMessage,ReleasePointer,TrackPointer);
         _timer.Elapsed+=(_,_)=>PollInput();
@@ -5084,7 +5094,6 @@ namespace vTools.Commands
 
       foreach (var record in removedRecords.AsEnumerable().Reverse())
       {
-        RestoreOriginalOffsetCurves(doc, record.OffsetSplits);
         if(record.Reuse is {} reuse)RestoreNotchReuse(doc,s,reuse,false);
       }
 
@@ -5118,7 +5127,6 @@ namespace vTools.Commands
       foreach (var placement in batch.Placements)
       {
         if(placement.Record.Reuse is {} reuse)RestoreNotchReuse(doc,s,reuse,true);
-        RestoreSplitOffsetPieces(doc, placement.Record.OffsetSplits);
         var notchIds = new List<Guid>();
         var labelIds = new List<Guid?>();
         for (int curveIndex = 0; curveIndex < s.Curves.Count; curveIndex++)
@@ -5508,11 +5516,7 @@ namespace vTools.Commands
 
     // ── Notch geometry ────────────────────────────────────────────────────────
 
-    static string CanonicalNotchType(string? notchType)
-    {
-      string value = (notchType ?? "I").Trim().ToUpperInvariant();
-      return value == "OPENV" || value == OpenVNotchType ? OpenVNotchType : value;
-    }
+    static string CanonicalNotchType(string? notchType)=>MatchingNotches.CanonicalType(notchType);
 
     static IReadOnlyList<Curve>? NotchGeometryForSides(Curve curve, double lengthFromStart,
       double notchLength, double notchOffset, string side, string notchType, double notchWidth,
@@ -5590,7 +5594,8 @@ namespace vTools.Commands
       if(curve.IsLinear(RhinoMath.ZeroTolerance))
         return MatchingNotches.StraightGeometry(center,tangent,direction,notchLength,notchOffset,notchType,notchWidth);
 
-      if (notchType is "I" or "T")
+      string profile=MatchingNotches.ProfileType(notchType);
+      if (profile is "I" or "T")
       {
         Point3d start, end;
         if (notchOffset > 0.0)
@@ -5650,7 +5655,7 @@ namespace vTools.Commands
           !TryNotchBase(curve, rightRaw, totalLength, tangent, out var rightBase))
         return null;
 
-      var tip = center + direction * notchLength;
+      var tip = MatchingNotches.ProfileTip(center,direction,notchLength,notchOffset,notchType);
       var offsetCurves = new List<Curve>();
       try
       {
@@ -5672,7 +5677,7 @@ namespace vTools.Commands
 
           leftBase += translation;
           rightBase += translation;
-          tip = center - direction * notchLength + translation;
+          tip = MatchingNotches.ProfileTip(center+translation,direction,notchLength,notchOffset,notchType);
 
           if (logOffsetFit)
           {
@@ -5682,7 +5687,7 @@ namespace vTools.Commands
           }
         }
 
-        if (notchType == "V")
+        if (profile == "V")
         {
           if (notchOffset > 0.0)
           {
@@ -5692,7 +5697,7 @@ namespace vTools.Commands
           return [new PolylineCurve(new[] { leftBase, tip, rightBase })];
         }
 
-        if (notchType is "U" or OpenVNotchType)
+        if (profile is "U" or OpenVNotchType)
         {
           // U is a V with its point truncated, not a parallel-sided channel.
           double halfFlat = Math.Max(0.0, notchWidth * 0.25);
@@ -5703,7 +5708,7 @@ namespace vTools.Commands
             FitNotchLegsToActualOffset(curve, offsetCurves,
               notchType, leftTip, ref leftBase, rightTip, ref rightBase, logOffsetFit);
           }
-          if (notchType == OpenVNotchType)
+          if (profile == OpenVNotchType)
             return [new LineCurve(leftBase, leftTip), new LineCurve(rightTip, rightBase)];
           return [new PolylineCurve(new[] { leftBase, leftTip, rightTip, rightBase })];
         }
@@ -6598,14 +6603,7 @@ namespace vTools.Commands
       s.CurveSideBySource[sourceId] = !oldSide;
       UpdateLogicalCurveSide(s, idx);
       RebuildCurveNotches(doc, s, idx);
-      if (!RefreshOffsetSplits(doc, s))
-      {
-        s.CurveSideBySource[sourceId] = oldSide;
-        UpdateLogicalCurveSide(s, idx);
-        RebuildCurveNotches(doc, s, idx);
-      }
-      else
-        ClearNotchRedo(s);
+      ClearNotchRedo(s);
       SelectBothCurves(doc, s);
       s.Panel?.UpdateUndoEnabled();
     }
@@ -6615,38 +6613,10 @@ namespace vTools.Commands
     {
       if (curveIndex < 0 || curveIndex >= s.Curves.Count || sourceId == Guid.Empty)
         return false;
-      bool previous = s.CurveBothSidesBySource.GetValueOrDefault(
-        sourceId, s.BothSidesToggle.CurrentValue);
       s.CurveBothSidesBySource[sourceId] = enabled;
       RebuildCurveNotches(doc, s, curveIndex);
-      if (!RefreshOffsetSplits(doc, s))
-      {
-        s.CurveBothSidesBySource[sourceId] = previous;
-        RebuildCurveNotches(doc, s, curveIndex);
-        return false;
-      }
       s.BothSidesToggle.CurrentValue = enabled;
       ClearNotchRedo(s);
-      s.Panel?.UpdateUndoEnabled();
-      return true;
-    }
-
-    static bool SetNotchTrim(RhinoDoc doc, NotchSession s, NotchTrimMode mode)
-    {
-      if (!Enum.IsDefined(mode))
-        return false;
-      if (s.NotchTrim == mode)
-        return true;
-      var previous = s.NotchTrim;
-      s.NotchTrim = mode;
-      if (!RefreshOffsetSplits(doc, s))
-      {
-        s.NotchTrim = previous;
-        return false;
-      }
-      SaveOptions(s);
-      ClearNotchRedo(s);
-      s.Panel?.RefreshNotchTrimIcon();
       s.Panel?.UpdateUndoEnabled();
       return true;
     }
@@ -6660,11 +6630,6 @@ namespace vTools.Commands
       int sourceIndex = s.PerCurveSourceIds[idx].IndexOf(sourceId);
       if (sourceIndex < 0 || sourceIndex >= s.PerCurveSegments[idx].Count)
         return;
-      var previousLengths = s.NotchRecords
-        .Select(record => idx < record.LengthsFromStart.Count
-          ? (double?)record.LengthsFromStart[idx] : null)
-        .ToArray();
-      bool wasReversed = s.CurveReversedBySource.GetValueOrDefault(sourceId);
       bool oldSide = s.CurveSideBySource.GetValueOrDefault(sourceId, s.CurveSides[idx]);
       double prefix = s.PerCurveSegments[idx]
         .Take(sourceIndex)
@@ -6691,25 +6656,7 @@ namespace vTools.Commands
       s.CurveIsContinuous[idx] = continuous;
       UpdateLogicalCurveSide(s, idx);
       RebuildCurveNotches(doc, s, idx);
-      if (!RefreshOffsetSplits(doc, s))
-      {
-        for (int recordIndex = 0; recordIndex < s.NotchRecords.Count; recordIndex++)
-          if (previousLengths[recordIndex].HasValue &&
-              idx < s.NotchRecords[recordIndex].LengthsFromStart.Count)
-            s.NotchRecords[recordIndex].LengthsFromStart[idx] =
-              previousLengths[recordIndex]!.Value;
-        s.ClearPlacementRuns();
-        s.PerCurveSegments[idx][sourceIndex].Reverse();
-        s.CurveReversedBySource[sourceId] = wasReversed;
-        s.CurveSideBySource[sourceId] = oldSide;
-        s.Curves[idx].Dispose();
-        s.Curves[idx] = BuildLayoutCurve(doc, s.PerCurveSegments[idx], out continuous);
-        s.CurveIsContinuous[idx] = continuous;
-        UpdateLogicalCurveSide(s, idx);
-        RebuildCurveNotches(doc, s, idx);
-      }
-      else
-        ClearNotchRedo(s);
+      ClearNotchRedo(s);
       SelectBothCurves(doc, s);
       s.Panel?.UpdateUndoEnabled();
     }
@@ -6732,12 +6679,8 @@ namespace vTools.Commands
       NotchCurveSources.ClearSelection(doc);
       foreach (var sourceId in s.PerCurveSourceIds.SelectMany(ids => ids))
         s.Sources.Select(doc, sourceId, true);
-      var toSelect = s.PerCurveSourceIds.Count > 0
-        ? OffsetSourceCurveIds(s)
-        : (IEnumerable<Guid>)s.CurveIds;
-      var parents = s.PerCurveSourceIds.SelectMany(ids => ids).Select(s.Sources.ParentId).ToHashSet();
-      foreach (var id in toSelect)
-        if (!parents.Contains(id))
+      if(s.PerCurveSourceIds.Count==0)
+        foreach(var id in s.CurveIds)
           doc.Objects.FindId(id)?.Select(true);
       doc.Views.Redraw();
     }
@@ -6951,8 +6894,6 @@ namespace vTools.Commands
       public List<MatchingNotches.CurveCopy> AssociatedCopies=[];
       public OptionToggle NotchToggle;
       public OptionToggle BothSidesToggle;
-      public NotchTrimMode NotchTrim = ConfiguredDefaultNotchTrim;
-      public string NotchTrimLayer = ConfiguredDefaultNotchTrimLayer;
       public OptionToggle LabelToggle;
       public OptionToggle LabelSizeAutoToggle;
 
@@ -6973,9 +6914,9 @@ namespace vTools.Commands
       public bool   MultipleAuto;
       public int MultipleCurvatureSensitivity;
       public bool   MultipleSeparate;
-      [global::vTools.CommandChoicesAttribute("vNotches", "notch_type", false, "I", "V", "\\/", "U", "T")] public readonly string[] NotchTypeValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vNotches.NotchSession), nameof(NotchTypeValues));
-      public readonly string[] NotchTypeOptionValues = ["I", "V", "OpenV", "U", "T"];
-      public readonly string[] NotchTypeToolTips = ["Slit", "Vee", "Open Vee", "Castle", "Tee"];
+      [global::vTools.CommandChoicesAttribute("vNotches", "notch_type", false, "I", "V", "\\/", "U", "T", MatchingNotches.ExternalVType, MatchingNotches.ExternalCastleType)] public readonly string[] NotchTypeValues = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.vNotches.NotchSession), nameof(NotchTypeValues));
+      public readonly string[] NotchTypeOptionValues = ["I", "V", "OpenV", "U", "T", MatchingNotches.ExternalVType, MatchingNotches.ExternalCastleType];
+      public readonly string[] NotchTypeToolTips = ["Slit", "Vee", "Open Vee", "Castle", "Tee", "External Vee", "External Castle"];
       public int NotchTypeIndex;
 
       public readonly int[] LabelSizePctValues;
@@ -7037,7 +6978,7 @@ namespace vTools.Commands
 
       // Command option indices (set each iteration)
       public int SideOptionIndex, ReverseOptionIndex, UndoOptionIndex, RedoOptionIndex;
-      public int TypeOptionIndex, NotchTrimIndex, NotchTrimLayerIndex, NotchLayerOptionIndex, NotchEnabledIndex, BothSidesIndex, LabelEnabledIndex;
+      public int TypeOptionIndex, NotchLayerOptionIndex, NotchEnabledIndex, BothSidesIndex, LabelEnabledIndex;
       public int LabelValueOptionIndex, LabelLayerOptionIndex;
       public int LabelSizeAutoIndex, LabelSizePctIndex2;
 
@@ -7197,7 +7138,6 @@ namespace vTools.Commands
       public NotchReuse? Reuse;
       public readonly Dictionary<Guid,NotchRecord> EditOverrides=[];
       public bool? BothSidesOverride,LabelDirectionOverride;
-      public List<OffsetSplitEdit> OffsetSplits = [];
     }
 
     sealed record MultiplePlacementPlan(
@@ -7278,10 +7218,6 @@ namespace vTools.Commands
     sealed class NotchPanel : Eto.Forms.Form
     {
       const int CurveRowHeight = 28; // Curve-row and drag-handle height in device-independent pixels.
-      const int NotchTrimIconWidth = 30; // Compact Type-row toggle width in device-independent pixels.
-      const int NotchTrimIconHeight = 20; // Compact Type-row toggle height in device-independent pixels.
-      const double NotchTrimCurveStroke = 1.7; // Original curve and notch stroke thickness in device-independent pixels.
-      const double NotchTrimSplitStroke = 3.0; // Emphasized between-leg split stroke thickness in device-independent pixels.
       const int CurveRowSpacing = 0; // Vertical space between adjacent curve rows in device-independent pixels.
       const int CurveRowControlSpacing = 3; // Horizontal space between compact curve-row controls in device-independent pixels.
       const int CurveDragHandleWidth = 16; // Width of the only cursor and drag-sensitive handle area; matches link buttons.
@@ -7382,7 +7318,8 @@ namespace vTools.Commands
       bool _multipleUseDistanceBeforeAuto;
       // Controls
       readonly Button[] _typeButtons;
-      readonly Button _notchTrimButton;
+      readonly CheckBox _externalNotchCheck=new(){Text="External",
+        ToolTip="Point V and Castle notches outward. In Edit mode, flip selected profiles in place."};
       readonly NumericStepper _lengthStepper, _offsetStepper, _widthStepper;
       readonly DropDown    _notchLayerDrop;
       readonly CheckBox    _percentCheck, _groupCheck, _associationsCheck;
@@ -7493,7 +7430,7 @@ namespace vTools.Commands
           _windowHeight > 0 ? _windowHeight : -1);
 
         // Type
-        _typeButtons = new Button[s.NotchTypeValues.Length];
+        _typeButtons = new Button[s.NotchTypeValues.Count(type=>!MatchingNotches.IsExternalType(type))];
         for (int i = 0; i < _typeButtons.Length; i++)
         {
           int typeIndex = i;
@@ -7509,14 +7446,13 @@ namespace vTools.Commands
           _typeButtons[i].Load += (_, __) =>
             InstallNotchTypeButtonStyle(_typeButtons[typeIndex], typeIndex);
         }
-        _notchTrimButton = new Button
+        _externalNotchCheck.CheckedChanged+=(_,_) =>
         {
-          Width = NotchTrimIconWidth,
-          Height = NotchTrimIconHeight,
+          if(_suppress)return;
+          bool external=_externalNotchCheck.Checked??true;
+          if(s.EditMode)EditAction(external?"external-on":"external-off");
+          else SetPanelNotchType(MatchingNotches.WithExternal(s.NotchTypeValues[s.NotchTypeIndex],external));
         };
-        _notchTrimButton.Click += (_, __) =>
-          SetNotchTrim(doc, s, (NotchTrimMode)(((int)s.NotchTrim + 1) % 3));
-        _notchTrimButton.Load += (_, __) => RefreshNotchTrimIcon();
 
         // Numeric fields
         _lengthStepper = MakeNumberStepper(s.NotchLengthOpt.CurrentValue,
@@ -8088,8 +8024,8 @@ namespace vTools.Commands
         };
         foreach (var button in _typeButtons)
           typeSelector.Items.Add(new StackLayoutItem(button, false));
+        typeSelector.Items.Add(new StackLayoutItem(_externalNotchCheck,false));
         typeSelector.Items.Add(new StackLayoutItem(null, true));
-        typeSelector.Items.Add(new StackLayoutItem(_notchTrimButton, false));
         notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Type", "Shape of the notch to create"), new TableCell(typeSelector, true) } });
         notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Layer", _notchLayerDrop.ToolTip), new TableCell(_notchLayerDrop, true) } });
         notchTable.Rows.Add(new TableRow { ScaleHeight = false, Cells = { FL("Length", _lengthStepper.ToolTip), new TableCell(_lengthStepper, true) } });
@@ -9688,9 +9624,11 @@ namespace vTools.Commands
         double right = center + width * 0.5;
         double top = center - height * 0.5;
         double bottom = center + height * 0.5;
+        notchType=CanonicalNotchType(notchType);
+        if(MatchingNotches.IsExternalType(notchType))(top,bottom)=(bottom,top);
 
         var strokes = new List<System.Windows.Media.PointCollection>();
-        switch (CanonicalNotchType(notchType))
+        switch (MatchingNotches.ProfileType(notchType))
         {
           case "V":
             strokes.Add([
@@ -9794,7 +9732,9 @@ namespace vTools.Commands
       {
         if (button.ControlObject is not System.Windows.Controls.Button native)
           return;
-        bool active = typeIndex == _s.NotchTypeIndex;
+        string currentType=_s.NotchTypeValues[_s.NotchTypeIndex];
+        string profile=_s.NotchTypeValues[typeIndex];
+        bool active=profile==MatchingNotches.ProfileType(currentType);
         native.Background = System.Windows.Media.Brushes.Transparent;
         native.BorderBrush = System.Windows.Media.Brushes.Transparent;
         native.Padding = new System.Windows.Thickness(0);
@@ -9807,7 +9747,7 @@ namespace vTools.Commands
         native.FocusVisualStyle = NotchTypeFocusVisualStyle;
         native.HorizontalContentAlignment = System.Windows.HorizontalAlignment.Center;
         native.VerticalContentAlignment = System.Windows.VerticalAlignment.Center;
-        var key = (_s.NotchTypeValues[typeIndex], active,
+        var key = (MatchingNotches.WithExternal(profile,active&&MatchingNotches.IsExternalType(currentType)), active,
           _s.NotchLengthOpt.CurrentValue, _s.NotchWidthOpt.CurrentValue);
         if (native.Content is System.Windows.FrameworkElement existing && Equals(existing.Tag, key))
           return;
@@ -9853,10 +9793,14 @@ namespace vTools.Commands
       }
       void SelectNotchType(int typeIndex)
       {
-        if (_suppress)
-          return;
-
-        int selected = Math.Clamp(typeIndex, 0, _typeButtons.Length - 1);
+        if(_suppress)return;
+        SetPanelNotchType(MatchingNotches.WithExternal(_s.NotchTypeValues[typeIndex],
+          MatchingNotches.IsExternalType(_s.NotchTypeValues[_s.NotchTypeIndex])));
+      }
+      void SetPanelNotchType(string type)
+      {
+        int selected=Array.IndexOf(_s.NotchTypeValues,type);
+        if(selected<0)return;
         _suppress = true;
         try
         {
@@ -9874,50 +9818,21 @@ namespace vTools.Commands
       {
         for (int i = 0; i < _typeButtons.Length; i++)
           InstallNotchTypeButtonStyle(_typeButtons[i], i);
+        RefreshExternalNotchCheck();
       }
-
-      public void RefreshNotchTrimIcon()
+      void RefreshExternalNotchCheck()
       {
-        _notchTrimButton.ToolTip = _s.NotchTrim switch
+        string type=_s.NotchTypeValues[_s.NotchTypeIndex];
+        var values=ExternalNotchSelection(_s.Doc,_s).Select(obj=>MatchingNotches.IsExternalType(StoredNotchType(obj))).Distinct().Take(2).ToArray();
+        bool previous=_suppress;
+        _suppress=true;
+        try
         {
-          NotchTrimMode.No => "NotchTrim: No (click for Split)",
-          NotchTrimMode.Split => $"NotchTrim: Split to {_s.NotchTrimLayer} (click for Trim)",
-          _ => "NotchTrim: Trim (click for No)",
-        };
-        if (_notchTrimButton.ControlObject is not System.Windows.Controls.Button native)
-          return;
-        if (native.Content is System.Windows.Controls.Canvas existing && Equals(existing.Tag, _s.NotchTrim))
-          return;
-        var ink = System.Windows.SystemColors.ControlTextBrush;
-        var splitInk = new System.Windows.Media.SolidColorBrush(
-          System.Windows.Media.Color.FromRgb(0, 145, 201));
-        var drawing = new System.Windows.Controls.Canvas
-        {
-          Width = NotchTrimIconWidth,
-          Height = NotchTrimIconHeight,
-          IsHitTestVisible = false,
-          Tag = _s.NotchTrim,
-        };
-        void Line(double x1, double y1, double x2, double y2,
-          System.Windows.Media.Brush color, double stroke)
-        {
-          drawing.Children.Add(new System.Windows.Shapes.Line
-          {
-            X1 = x1, Y1 = y1, X2 = x2, Y2 = y2,
-            Stroke = color, StrokeThickness = stroke,
-            SnapsToDevicePixels = true,
-          });
+          _externalNotchCheck.Enabled=_s.EditMode?values.Length>0:MatchingNotches.CanSetExternal(type);
+          _externalNotchCheck.ThreeState=values.Length==2;
+          _externalNotchCheck.Checked=_s.EditMode&&values.Length>0?(values.Length==2?null:values[0]):MatchingNotches.IsExternalType(type);
         }
-        Line(2, 14, 10, 14, ink, NotchTrimCurveStroke);
-        Line(20, 14, 28, 14, ink, NotchTrimCurveStroke);
-        if (_s.NotchTrim != NotchTrimMode.Trim)
-          Line(10, 14, 20, 14,
-            _s.NotchTrim == NotchTrimMode.Split ? splitInk : ink,
-            _s.NotchTrim == NotchTrimMode.Split ? NotchTrimSplitStroke : NotchTrimCurveStroke);
-        Line(10, 14, 15, 4, ink, NotchTrimCurveStroke);
-        Line(15, 4, 20, 14, ink, NotchTrimCurveStroke);
-        native.Content = drawing;
-        native.Padding = new System.Windows.Thickness(0);
+        finally{_suppress=previous;}
       }
 
       void InstallCollapsibleGroupHeader(GroupBox group, Control content, string title,
@@ -10737,6 +10652,7 @@ namespace vTools.Commands
         _associationsCheck.Visible=!editing;
         if(editing)ClearMultiplePreview();
         RefreshPercentCheck();
+        RefreshNotchTypeIcons();
         Redraw();
       }
     }
@@ -10755,496 +10671,6 @@ namespace vTools.Commands
 
   public sealed partial class vNotches
   {
-    private sealed record OffsetSplitContact(int CurveIndex, double First, double Second);
-    private sealed record OffsetCurveHit(RhinoObject Object, double Parameter, double Distance);
-
-    private sealed class OffsetSplitPlan(Guid targetId, bool preserveSourceId)
-    {
-      public Guid TargetId { get; } = targetId;
-      public bool PreserveSourceId { get; } = preserveSourceId;
-      public List<OffsetSplitContact> Contacts { get; } = [];
-    }
-
-    private sealed class OffsetSplitEdit(DocObjectSnapshot original, bool selected)
-    {
-      public DocObjectSnapshot Original { get; } = original;
-      public bool Selected { get; } = selected;
-      public List<DocObjectSnapshot> Pieces { get; } = [];
-      public List<Guid> LivePieceIds { get; } = [];
-      public Guid RestoredOriginalId { get; set; }
-      public bool PreservesOriginalId { get; set; }
-    }
-
-    private static HashSet<Guid> OffsetSourceCurveIds(NotchSession session,
-      IEnumerable<OffsetSplitEdit>? edits = null)
-    {
-      var ids = session.PerCurveSourceIds.SelectMany(sourceIds => sourceIds)
-        .Select(session.Sources.ParentId).ToHashSet();
-      foreach (var edit in edits ?? session.NotchRecords.SelectMany(record => record.OffsetSplits))
-        if (ids.Remove(edit.Original.Attributes.ObjectId))
-          ids.UnionWith(edit.LivePieceIds);
-      return ids;
-    }
-
-    private static List<OffsetSplitPlan> PrepareOffsetSplits(
-      RhinoDoc doc, NotchSession session, IReadOnlyList<double> lengths, bool[] curveEnabled,
-      double notchLength, double notchOffset, string notchType, double notchWidth,
-      Point3d? cursorPoint, KinkTangentChoice referenceKinkChoice,
-      IEnumerable<OffsetSplitEdit>? priorEdits = null)
-    {
-      var plans = new Dictionary<Guid, OffsetSplitPlan>();
-      if (session.NotchTrim == NotchTrimMode.No ||
-          CanonicalNotchType(notchType) is not ("V" or "U" or OpenVNotchType))
-        return [];
-
-      var sourceIds = OffsetSourceCurveIds(session, priorEdits);
-      bool onSource = notchOffset <= 0.0;
-      var settings = new ObjectEnumeratorSettings
-      {
-        IncludeLights = false,
-        IncludeGrips = false,
-        IncludePhantoms = false,
-        NormalObjects = true,
-        HiddenObjects = false,
-        LockedObjects = false
-      };
-      var candidates = doc.Objects.GetObjectList(settings)
-        .Where(obj => obj?.Geometry is Curve && sourceIds.Contains(obj.Id) == onSource &&
-                      obj.Attributes.GetUserString(NotchDataPrefix + "version") == null)
-        .ToArray();
-      double contactTolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * ConfiguredOffsetSplitContactToleranceScale,
-        RhinoMath.ZeroTolerance * ConfiguredOffsetSplitZeroToleranceScale);
-      int referenceIndex = cursorPoint.HasValue ? session.PreviewRefCurveIndex : -1;
-      KinkTangentChoice? kinkChoice = referenceKinkChoice == KinkTangentChoice.Default
-        ? null : referenceKinkChoice;
-
-      for (int curveIndex = 0; curveIndex < session.Curves.Count; curveIndex++)
-      {
-        if (curveIndex >= curveEnabled.Length || !curveEnabled[curveIndex] ||
-            curveIndex >= lengths.Count)
-          continue;
-        ResolvePlacementCurve(session, curveIndex, lengths[curveIndex], kinkChoice,
-          out var placementCurve, out double placementLength);
-        string side = PlacementCurveSide(session, curveIndex, lengths[curveIndex], kinkChoice);
-        bool bothSides = PlacementCurveBothSides(
-          session, curveIndex, lengths[curveIndex], kinkChoice);
-        var sides = bothSides
-          ? new[] { side, side == "Left" ? "Right" : "Left" }
-          : new[] { side };
-        foreach (var currentSide in sides)
-        {
-          var geometry = NotchGeometry(
-            placementCurve, placementLength, notchLength, notchOffset,
-            currentSide, notchType, notchWidth,
-            curveIndex == referenceIndex ? cursorPoint : null, kinkChoice);
-          if (geometry == null || geometry.Count == 0)
-            continue;
-          try
-          {
-            var first = geometry[0].PointAtStart;
-            var second = geometry[^1].PointAtEnd;
-            var firstHits = new List<OffsetCurveHit>();
-            var secondHits = new List<OffsetCurveHit>();
-            foreach (var candidate in candidates)
-            {
-              if (candidate.Geometry is not Curve target ||
-                  !target.ClosestPoint(first, out double firstParameter) ||
-                  !target.ClosestPoint(second, out double secondParameter))
-                continue;
-              double firstDistance = first.DistanceTo(target.PointAt(firstParameter));
-              double secondDistance = second.DistanceTo(target.PointAt(secondParameter));
-              if (firstDistance <= contactTolerance)
-                firstHits.Add(new OffsetCurveHit(candidate, firstParameter, firstDistance));
-              if (secondDistance <= contactTolerance)
-                secondHits.Add(new OffsetCurveHit(candidate, secondParameter, secondDistance));
-            }
-            firstHits.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-            secondHits.Sort((a, b) => a.Distance.CompareTo(b.Distance));
-
-            OffsetCurveHit? firstHit = null;
-            OffsetCurveHit? secondHit = null;
-            double sharedFirst = 0.0;
-            double sharedSecond = 0.0;
-            double bestDistance = double.MaxValue;
-            foreach (var left in firstHits)
-            {
-              foreach (var right in secondHits)
-              {
-                if (left.Object.Id != right.Object.Id ||
-                    Math.Abs(left.Parameter - right.Parameter) <= RhinoMath.ZeroTolerance)
-                  continue;
-                double distance = left.Distance + right.Distance;
-                if (distance >= bestDistance)
-                  continue;
-                firstHit = left;
-                secondHit = right;
-                bestDistance = distance;
-              }
-            }
-            if (firstHit != null && secondHit != null)
-            {
-              AddOffsetSplitContact(plans, firstHit.Object.Id, onSource,
-                new OffsetSplitContact(curveIndex, firstHit.Parameter, secondHit.Parameter));
-              continue;
-            }
-
-            bestDistance = double.MaxValue;
-            foreach (var left in firstHits)
-            {
-              foreach (var right in secondHits)
-              {
-                if (left.Object.Id == right.Object.Id ||
-                    left.Object.Geometry is not Curve leftCurve ||
-                    right.Object.Geometry is not Curve rightCurve ||
-                    !TryFindSharedOffsetEndpoint(leftCurve, rightCurve, contactTolerance,
-                      out double leftEnd, out double rightEnd))
-                  continue;
-                double distance = left.Distance + right.Distance;
-                if (distance >= bestDistance)
-                  continue;
-                firstHit = left;
-                secondHit = right;
-                sharedFirst = leftEnd;
-                sharedSecond = rightEnd;
-                bestDistance = distance;
-              }
-            }
-            if (firstHit == null || secondHit == null)
-            {
-              Log.Write("vNotches", $"offset split skipped curve={curveIndex + 1}: " +
-                $"firstHits={firstHits.Count} secondHits={secondHits.Count} " +
-                "no shared offset curve or connected pair");
-              continue;
-            }
-            AddOffsetSplitContact(plans, firstHit.Object.Id, onSource,
-              new OffsetSplitContact(curveIndex, firstHit.Parameter, sharedFirst));
-            AddOffsetSplitContact(plans, secondHit.Object.Id, onSource,
-              new OffsetSplitContact(curveIndex, sharedSecond, secondHit.Parameter));
-            Log.Write("vNotches", $"offset split paired curve={curveIndex + 1} " +
-              $"targets={firstHit.Object.Id},{secondHit.Object.Id}");
-          }
-          finally
-          {
-            foreach (var curve in geometry)
-              curve.Dispose();
-          }
-        }
-      }
-      return plans.Values.ToList();
-    }
-
-    private static void AddOffsetSplitContact(Dictionary<Guid, OffsetSplitPlan> plans,
-      Guid targetId, bool preserveSourceId, OffsetSplitContact contact)
-    {
-      if (!plans.TryGetValue(targetId, out var plan))
-      {
-        plan = new OffsetSplitPlan(targetId, preserveSourceId);
-        plans.Add(targetId, plan);
-      }
-      plan.Contacts.Add(contact);
-    }
-
-    private static bool TryFindSharedOffsetEndpoint(Curve first, Curve second,
-      double tolerance, out double firstParameter, out double secondParameter)
-    {
-      firstParameter = 0.0;
-      secondParameter = 0.0;
-      if (first.IsClosed || second.IsClosed)
-        return false;
-
-      var firstEnds = new[] { first.Domain.T0, first.Domain.T1 };
-      var secondEnds = new[] { second.Domain.T0, second.Domain.T1 };
-      double bestDistance = tolerance;
-      bool found = false;
-      foreach (double firstEnd in firstEnds)
-      {
-        foreach (double secondEnd in secondEnds)
-        {
-          double distance = first.PointAt(firstEnd).DistanceTo(second.PointAt(secondEnd));
-          if (distance > bestDistance)
-            continue;
-          firstParameter = firstEnd;
-          secondParameter = secondEnd;
-          bestDistance = distance;
-          found = true;
-        }
-      }
-      return found;
-    }
-
-    private static bool TryApplyOffsetSplits(
-      RhinoDoc doc, IReadOnlyList<OffsetSplitPlan> plans,
-      IReadOnlyList<(Guid notch, Guid? label)> placements,
-      NotchTrimMode mode, string layerName, List<OffsetSplitEdit> edits)
-    {
-      foreach (var plan in plans)
-      {
-        var contacts = plan.Contacts
-          .Where(contact => contact.CurveIndex < placements.Count &&
-                            placements[contact.CurveIndex].notch != Guid.Empty)
-          .ToArray();
-        if (contacts.Length == 0)
-          continue;
-        if (TrySplitOffsetCurve(doc, plan.TargetId, contacts, mode, layerName,
-              plan.PreserveSourceId, out var edit))
-        {
-          if (edit != null)
-            edits.Add(edit);
-          continue;
-        }
-        RestoreOriginalOffsetCurves(doc, edits);
-        edits.Clear();
-        return false;
-      }
-      return true;
-    }
-
-    private static bool RefreshOffsetSplits(RhinoDoc doc, NotchSession session)
-    {
-      if (session.NotchRecords.Any(record =>
-            record.DetachedNotchIds.Count > 0 && record.OffsetSplits.Count > 0))
-      {
-        RhinoApp.WriteLine("vNotches: finish and restart to change the side of notches whose source curves were removed from this selection.");
-        return false;
-      }
-      if (!session.NotchRecords.Any(record => record.NotchEnabled &&
-            CanonicalNotchType(record.NotchType) is ("V" or "U" or OpenVNotchType)))
-        return true;
-      var oldEdits = session.NotchRecords
-        .Select(record => record.OffsetSplits.ToList())
-        .ToArray();
-      for (int index = session.NotchRecords.Count - 1; index >= 0; index--)
-        RestoreOriginalOffsetCurves(doc, oldEdits[index]);
-
-      var replacementEdits = new List<List<OffsetSplitEdit>>();
-      bool completed = true;
-      for (int index = 0; index < session.NotchRecords.Count; index++)
-      {
-        var record = session.NotchRecords[index];
-        var edits = new List<OffsetSplitEdit>();
-        replacementEdits.Add(edits);
-        if (!record.NotchEnabled || index >= session.PlacementIds.Count)
-          continue;
-        var enabled = Enumerable.Range(0, session.Curves.Count)
-          .Select(curveIndex => curveIndex < record.CurveEnabled.Count &&
-                                record.CurveEnabled[curveIndex])
-          .ToArray();
-        var plans = PrepareOffsetSplits(
-          doc, session, record.LengthsFromStart, enabled,
-          record.NotchLength, record.NotchOffset, record.NotchType, record.NotchWidth,
-          null, record.KinkChoice, replacementEdits.SelectMany(previous => previous));
-        var affectedHistory = plans
-          .SelectMany(plan => HistoryBreakWarning.CaptureAffectedRecords(doc, plan.TargetId))
-          .ToHashSet();
-        if (!HistoryBreakWarning.Confirm(doc, "vNotches", affectedHistory))
-        {
-          completed = false;
-          break;
-        }
-        var ids = session.PlacementIds[index]
-          .Select(id => (notch: id, label: (Guid?)null))
-          .ToArray();
-        if (!TryApplyOffsetSplits(doc, plans, ids, session.NotchTrim,
-              session.NotchTrimLayer, edits))
-        {
-          completed = false;
-          break;
-        }
-      }
-      if (completed)
-      {
-        for (int index = 0; index < session.NotchRecords.Count; index++)
-          session.NotchRecords[index].OffsetSplits = replacementEdits[index];
-        doc.Views.Redraw();
-        return true;
-      }
-
-      for (int index = replacementEdits.Count - 1; index >= 0; index--)
-        RestoreOriginalOffsetCurves(doc, replacementEdits[index]);
-      foreach (var old in oldEdits)
-        RestoreSplitOffsetPieces(doc, old);
-      RhinoApp.WriteLine("vNotches: previous offset-curve splits restored.");
-      doc.Views.Redraw();
-      return false;
-    }
-
-    private static bool TrySplitOffsetCurve(
-      RhinoDoc doc, Guid targetId, IReadOnlyList<OffsetSplitContact> contacts,
-      NotchTrimMode mode, string layerName, bool preserveSourceId, out OffsetSplitEdit? edit)
-    {
-      edit = null;
-      var target = doc.Objects.FindId(targetId);
-      if (target?.Geometry is not Curve original ||
-          CaptureDocObject(doc, targetId) is not { } snapshot)
-        return false;
-
-      double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
-      var parameters = contacts.SelectMany(contact => new[] { contact.First, contact.Second })
-        .Where(parameter =>
-          original.PointAt(parameter).DistanceTo(original.PointAtStart) > tolerance &&
-          original.PointAt(parameter).DistanceTo(original.PointAtEnd) > tolerance)
-        .Distinct()
-        .OrderBy(parameter => parameter)
-        .ToArray();
-      var pieces = parameters.Length > 0
-        ? original.Split(parameters)
-        : new[] { original.DuplicateCurve() };
-      if (pieces == null || pieces.Length == 0)
-      {
-        Log.Write("vNotches", $"offset split skipped target={targetId}: no interior pieces");
-        if (pieces != null)
-          foreach (var piece in pieces) piece.Dispose();
-        return true;
-      }
-
-      var between = new bool[pieces.Length];
-      double totalLength = original.IsClosed ? original.GetLength() : 0.0;
-      for (int pieceIndex = 0; pieceIndex < pieces.Length; pieceIndex++)
-      {
-        if (!original.ClosestPoint(pieces[pieceIndex].PointAtNormalizedLength(0.5),
-              out double middleParameter))
-          continue;
-        foreach (var contact in contacts)
-        {
-          double first = Math.Min(contact.First, contact.Second);
-          double last = Math.Max(contact.First, contact.Second);
-          bool inside = middleParameter > first && middleParameter < last;
-          if (original.IsClosed)
-          {
-            using var span = original.Trim(first, last);
-            if (span != null && span.GetLength() > totalLength * 0.5)
-              inside = !inside;
-          }
-          if (inside)
-          {
-            between[pieceIndex] = true;
-            break;
-          }
-        }
-      }
-      if (!between.Any(value => value))
-      {
-        foreach (var piece in pieces) piece.Dispose();
-        Log.Write("vNotches", $"offset split skipped target={targetId}: no segment between legs");
-        return true;
-      }
-
-      edit = new OffsetSplitEdit(snapshot, target.IsSelected(false) != 0);
-      int referenceLayer = mode == NotchTrimMode.Split
-        ? UzipCommon.EnsureLayer(doc, layerName) : -1;
-      int preservedPiece = preserveSourceId ? Array.FindIndex(between, value => !value) : -1;
-      if (preserveSourceId && preservedPiece < 0 && mode == NotchTrimMode.Split)
-        preservedPiece = 0;
-      edit.PreservesOriginalId = preservedPiece >= 0;
-      try
-      {
-        if (preservedPiece < 0 && !doc.Objects.Delete(targetId, quiet: true))
-          throw new InvalidOperationException("could not remove the offset curve");
-        for (int pieceIndex = 0; pieceIndex < pieces.Length; pieceIndex++)
-        {
-          if (mode == NotchTrimMode.Trim && between[pieceIndex])
-            continue;
-          var attributes = snapshot.Attributes.Duplicate();
-          attributes.ObjectId = pieceIndex == preservedPiece ? targetId : Guid.NewGuid();
-          if (mode == NotchTrimMode.Split && between[pieceIndex])
-            attributes.LayerIndex = referenceLayer;
-          Guid id;
-          if (pieceIndex == preservedPiece)
-          {
-            // Keep the selected source identity while its other pieces remain traceable.
-            if (!doc.Objects.Replace(targetId, pieces[pieceIndex]) ||
-                !doc.Objects.ModifyAttributes(targetId, attributes, quiet: true))
-              throw new InvalidOperationException("could not replace the source-curve segment");
-            id = targetId;
-          }
-          else
-            id = doc.Objects.AddCurve(pieces[pieceIndex], attributes);
-          if (id == Guid.Empty)
-            throw new InvalidOperationException("could not add an offset-curve segment");
-          edit.LivePieceIds.Add(id);
-          if (edit.Selected)
-            doc.Objects.FindId(id)?.Select(true);
-          if (CaptureDocObject(doc, id) is not { } pieceSnapshot)
-            throw new InvalidOperationException("could not capture an offset-curve segment");
-          edit.Pieces.Add(pieceSnapshot);
-        }
-        Log.Write("vNotches", $"offset {mode.ToString().ToLowerInvariant()} " +
-          $"target={targetId} pieces={pieces.Length} between={between.Count(value => value)} " +
-          $"retained={edit.LivePieceIds.Count} onSource={preserveSourceId}");
-        return true;
-      }
-      catch (Exception ex)
-      {
-        Log.Write("vNotches", $"offset split failed target={targetId}: {ex}");
-        RestoreOriginalOffsetCurves(doc, [edit]);
-        edit = null;
-        return false;
-      }
-      finally
-      {
-        foreach (var piece in pieces) piece.Dispose();
-      }
-    }
-
-    private static void RestoreOriginalOffsetCurves(
-      RhinoDoc doc, IReadOnlyList<OffsetSplitEdit> edits)
-    {
-      for (int index = edits.Count - 1; index >= 0; index--)
-      {
-        var edit = edits[index];
-        foreach (var id in edit.LivePieceIds)
-          if ((!edit.PreservesOriginalId || id != edit.Original.Attributes.ObjectId) &&
-              doc.Objects.FindId(id) != null)
-            doc.Objects.Delete(id, quiet: true);
-        edit.LivePieceIds.Clear();
-        if (edit.PreservesOriginalId)
-          edit.RestoredOriginalId = RestoreOffsetCurveSnapshot(doc, edit.Original);
-        else if (doc.Objects.FindId(edit.Original.Attributes.ObjectId) == null)
-          edit.RestoredOriginalId = RestoreDocObject(doc, edit.Original);
-        else
-          edit.RestoredOriginalId = edit.Original.Attributes.ObjectId;
-        if (edit.Selected && edit.RestoredOriginalId != Guid.Empty)
-          doc.Objects.FindId(edit.RestoredOriginalId)?.Select(true);
-      }
-    }
-
-    private static void RestoreSplitOffsetPieces(
-      RhinoDoc doc, IReadOnlyList<OffsetSplitEdit> edits)
-    {
-      foreach (var edit in edits)
-      {
-        var originalId = edit.RestoredOriginalId != Guid.Empty
-          ? edit.RestoredOriginalId : edit.Original.Attributes.ObjectId;
-        if ((!edit.PreservesOriginalId || originalId != edit.Original.Attributes.ObjectId) &&
-            doc.Objects.FindId(originalId) != null)
-          doc.Objects.Delete(originalId, quiet: true);
-        edit.RestoredOriginalId = Guid.Empty;
-        edit.LivePieceIds.Clear();
-        foreach (var piece in edit.Pieces)
-        {
-          var id = edit.PreservesOriginalId && piece.Attributes.ObjectId == edit.Original.Attributes.ObjectId
-            ? RestoreOffsetCurveSnapshot(doc, piece) : RestoreDocObject(doc, piece);
-          if (id != Guid.Empty)
-          {
-            edit.LivePieceIds.Add(id);
-            if (edit.Selected)
-              doc.Objects.FindId(id)?.Select(true);
-          }
-        }
-      }
-    }
-
-    private static Guid RestoreOffsetCurveSnapshot(RhinoDoc doc, DocObjectSnapshot snapshot)
-    {
-      Guid id = snapshot.Attributes.ObjectId;
-      if (doc.Objects.FindId(id) == null)
-        return RestoreDocObject(doc, snapshot);
-      return snapshot.Geometry is Curve curve && doc.Objects.Replace(id, curve) &&
-             doc.Objects.ModifyAttributes(id, snapshot.Attributes.Duplicate(), quiet: true)
-        ? id : Guid.Empty;
-    }
-
     private static void DeletePlacedNotches(
       RhinoDoc doc, IReadOnlyList<(Guid notch, Guid? label)> placements)
     {

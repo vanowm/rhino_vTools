@@ -34,6 +34,7 @@ public sealed class vFacing : vToolsCommand
 
   private const string SectionName = "vFacing";
   private const string SizeKey     = "size";
+  internal const string FacingPartKey = "vTools.facing"; // Boundary marker used by vNest to identify facing parts.
 
   private static double _size = ConfiguredDefaultSize;
 
@@ -219,6 +220,7 @@ public sealed class vFacing : vToolsCommand
       if (placed == null) continue;
       placed.Transform(xform);
       attr.RemoveFromAllGroups();
+      attr.SetUserString(FacingPartKey,bool.TrueString);
       var id = AddToDoc(doc, placed, attr);
       if (id != Guid.Empty) addedIds.Add(id);
     }

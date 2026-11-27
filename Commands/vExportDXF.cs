@@ -60,8 +60,6 @@ namespace vTools.Commands
     private const string GrainIdentifier = "GRAIN"; // Case-insensitive object name or leaf layer name identifying an open grain guide.
     private const string NestMetadataPrefix = "vNest."; // Internal nesting bookkeeping omitted from export-copy user text; originals retain all provenance.
     private const string CleanupPieceKey = "vExportDXF.cleanupPiece"; // Temporary-only GUID in N format linking cleanup fragments to their original export piece; never written to source objects or export attributes.
-    internal const string CleanupPartitionKey = "vExportDXF.cleanupPart"; // Temporary-only export-part identity; duplicate cleanup must not compare independent native patterns.
-    private const bool DefaultIsolateCleanupParts=false; // false retains standalone DXF cleanup scope; true isolates native-project cleanup by the same groups and inferred parts used for export.
     private static readonly Regex NativeSkippedCounts = new(@"^[^:\r\n]+:\s*\d+\s+written,\s*(\d+)\s+skipped[^\S\r\n]*\r?$",RegexOptions.Multiline|RegexOptions.CultureInvariant|RegexOptions.IgnoreCase); // English native export totals; a nonzero skipped count rejects the temporary file.
     [global::vTools.CommandDefault("vExportDXF", "vTools.Commands.vExportDXF.DefaultOptimize", "true cleans temporary export copies with vCleanup; false skips cleanup. Neither changes source geometry.", OptionKeys = "optimize")] private const bool DefaultOptimize = true; // true cleans temporary export copies; false skips cleanup; source geometry stays unchanged in either case.
 
@@ -155,6 +153,7 @@ namespace vTools.Commands
 
     internal sealed record PreparedExportEntry(
       Guid Id, Guid[] SourceIds, string? GroupName, bool TableAnnotation);
+    internal const string PreparedSourceKey = "vTools.preparedExportSource";
 
     internal delegate Result PreparedExportWriter(RhinoDoc doc,
       IReadOnlyList<RhinoObject> sources, IReadOnlyList<PreparedExportEntry> entries,
@@ -168,10 +167,10 @@ namespace vTools.Commands
       IReadOnlyList<RhinoObject>? sourcesOverride=null,vCleanup.ExportGeometrySettings? geometryOverride=null,
       Func<int,int,string?,vCleanup.ExportCleanupAction?>? reviewFindings=null,
       Action? keepResponsive=null,Action<int,int>? findingsChanged=null,Action<Exception>? preparationFailed=null,
-      Action<ExportCleanupFeedback>? cleanupReviewReady=null)
+      Action<ExportCleanupFeedback>? cleanupReviewReady=null,bool recordSource=false,IReadOnlySet<Guid>? preserveSourceShapes=null)
     {
       using var documentState = new ExportDocumentState(doc);
-      CleanupFindingDisplay.ClearAll();
+      if(!doc.IsHeadless)CleanupFindingDisplay.ClearAll();
       var settings = settingsOverride??LoadSettings(doc);
       if (mode == RunMode.Scripted&&settingsOverride==null)
       {
@@ -218,7 +217,7 @@ namespace vTools.Commands
         {
           preparationStatus?.Invoke("Checking export geometry");
           cleanupFeedback = new ExportCleanupFeedback(doc){KeepResponsive=keepResponsive,FindingsChanged=findingsChanged,ReviewReady=cleanupReviewReady};
-          var result = OptimizeExportPieces(doc, targets, notchTrimOverrides, settings.CleanupAction, cleanupFeedback,geometryOverride,reviewFindings,writer!=null);
+          var result = OptimizeExportPieces(doc, targets, notchTrimOverrides, settings.CleanupAction, cleanupFeedback,geometryOverride,reviewFindings,preserveSourceShapes);
           if (result != Result.Success) return result;
           targets = targets.Where(obj => obj.Geometry is not Curve || ExportPieces(obj, notchTrimOverrides).Any()).ToArray();
           if (targets.Length == 0)
@@ -236,7 +235,7 @@ namespace vTools.Commands
         preparationStatus?.Invoke("Building temporary export parts");
         var exportIds = PrepareExportObjects(
           doc, targets, translation, notchTrimOverrides, textBreakOverrides,
-          temporaryObjects, temporaryDefinitions, preparedEntries);
+          temporaryObjects, temporaryDefinitions, preparedEntries, recordSource);
         if (exportIds.Count == 0)
           throw new InvalidOperationException("No exportable objects were prepared.");
 
@@ -307,7 +306,7 @@ namespace vTools.Commands
           doc.Objects.Select(id);
         foreach (var grip in originalGrips)
           if (grip.IsValid) grip.Select(true, true);
-        if (cleanupFeedback is { HasFindings: true }) cleanupFeedback.Retain();
+        if (!doc.IsHeadless&&cleanupFeedback is { HasFindings: true }) cleanupFeedback.Retain();
         else cleanupFeedback?.Dispose();
         doc.Views.Redraw();
         if (tempPath != null)
@@ -428,9 +427,10 @@ namespace vTools.Commands
 
     private static Result OptimizeExportPieces(RhinoDoc doc, IReadOnlyList<RhinoObject> targets,
       Dictionary<Guid, List<ExportCurvePiece>> overrides, vCleanup.ExportCleanupAction action, ExportCleanupFeedback feedback,
-      vCleanup.ExportGeometrySettings? geometrySettings=null,Func<int,int,string?,vCleanup.ExportCleanupAction?>? reviewFindings=null,bool isolateParts=DefaultIsolateCleanupParts)
+      vCleanup.ExportGeometrySettings? geometrySettings=null,Func<int,int,string?,vCleanup.ExportCleanupAction?>? reviewFindings=null,
+      IReadOnlySet<Guid>? preserveSourceShapes=null)
     {
-      using var copies = new ExportCleanupCopies(doc){IsolateParts=isolateParts};
+      using var copies = new ExportCleanupCopies(doc);
       copies.Add(targets, overrides);
       doc.Objects.UnselectAll();
       var result = vCleanup.OptimizeExportCopies(doc, copies.ObjectIds, action,
@@ -441,7 +441,8 @@ namespace vTools.Commands
           feedback.SetFindings(copies.SourceIds(ids), shortFindings
             .Select(finding => (copies.SourceId(finding.SourceId), finding.Curve, finding.Point)).ToArray());
           feedback.ReviewReady?.Invoke(feedback);
-        }, copies.Refresh,geometrySettings,reviewFindings,feedback.KeepResponsive,feedback.FindingsChanged);
+        }, copies.Refresh,geometrySettings,reviewFindings,feedback.KeepResponsive,feedback.FindingsChanged,
+        canSimplify:preserveSourceShapes==null?null:id=>!preserveSourceShapes.Contains(copies.SourceId(id)));
       feedback.ConfigureTracking(targets.Where(obj => obj.Geometry is Curve).Select(obj => obj.Id), geometrySettings is {} own
         ?new vCleanup.LiveFindingSettings(own.Threshold,own.FindOverlaps,own.OverlapTolerance):vCleanup.CaptureLiveFindingSettings());
       if (result == Result.Success)
@@ -463,7 +464,6 @@ namespace vTools.Commands
       private readonly HashSet<Guid> _sourceIds = [];
       private bool _disposed;
       internal HashSet<Guid> ObjectIds { get; } = [];
-      internal bool IsolateParts {get;init;}=DefaultIsolateCleanupParts;
 
       internal ExportCleanupCopies(RhinoDoc doc)
       {
@@ -477,19 +477,6 @@ namespace vTools.Commands
 
       internal void Add(IReadOnlyList<RhinoObject> targets, IReadOnlyDictionary<Guid, List<ExportCurvePiece>> overrides)
       {
-        var partitions=new Dictionary<Guid,string>();
-        if(IsolateParts)
-        {
-          var tables=NestTableMetadata.TableGroups(_doc);
-          foreach(var source in targets)
-          {
-            int group=(source.Attributes.GetGroupList()??[]).Where(index=>!tables.Contains(index)&&_doc.Groups[index] is {IsDeleted:false}).Order().FirstOrDefault(-1);
-            if(group>=0)partitions[source.Id]="group:"+_doc.Groups[group].Id.ToString("N");
-          }
-          var ungrouped=targets.Where(obj=>obj.Attributes.GroupCount==0&&!NestTableMetadata.IsCleanupDecoration(_doc,obj)).ToArray();
-          var inferred=UngroupedExportParts(ungrouped,_doc.ModelAbsoluteTolerance);
-          for(int index=0;index<inferred.Count;index++)foreach(var source in inferred[index])partitions[source.Id]="inferred:"+index.ToString(CultureInfo.InvariantCulture);
-        }
         foreach (var source in targets.Where(obj => obj.Geometry is Curve && !NestTableMetadata.IsCleanupDecoration(_doc, obj)))
         {
           _sourceIds.Add(source.Id);
@@ -504,7 +491,6 @@ namespace vTools.Commands
             attributes.RemoveFromAllGroups();
             attributes.Mode = ObjectMode.Normal;
             attributes.SetUserString(CleanupPieceKey, key);
-            if(IsolateParts)attributes.SetUserString(CleanupPartitionKey,partitions.GetValueOrDefault(source.Id,"object:"+source.Id.ToString("N")));
             Guid id = _doc.Objects.AddCurve(curve, attributes);
             if (id == Guid.Empty)
               throw new InvalidOperationException("Could not create a temporary cleanup curve.");
@@ -1103,7 +1089,7 @@ namespace vTools.Commands
       IReadOnlyDictionary<Guid, List<ExportCurvePiece>> notchTrimOverrides,
       IReadOnlyDictionary<Guid, List<TextEntity>> textBreakOverrides,
       List<Guid> temporaryObjects, List<int> temporaryDefinitions,
-      List<PreparedExportEntry>? preparedEntries = null)
+      List<PreparedExportEntry>? preparedEntries = null,bool recordSource = false)
     {
       var targetById = targets.ToDictionary(obj => obj.Id);
       var assigned = targets.Where(obj => NestTableMetadata.IsTableStructure(doc, obj)).Select(obj => obj.Id).ToHashSet();
@@ -1200,7 +1186,7 @@ namespace vTools.Commands
         if (members.Length == 0)
           continue;
         if (!TryCreateGroupBlock(doc, groupName, members, translation, notchTrimOverrides, textBreakOverrides,
-              temporaryObjects, temporaryDefinitions, out Guid instanceId))
+              temporaryObjects, temporaryDefinitions, out Guid instanceId, recordSource))
           throw new InvalidOperationException($"Could not prepare group '{groupName}' as a DXF block.");
         exportIds.Add(instanceId);
         preparedEntries?.Add(new PreparedExportEntry(instanceId,
@@ -1217,7 +1203,7 @@ namespace vTools.Commands
         var members = inferredParts[index];
         string name = UnnamedGroupPrefix + (doc.Groups.Count + index).ToString(CultureInfo.InvariantCulture);
         if (!TryCreateGroupBlock(doc, name, members, translation, notchTrimOverrides, textBreakOverrides,
-              temporaryObjects, temporaryDefinitions, out Guid instanceId))
+              temporaryObjects, temporaryDefinitions, out Guid instanceId, recordSource))
           throw new InvalidOperationException("Could not prepare an ungrouped part as a DXF block.");
         exportIds.Add(instanceId);
         preparedEntries?.Add(new PreparedExportEntry(instanceId,
@@ -1238,6 +1224,7 @@ namespace vTools.Commands
           if (geometry == null || !geometry.Transform(translation))
             throw new InvalidOperationException($"Could not copy object {source.Id} for export.");
           using var attributes = ExportAttributes(piece.Attributes);
+          if (recordSource) attributes.SetUserString(PreparedSourceKey, source.Id.ToString("N"));
           Guid copyId = doc.Objects.Add(geometry, attributes);
           if (copyId == Guid.Empty)
             throw new InvalidOperationException($"Could not add temporary copy of {source.Id}.");
@@ -1391,7 +1378,7 @@ namespace vTools.Commands
       IReadOnlyDictionary<Guid, List<ExportCurvePiece>> notchTrimOverrides,
       IReadOnlyDictionary<Guid, List<TextEntity>> textBreakOverrides,
       List<Guid> temporaryObjects, List<int> temporaryDefinitions,
-      out Guid instanceId)
+      out Guid instanceId, bool recordSource = false)
     {
       instanceId = Guid.Empty;
       var geometries = new List<GeometryBase>();
@@ -1409,6 +1396,7 @@ namespace vTools.Commands
             geometries.Add(geometry);
             bounds.Union(geometry.GetBoundingBox(true));
             var attrs = ExportAttributes(piece.Attributes);
+            if (recordSource) attrs.SetUserString(PreparedSourceKey, member.Id.ToString("N"));
             attributes.Add(attrs);
           }
         }
@@ -1765,19 +1753,18 @@ namespace vTools.Commands
       if (mode == NotchTrimMode.No)
         return overrides;
 
-      double tolerance = Math.Max(
-        doc.ModelAbsoluteTolerance * ConfiguredNotchContactToleranceScale,
-        RhinoMath.ZeroTolerance * ConfiguredNotchContactZeroToleranceScale);
+      double tolerance=NotchContactTolerance(doc);
       var curves = targets.Where(obj => obj.Geometry is Curve &&
         obj.Attributes.GetUserString(NotchMetadataPrefix + "object_role") != NotchRole)
         .ToArray();
       var notchComponents = targets.Where(obj => obj.Geometry is Curve &&
         obj.Attributes.GetUserString(NotchMetadataPrefix + "object_role") == NotchRole &&
-        (obj.Attributes.GetUserString(NotchMetadataPrefix + "notch_type") is
-          "V" or "U" or OpenVNotchType) &&
+        obj.Attributes.GetUserString(NotchMetadataPrefix+"notch_type") is {} type &&
+        MatchingNotches.ProfileType(type) is ("V" or "U" or OpenVNotchType) &&
         double.TryParse(obj.Attributes.GetUserString(NotchMetadataPrefix + "notch_offset"),
           NumberStyles.Float, CultureInfo.InvariantCulture, out double offset) &&
         offset >= 0.0).ToArray();
+      if(notchComponents.Length==0)return overrides;
       var notchGroups = notchComponents.GroupBy(obj =>
         obj.Attributes.GetUserString(NotchMetadataPrefix + "component_set") is
           { Length: > 0 } set ? set : obj.Id.ToString("N"));
@@ -1789,61 +1776,12 @@ namespace vTools.Commands
       {
         foreach (var legs in ExtractNotchLegs(group))
         {
-          var firstHits = FindContactHits(
-            curves, legs.First, legs.SourceId, legs.OnSource, tolerance);
-          var secondHits = FindContactHits(
-            curves, legs.Second, legs.SourceId, legs.OnSource, tolerance);
-          CurveHit? first = null;
-          CurveHit? second = null;
-          double best = double.MaxValue;
-          foreach (var left in firstHits)
-            foreach (var right in secondHits)
-              if (left.Object.Id == right.Object.Id &&
-                  Math.Abs(left.Parameter - right.Parameter) > RhinoMath.ZeroTolerance &&
-                  left.Distance + right.Distance < best)
-              {
-                first = left;
-                second = right;
-                best = left.Distance + right.Distance;
-              }
-          if (first.HasValue && second.HasValue)
+          if(CollectNotchContact(legs,curves,tolerance,contacts) is {} ids)
           {
-            AddContact(contacts, first.Value.Object.Id,
-              first.Value.Parameter, second.Value.Parameter);
-            matchedNotches.Add(new MatchedNotch(
-              [first.Value.Object.Id], legs.Components));
-            matched++;
-            continue;
-          }
-
-          best = double.MaxValue;
-          double firstEnd = 0.0;
-          double secondEnd = 0.0;
-          foreach (var left in firstHits)
-            foreach (var right in secondHits)
-              if (left.Object.Id != right.Object.Id &&
-                  left.Object.Geometry is Curve leftCurve &&
-                  right.Object.Geometry is Curve rightCurve &&
-                  TrySharedEnd(leftCurve, rightCurve, tolerance,
-                    out double leftEnd, out double rightEnd) &&
-                  left.Distance + right.Distance < best)
-              {
-                first = left;
-                second = right;
-                firstEnd = leftEnd;
-                secondEnd = rightEnd;
-                best = left.Distance + right.Distance;
-              }
-          if (first.HasValue && second.HasValue)
-          {
-            AddContact(contacts, first.Value.Object.Id, first.Value.Parameter, firstEnd);
-            AddContact(contacts, second.Value.Object.Id, secondEnd, second.Value.Parameter);
-            matchedNotches.Add(new MatchedNotch(
-              [first.Value.Object.Id, second.Value.Object.Id], legs.Components));
+            matchedNotches.Add(new MatchedNotch(ids,legs.Components));
             matched++;
           }
-          else
-            unmatched++;
+          else unmatched++;
         }
       }
 
@@ -1872,6 +1810,39 @@ namespace vTools.Commands
       if (unmatched > 0)
         RhinoApp.WriteLine($"vExportDXF: {CountText.Format(unmatched, "V/U notch contact")} did not match an export curve.");
       return overrides;
+    }
+
+    private static double NotchContactTolerance(RhinoDoc doc)=>Math.Max(
+      doc.ModelAbsoluteTolerance*ConfiguredNotchContactToleranceScale,
+      RhinoMath.ZeroTolerance*ConfiguredNotchContactZeroToleranceScale);
+
+    private static Guid[]? CollectNotchContact(NotchLegs legs,IReadOnlyList<RhinoObject> curves,
+      double tolerance,Dictionary<Guid,List<NotchContact>> contacts)
+    {
+      var firstHits=FindContactHits(curves,legs.First,legs.SourceId,legs.OnSource,tolerance);
+      var secondHits=FindContactHits(curves,legs.Second,legs.SourceId,legs.OnSource,tolerance);
+      CurveHit? first=null,second=null;
+      double best=double.MaxValue;
+      foreach(var left in firstHits)
+        foreach(var right in secondHits)
+          if(left.Object.Id==right.Object.Id&&Math.Abs(left.Parameter-right.Parameter)>RhinoMath.ZeroTolerance&&
+            left.Distance+right.Distance<best)
+          {first=left;second=right;best=left.Distance+right.Distance;}
+      if(first is {} a&&second is {} b)
+      {
+        AddContact(contacts,a.Object.Id,a.Parameter,b.Parameter);
+        return [a.Object.Id];
+      }
+      double firstEnd=0,secondEnd=0;
+      foreach(var left in firstHits)
+        foreach(var right in secondHits)
+          if(left.Object.Id!=right.Object.Id&&left.Object.Geometry is Curve leftCurve&&right.Object.Geometry is Curve rightCurve&&
+            TrySharedEnd(leftCurve,rightCurve,tolerance,out double leftEnd,out double rightEnd)&&left.Distance+right.Distance<best)
+          {first=left;second=right;firstEnd=leftEnd;secondEnd=rightEnd;best=left.Distance+right.Distance;}
+      if(first is not {} start||second is not {} end)return null;
+      AddContact(contacts,start.Object.Id,start.Parameter,firstEnd);
+      AddContact(contacts,end.Object.Id,secondEnd,end.Parameter);
+      return [start.Object.Id,end.Object.Id];
     }
 
     private static int JoinNotchedExportCurves(
@@ -2055,8 +2026,7 @@ namespace vTools.Commands
       {
         var side = components[index..(index + perSide)];
         yield return new NotchLegs(
-          ((Curve)side[0].Geometry).PointAtStart,
-          ((Curve)side[^1].Geometry).PointAtEnd,
+          ((Curve)side[0].Geometry).PointAtStart,((Curve)side[^1].Geometry).PointAtEnd,
           sourceId, onSource, side);
       }
     }

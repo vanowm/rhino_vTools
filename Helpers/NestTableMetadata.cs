@@ -11,6 +11,7 @@ internal static class NestTableMetadata
   internal const string RoleKey = "vNest.role"; // Role metadata for distinguishing table decorations from actual part geometry.
   internal const string BorderRole = "table-border"; // Table perimeter marker, not an individual part outline.
   internal const string LabelRole = "table-label"; // Table annotation marker, not an individual part label.
+  internal const string SolverInfoRole = "table-solver-info"; // Rhino-only header annotation excluded from prepared exports.
   internal const string LabelFrameRole = "table-label-frame"; // Frame of the grouped table-label part; excluded from nesting-source capture.
   internal const string LabelDividerRole = "table-label-divider"; // Shared table/label closing edge; decoration only, omitted from exported label blocks and parts.
   internal const string MaterialFrameRole = "table-material-frame"; // True usable material boundary inside an enclosed ruler frame; never a cutting part or export outline.
@@ -18,7 +19,9 @@ internal static class NestTableMetadata
   internal const string LayoutKey = "vNest.tableLayout"; // Geometry/attribute format discriminator; absent means legacy left-hand labels.
   internal const string EnclosedHeaderLayout = "enclosed-header-1"; // One outer rectangle enclosing the header and four ruler bands.
   internal const string HeaderFractionKey = "vNest.headerFraction"; // Header height divided by outer-frame height, strictly between zero and one; invariant under uniform scale.
-  internal const string HeaderSlotKey = "vNest.headerSlot"; // Header text cell index 0 through 4: material, name, count, dimensions, yardage; independent of horizontal position.
+  internal const string HeaderSlotKey = "vNest.headerSlot"; // Header text cell index: material, name, count, dimensions, yardage, then optional solver and timing information.
+  internal const string SolverInfoSlot = "5"; // Zero-based header slot reserved for Rhino-only solver information.
+  internal const string SolverTimingSlot = "6"; // Zero-based header slot reserved for Rhino-only elapsed and winning times.
   private const string LegacyBorderName = "NestTable"; // Rectangle object name used by pre-metadata nest output.
   private const string LegacyGroupPrefix = "vNest_"; // Former generated table group prefix followed by a session identifier.
   private const string LegacyTableToken = "_table_"; // Former generated table group delimiter; individual part groups use a different delimiter.
@@ -29,7 +32,7 @@ internal static class NestTableMetadata
     attributes.SetUserString("vNest.session",session); attributes.SetUserString("vNest.table",(table+1).ToString());
     attributes.SetUserString("vNest.tableName",name);
   }
-  private static bool Marker(ObjectAttributes attributes)=>attributes.GetUserString(RoleKey) is BorderRole or LabelRole or LabelFrameRole or LabelDividerRole or MaterialFrameRole or HeaderFillRole;
+  private static bool Marker(ObjectAttributes attributes)=>attributes.GetUserString(RoleKey) is BorderRole or LabelRole or LabelFrameRole or LabelDividerRole or MaterialFrameRole or HeaderFillRole or SolverInfoRole;
   internal static bool HasDecorationRole(ObjectAttributes attributes) => Marker(attributes);
   internal static bool IsBorderGroup(RhinoDoc doc,RhinoObject border,int index)
   {
@@ -40,7 +43,7 @@ internal static class NestTableMetadata
   internal static bool IsTableBorder(RhinoDoc doc, RhinoObject obj) =>
     obj.Attributes.GetUserString(RoleKey) == BorderRole ||
     obj.Attributes.Name == LegacyBorderName && IsDecoration(doc, obj);
-  internal static bool IsTableStructure(RhinoDoc doc,RhinoObject obj)=>IsTableBorder(doc,obj)||obj.Attributes.GetUserString(RoleKey) is LabelDividerRole or MaterialFrameRole or HeaderFillRole;
+  internal static bool IsTableStructure(RhinoDoc doc,RhinoObject obj)=>IsTableBorder(doc,obj)||obj.Attributes.GetUserString(RoleKey) is LabelDividerRole or MaterialFrameRole or HeaderFillRole or SolverInfoRole;
   internal static bool IsEnclosedHeader(GeometryBase geometry)=>geometry.GetUserString(LayoutKey)==EnclosedHeaderLayout;
   internal static bool TryHeaderFrame(Curve outline,out Rectangle3d header)
   {

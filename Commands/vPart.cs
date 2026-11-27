@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Rhino;
 using Rhino.Commands;
 using Rhino.Display;
@@ -37,19 +38,23 @@ public sealed class vPart : vToolsCommand
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabel", "true prompts for a label after placement; false creates the part without a new label.", OptionKeys = "label")] private const bool DefaultLabel = false; // true prompts for a label after placement; false creates the part without a new label.
 
   private static readonly bool ConfiguredDefaultLabel = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults; restart Rhino after changes.
+  [CommandDefault("vPart", "vTools.Commands.vPart.DefaultGrain", "True prompts for a movable grain guide after labeling or placement; false skips grain placement.", OptionKeys = "grain")]
+  private const bool DefaultGrain = false; // true offers grain placement for each part; false leaves its grain unchanged.
+  private static readonly bool ConfiguredDefaultGrain = CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultGrain", DefaultGrain); // Initial Grain option until a value is saved.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelText", "Last-entered plain label offered for the next part.", OptionKeys = "labelText")] private const string DefaultLabelText = "A"; // Last-entered plain label offered for the next part.
 
   private static readonly string ConfiguredDefaultLabelText = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelText", DefaultLabelText); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelLayer", "Label layer path or the current-layer sentinel.", OptionKeys = "labelLayer")] private const string DefaultLabelLayer = "Reference"; // Label layer path or the current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLabelLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelLayer", DefaultLabelLayer); // Resolved once from advanced defaults; restart Rhino after changes.
+  private static readonly Color NewLabelLayerColor = Color.White; // Initial RGB color for newly created label layers only.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLabelSize", "Label height in model units; positive.", OptionKeys = "labelSize")] private const double DefaultLabelSize = 1.0; // Label height in model units; positive.
 
   private static readonly double ConfiguredDefaultLabelSize = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLabelSize", DefaultLabelSize); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelInteriorGridSamples", "Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.")] private const int LabelInteriorGridSamples = 25; // Grid samples per axis used when a concave part's center lies outside its perimeter; two or greater.
 
   private static readonly int ConfiguredLabelInteriorGridSamples = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelInteriorGridSamples", LabelInteriorGridSamples); // Resolved once from advanced defaults; restart Rhino after changes.
-  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelPointerThresholdPixels", "Minimum cursor movement before moving the initially centered label; positive screen pixels.")] private const int LabelPointerThresholdPixels = 3; // Minimum cursor movement before moving the initially centered label; positive screen pixels.
+  [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelPointerThresholdPixels", "Screen pixels of movement that distinguish a label drag from a confirmation click; positive.")] private const int LabelPointerThresholdPixels = 3; // Screen pixels of movement that distinguish a label drag from a confirmation click; positive.
 
   private static readonly int ConfiguredLabelPointerThresholdPixels = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelPointerThresholdPixels", LabelPointerThresholdPixels); // Resolved once from advanced defaults; restart Rhino after changes.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", "Upward Shift-movement pixels per one model-unit label-height increment; positive.")] private const double LabelSizePixelsPerUnit = 20.0; // Upward Shift-movement pixels per one model-unit label-height increment; positive.
@@ -57,7 +62,7 @@ public sealed class vPart : vToolsCommand
   private static readonly double ConfiguredLabelSizePixelsPerUnit = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.LabelSizePixelsPerUnit", LabelSizePixelsPerUnit); // Resolved once from advanced defaults; restart Rhino after changes.
   private const string LabelObjectName = "PartLabel"; // Object name for the part's primary identifying label.
   private const string PrimaryLabelLayer = "LABEL"; // Conventional part-name layer preferred over other unmarked text.
-  private static readonly string[] DetailLabelNames = ["NotchLabel", "LengthLabel", "PartSplitSeamLabel", "PartSplitReferenceLabel", "ShadeOverlapLabel"]; // Detail annotations that must never be replaced as the part's primary label.
+  private static readonly string[] DetailLabelNames = ["NotchLabel", "LengthLabel", "PartSplitSeamLabel", "PartSplitReferenceLabel", "ShadeOverlapLabel", "ShadeLabel", "ShadeReinforcementPartLabel"]; // Detail annotations that must never be replaced as the part's primary label.
   [global::vTools.CommandDefault("vPart", "vTools.Commands.vPart.DefaultLayer", "Rhino layer path or the shared current-layer sentinel.", OptionKeys = "layer")] private const string DefaultLayer = DuplicateCommandSupport.CurrentLayerOption; // Rhino layer path or the shared current-layer sentinel.
 
   private static readonly string ConfiguredDefaultLayer = global::vTools.CommandDefaults.Get("vPart", "vTools.Commands.vPart.DefaultLayer", DefaultLayer); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -86,6 +91,7 @@ public sealed class vPart : vToolsCommand
   private static bool _cleanup = ConfiguredDefaultCleanup;
   private static string _layer = ConfiguredDefaultLayer;
   private static bool _label = ConfiguredDefaultLabel;
+  private static bool _grain = ConfiguredDefaultGrain;
   private static string _labelText = ConfiguredDefaultLabelText;
   private static string _labelLayer = ConfiguredDefaultLabelLayer;
   private static double _labelSize = ConfiguredDefaultLabelSize;
@@ -107,6 +113,7 @@ public sealed class vPart : vToolsCommand
       if (ToolsOptionStore.TryGetString(section, LayerKey, out var layer))
         _layer = NormalizePerimeterLayerOption(layer);
       _label = ToolsOptionStore.TryGetBool(section, "label", out var label) ? label : ConfiguredDefaultLabel;
+      _grain = ToolsOptionStore.TryGetBool(section, "grain", out var grain) ? grain : ConfiguredDefaultGrain;
       _labelText = ToolsOptionStore.TryGetString(section, "labelText", out var text) ? text : ConfiguredDefaultLabelText;
       _labelLayer = ToolsOptionStore.TryGetString(section, "labelLayer", out var labelLayer) ? labelLayer : ConfiguredDefaultLabelLayer;
       _labelSize = ToolsOptionStore.TryGetDouble(section, "labelSize", out var size) && double.IsFinite(size) && size > 0
@@ -123,6 +130,7 @@ public sealed class vPart : vToolsCommand
       section.Remove(LegacyRemoveInteriorLinesKey);
       section[LayerKey] = _layer;
       section["label"] = _label;
+      section["grain"] = _grain;
       section["labelText"] = _labelText;
       section["labelLayer"] = _labelLayer;
       section["labelSize"] = _labelSize;
@@ -131,13 +139,62 @@ public sealed class vPart : vToolsCommand
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
   {
     LoadOptions();
-    using var existing = FindPreselectedPart(doc);
+    var selection = Array.Empty<Guid>();
+    bool completed = false;
+    try
+    {
+      while (true)
+      {
+        var result = RunOnePart(doc, mode, !completed, out var reselect);
+        if (result != Result.Success)
+        {
+          if (reselect.Length > 0) selection = reselect;
+          return completed && result is Result.Cancel or Result.Nothing ? Result.Success : result;
+        }
+        completed = true;
+        selection = reselect;
+        if (mode != RunMode.Interactive) return Result.Success;
+        doc.Objects.UnselectAll();
+      }
+    }
+    finally
+    {
+      if (selection.Length > 0)
+      {
+        doc.Objects.UnselectAll();
+        doc.Objects.Select(selection);
+        doc.Views.Redraw();
+      }
+    }
+  }
+
+  private Result RunOnePart(RhinoDoc doc, RunMode mode, bool acceptExistingPart, out Guid[] reselect)
+  {
+    reselect = [];
+    using var existing = acceptExistingPart ? FindPreselectedPart(doc) : null;
     if (existing != null)
     {
-      var id = PlaceOrUpdatePartLabel(doc, mode, existing.Part.Outline, existing.Part.Plane, existing.Label, existing.Groups);
-      if (id != Guid.Empty) doc.Objects.Select(existing.Part.Items.Select(item => item.Id).Append(id));
+      // The layer controls must not act on a selected group while editing its label.
+      reselect = doc.Objects.GetSelectedObjects(false, false).Select(obj => obj.Id).ToArray();
+      doc.Objects.UnselectAll();
       doc.Views.Redraw();
-      return id == Guid.Empty ? Result.Cancel : Result.Success;
+      var memberIds = existing.Part.Items.Select(item => item.Id).ToHashSet();
+      var id = PlaceOrUpdatePartLabel(doc, mode, existing.Part.Outline, existing.Part.Plane,
+        existing.Label, existing.Groups, memberIds, out bool removed);
+      if (id == Guid.Empty && !removed) return Result.Cancel;
+      if (removed) memberIds.RemoveWhere(member => doc.Objects.FindId(member) == null);
+      if (id != Guid.Empty) memberIds.Add(id);
+      if (_grain)
+      {
+        var guide = vGrain.AddGuide(doc, existing.Part.Outline, existing.Part.Plane, memberIds.ToArray(),
+          vGrain.PartMembership(doc, existing.GroupIndex, existing.Groups), existing.Part.Attributes.LayerIndex, out _);
+        if (guide != Guid.Empty) memberIds.Add(guide);
+      }
+      if(existing.GroupIndex>=0&&!FlattenPartSubgroups(doc,existing.GroupIndex))
+        RhinoApp.WriteLine("vPart: could not flatten subgroups. Check for locked part objects.");
+      reselect = memberIds.ToArray();
+      doc.Views.Redraw();
+      return Result.Success;
     }
     var layerSession = new DuplicateOutputLayerSession(doc, _layer, EnglishName);
     var tol = doc.ModelAbsoluteTolerance;
@@ -155,6 +212,7 @@ public sealed class vPart : vToolsCommand
     var joinPerimToggle = new OptionToggle(_joinPerim, "No", "Yes");
     var cleanupToggle = new OptionToggle(_cleanup, "No", "Yes");
     var labelToggle = new OptionToggle(_label, "No", "Yes");
+    var grainToggle = new OptionToggle(_grain, "No", "Yes");
     var labelSizeOption = new OptionDouble(_labelSize, RhinoMath.ZeroTolerance, double.MaxValue);
 
     using var go = new GetObject();
@@ -178,6 +236,7 @@ public sealed class vPart : vToolsCommand
       go.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
       go.AddOptionToggle("Cleanup", ref cleanupToggle);
       go.AddOptionToggle("Label", ref labelToggle);
+      go.AddOptionToggle("Grain", ref grainToggle);
       go.AddOptionDouble("LabelSize", ref labelSizeOption);
       int labelLayerIndex = go.AddOption("LabelLayer", _labelLayer);
       var layerOptionIndex = go.AddOption("Layer", layerSession.OptionLayerName);
@@ -191,6 +250,7 @@ public sealed class vPart : vToolsCommand
         _joinPerim = joinPerimToggle.CurrentValue;
         _cleanup = cleanupToggle.CurrentValue;
         _label = labelToggle.CurrentValue;
+        _grain = grainToggle.CurrentValue;
         _labelSize = labelSizeOption.CurrentValue;
         if (go.Option()?.Index == labelLayerIndex) PromptForLabelLayer(doc, mode);
         if (go.Option()?.Index == layerOptionIndex)
@@ -274,10 +334,17 @@ public sealed class vPart : vToolsCommand
     L($"perimList: {CountText.Format(perimList.Count, "curve")}");
     if (perimList.Count == 0)
     {
-      RhinoApp.WriteLine("vPart: no curves selected.");
       L("EXIT: no curves");
       return Result.Nothing;
     }
+
+    if (perimList.Count == 1 && perimIds.Count == 1 && !perimList[0].Crv.IsClosed &&
+        doc.Objects.FindId(perimIds.First()) is {} seed)
+      foreach (var edge in PlanarPartSelection.ConnectedPerimeter(doc, seed, tol).Skip(1))
+      {
+        perimIds.Add(edge.Id);
+        perimList.Add((((Curve)edge.Geometry).DuplicateCurve(),edge.Attributes.Duplicate()));
+      }
 
     // Deselect source curves now that we have them captured
     foreach (var r in collectedMap.Values)
@@ -466,6 +533,7 @@ public sealed class vPart : vToolsCommand
       gp.AddOptionToggle("JoinPerimeter", ref joinPerimToggle);
       gp.AddOptionToggle("Cleanup", ref cleanupToggle);
       gp.AddOptionToggle("Label", ref labelToggle);
+      gp.AddOptionToggle("Grain", ref grainToggle);
       gp.AddOptionDouble("LabelSize", ref labelSizeOption);
       int labelLayerIndex = gp.AddOption("LabelLayer", _labelLayer);
       var layerOptionIndex = gp.AddOption("Layer", layerSession.OptionLayerName);
@@ -502,6 +570,7 @@ public sealed class vPart : vToolsCommand
       _joinPerim = joinPerimToggle.CurrentValue;
       _cleanup = cleanupToggle.CurrentValue;
       _label = labelToggle.CurrentValue;
+      _grain = grainToggle.CurrentValue;
       _labelSize = labelSizeOption.CurrentValue;
       if (gpResult == GetResult.Option)
       {
@@ -583,15 +652,24 @@ public sealed class vPart : vToolsCommand
       if (id != Guid.Empty) addedIds.Add(id);
     }
 
-    if (_label && addedIds.Count > 0)
+    if ((_label || _grain) && addedIds.Count > 0)
     {
       doc.Views.Redraw();
       using var placedPerimeter = perimeter.DuplicateCurve();
       placedPerimeter.Transform(translation);
       var labelPlane = plane;
       labelPlane.Origin = plane.Origin + (placementPoint - basePoint);
-      var labelId = PlacePartLabel(doc, mode, placedPerimeter, labelPlane);
-      if (labelId != Guid.Empty) addedIds.Add(labelId);
+      if (_label)
+      {
+        var labelId = PlaceOrUpdatePartLabel(doc, mode, placedPerimeter, labelPlane, null, [], addedIds.ToHashSet(), out _);
+        if (labelId != Guid.Empty && !addedIds.Contains(labelId)) addedIds.Add(labelId);
+      }
+      if (_grain)
+      {
+        int boundaryLayer = doc.Objects.FindId(addedIds[0])?.Attributes.LayerIndex ?? -1;
+        var guide = vGrain.AddGuide(doc, placedPerimeter, labelPlane, addedIds, [], boundaryLayer, out _);
+        if (guide != Guid.Empty && !addedIds.Contains(guide)) addedIds.Add(guide);
+      }
     }
 
     if (_group && addedIds.Count > 1)
@@ -629,7 +707,10 @@ public sealed class vPart : vToolsCommand
   private static Point3d PartLabelCenter(Curve perimeter, Plane plane, double tolerance)
   {
     var bounds = perimeter.GetBoundingBox(plane);
-    var center = plane.PointAt(bounds.Center.X, bounds.Center.Y);
+    using var mass = AreaMassProperties.Compute(perimeter, tolerance);
+    var center = mass != null && mass.Centroid.IsValid
+      ? plane.ClosestPoint(mass.Centroid)
+      : plane.PointAt(bounds.Center.X, bounds.Center.Y);
     if (perimeter.Contains(center, plane, tolerance) == PointContainment.Inside) return center;
     var best = Point3d.Unset;
     double bestDistance = double.MaxValue;
@@ -646,7 +727,7 @@ public sealed class vPart : vToolsCommand
     return best.IsValid ? best : center;
   }
 
-  private sealed record ExistingPart(PlanarPartSelection.Part Part, RhinoObject? Label, int[] Groups) : IDisposable
+  private sealed record ExistingPart(PlanarPartSelection.Part Part, RhinoObject? Label, int[] Groups, int GroupIndex) : IDisposable
   {
     public void Dispose() => Part.Dispose();
   }
@@ -657,51 +738,153 @@ public sealed class vPart : vToolsCommand
     if (selected.Length == 0) return null;
     var ids = selected.Select(obj => obj.Id).ToHashSet();
     var common = selected.Select(obj => obj.Attributes.GetGroupList() ?? []).Aggregate((first, next) => first.Intersect(next).ToArray());
-    foreach (int group in common.OrderBy(doc.Groups.GroupObjectCount))
+    foreach (int group in common.OrderByDescending(doc.Groups.GroupObjectCount))
     {
       if (doc.Groups[group] is not { IsDeleted: false }) continue;
       var members = doc.Groups.GroupMembers(group).Where(obj => !obj.IsDeleted).ToArray();
       if (!members.Any(obj => obj.Geometry is Curve && !IsNotchCurve(obj.Attributes)) ||
           members.Any(obj => NestTableMetadata.IsDecoration(doc, obj)) ||
           members.Any(obj => obj.IsSelectable(true, false, false, false) && !ids.Contains(obj.Id))) continue;
-      var parts = PlanarPartSelection.Capture(doc, members.Select(obj => obj.Id).ToArray(), doc.ModelAbsoluteTolerance);
+      var parts = PlanarPartSelection.CaptureGroup(doc, members.Select(obj => obj.Id).ToArray(), doc.ModelAbsoluteTolerance);
       if (parts.Count != 1) { foreach (var part in parts) part.Dispose(); continue; }
       var label = FindPartLabel(doc, members);
       var groups = members.Select(obj => obj.Attributes.GetGroupList() ?? []).Aggregate((first, next) => first.Intersect(next).ToArray());
       L($"preselected part: group={group} members={members.Length} label={label?.Id}");
-      return new(parts[0], label, groups);
+      return new(parts[0], label, groups, group);
     }
     if (selected.All(obj => (obj.Attributes.GetGroupList() ?? []).Length == 0) &&
         selected.Any(obj => obj.Geometry is TextEntity && string.Equals(obj.Attributes.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase)))
     {
       var parts = PlanarPartSelection.Capture(doc, selected.Select(obj => obj.Id).ToArray(), doc.ModelAbsoluteTolerance);
-      if (parts.Count == 1) return new(parts[0], FindPartLabel(doc, selected), []);
+      if (parts.Count == 1) return new(parts[0], FindPartLabel(doc, selected), [], -1);
       foreach (var part in parts) part.Dispose();
     }
     return null;
   }
 
-  private static RhinoObject? FindPartLabel(RhinoDoc doc, IEnumerable<RhinoObject> members) =>
-    members.Where(obj => obj.Geometry is TextEntity text && !string.IsNullOrWhiteSpace(text.PlainText) &&
-          !DetailLabelNames.Contains(obj.Attributes.Name, StringComparer.OrdinalIgnoreCase) &&
-          !string.Equals(obj.Attributes.GetUserString(NotchRoleKey), "label", StringComparison.OrdinalIgnoreCase) &&
-          string.IsNullOrEmpty(obj.Attributes.GetUserString("notch.label_id")))
-        .OrderByDescending(obj => string.Equals(obj.Attributes.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase))
-        .ThenByDescending(obj => string.Equals(doc.Layers[obj.Attributes.LayerIndex].Name, PrimaryLabelLayer, StringComparison.OrdinalIgnoreCase))
-        .ThenByDescending(obj => ((TextEntity)obj.Geometry).TextHeight).FirstOrDefault();
+  private static bool FlattenPartSubgroups(RhinoDoc doc,int partGroup)
+  {
+    // Memberships that reach outside the part (including the nest table) are not subgroups.
+    var members=(doc.Groups.GroupMembers(partGroup)??[]).Where(obj=>!obj.IsDeleted).ToArray();
+    var ids=members.Select(obj=>obj.Id).ToHashSet();
+    var subgroups=members.SelectMany(obj=>obj.Attributes.GetGroupList()??[]).Distinct()
+      .Where(index=>index!=partGroup&&doc.Groups[index] is {IsDeleted:false}&&
+        (doc.Groups.GroupMembers(index)??[]).All(obj=>obj.IsDeleted||ids.Contains(obj.Id))).ToHashSet();
+    if(subgroups.Count==0)return true;
+    var affected=members.Where(obj=>(obj.Attributes.GetGroupList()??[]).Any(subgroups.Contains)).ToArray();
+    if(affected.Any(obj=>!obj.IsSelectable(true,false,false,false)))return false;
+    var modified=new List<(Guid Id,ObjectAttributes Attributes)>();
+    try
+    {
+      foreach(var obj in affected)
+      {
+        using var attributes=obj.Attributes.Duplicate();
+        foreach(int subgroup in (attributes.GetGroupList()??[]).Where(subgroups.Contains))attributes.RemoveFromGroup(subgroup);
+        var before=obj.Attributes.Duplicate();
+        if(!doc.Objects.ModifyAttributes(obj.Id,attributes,true))
+        {before.Dispose();throw new InvalidOperationException("Could not remove a subgroup membership.");}
+        modified.Add((obj.Id,before));
+      }
+      foreach(int subgroup in subgroups)
+        if(doc.Groups.GroupObjectCount(subgroup)==0)doc.Groups.Delete(subgroup);
+      return true;
+    }
+    catch(Exception ex)
+    {
+      foreach(var (id,attributes) in modified)doc.Objects.ModifyAttributes(id,attributes,true);
+      L($"subgroup flattening failed: {ex.Message}");
+      return false;
+    }
+    finally{foreach(var entry in modified)entry.Attributes.Dispose();}
+  }
 
-  private static Guid PlacePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane) =>
-    PlaceOrUpdatePartLabel(doc, mode, perimeter, plane, null, []);
+  private static bool IsDetailLabel(ObjectAttributes attributes)
+  {
+    var shadeRole = attributes.GetUserString("vShade.role");
+    return DetailLabelNames.Contains(attributes.Name, StringComparer.OrdinalIgnoreCase) ||
+      string.Equals(attributes.GetUserString(NotchRoleKey), "label", StringComparison.OrdinalIgnoreCase) ||
+      !string.IsNullOrEmpty(attributes.GetUserString("notch.label_id")) ||
+      string.Equals(shadeRole, "label", StringComparison.OrdinalIgnoreCase) ||
+      string.Equals(shadeRole, "reinforcement_part_label", StringComparison.OrdinalIgnoreCase);
+  }
+
+  private static RhinoObject? FindPartLabel(RhinoDoc doc, IReadOnlyList<RhinoObject> members)
+  {
+    var labels = members.Where(obj => obj.Geometry is TextEntity text && !string.IsNullOrWhiteSpace(text.PlainText)).ToArray();
+    var candidates = labels.Where(obj => !IsDetailLabel(obj.Attributes)).ToArray();
+    var named = candidates.Where(obj => string.Equals(obj.Attributes.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray();
+    if (named.Length != 0) return named.Length == 1 ? named[0] : null;
+    if (labels.Length == 1) return candidates.SingleOrDefault();
+    if (candidates.Length == 0) return null;
+
+    // Without an explicit primary label, don't overwrite notes on layers shared with part geometry.
+    var curveLayers = members.Where(obj => obj.Geometry is Curve).Select(obj => obj.Attributes.LayerIndex).ToHashSet();
+    var configuredLayer = FindPartLabelLayer(doc, _labelLayer);
+    var dedicated = candidates.Where(obj =>
+    {
+      int layer = obj.Attributes.LayerIndex;
+      return !curveLayers.Contains(layer) && (layer == configuredLayer ||
+        string.Equals(doc.Layers[layer]?.Name, PrimaryLabelLayer, StringComparison.OrdinalIgnoreCase));
+    }).Take(2).ToArray();
+    return dedicated.Length == 1 ? dedicated[0] : null;
+  }
+
+  private static int FindPartLabelLayer(RhinoDoc doc, string path) =>
+    LayerSelector.IsCurrentLayerValue(path, DuplicateCommandSupport.CurrentLayerOption)
+      ? doc.Layers.CurrentLayerIndex : doc.Layers.FindByFullPath(path, -1);
+
+  private static int ResolvePartLabelLayer(RhinoDoc doc, string path)
+  {
+    int index = FindPartLabelLayer(doc, path);
+    return index >= 0 ? index : doc.Layers.AddPath(path, NewLabelLayerColor);
+  }
+
+  private static bool CanAdoptPartText(RhinoObject obj) =>
+    obj.Geometry is TextEntity text && !string.IsNullOrWhiteSpace(text.PlainText) &&
+    !IsDetailLabel(obj.Attributes) && obj.IsSelectable(true, false, false, false);
+
+  private static RhinoObject? FindClickedPartText(RhinoDoc doc, PartLabelClick click, IReadOnlySet<Guid> members, Guid current)
+  {
+    var (viewport, pixel) = click;
+    if (viewport.ParentView is not { } view || !viewport.GetFrustumLine(pixel.X, pixel.Y, out var line)) return null;
+    using var context = new PickContext
+    {
+      View = view, PickLine = line, PickStyle = PickStyle.PointPick, PickMode = PickMode.Wireframe,
+      PickGroupsEnabled = false, SubObjectSelectionEnabled = false
+    };
+    context.SetPickTransform(viewport.GetPickTransform(pixel));
+    context.UpdateClippingPlanes();
+    var hits = doc.Objects.PickObjects(context) ?? [];
+    try
+    {
+      foreach (var hit in hits)
+        if (hit.ObjectId != current && members.Contains(hit.ObjectId) &&
+            hit.Object() is { } obj && CanAdoptPartText(obj))
+          return obj;
+      return null;
+    }
+    finally { foreach (var hit in hits) hit.Dispose(); }
+  }
+
+  private static bool TryPromptPartLabel(ref string text)
+  {
+    using var getter = new GetString();
+    getter.SetCommandPrompt("Part label");
+    getter.SetDefaultString(text);
+    if (getter.GetLiteralString() != GetResult.String || string.IsNullOrWhiteSpace(getter.StringResult())) return false;
+    text = getter.StringResult();
+    return true;
+  }
 
   private static Guid PlaceOrUpdatePartLabel(RhinoDoc doc, RunMode mode, Curve perimeter, Plane plane,
-    RhinoObject? existing, IReadOnlyList<int> groups)
+    RhinoObject? existing, IReadOnlyList<int> groups, IReadOnlySet<Guid> memberIds, out bool removed)
   {
+    removed = false;
     if (existing != null && !existing.IsSelectable(true, false, false, false))
     { RhinoApp.WriteLine("vPart: the existing label is hidden or locked; make it editable first."); return Guid.Empty; }
     var original = existing?.Geometry as TextEntity;
     var text = original?.PlainText ?? _labelText;
-    if (RhinoGet.GetString("Part label", false, ref text) != Result.Success || string.IsNullOrWhiteSpace(text))
-      return Guid.Empty;
+    if (!TryPromptPartLabel(ref text)) return Guid.Empty;
     if (original != null)
     {
       _labelSize = original.TextHeight;
@@ -711,33 +894,37 @@ public sealed class vPart : vToolsCommand
     SaveOptions();
     var position = original?.Plane.Origin ?? PartLabelCenter(perimeter, plane, doc.ModelAbsoluteTolerance);
     double angle = original == null ? 0 : Math.Atan2(original.Plane.XAxis * plane.YAxis, original.Plane.XAxis * plane.XAxis);
-    using var entity = original?.Duplicate() as TextEntity ?? new TextEntity
+    var initialText = original?.Duplicate() as TextEntity ?? new TextEntity
     {
       PlainText = text, Plane = new Plane(position, plane.XAxis, plane.YAxis),
       TextHeight = _labelSize, Justification = TextJustification.MiddleCenter, DrawForward = false,
       DimensionStyleId = doc.DimStyles.Current.Id
     };
-    entity.PlainText = text;
-    using var visibility = new PartLabelVisibility(doc, existing?.Id ?? Guid.Empty) { Enabled = existing != null };
+    if (initialText.PlainText != text) initialText.PlainText = text;
+    using var preview = new PartLabelPreview(doc, existing?.Id ?? Guid.Empty, initialText) { Enabled = existing != null };
     if (original == null) using (var style = doc.DimStyles.Current.Duplicate())
     {
       style.TextHeight = _labelSize;
       style.DimensionScale = 1;
       style.TextOrientation = TextOrientation.InPlane;
       style.TextRotation = 0;
-      entity.SetOverrideDimStyle(style);
+      initialText.SetOverrideDimStyle(style);
     }
     while (true)
     {
+      var entity = preview.Text;
       using var getter = new GetPoint();
-      getter.SetCommandPrompt("Confirm label or drag to move; Alt rotates, Shift sizes");
+      getter.SetCommandPrompt("Click part text to use as label, click elsewhere or Enter to confirm; drag to move");
       getter.AcceptNothing(true);
       getter.AcceptCustomMessage(true);
       getter.Constrain(plane, false);
       var size = new OptionDouble(_labelSize, RhinoMath.ZeroTolerance, double.MaxValue);
-      int textOption = getter.AddOption("Text", entity.PlainText);
+      int textOption = getter.AddOption("Text");
+      int centerOption = getter.AddOption("Center");
       int sizeOption = getter.AddOptionDouble("LabelSize", ref size);
       int layerOption = getter.AddOption("LabelLayer", _labelLayer);
+      var grain = new OptionToggle(_grain, "No", "Yes");
+      getter.AddOptionToggle("Grain", ref grain);
       var previousMode = -1;
       double rotationStart = 0, initialAngle = angle, initialSize = _labelSize;
       int sizeStartY = 0;
@@ -789,7 +976,7 @@ public sealed class vPart : vToolsCommand
         entity.Plane = labelPlane;
         entity.TextHeight = _labelSize;
       }
-      using var drag = new PartLabelDrag(doc, entity, plane, BeginDrag, UpdateLabel) { Enabled = true };
+      using var drag = new PartLabelDrag(doc, plane, BeginDrag, UpdateLabel) { Enabled = true };
       getter.MouseMove += (_, e) => drag.UpdateModifiers(e.Viewport, e.WindowPoint);
       getter.DynamicDraw += (_, e) =>
       {
@@ -797,16 +984,49 @@ public sealed class vPart : vToolsCommand
         try { e.Display.DrawAnnotation(entity, LabelColor()); }
         finally { e.Display.PopDepthTesting(); }
       };
-      var result = getter.Get(onMouseUp: true);
+      GetResult result;
+      using (var deleteKey = new PartLabelDeleteKey())
+        result = getter.Get(onMouseUp: true);
       drag.Enabled = false;
+      _grain = grain.CurrentValue;
+      if (result == GetResult.CustomMessage && getter.CustomMessage() is PartLabelDelete)
+      {
+        removed = existing == null || preview.TargetId != existing.Id || doc.Objects.Delete(existing.Id, true);
+        if (!removed) RhinoApp.WriteLine("vPart: could not remove the existing label.");
+        SaveOptions();
+        return Guid.Empty;
+      }
       if (result == GetResult.Point && drag.Moved) { SaveOptions(); continue; }
+      if (result == GetResult.CustomMessage && getter.CustomMessage() is PartLabelClick click &&
+          FindClickedPartText(doc, click, memberIds, preview.TargetId) is { Geometry: TextEntity picked } target &&
+          picked.Duplicate() is TextEntity adopted)
+      {
+        var wording = adopted.PlainText;
+        if (TryPromptPartLabel(ref wording) && wording != adopted.PlainText) adopted.PlainText = wording;
+        preview.Adopt(target.Id, adopted);
+        position = adopted.Plane.Origin;
+        angle = Math.Atan2(adopted.Plane.XAxis * plane.YAxis, adopted.Plane.XAxis * plane.XAxis);
+        _labelSize = adopted.TextHeight;
+        _labelLayer = doc.Layers[target.Attributes.LayerIndex].FullPath;
+        _labelText = adopted.PlainText;
+        SaveOptions();
+        continue;
+      }
       if (result == GetResult.Option)
       {
         if (getter.Option()?.Index == textOption)
         {
           var proposed = entity.PlainText;
-          if (RhinoGet.GetString("Part label", false, ref proposed) == Result.Success && !string.IsNullOrWhiteSpace(proposed))
-          { entity.PlainText = proposed; _labelText = proposed; }
+          if (TryPromptPartLabel(ref proposed))
+          { if (proposed != entity.PlainText) entity.PlainText = proposed; _labelText = proposed; }
+        }
+        if (getter.Option()?.Index == centerOption)
+        {
+          position = PartLabelCenter(perimeter, plane, doc.ModelAbsoluteTolerance);
+          var labelPlane = entity.Plane;
+          labelPlane.Origin = position;
+          entity.Plane = labelPlane;
+          entity.Justification = TextJustification.MiddleCenter;
         }
         if (getter.Option()?.Index == sizeOption) _labelSize = size.CurrentValue;
         entity.TextHeight = _labelSize;
@@ -816,12 +1036,22 @@ public sealed class vPart : vToolsCommand
       }
       SaveOptions();
       if (result != GetResult.Point && result != GetResult.Nothing &&
-        !(result == GetResult.CustomMessage && getter.CustomMessage() is PartLabelConfirm)) return Guid.Empty;
+        !(result == GetResult.CustomMessage && getter.CustomMessage() is PartLabelClick)) return Guid.Empty;
       // Commit the same entity and transform used by the last preview, including Alt/Shift edits.
-      int outputLayer = LayerSelector.IsCurrentLayerValue(_labelLayer, DuplicateCommandSupport.CurrentLayerOption)
-        ? doc.Layers.CurrentLayerIndex : UzipCommon.EnsureLayer(doc, _labelLayer, Color.White);
-      if (outputLayer < 0) return Guid.Empty;
-      return CommitPartLabel(doc, entity, outputLayer, existing, groups);
+      int outputLayer = ResolvePartLabelLayer(doc, _labelLayer);
+      if (!IsUsableLayer(doc, outputLayer))
+      {
+        RhinoApp.WriteLine($"vPart: could not create label layer '{_labelLayer}'. Choose a different LabelLayer.");
+        continue;
+      }
+      if (preview.TargetId == (existing?.Id ?? Guid.Empty))
+        return CommitPartLabel(doc, entity, outputLayer, existing, groups);
+      if (doc.Objects.FindId(preview.TargetId) is { } targetObject && CanAdoptPartText(targetObject))
+      {
+        var id = CommitPickedPartLabel(doc, entity, outputLayer, targetObject, groups, memberIds);
+        if (id != Guid.Empty) return id;
+      }
+      RhinoApp.WriteLine("vPart: could not use the picked text as the label. Choose another text or press Esc.");
     }
   }
 
@@ -852,25 +1082,105 @@ public sealed class vPart : vToolsCommand
     return id;
   }
 
-  private sealed class PartLabelVisibility(RhinoDoc doc, Guid id) : DisplayConduit, IDisposable
+  private static Guid CommitPickedPartLabel(RhinoDoc doc, TextEntity entity, int layer, RhinoObject target,
+    IReadOnlyList<int> groups, IReadOnlySet<Guid> members)
   {
+    if (!members.Contains(target.Id) || !CanAdoptPartText(target)) return Guid.Empty;
+    var demoted = new List<(Guid Id, ObjectAttributes Attributes)>();
+    Guid result = Guid.Empty;
+    try
+    {
+      // Keep any former label's text and placement; only the picked text should be marked primary.
+      foreach (var id in members)
+      {
+        if (id == target.Id || doc.Objects.FindId(id) is not { Geometry: TextEntity } obj ||
+            IsDetailLabel(obj.Attributes) || !string.Equals(obj.Name, LabelObjectName, StringComparison.OrdinalIgnoreCase)) continue;
+        using var updated = obj.Attributes.Duplicate();
+        var original = obj.Attributes.Duplicate();
+        updated.Name = string.Empty;
+        if (!doc.Objects.ModifyAttributes(id, updated, true)) { original.Dispose(); return Guid.Empty; }
+        demoted.Add((id, original));
+      }
+      result = CommitPartLabel(doc, entity, layer, target, groups);
+      return result;
+    }
+    finally
+    {
+      foreach (var (id, attributes) in demoted)
+      {
+        if (result == Guid.Empty) doc.Objects.ModifyAttributes(id, attributes, true);
+        attributes.Dispose();
+      }
+    }
+  }
+
+  private sealed class PartLabelPreview(RhinoDoc doc, Guid targetId, TextEntity text) : DisplayConduit, IDisposable
+  {
+    internal Guid TargetId { get; private set; } = targetId;
+    internal TextEntity Text { get; private set; } = text;
+    internal void Adopt(Guid id, TextEntity source)
+    {
+      Text.Dispose();
+      Text = source;
+      TargetId = id;
+      Enabled = true;
+    }
     protected override void ObjectCulling(CullObjectEventArgs e)
     {
-      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == id) e.CullObject = true;
+      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == TargetId) e.CullObject = true;
     }
     protected override void PreDrawObject(DrawObjectEventArgs e)
     {
-      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == id) e.DrawObject = false;
+      if (e.RhinoObject?.Document == doc && e.RhinoObject.Id == TargetId) e.DrawObject = false;
     }
-    public void Dispose() { Enabled = false; doc.Views.Redraw(); }
+    public void Dispose() { Enabled = false; Text.Dispose(); doc.Views.Redraw(); }
   }
 
   private static double ShiftLabelSize(double startSize, double upwardPixels) =>
     Math.Max(1, Math.Round(startSize + upwardPixels / ConfiguredLabelSizePixelsPerUnit, MidpointRounding.AwayFromZero));
 
-  private sealed record PartLabelConfirm;
+  private sealed record PartLabelClick(RhinoViewport Viewport, System.Drawing.Point Pixel);
+  private sealed record PartLabelDelete;
 
-  private sealed class PartLabelDrag(RhinoDoc doc, TextEntity entity, Plane plane,
+  private sealed class PartLabelDeleteKey : IDisposable
+  {
+    private const int KeyboardHook = 2; // Thread-local Win32 WH_KEYBOARD hook for the confirmation getter.
+    private const long KeyReleased = 1L << 31; // Win32 key transition bit; commit on release to swallow repeats.
+    private const uint RootWindow = 2; // Win32 GetAncestor flag for the focused control's top-level window.
+    private readonly Hook _callback;
+    private readonly IntPtr _mainWindow=RhinoApp.MainWindowHandle();
+    private readonly IntPtr _hook;
+    private delegate IntPtr Hook(int code,IntPtr key,IntPtr state);
+
+    internal PartLabelDeleteKey()
+    {
+      _callback=OnKey;
+      if(OperatingSystem.IsWindows()&&_mainWindow!=IntPtr.Zero)
+        _hook=SetWindowsHookEx(KeyboardHook,_callback,IntPtr.Zero,GetCurrentThreadId());
+    }
+    private IntPtr OnKey(int code,IntPtr key,IntPtr state)
+    {
+      if(code==0&&key.ToInt64()==(int)System.Windows.Forms.Keys.Delete)
+      {
+        var focus=GetFocus();
+        if((focus==_mainWindow||GetAncestor(focus,RootWindow)==_mainWindow)&&System.Windows.Forms.Control.ModifierKeys==System.Windows.Forms.Keys.None)
+        {
+          if((state.ToInt64()&KeyReleased)!=0)GetBaseClass.PostCustomMessage(new PartLabelDelete());
+          return new IntPtr(1);
+        }
+      }
+      return CallNextHookEx(_hook,code,key,state);
+    }
+    public void Dispose(){if(_hook!=IntPtr.Zero)UnhookWindowsHookEx(_hook);}
+    [DllImport("kernel32.dll")]private static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")]private static extern IntPtr SetWindowsHookEx(int kind,Hook callback,IntPtr module,uint thread);
+    [DllImport("user32.dll")]private static extern bool UnhookWindowsHookEx(IntPtr hook);
+    [DllImport("user32.dll")]private static extern IntPtr CallNextHookEx(IntPtr hook,int code,IntPtr key,IntPtr state);
+    [DllImport("user32.dll")]private static extern IntPtr GetFocus();
+    [DllImport("user32.dll")]private static extern IntPtr GetAncestor(IntPtr window,uint flags);
+  }
+
+  private sealed class PartLabelDrag(RhinoDoc doc, Plane plane,
     Action<Point3d, System.Drawing.Point> begin, Action<Point3d, System.Drawing.Point> update) : Rhino.UI.MouseCallback, IDisposable
   {
     private System.Drawing.Point? _start;
@@ -908,13 +1218,7 @@ public sealed class vPart : vToolsCommand
     {
       if (RhinoDoc.ActiveDoc != doc || e.MouseButton != Rhino.UI.MouseButton.Left ||
         e.View?.ActiveViewport is not { } viewport || !PointAt(e, plane, out var point)) { base.OnMouseDown(e); return; }
-      var bounds = AnnotationTextTransform.TextBounds(entity);
-      var corners = bounds.IsValid ? bounds.GetCorners().Select(p => entity.Plane.PointAt(p.X, p.Y, p.Z)).Select(viewport.WorldToClient).ToArray() : [];
-      if (corners.Length == 0) { base.OnMouseDown(e); return; }
       var cursor = e.ViewportPoint;
-      int padding = ConfiguredLabelPointerThresholdPixels;
-      if (cursor.X < corners.Min(p => p.X) - padding || cursor.X > corners.Max(p => p.X) + padding ||
-        cursor.Y < corners.Min(p => p.Y) - padding || cursor.Y > corners.Max(p => p.Y) + padding) { base.OnMouseDown(e); return; }
       _start = cursor; _viewport = viewport.Id; _dragged = false; _modifierInteraction = false;
       begin(point, cursor);
       e.Cancel = true;
@@ -937,7 +1241,8 @@ public sealed class vPart : vToolsCommand
       if (_start != null && e.MouseButton == Rhino.UI.MouseButton.Left)
       {
         e.Cancel = true;
-        if (!_dragged) GetBaseClass.PostCustomMessage(new PartLabelConfirm());
+        if (!_dragged && e.View?.ActiveViewport is { } viewport && viewport.Id == _viewport)
+          GetBaseClass.PostCustomMessage(new PartLabelClick(viewport, e.ViewportPoint));
         _start = null;
       }
       base.OnMouseUp(e);

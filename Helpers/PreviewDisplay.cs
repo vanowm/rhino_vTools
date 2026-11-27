@@ -18,6 +18,8 @@ internal static class PreviewDisplay
   private const int DefaultMinimumCurveMarkerPixels = 0; // Zero preserves normal highlighting; positive pixels add a cue for subpixel curves when a caller opts in.
   private const int DefaultMinimumObjectMarkerPixels = 0; // Zero preserves ordinary object rendering; positive pixels add a cue for subpixel non-curve objects when opted in.
   private const int DefaultObjectLocatorPixels = 0; // Zero omits screen-space object bounds; positive pixels size a persistent locator cross and minimum rectangle for opt-in callers.
+  private const bool DefaultDepthBiasedShading = false; // true pulls a fill slightly toward the camera; false draws the fill at model depth.
+  private const double HoverDepthOffsetPixels = 1; // Camera-facing depth displacement in world units per screen pixel; positive avoids coincident hover fills vanishing.
   // Thickness values are pixel increments above Rhino's current default curve thickness.
   [global::vTools.CommandDefault("PreviewDisplay", "vTools.PreviewDisplay.MinimumCurveThickness", "Minimum preview stroke width in display pixels; one or greater.")] private const int MinimumCurveThickness = 1; // Minimum preview stroke width in display pixels; one or greater.
 
@@ -322,11 +324,13 @@ internal static class PreviewDisplay
     internal bool DrawOnTop { get; set; } = ConfiguredDefaultHighlightDrawOnTop;
     internal bool AutomaticForegroundDrawing { get; set; } = ConfiguredDefaultAutomaticForegroundDrawing;
     internal bool AutomaticShadedDrawing { get; set; } = ConfiguredDefaultAutomaticShadedDrawing;
+    internal bool DepthBiasedShading { get; set; } = DefaultDepthBiasedShading;
     internal int FillBoundaryEmphasis { get; set; } = DefaultFillBoundaryEmphasis;
     internal int MinimumFillBoundaryPixels { get; set; } = DefaultMinimumFillBoundaryPixels;
     internal double MinimumFillBoundaryOpacity { get; set; } = DefaultMinimumFillBoundaryOpacity;
     internal int FillBoundaryHaloPixels { get; set; } = DefaultFillBoundaryHaloPixels;
     internal bool ScreenSpaceCurves { get; set; } = DefaultScreenSpaceCurves;
+    internal Func<Guid,Guid>? CurveColorSourceId { get; set; } // Resolves a temporary curve section to the live object that supplies its color.
     internal int MinimumCurveMarkerPixels { get; set; } = DefaultMinimumCurveMarkerPixels;
     internal int MinimumObjectMarkerPixels { get; set; } = DefaultMinimumObjectMarkerPixels;
     internal int ObjectLocatorPixels { get; set; } = DefaultObjectLocatorPixels;
@@ -389,21 +393,50 @@ internal static class PreviewDisplay
 
     protected override void PostDrawObjects(DrawEventArgs e)
     {
-      if (AutomaticShadedDrawing) DrawShadedHighlights(e);
+      if (!AutomaticShadedDrawing) return;
+      if (!DepthBiasedShading)
+      {
+        DrawShadedHighlights(e);
+        return;
+      }
+      _material.IsTwoSided = true;
+      _material.BackDiffuse = _style.BodyColor;
+      var previousDepth = e.Display.DepthMode;
+      var previousBias = e.Display.ZBiasMode;
+      e.Display.PushDepthTesting(true);
+      e.Display.PushDepthWriting(false);
+      e.Display.PushCullFaceMode(CullFaceMode.DrawFrontAndBack);
+      try
+      {
+        e.Display.DepthMode = DepthMode.Neutral;
+        e.Display.ZBiasMode = ZBiasMode.TowardsCamera;
+        DrawShadedHighlights(e);
+      }
+      finally
+      {
+        e.Display.ZBiasMode = previousBias;
+        e.Display.DepthMode = previousDepth;
+        e.Display.PopCullFaceMode();
+        e.Display.PopDepthWriting();
+        e.Display.PopDepthTesting();
+      }
     }
 
-    internal void DrawFillBoundaryHighlights(DrawEventArgs e)
+    internal void DrawFillBoundaryHighlights(DrawEventArgs e,IReadOnlySet<Guid>? included=null)
     {
       if (FillBoundaryEmphasis <= 0 || e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
         return;
       int alpha = (int)Math.Round(_style.BodyColor.A * Math.Clamp(1 - _style.Transparency, 0, 1));
       if (alpha <= 0) return;
-      foreach (var paths in _fillBoundaries.Values)
+      foreach (var (id,paths) in _fillBoundaries)
+      {
+        if(included!=null&&!included.Contains(id))continue;
         foreach (var path in paths)
         {
           var stroke=FillBoundaryStroke(e,path,alpha);
           e.Display.DrawPolyline(path,Color.FromArgb(stroke.Alpha,_style.BodyColor),stroke.Width);
         }
+      }
     }
 
     private (int Width,int Alpha) FillBoundaryStroke(DrawEventArgs e,Polyline path,int alpha)
@@ -423,12 +456,12 @@ internal static class PreviewDisplay
       return(width,alpha);
     }
 
-    internal void DrawFillHaloHighlights(DrawEventArgs e)
+    internal void DrawFillHaloHighlights(DrawEventArgs e,IReadOnlySet<Guid>? included=null)
     {
       if(FillBoundaryHaloPixels<=0||e.RhinoDoc.RuntimeSerialNumber!=_doc.RuntimeSerialNumber||_style.BodyColor.A==0)return;
-      foreach(var paths in _fillBoundaries.Values)
-        foreach(var path in paths)
-          DrawScreenPolyline(e,path,_style.BodyColor,FillBoundaryHaloPixels);
+      foreach(var (id,paths) in _fillBoundaries)
+        if(included==null||included.Contains(id))
+          foreach(var path in paths)DrawScreenPolyline(e,path,_style.BodyColor,FillBoundaryHaloPixels);
     }
     private static void DrawScreenPolyline(DrawEventArgs e,Polyline path,Color color,float width)
     {
@@ -443,7 +476,7 @@ internal static class PreviewDisplay
       }
     }
 
-    internal void DrawShadedHighlights(DrawEventArgs e)
+    internal void DrawShadedHighlights(DrawEventArgs e,IReadOnlySet<Guid>? included=null)
     {
       if (e.RhinoDoc.RuntimeSerialNumber != _doc.RuntimeSerialNumber)
         return;
@@ -453,33 +486,45 @@ internal static class PreviewDisplay
 
       foreach (var objectId in _objectIds)
       {
+        if(included!=null&&!included.Contains(objectId))continue;
         var geometry = GetGeometry(objectId);
-        switch (geometry)
+        if (geometry == null) continue;
+        var direction = DepthBiasedShading ? -e.Viewport.CameraDirection : Vector3d.Zero;
+        double scale = 0;
+        bool offset = DepthBiasedShading && direction.Unitize() &&
+          e.Viewport.GetWorldToScreenScale(geometry.GetBoundingBox(false).Center, out scale) && scale > 0;
+        if (offset)
+          e.Display.PushModelTransform(Transform.Translation(direction * (HoverDepthOffsetPixels / scale)));
+        try
         {
-          case Brep brep:
-            e.Display.DrawBrepShaded(brep, _material);
-            break;
-          case Extrusion extrusion:
+          switch (geometry)
           {
-            using var brep = extrusion.ToBrep();
-            if (brep != null)
+            case Brep brep:
               e.Display.DrawBrepShaded(brep, _material);
-            break;
+              break;
+            case Extrusion extrusion:
+            {
+              using var brep = extrusion.ToBrep();
+              if (brep != null)
+                e.Display.DrawBrepShaded(brep, _material);
+              break;
+            }
+            case Surface surface:
+            {
+              using var brep = surface.ToBrep();
+              if (brep != null)
+                e.Display.DrawBrepShaded(brep, _material);
+              break;
+            }
+            case Mesh mesh:
+              e.Display.DrawMeshShaded(mesh, _material);
+              break;
+            case SubD subD:
+              e.Display.DrawSubDShaded(subD, _material);
+              break;
           }
-          case Surface surface:
-          {
-            using var brep = surface.ToBrep();
-            if (brep != null)
-              e.Display.DrawBrepShaded(brep, _material);
-            break;
-          }
-          case Mesh mesh:
-            e.Display.DrawMeshShaded(mesh, _material);
-            break;
-          case SubD subD:
-            e.Display.DrawSubDShaded(subD, _material);
-            break;
         }
+        finally { if (offset) e.Display.PopModelTransform(); }
       }
     }
 
@@ -504,8 +549,11 @@ internal static class PreviewDisplay
         switch (geometry)
         {
           case Curve curve:
-            var curveStyle = _style.UseObjectCurveColor && obj != null
-              ? _style with { BodyColor = obj.Attributes.DrawColor(_doc, e.Viewport.Id) }
+            var colorSource = _style.UseObjectCurveColor
+              ? obj ?? (CurveColorSourceId is {} resolve ? _doc.Objects.FindId(resolve(objectId)) : null)
+              : null;
+            var curveStyle = colorSource != null
+              ? _style with { BodyColor = colorSource.Attributes.DrawColor(_doc, e.Viewport.Id) }
               : _style;
             if(ScreenSpaceCurves&&curve.TryGetPolyline(out var polyline))
             {

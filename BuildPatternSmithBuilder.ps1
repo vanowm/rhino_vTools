@@ -98,7 +98,7 @@ try {
     if (-not (Test-Path -LiteralPath $framework -PathType Container)) {
         $framework = Join-Path ([Environment]::GetFolderPath('Windows')) 'Microsoft.NET\Framework\v4.0.30319'
     }
-    $references = @('mscorlib.dll', 'System.dll', 'System.Core.dll', 'System.Xml.dll', 'System.Xml.Linq.dll',
+    $references = @('mscorlib.dll', 'System.dll', 'System.Core.dll', 'System.Drawing.dll', 'System.Xml.dll', 'System.Xml.Linq.dll',
         'System.IO.Compression.dll', 'System.Runtime.Serialization.dll', 'WPF\WindowsBase.dll', 'WPF\PresentationCore.dll') |
         ForEach-Object {
             $path = Join-Path $framework $_

@@ -78,7 +78,51 @@ internal static class PlanarPartSelection
 
   private static bool Supported(GeometryBase geometry) => geometry is Curve or AnnotationBase or Rhino.Geometry.Point or TextDot;
 
+  internal static IReadOnlyList<RhinoObject> ConnectedPerimeter(RhinoDoc doc, RhinoObject seed, double tolerance)
+    => TracePerimeter(seed, doc.Objects.GetObjectList(ObjectType.Curve).Where(obj =>
+      obj.Visible && !obj.IsDeleted && !NestTableMetadata.IsDecoration(doc,obj)), tolerance);
+
+  internal static IReadOnlyList<RhinoObject> TracePerimeter(RhinoObject seed, IEnumerable<RhinoObject> candidates, double tolerance)
+  {
+    if (seed.Geometry is not Curve curve) return [];
+    if (curve.IsClosed) return [seed];
+    var available = candidates.Where(obj => obj.Id != seed.Id && obj.Attributes.LayerIndex == seed.Attributes.LayerIndex &&
+      obj.Geometry is Curve { IsClosed: false }).ToList();
+    var chain = new List<RhinoObject> { seed };
+    var start = curve.PointAtStart;
+    var end = curve.PointAtEnd;
+    while (available.Count > 0)
+    {
+      int next = -1;
+      bool reverse = false;
+      for (int i = 0; i < available.Count; i++)
+      {
+        var candidate = (Curve)available[i].Geometry;
+        bool atStart = end.DistanceTo(candidate.PointAtStart) <= tolerance;
+        bool atEnd = end.DistanceTo(candidate.PointAtEnd) <= tolerance;
+        if (!atStart && !atEnd) continue;
+        if (next >= 0 || atStart == atEnd) return []; // A branch cannot identify one perimeter.
+        next = i;
+        reverse = atEnd;
+      }
+      if (next < 0) break;
+      var member = available[next];
+      var edge = (Curve)member.Geometry;
+      end = reverse ? edge.PointAtStart : edge.PointAtEnd;
+      chain.Add(member);
+      if (end.DistanceTo(start) <= tolerance) return chain;
+      available.RemoveAt(next);
+    }
+    return [];
+  }
+
   internal static List<Part> Capture(RhinoDoc doc, IReadOnlyList<Guid> ids, double tolerance,bool requirePlanarDetails=DefaultRequirePlanarDetails)
+    => CaptureCore(doc, ids, tolerance, requirePlanarDetails, partitionGroups:true);
+
+  internal static List<Part> CaptureGroup(RhinoDoc doc, IReadOnlyList<Guid> ids, double tolerance)
+    => CaptureCore(doc, ids, tolerance, requirePlanarDetails:false, partitionGroups:false);
+
+  private static List<Part> CaptureCore(RhinoDoc doc, IReadOnlyList<Guid> ids, double tolerance,bool requirePlanarDetails,bool partitionGroups)
   {
     var selected=ids.Select(doc.Objects.FindId).Where(obj=>obj!=null).Cast<RhinoObject>().ToList();
     var regions=new List<Region>();
@@ -92,7 +136,7 @@ internal static class PlanarPartSelection
         if(!groupSizes.TryGetValue(index,out int size))groupSizes[index]=size=doc.Groups.GroupObjectCount(index);
         return size;
       }
-      var buckets=selected.GroupBy(obj=>(obj.Attributes.GetGroupList()??[])
+      var buckets=selected.GroupBy(obj=>!partitionGroups?-1:(obj.Attributes.GetGroupList()??[])
         .Where(index=>doc.Groups[index] is {IsDeleted:false})
         .OrderBy(GroupSize).FirstOrDefault(-1));
       foreach(var bucket in buckets)
@@ -100,7 +144,7 @@ internal static class PlanarPartSelection
         var objects=bucket.ToList();
         var curves=objects.Select(obj=>obj.Geometry).OfType<Curve>().ToArray();
         if(curves.Length==0) continue;
-        var loops=BoundaryLoops(doc,objects,tolerance,requirePlanarDetails);
+        var loops=BoundaryLoops(doc,objects,tolerance,requirePlanarDetails,joinOpenPerimeters:!partitionGroups);
         var candidates=loops.Where(curve=>curve.IsClosed && curve.TryGetPlane(out _,tolerance)).ToList();
         var areas=new Dictionary<Curve,double?>();
         foreach(var candidate in candidates)
@@ -180,14 +224,26 @@ internal static class PlanarPartSelection
     finally { foreach(var region in regions) region.Outline.Dispose(); }
   }
 
-  private static List<Curve> BoundaryLoops(RhinoDoc doc,IReadOnlyList<RhinoObject> objects,double tolerance,bool requirePlanarDetails)
+  private static List<Curve> BoundaryLoops(RhinoDoc doc,IReadOnlyList<RhinoObject> objects,double tolerance,bool requirePlanarDetails,bool joinOpenPerimeters=false)
   {
     var curves=objects.Select(obj=>obj.Geometry).OfType<Curve>().ToArray();
     if(requirePlanarDetails) return GroupBoundaryTopology.PlanarRegions(curves,tolerance,tolerance);
     var closed=objects.Where(obj=>obj.Geometry is Curve {IsClosed:true} curve&&curve.TryGetPlane(out _,tolerance)).ToArray();
     var cutting=closed.Where(obj=>!string.Equals(doc.Layers[obj.Attributes.LayerIndex].FullPath.Split("::").Last(),ReferenceLayerName,StringComparison.OrdinalIgnoreCase)).ToArray();
     if(cutting.Length>0) closed=cutting;
-    return closed.Length>0?closed.Select(obj=>((Curve)obj.Geometry).DuplicateCurve()).ToList():GroupBoundaryTopology.PlanarRegions(curves,tolerance,tolerance);
+    var loops=closed.Select(obj=>((Curve)obj.Geometry).DuplicateCurve()).ToList();
+    if(joinOpenPerimeters)
+    {
+      // A closed hole or seam must not prevent discovery of an open-edge outer perimeter.
+      var edges=curves.Where(curve=>!curve.IsClosed).ToArray();
+      if(edges.Length>0)
+        foreach(var joined in Curve.JoinCurves(edges,tolerance))
+        {
+          if(joined.IsClosed&&joined.TryGetPlane(out _,tolerance))loops.Add(joined);
+          else joined.Dispose();
+        }
+    }
+    return loops.Count>0?loops:GroupBoundaryTopology.PlanarRegions(curves,tolerance,tolerance);
   }
 
   private static bool ContainsCurve(Curve outer,Curve inner,Plane plane,double tolerance,bool projectInner,double? outerArea,double innerArea)

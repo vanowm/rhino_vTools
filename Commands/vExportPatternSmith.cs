@@ -29,6 +29,9 @@ using Autometrix.Core.Nesting.Materials.Patterns;
 using Autometrix.Core.Nesting.Pattern;
 using Autometrix.Presentation.Core.Data;
 using Autometrix.Conversion.Project;
+using NativeNotch = Autometrix.Core.Entities.Notches.Notch;
+using NativeNotchExecution = Autometrix.Core.Entities.Notches.ExecutionStyle;
+using NativeNotchStyle = Autometrix.Core.Entities.Notches.Style;
 
 public static class EntryPoint
 {
@@ -58,6 +61,9 @@ public static class NativeProjectBuilder
     public const string DefaultTool = "Cut"; // Native processing-role fallback for a request without a tool attribute.
     public const string DefaultPerimeter = "Auto"; // Auto, Derived, Element or Box; Element is the UI name for a derived entity perimeter.
     public const double DefaultTextHeight = 1.0; // Positive native inches when a request omits text height.
+    public const float NativeFontPointSize = 12f; // Positive GDI font size in points; drawing height is set from the native glyph bounds.
+    public const double FontPointsPerInch = 72; // Fixed conversion between PatternSmith 11 font points and native drawing inches.
+    public const bool DefaultLegacyTableFontSizing = false; // true stores the PS10 font units; false stores editable PS11 font units.
     public const double DefaultPointRadius = 0.125; // Positive native inches when a request omits point radius.
     public const double DefaultCopySpacing = 0.0; // Nonnegative native inches for uncatalogued materials.
     public const double DefaultEdgeSpacing = 0.0; // Nonnegative native inches for uncatalogued materials.
@@ -76,6 +82,16 @@ public static class NativeProjectBuilder
     public const PatternFillColorStyle DefaultPatternFillStyle = PatternFillColorStyle.Custom; // Explicit pattern color copies its material; Material style does not reliably draw stripes in PatternSmith.
     public const bool DefaultPatternFillStriped = true; // true displays slanted material-color stripes; false would use a solid material fill.
     public const double MinimumGeometryDistance = 1e-12; // Positive inches; shorter or collapsed segments are rejected, never padded.
+    public const NativeNotchExecution DefaultNotchExecutionStyle = NativeNotchExecution.Discrete; // Compatibility fallback for decoder requests predating inline profiles.
+    public const int NativeEffectSamplingDivisor = 16; // Divisor greater than two; reserve the sampling error of both paths during effect verification.
+    public const int NativeEffectSplineFitDivisor = 20; // Positive divisor of effect tolerance for fitting sew curves before generating cut paths.
+    public const int NativeEffectCompactPointThreshold = 64; // Fit-point count above which to test a smaller equivalent native effect spline.
+    public const int NativeEffectCompactAttempts = 4; // Maximum thinning trials per dense spline; halve the requested trial error each time.
+    public const int NativeEffectEndpointKnots = 4; // Original fit points retained at each end of an open spline to preserve endpoint tangents.
+    public const int NativeEffectNotchKnotRadius = 8; // Original fit points kept on either side of each notch anchor.
+    static readonly int[] NativeEffectKnotStrides = {16,12,8,4,2}; // Try sparse-to-dense interior fit-point strides; all must pass path verification.
+    public const int NativeNotchStationRefinementAttempts = 3; // Maximum corrected arc-length stations after the initial notch does not match.
+    public const int NativeNotchStationRefinementReach = 16; // Maximum arc-length correction as a positive multiple of document tolerance.
     public const int DiagnosticEntityCharacterLimit = 1024; // Maximum request characters included in an invalid-entity diagnostic.
     public const double DefaultWorkspaceGap = 12.0; // Nonnegative inches between table groups in the pattern-definition workspace, never between nested copies.
     public const double DefaultMergeWorkspaceGap = 36.0; // Nonnegative native inches between the old workspace and a new merged layout.
@@ -102,7 +118,7 @@ public static class NativeProjectBuilder
     public const int DistanceIndexLongSearchThreshold = 8; // Positive number of expensive searches needed to amortize indexing a dense interpolation.
     public const double DistanceBoundsRelativePadding = 1e-12; // Conservative relative expansion of index boxes, never of the final distance threshold.
     public const int DefaultProgressIntervalMilliseconds = 100; // Nonnegative minimum interval between same-stage progress messages; zero disables throttling.
-    public const int SplineCacheRevision = 1; // Persistent conversion format/algorithm revision; increment when conversion semantics change.
+    public const int SplineCacheRevision = 4; // Persistent conversion format/algorithm revision; increment when conversion semantics change.
     public const int DefaultSplineCacheMegabytes = 256; // Positive maximum MiB retained in the optional per-user conversion cache.
     public const int MaximumCachedSplinePoints = 500000; // Positive per-entry point limit; larger splines still export without disk caching.
     public const int SplineShapeKeyDecimals = 9; // Decimal places in local-coordinate lookup keys; every transformed reuse is independently error-checked.
@@ -110,6 +126,7 @@ public static class NativeProjectBuilder
     public const double AnnotationRowToleranceInches = 1e-6; // Fixed native-inch numerical tolerance when grouping existing table-header rows; never changes part geometry.
     static readonly ReadOnlyCollection<Layer> NoLayers = new ReadOnlyCollection<Layer>(new Layer[0]);
     static readonly ReadOnlyCollection<DynamicEntity> NoDynamic = new ReadOnlyCollection<DynamicEntity>(new DynamicEntity[0]);
+    static readonly Layer SplineValidationLayer = new Layer("Spline validation"); // Temporary SDK validation layer; never exported.
     static readonly Dictionary<string, Layer> Layers = new Dictionary<string, Layer>();
     static readonly Dictionary<Layer, ToolReference> ToolMap = new Dictionary<Layer, ToolReference>();
     static readonly Dictionary<string,System.Windows.Media.SolidColorBrush> PreviewToolBrushes = new Dictionary<string,System.Windows.Media.SolidColorBrush>(StringComparer.Ordinal);
@@ -153,16 +170,33 @@ public static class NativeProjectBuilder
         int hint;
         int longSearches;
         SegmentNode indexRoot;
-        internal CurveDistanceQuery(Curve2d source) { curve=source; }
+        readonly double interpolationTolerance;
+        double minX=double.NegativeInfinity,minY=double.NegativeInfinity;
+        double maxX=double.PositiveInfinity,maxY=double.PositiveInfinity;
+        internal CurveDistanceQuery(Curve2d source,double tolerance=NativeDistanceInterpolation) { curve=source;interpolationTolerance=tolerance; }
+        internal CurveDistanceQuery(Point2d[] samples)
+        {
+            points=samples;
+            if(samples.Length==0)return;
+            minX=maxX=samples[0].X;minY=maxY=samples[0].Y;
+            foreach(var p in samples) {
+                minX=Math.Min(minX,p.X);maxX=Math.Max(maxX,p.X);
+                minY=Math.Min(minY,p.Y);maxY=Math.Max(maxY,p.Y);
+            }
+        }
         internal bool Within(Point2d point,double threshold)
         {
-            var current=curve.GetInterpolatedCurve(NativeDistanceInterpolation);
-            if(!Object.ReferenceEquals(current,interpolation)) {
-                interpolation=current;points=current.Points.ToArray();hint=0;
-                indexRoot=null;longSearches=0;
+            if(curve!=null) {
+                var current=curve.GetInterpolatedCurve(interpolationTolerance);
+                if(!Object.ReferenceEquals(current,interpolation)) {
+                    interpolation=current;points=current.Points.ToArray();hint=0;
+                    indexRoot=null;longSearches=0;
+                }
             }
-            if(points.Length==1)return points[0].DistanceTo(point)<=threshold;
+            if(points==null||points.Length==0)return false;
             if(double.IsNaN(threshold)||threshold<0)return false;
+            if(point.X<minX-threshold||point.X>maxX+threshold||point.Y<minY-threshold||point.Y>maxY+threshold)return false;
+            if(points.Length==1)return points[0].DistanceTo(point)<=threshold;
             if(indexRoot!=null) {
                 int budget=LocalDistanceProbeSegments;
                 for(int i=hint;i<points.Length-1&&budget>0;i++,budget--)
@@ -277,7 +311,8 @@ public static class NativeProjectBuilder
         // Match PatternSmith ImportLayers.ValidateLayer for each entity family.
         string type=e.Name.LocalName.ToLowerInvariant();
         bool common=process==ProcessType.Reference || process==ProcessType.Mark || process==ProcessType.Inkjet || process==ProcessType.Print;
-        bool supported=common || (type=="point" ? process==ProcessType.Drill || process==ProcessType.Punch : type=="text" ? false : process==ProcessType.Cut || process==ProcessType.Crease);
+        bool supported=common || (type=="point" ? process==ProcessType.Drill || process==ProcessType.Punch : type=="text" ? false :
+            process==ProcessType.Cut || process==ProcessType.Crease || type=="notch"&&process.ToString()=="Notch");
         if(!supported) {
             Console.WriteLine("ROLE FALLBACK " + e.Name.LocalName + " " + process + " -> Reference");
             process=ProcessType.Reference;index=0;
@@ -306,7 +341,7 @@ public static class NativeProjectBuilder
         Console.WriteLine("SHORT LINE PRESERVED lengthInches="+length.ToString("R",CultureInfo.InvariantCulture));
         return polyline;
     }
-    static Entity EntityFromRequest(XElement e)
+    static Entity EntityFromRequest(XElement e,bool effectReference=false)
     {
         Layer layer = ToolLayer(e);
         Entity entity;
@@ -332,14 +367,13 @@ public static class NativeProjectBuilder
             points = Points(e);
             if (points.Count < 4 || (points.Count-1)%3 != 0) throw new ArgumentException("BezierGroup requires 3n+1 control points.");
             var curve = new BezierGroup2d(points);
-            entity = B(e,"nativeSpline",false)
+            entity = !effectReference && B(e,"nativeSpline",false)
                 ? CachedNativeSpline(e).GetEntity(layer,NoLayers,null,NoDynamic)
                 : curve.GetEntity(layer, NoLayers, null, NoDynamic);
         } else if (type == "point") {
             entity = new PointEntity(layer, NoLayers, P(e), D(e, "rotation", 0), new NonnegativeDouble(D(e, "radius", DefaultPointRadius)), S(e, "label", ""));
         } else if (type == "text") {
-            double height = D(e, "height", DefaultTextHeight); if (height <= 0) throw new ArgumentException("Text height must be positive.");
-            entity = new TextEntity(layer, NoLayers, P(e), D(e, "rotation", 0), e.Value, height, D(e, "characterRotation", 0));
+            entity = TextFromRequest(e,layer,P(e),D(e,"rotation",0));
         } else throw new ArgumentException("Unsupported entity: " + e.Name);
         var continuous = entity as ContinuousEntity;
         bool exclude = B(e, "excludeFromPerimeter", !S(e,"tool",DefaultTool).Equals("Cut",StringComparison.OrdinalIgnoreCase));
@@ -362,7 +396,7 @@ public static class NativeProjectBuilder
     }
     static SplineData ConvertSpline(XElement e,string key,Point2d[] source)
     {
-        return new SplineData(NativeSpline(new BezierGroup2d(source),D(e,"tolerance",DefaultSplineTolerance),B(e,"closed",false),D(e,"thinError",LegacySplineThinError)),source,key);
+        return new SplineData(NativeSpline(source,D(e,"tolerance",DefaultSplineTolerance),B(e,"closed",false),D(e,"thinError",LegacySplineThinError)),source,key);
     }
     static string ShapeKey(XElement e,Point2d[] source)
     {
@@ -382,6 +416,7 @@ public static class NativeProjectBuilder
         if(source.Length!=original.Source.Length)return false;
         var from=new SplineFrame(original.Source);var to=new SplineFrame(source);
         var candidate=new Spline2d(original.Points.Select(point=>to.World(from.Local(point))),original.Closed);
+        if(!IsValidSpline(candidate))return false;
         var curve=new BezierGroup2d(source);
         if(candidate.Start.DistanceTo(curve.Start)>MinimumGeometryDistance||candidate.End.DistanceTo(curve.End)>MinimumGeometryDistance||candidate.IsClosed!=B(request,"closed",false))return false;
         double error=Math.Max(D(request,"tolerance",DefaultSplineTolerance),D(request,"thinError",LegacySplineThinError));
@@ -508,20 +543,41 @@ public static class NativeProjectBuilder
         PruneSplineCache();
         Console.WriteLine("CACHE|splines="+curves.Length+" unique="+unique.Length+" reused="+(curves.Length-unique.Length)+" diskHits="+diskCacheHits+" shapeHits="+shapeCacheHits+" workers="+workers);
     }
-    static Spline2d NativeSpline(BezierGroup2d source,double tolerance,bool closed,double thinError)
+    static bool IsValidSpline(Spline2d spline)
+    {
+        return spline.GetEntity(SplineValidationLayer,NoLayers,null,NoDynamic).IsValid();
+    }
+    static Spline2d NativeSpline(Point2d[] controls,double tolerance,bool closed,double thinError)
     {
         if(tolerance<=0)throw new ArgumentException("Spline tolerance must be positive inches.");
+        var source=new BezierGroup2d(controls);
         double sampling=tolerance/SplineRefinementFactor;
         var sourceSamples=source.GetPoly(new PositiveDouble(sampling)).Points.ToArray();
-        var sourceDistance=new CurveDistanceQuery(source);
+        double interpolation=Math.Min(NativeDistanceInterpolation,sampling);
+        var sourceDistance=new CurveDistanceQuery(source,interpolation);
+        Func<Spline2d,bool> matches=candidate=> {
+            if(!IsValidSpline(candidate))return false;
+            var samples=candidate.GetPoly(new PositiveDouble(tolerance/SplineRefinementFactor)).Points;
+            var splineDistance=new CurveDistanceQuery(candidate,interpolation);
+            return sourceSamples.All(point=>splineDistance.Within(point,tolerance))&&samples.All(point=>sourceDistance.Within(point,tolerance));
+        };
+        // The cubic spans of an imported native spline already meet at its original fit points.
+        var knots=controls.Where((point,index)=>index%3==0).ToList();
+        if(closed&&knots[0].DistanceTo(knots[knots.Count-1])<=MinimumGeometryDistance)knots.RemoveAt(knots.Count-1);
+        if(knots.Count>= (closed?3:2)) {
+            try {
+                var original=new Spline2d(knots,closed);
+                if(matches(original))return ThinSpline(source,original,thinError,sourceDistance);
+            } catch(ArgumentException) {
+                // Arbitrary Rhino cubics need not be fit-point interpolation splines.
+            }
+        }
         for(int attempt=0;attempt<SplineConversionAttempts;attempt++,sampling/=SplineRefinementFactor) {
             var spline=source.AsSpline(new PositiveDouble(sampling));
             if(spline.IsClosed!=closed)spline=new Spline2d(spline.ControlPoints,closed);
-            var samples=spline.GetPoly(new PositiveDouble(tolerance/SplineRefinementFactor)).Points;
-            var splineDistance=new CurveDistanceQuery(spline);
-            if(sourceSamples.All(point=>splineDistance.Within(point,tolerance))&&samples.All(point=>sourceDistance.Within(point,tolerance)))return ThinSpline(source,spline,thinError,sourceDistance);
+            if(matches(spline))return ThinSpline(source,spline,thinError,sourceDistance);
         }
-        throw new InvalidDataException("Native spline conversion exceeds the document tolerance; use Bezier mode to preserve this curve exactly.");
+        throw new InvalidDataException("Could not produce a valid native spline within the document tolerance; try Bezier mode to keep the cubic curve.");
     }
     static Spline2d ThinSpline(BezierGroup2d source,Spline2d spline,double error,CurveDistanceQuery sourceDistance)
     {
@@ -533,7 +589,8 @@ public static class NativeProjectBuilder
         for(int attempt=0;attempt<SplineConversionAttempts;attempt++,trialError/=SplineRefinementFactor)
         {
             var candidate=spline.Thin(new PositiveDouble(trialError));
-            if(candidate.IsClosed!=spline.IsClosed||candidate.Start.DistanceTo(spline.Start)>MinimumGeometryDistance||candidate.End.DistanceTo(spline.End)>MinimumGeometryDistance)continue;
+            if(!IsValidSpline(candidate)||candidate.IsClosed!=spline.IsClosed||
+                candidate.Start.DistanceTo(spline.Start)>MinimumGeometryDistance||candidate.End.DistanceTo(spline.End)>MinimumGeometryDistance)continue;
             if(candidate.ControlPoints.Count()>=original)return spline;
             var points=candidate.GetPoly(new PositiveDouble(error/SplineRefinementFactor)).Points;
             var candidateDistance=new CurveDistanceQuery(candidate);
@@ -546,15 +603,29 @@ public static class NativeProjectBuilder
         Console.WriteLine("SPLINE THIN kept original to preserve endpoints and requested error.");
         return spline;
     }
+    static bool IsEditableText(Entity entity) { return entity is TextEntity || entity is FontEntity; }
+
+    static DiscreteEntity TextFromRequest(XElement e,Layer layer,Point2d center,double rotation)
+    {
+        double height=D(e,"height",DefaultTextHeight);
+        if(height<=0)throw new ArgumentException("Text height must be positive.");
+        string family=S(e,"fontFamily","");
+        if(String.IsNullOrWhiteSpace(family))return new TextEntity(layer,NoLayers,center,rotation,e.Value,height,D(e,"characterRotation",0));
+        var font=new System.Drawing.Font(family,NativeFontPointSize,System.Drawing.FontStyle.Regular,System.Drawing.GraphicsUnit.Point);
+        try {
+            var text=new FontEntity(layer,NoLayers,center,rotation,e.Value,font,height,new Point2d(1,1));
+            return text.WithHeight(height);
+        }
+        catch {font.Dispose();throw;}
+    }
+
     static IEnumerable<Entity> EntitiesFromRequest(XElement e)
     {
         if(e.Name.LocalName.Equals("Text",StringComparison.OrdinalIgnoreCase) && B(e,"mirrorY",false)) {
             Layer layer=ToolLayer(e);
-            double height=D(e,"height",DefaultTextHeight);
-            if(height<=0)throw new ArgumentException("Text height must be positive.");
             // TextEntity.Transform discards reflections and regenerates upright
             // glyphs. Preserve mirrored labels as native font stroke geometry.
-            var text=new TextEntity(layer,NoLayers,new Point2d(0,0),0,e.Value,height,D(e,"characterRotation",0));
+            var text=TextFromRequest(e,layer,new Point2d(0,0),0);
             var transform=new Transform2d();
             transform.Scale(1,-1);transform.Rotate(D(e,"rotation",0));transform.Translate(P(e));
             int count=0;
@@ -570,19 +641,404 @@ public static class NativeProjectBuilder
             Console.WriteLine("TEXT MIRROR FLATTENED native-strokes="+count);
         } else yield return EntityFromRequest(e);
     }
-    static Pattern PatternFromRequest(XElement e)
+    static List<Entity> ReplaceWithNativeEffects(XElement pattern,List<Tuple<string,Entity>> flat,out bool incomplete)
+    {
+        var replaced=new HashSet<string>(StringComparer.Ordinal);
+        var requested=new HashSet<string>(S(pattern,"effectOrigins","").Split(new[]{';'},StringSplitOptions.RemoveEmptyEntries),
+            StringComparer.Ordinal);
+        var native=new List<Entity>();
+        var referenceRequests=pattern.Elements().Where(node=>node.Name=="BezierGroup"&&B(node,"nativeSpline",false))
+            .ToLookup(node=>S(node,"origin",""));
+        var references=new Dictionary<string,Entity[]>(StringComparer.Ordinal);
+        foreach(var recipe in pattern.Elements("EffectSet")) {
+            var ids=new HashSet<string>(S(recipe,"replace","").Split(new[]{';'},StringSplitOptions.RemoveEmptyEntries),StringComparer.Ordinal);
+            requested.UnionWith(ids);
+            if(ids.Count==0||ids.Overlaps(replaced))continue;
+            var expected=flat.Where(item=>ids.Contains(item.Item1)).ToArray();
+            if(expected.Select(item=>item.Item1).Distinct().Count()!=ids.Count)continue;
+            List<Entity> candidate;
+            try {
+                // Compare against the prepared path before display/editing splines are thinned.
+                var validation=expected.GroupBy(item=>item.Item1,StringComparer.Ordinal).SelectMany(group=>{
+                    Entity[] unthinned;
+                    if(!references.TryGetValue(group.Key,out unthinned))
+                        references[group.Key]=unthinned=referenceRequests[group.Key].Select(node=>EntityFromRequest(node,true)).ToArray();
+                    return group.Where(item=>!(item.Item2 is SplineEntity)||unthinned.Length==0)
+                        .Concat(unthinned.Select(curve=>Tuple.Create(group.Key,curve)));
+                }).ToArray();
+                candidate=TryNativeEffectSet(recipe,validation);
+            } catch(Exception error) {
+                Console.WriteLine("Native effect reference declined: "+error.Message);
+                continue;
+            }
+            if(candidate==null)continue;
+            replaced.UnionWith(ids);
+            native.AddRange(candidate);
+        }
+        incomplete=!requested.IsSubsetOf(replaced);
+        if(native.Count==0)return null;
+        var curves=native.OfType<ContinuousEntity>().ToArray();
+        Console.WriteLine("NATIVE EFFECTS|"+S(pattern,"name","Rhino pattern")+"|seams="+curves.Count(curve=>curve.HasSeam)+
+            " notches="+curves.Sum(curve=>curve.DynamicEntities.OfType<NativeNotch>().Count()));
+        native.AddRange(flat.Where(item=>!replaced.Contains(item.Item1)).Select(item=>item.Item2.Clone()));
+        return native;
+    }
+
+    static List<Entity> TryNativeEffectSet(XElement recipe,Tuple<string,Entity>[] expected)
+    {
+        double tolerance=D(recipe,"tolerance",DefaultSplineTolerance);
+        if(tolerance<=0)return null;
+        bool hasSeam=recipe.Elements("Source").Any(node=>node.Element("Seam")!=null);
+        var styles=new[]{SeamStyle.Square,SeamStyle.Extend,SeamStyle.Slant,SeamStyle.Mirror,SeamStyle.Return};
+        var sourceItems=recipe.Elements("Source").ToArray();
+        var sourceGeometry=sourceItems.Select(item=>item.Elements().Where(node=>node.Name!="Seam"&&node.Name!="Notch").ToArray()).ToArray();
+        var stylePairs=styles.SelectMany(start=>styles.Select(end=>Tuple.Create(start,end)))
+            .OrderBy(pair=>pair.Item1==pair.Item2?0:1);
+        bool authored=hasSeam&&sourceItems.Where(item=>item.Element("Seam")!=null).All(item=>item.Element("Seam").Attribute("StartStyle")!=null);
+        bool openSeam=hasSeam&&!authored&&sourceItems.Any(item=>item.Element("Seam")!=null &&
+            item.Elements().Any(node=>node.Name=="Line"||node.Name=="Arc"||
+                (node.Name=="Polyline"||node.Name=="BezierGroup")&&!B(node,"closed",false)));
+        var bases=sourceGeometry.Select(geometry=>geometry
+            .Select(element=> {
+                if(element.Name!="BezierGroup"||!B(element,"nativeSpline",false))return EntityFromRequest(element) as ContinuousEntity;
+                var source=new XElement(element);
+                source.SetAttributeValue("thinError",0);
+                double fit=D(source,"tolerance",DefaultSplineTolerance);
+                double tightFit=Math.Min(fit,tolerance/NativeEffectSplineFitDivisor);
+                if(tightFit<fit) {
+                    source.SetAttributeValue("tolerance",tightFit);
+                    try { return EntityFromRequest(source) as ContinuousEntity; }
+                    catch(InvalidDataException) { source.SetAttributeValue("tolerance",fit); }
+                }
+                return EntityFromRequest(source) as ContinuousEntity;
+            }).ToArray()).ToArray();
+        if(bases.Any(sources=>sources.Length==0||sources.Any(source=>source==null)))
+            throw new InvalidDataException("A native effect requires continuous source geometry.");
+        // On a guide-only tool, seam style and side cannot change the original sew line.
+        if(hasSeam&&!sourceItems.Any(item=>item.Element("Seam")==null&&
+            item.Elements("Notch").Any(notch=>ImportNotchExecution(notch)==NativeNotchExecution.Inline))) {
+            var effectLayers=new HashSet<Guid>(sourceItems.SelectMany(item=>item.Elements())
+                .Where(node=>node.Name=="Seam"||node.Name=="Notch").Select(node=>ToolLayer(node).Id));
+            foreach(var guides in bases.SelectMany(sources=>sources).Where(source=>!effectLayers.Contains(source.Layer.Id))
+                .GroupBy(source=>source.Layer.Id)) {
+                if(!NativeGeometryMatches(guides,expected.Select(item=>item.Item2).Where(entity=>entity.Layer.Id==guides.Key),tolerance)) {
+                    Console.WriteLine("Native effect candidate declined: The sew path differs from the prepared geometry.");
+                    return null;
+                }
+            }
+        }
+        string failure=null;
+        foreach(var style in openSeam?stylePairs:stylePairs.Take(1))
+        foreach(int sign in hasSeam&&!authored?new[]{1,-1}:new[]{1}) {
+            try {
+                var result=BuildNativeEffectGeometry(sourceItems,bases,expected,tolerance,style,sign,authored);
+                if(NativeGeometryMatches(ExpandNativeEffects(result),expected.Select(item=>item.Item2),tolerance))
+                    return CompactNativeEffectGeometry(sourceItems,sourceGeometry,bases,result,expected,tolerance,style,sign,authored);
+                failure="Its generated paths differ from the prepared geometry or tools.";
+            } catch(Exception error) {
+                if(failure==null)failure=error.Message;
+            }
+        }
+        if(failure!=null)Console.WriteLine("Native effect candidate declined: "+failure);
+        return null;
+    }
+
+    static List<Entity> BuildNativeEffectGeometry(XElement[] items,ContinuousEntity[][] bases,Tuple<string,Entity>[] expected,
+        double tolerance,Tuple<SeamStyle,SeamStyle> style,int sign,bool authored)
+    {
+        var result=new List<Entity>();
+        for(int index=0;index<items.Length;index++) {
+            var item=items[index];
+            var sources=bases[index].Select(source=>(ContinuousEntity)source.Clone()).ToArray();
+            var allowance=item.Element("Seam");
+            if(allowance!=null) {
+                var layer=ToolLayer(allowance);
+                var seam=new Seam(layer,sign*D(allowance,"Width",0),
+                    authored?ReadEffectChoice<SeamStyle>(allowance,"StartStyle"):style.Item1,
+                    authored?ReadEffectChoice<SeamStyle>(allowance,"EndStyle"):style.Item2);
+                for(int i=0;i<sources.Length;i++)
+                    sources[i]=sources[i].With(null,seam,null,ToolMap[layer].ProcessType==ProcessType.Cut?(bool?)false:null,null);
+            }
+            var dynamics=sources.Select(_=>new List<DynamicEntity>()).ToArray();
+            foreach(var request in item.Elements("Notch")) {
+                bool placed=false;
+                for(int i=0;i<sources.Length;i++) {
+                    var notch=CreateExportNotch(sources[i],request,expected,tolerance);
+                    if(notch==null)continue;
+                    dynamics[i].Add(notch);placed=true;break;
+                }
+                if(!placed)throw new InvalidDataException("The editable notch does not match its prepared strokes.");
+            }
+            for(int i=0;i<sources.Length;i++) {
+                var source=sources[i];
+                if(dynamics[i].Count>0)source=source.With(dynamicEntities:new ReadOnlyCollection<DynamicEntity>(dynamics[i]));
+                if(!source.IsValid())throw new InvalidDataException("An editable effect made its source invalid.");
+                result.Add(source);
+            }
+        }
+        return result;
+    }
+
+    static List<Entity> CompactNativeEffectGeometry(XElement[] items,XElement[][] geometry,ContinuousEntity[][] bases,
+        List<Entity> verified,Tuple<string,Entity>[] expected,double tolerance,Tuple<SeamStyle,SeamStyle> style,int sign,bool authored)
+    {
+        var comparison=expected.Select(item=>item.Item2).ToArray();
+        for(int i=0;i<bases.Length;i++)
+        for(int j=0;j<bases[i].Length;j++) {
+            var source=bases[i][j] as SplineEntity;
+            if(source==null)continue;
+            var spline=source.Geometry;
+            int count=spline.ControlPoints.Count();
+            if(count<=NativeEffectCompactPointThreshold)continue;
+            double requested=D(geometry[i][j],"thinError",LegacySplineThinError);
+            if(requested<=0)continue;
+            Func<Spline2d,bool> accept=thin=> {
+                bool accepted=false;
+                try {
+                    int reduced=thin.ControlPoints.Count();
+                    if(reduced>=count||thin.IsClosed!=spline.IsClosed||
+                        thin.Start.DistanceTo(spline.Start)>MinimumGeometryDistance||thin.End.DistanceTo(spline.End)>MinimumGeometryDistance)
+                        return false;
+                    var candidate=thin.GetEntity(source.Layer,NoLayers,null,NoDynamic) as ContinuousEntity;
+                    if(candidate==null||!candidate.IsValid())return false;
+                    if(requested<tolerance&&!NativeGeometryMatches(new[]{candidate},new[]{source},requested))return false;
+                    bases[i][j]=candidate.With(null,null,null,source.ExcludeFromPerimeter,null);
+                    var trial=BuildNativeEffectGeometry(items,bases,expected,tolerance,style,sign,authored);
+                    if(!NativeGeometryMatches(ExpandNativeEffects(trial),comparison,tolerance))return false;
+                    verified=trial;accepted=true;
+                    Console.WriteLine("NATIVE EFFECT SPLINE THIN points="+count+"->"+reduced);
+                    return true;
+                } catch(InvalidDataException) {
+                    // A thinner spline may move its offset or dynamic notch beyond tolerance.
+                } catch(ArgumentException) {
+                    // The SDK can reject a degenerate thinned result.
+                } catch(InvalidOperationException) {
+                    // A candidate can invalidate a native join even when the source spline is valid.
+                } finally {
+                    if(!accepted)bases[i][j]=source;
+                }
+                return false;
+            };
+
+            var anchors=items[i].Elements("Notch").Select(node=>P(node.Element("P"))).ToArray();
+            if(anchors.Length>0 && CompactSplineAtNotches(spline,anchors,tolerance,accept))continue;
+            double error=Math.Min(requested,tolerance);
+            for(int attempt=0;attempt<NativeEffectCompactAttempts;attempt++,error/=2) {
+                try { if(accept(spline.Thin(new PositiveDouble(error))))break; }
+                catch(ArgumentException) { }
+                catch(InvalidOperationException) { }
+            }
+        }
+        return verified;
+    }
+
+    static bool CompactSplineAtNotches(Spline2d spline,Point2d[] anchors,double tolerance,Func<Spline2d,bool> accept)
+    {
+        var points=spline.ControlPoints.ToArray();
+        var locked=new HashSet<int>();
+        var guide=new CurveDistanceQuery(spline.GetPoly(new PositiveDouble(tolerance/NativeEffectSamplingDivisor)).Points.ToArray());
+        foreach(var anchor in anchors) {
+            if(!guide.Within(anchor,tolerance))continue;
+            int closest=0;
+            for(int i=1;i<points.Length;i++)
+                if(points[i].DistanceTo(anchor)<points[closest].DistanceTo(anchor))closest=i;
+            for(int i=closest-NativeEffectNotchKnotRadius;i<=closest+NativeEffectNotchKnotRadius;i++)
+                if(spline.IsClosed)locked.Add((i+points.Length)%points.Length);
+                else if(i>=0&&i<points.Length)locked.Add(i);
+        }
+        if(locked.Count==0)return false;
+        for(int i=0;i<NativeEffectEndpointKnots;i++) {
+            locked.Add(i);locked.Add(points.Length-i-1);
+        }
+        // SDK Thin can resample around a notch. Retaining its original neighbors keeps that local tangent.
+        foreach(int stride in NativeEffectKnotStrides) {
+            try {
+                var sparse=new Spline2d(points.Where((point,i)=>i%stride==0||locked.Contains(i)),spline.IsClosed);
+                if(accept(sparse))return true;
+            } catch(ArgumentException) { }
+        }
+        return false;
+    }
+
+    static NativeNotch CreateExportNotch(ContinuousEntity source,XElement request,Tuple<string,Entity>[] flat,double tolerance)
+    {
+        var guide=source.HasSeam?source.With(seam:Seam.EmptySeam):source;
+        var anchor=P(request.Element("P"));
+        if(guide.ClosestCurvePoint(anchor).DistanceTo(anchor)>tolerance &&
+            !new CurveDistanceQuery(guide.GetPoly(new PositiveDouble(tolerance/NativeEffectSamplingDivisor)).Points.ToArray())
+                .Within(anchor,tolerance))
+            return null;
+        double length=guide.GetArcLength(),distance=guide.GetNotchDistance(anchor);
+        if(length<=MinimumGeometryDistance||distance<-tolerance||distance>length+tolerance)
+            return null;
+        var effect=new XElement(request);
+        effect.SetAttributeValue("Placement","Start");
+        distance=Math.Max(0,Math.Min(length,distance));
+        bool fractional=S(effect,"DistanceUnits","Native")=="Fractional";
+        var layer=ToolLayer(effect);
+        var ids=new HashSet<string>(S(request,"pieces","").Split(new[]{';'},StringSplitOptions.RemoveEmptyEntries),StringComparer.Ordinal);
+        var expected=flat.Where(item=>ids.Contains(item.Item1)).Select(item=>item.Item2).ToArray();
+        if(expected.Length==0)return null;
+        Point2d target=StrokeCenter(expected);
+        double low=Math.Max(0,distance-tolerance*NativeNotchStationRefinementReach);
+        double high=Math.Min(length,distance+tolerance*NativeNotchStationRefinementReach);
+        Func<double,NativeNotch> at=station=> {
+            effect.SetAttributeValue("Distance",fractional?station/length:station);
+            return ReadImportNotch(effect,source,NativeNotchExecution.Discrete,layer);
+        };
+        string preferred=S(request,"Side","Internal");
+        foreach(var side in new[]{preferred,preferred=="Internal"?"External":"Internal"}) {
+            effect.SetAttributeValue("Side",side);
+            double station=distance;
+            for(int step=0;step<=NativeNotchStationRefinementAttempts;step++) {
+                var probe=at(station);
+                var strokes=source.GetDynamicEntityPrimitives(probe).ToArray();
+                if(NativeGeometryMatches(strokes,expected,tolerance))
+                    return ImportNotchExecution(effect)==NativeNotchExecution.Discrete?probe:
+                        ReadImportNotch(effect,source,NativeNotchExecution.Inline,layer);
+                if(step==NativeNotchStationRefinementAttempts||strokes.Length==0)break;
+                double sample=station+tolerance<=high?station+tolerance:Math.Max(low,station-tolerance);
+                if(Math.Abs(sample-station)<=MinimumGeometryDistance)break;
+                var neighbor=source.GetDynamicEntityPrimitives(at(sample)).ToArray();
+                if(neighbor.Length==0)break;
+                // Correct PS's approximate arc-length lookup using the motion of the actual notch strokes.
+                Point2d from=StrokeCenter(strokes),to=StrokeCenter(neighbor);
+                double x=to.X-from.X,y=to.Y-from.Y,squared=x*x+y*y;
+                if(squared<=MinimumGeometryDistance*MinimumGeometryDistance)break;
+                double next=station+(sample-station)*((target.X-from.X)*x+(target.Y-from.Y)*y)/squared;
+                next=Math.Max(low,Math.Min(high,next));
+                if(Math.Abs(next-station)<=MinimumGeometryDistance)break;
+                station=next;
+            }
+        }
+        return null;
+    }
+
+    static Point2d StrokeCenter(IEnumerable<Entity> strokes)
+    {
+        var bounds=strokes.Select(stroke=>stroke.GetBounds()).ToArray();
+        return new Point2d((bounds.Min(box=>box.Min.X)+bounds.Max(box=>box.Max.X))/2,
+            (bounds.Min(box=>box.Min.Y)+bounds.Max(box=>box.Max.Y))/2);
+    }
+
+    static IEnumerable<Entity> ExpandNativeEffects(IEnumerable<Entity> entities)
+    {
+        var items=entities.ToArray();
+        var seamed=items.OfType<ContinuousEntity>().Where(entity=>entity.HasSeam).ToArray();
+        var chain=seamed.Length<2?null:new EntityCollection(seamed).GetGroupedEntities(PerimeterOptions.OnlyContinuous);
+        var pathOptions=new PerimeterPathOptions();
+        foreach(var entity in items) {
+            var source=entity as ContinuousEntity;
+            if(source==null) {yield return entity;continue;}
+            var notches=source.DynamicEntities.OfType<NativeNotch>().ToArray();
+            bool inline=notches.Any(notch=>notch.ExecutionStyle==NativeNotchExecution.Inline);
+            if(source.HasSeam||!inline)yield return entity;
+            if(source.HasSeam)
+                foreach(var cut in ReadImportAllowance(source,chain,inline)) {
+                    if(cut==null||!cut.IsValid())throw new InvalidDataException("Could not generate the native cutting edge.");
+                    yield return cut;
+                }
+            else if(inline)
+                foreach(var cut in source.GetSplicedDynamics(ContinuousEntity.GetInlineDynamicPrimitiveConstructors(
+                    source,source.With(dynamicEntities:NoDynamic),pathOptions)))yield return cut;
+            foreach(var notch in notches.Where(notch=>notch.ExecutionStyle==NativeNotchExecution.Discrete))
+                foreach(var primitive in source.GetDynamicEntityPrimitives(notch))yield return primitive;
+        }
+    }
+
+    static bool NativeGeometryMatches(IEnumerable<Entity> candidate,IEnumerable<Entity> prepared,double tolerance)
+    {
+        var first=candidate.ToArray();var second=prepared.ToArray();
+        var a=first.OfType<ContinuousEntity>().ToArray();var b=second.OfType<ContinuousEntity>().ToArray();
+        if(a.Length==0||b.Length==0||a.Length!=first.Length||b.Length!=second.Length)return false;
+        double step=tolerance/NativeEffectSamplingDivisor;
+        var sampling=new PositiveDouble(step);
+        double allowance=tolerance-2*step;
+        var expected=b.ToLookup(curve=>curve.Layer.Id);
+        foreach(var group in a.GroupBy(curve=>curve.Layer.Id)) {
+            var left=group.ToArray();var right=expected[group.Key].ToArray();
+            if(right.Length==0 || Math.Abs(left.Sum(curve=>curve.GetArcLength())-right.Sum(curve=>curve.GetArcLength()))>
+                tolerance*Math.Max(left.Length,right.Length) ||
+                !EquivalentEffectCoverage(left,right,sampling,allowance))return false;
+        }
+        return expected.Count==a.Select(curve=>curve.Layer.Id).Distinct().Count();
+    }
+
+    static bool EquivalentEffectCoverage(ContinuousEntity[] a,ContinuousEntity[] b,PositiveDouble sampling,double tolerance)
+    {
+        var first=a.Select(curve=>curve.GetPoly(sampling).Points.ToArray()).ToArray();
+        var second=b.Select(curve=>curve.GetPoly(sampling).Points.ToArray()).ToArray();
+        return CoversNativeEffects(first,second,tolerance)&&CoversNativeEffects(second,first,tolerance);
+    }
+
+    static bool CoversNativeEffects(Point2d[][] from,Point2d[][] to,double tolerance)
+    {
+        var queries=to.Select(path=>new CurveDistanceQuery(path)).ToArray();
+        foreach(var points in from) {
+            if(points.Length<2)return false;
+            for(int i=0;i<points.Length;i++) {
+                var point=points[i];
+                if(!queries.Any(target=>target.Within(point,tolerance)))return false;
+                if(i==0)continue;
+                var previous=points[i-1];
+                var middle=new Point2d((previous.X+point.X)/2,(previous.Y+point.Y)/2);
+                if(!queries.Any(target=>target.Within(middle,tolerance)))return false;
+            }
+        }
+        return true;
+    }
+
+    static Pattern PatternFromRequest(XElement e,out Point2d copyLocation,bool clipboard)
     {
         string name=S(e,"name",S(e,"id","Rhino pattern"));
-        var entities=new List<Entity>();int ordinal=0;var requests=e.Elements().ToArray();
+        var entities=new List<Entity>();
+        var flat=e.Element("EffectSet")==null?null:new List<Tuple<string,Entity>>();
+        int ordinal=0;var requests=e.Elements().Where(node=>node.Name!="EffectSet").ToArray();
         foreach(var requested in requests) {
             ordinal++;
             Progress(entityProgressStart+(totalEntities==0?0:completedEntities*(EntityProgressEnd-entityProgressStart)/totalEntities),"Converting "+name+": entity "+ordinal+" / "+requests.Length);
-            try { entities.AddRange(EntitiesFromRequest(requested)); }
+            try {
+                foreach(var entity in EntitiesFromRequest(requested)) {
+                    entities.Add(entity);
+                    if(flat!=null)flat.Add(Tuple.Create(S(requested,"origin",""),entity));
+                }
+            }
             catch(Exception error) {
                 throw new ArgumentException("Pattern '"+name+"' ("+S(e,"id","unknown")+"), entity "+ordinal+" ("+requested.Name+"): "+error.Message,error);
             }
             completedEntities++;
         }
+        bool incomplete=flat==null&&e.Attribute("effectOrigins")!=null;
+        var native=flat==null?null:ReplaceWithNativeEffects(e,flat,out incomplete);
+        Exception nativeError=null;
+        if(native!=null) {
+            try {
+                bool ignored;
+                var pattern=AssemblePattern(e,native.Select(entity=>entity.Clone()).ToList(),out copyLocation,clipboard,false,out ignored);
+                if(incomplete)Console.WriteLine("NATIVE EFFECT FALLBACK|"+name+"|Some editable effects did not match the prepared curves.");
+                return pattern;
+            }
+            catch(Exception error) { nativeError=error; }
+        }
+        bool openCut;
+        var prepared=AssemblePattern(e,entities,out copyLocation,clipboard,true,out openCut);
+        if(openCut&&native!=null) {
+            // An already-open path can keep verified native effects without becoming a nestable perimeter.
+            try {
+                Point2d nativeLocation;bool nativeOpen;
+                var candidate=AssemblePattern(e,native,out nativeLocation,clipboard,true,out nativeOpen);
+                if(nativeOpen) {prepared=candidate;copyLocation=nativeLocation;nativeError=null;}
+            } catch(Exception error) { nativeError=error; }
+        }
+        if(!clipboard&&openCut)Console.WriteLine("OPEN CUT PATH|"+name.Replace('\r',' ').Replace('\n',' '));
+        if(nativeError!=null||incomplete)Console.WriteLine("NATIVE EFFECT FALLBACK|"+name+"|"+
+            (nativeError==null?"Some editable effects did not match the prepared curves.":nativeError.Message));
+        return prepared;
+    }
+    static Pattern AssemblePattern(XElement e,List<Entity> entities,out Point2d copyLocation,bool clipboard,bool allowOpenCutPaths,out bool openCut)
+    {
+        openCut=false;
+        string name=S(e,"name",S(e,"id","Rhino pattern"));
         if (entities.Count == 0) throw new ArgumentException("Pattern has no entities.");
         if(B(e,"annotation",false)&&B(e,"fitAnnotation",false))FitTableAnnotation(entities);
         var bounds = entities.Select(x => x.GetBounds()).ToList();
@@ -590,6 +1046,9 @@ public static class NativeProjectBuilder
         var center = new Point2d((minX+maxX)/2, (minY+maxY)/2);
         double rotation=B(e,"annotation",false)?DefaultSourceRotation:D(e,"sourceRotation",DefaultSourceRotation);
         var shift = new Transform2d(); shift.Translate(-center.X, -center.Y);
+        // PatternSmith copies reflect after rotating; reverse those operations here.
+        bool flipped=B(e,"sourceFlipped",false);
+        if(flipped)shift.Scale(1,-1);
         if(rotation!=0)shift.Rotate(-rotation);
         // Entity.Transform returns bool and mutates each native entity in place.
         for(int index=0;index<entities.Count;index++) {
@@ -601,12 +1060,32 @@ public static class NativeProjectBuilder
         var pattern = new Pattern(entities, PerimeterType.Derived, center, rotation, name);
         string perimeter=S(e,"perimeter",DefaultPerimeter);
         if(!new[]{"Auto","Derived","Element","Box"}.Any(p=>p.Equals(perimeter,StringComparison.OrdinalIgnoreCase)))throw new ArgumentException("Pattern perimeter must be Auto, Derived, Element or Box.");
-        bool cutting=entities.OfType<ContinuousEntity>().Any(entity=>!entity.ExcludeFromPerimeter&&ToolMap[entity.Layer].ProcessType==ProcessType.Cut);
-        if(perimeter.Equals("Box",StringComparison.OrdinalIgnoreCase)||perimeter.Equals("Auto",StringComparison.OrdinalIgnoreCase)&&!cutting)
+        bool cutting=entities.OfType<ContinuousEntity>().Any(entity=>!entity.ExcludeFromPerimeter&&
+            (ToolMap[entity.Layer].ProcessType==ProcessType.Cut || entity.HasSeam&&ToolMap[entity.Seam.Layer].ProcessType==ProcessType.Cut));
+        bool autoPerimeter=perimeter.Equals("Auto",StringComparison.OrdinalIgnoreCase);
+        if(perimeter.Equals("Box",StringComparison.OrdinalIgnoreCase)||autoPerimeter&&!cutting)
             pattern=new Pattern(entities,PerimeterType.Box,center,rotation,name);
-        else ValidateDerivedPerimeter(pattern);
+        else {
+            try { ValidateDerivedPerimeter(pattern); }
+            catch(InvalidDataException) {
+                if(!allowOpenCutPaths||!autoPerimeter||!clipboard&&pattern.ImportedPatternHasValidPerimeter())throw;
+                // This is a workspace and placement wrapper only; no rectangular cutting curve is created.
+                pattern=new Pattern(entities,PerimeterType.Box,center,rotation,name);
+                openCut=true;
+            }
+        }
         // Existing table placements are always explicit copies; auto-nesting is optional.
-        pattern=pattern.With(allowNesting:!B(e,"annotation",false)&&B(e,"allowNesting",DefaultAllowNesting));
+        pattern=pattern.With(allowNesting:!B(e,"annotation",false)&&B(e,"allowNesting",DefaultAllowNesting)&&
+            !openCut&&(!clipboard||pattern.PerimeterType!=PerimeterType.Box));
+        if(e.Attribute("copies")!=null) {
+            double step=D(e,"rotationStep",-1);
+            pattern=pattern.With(constraints:pattern.Constraints.With(
+                quota:new QuotaConstraint((int)D(e,"copies",1),1,false),
+                rotation:step<0?RotationConstraint.FullRotation:new RotationConstraint(new NonnegativeDouble(step))));
+        }
+        // Pattern recenters its local entities; reflect the resulting adjustment
+        // around the original center to keep a mirrored copy from translating.
+        copyLocation=flipped?new Point2d(pattern.Location.X,2*center.Y-pattern.Location.Y):pattern.Location;
         Console.WriteLine("PATTERN " + name + " native=" + pattern.PerimeterType + " center=" + center + " entities=" + entities.Count);
         return pattern;
     }
@@ -616,7 +1095,7 @@ public static class NativeProjectBuilder
     }
     static void FitTableAnnotation(List<Entity> entities)
     {
-        var originalTexts=entities.OfType<TextEntity>().ToArray();if(originalTexts.Length==0)return;
+        var originalTexts=entities.Where(IsEditableText).Cast<DiscreteEntity>().ToArray();if(originalTexts.Length==0)return;
         double angle=originalTexts[0].Rotation;
         var local=new Transform2d();local.Rotate(-angle);
         var world=new Transform2d();world.Rotate(angle);
@@ -629,7 +1108,7 @@ public static class NativeProjectBuilder
             Math.Min(Math.Abs(point.X-area.Min.X),Math.Abs(point.X-area.Max.X))>AnnotationRowToleranceInches||
             Math.Min(Math.Abs(point.Y-area.Min.Y),Math.Abs(point.Y-area.Max.Y))>AnnotationRowToleranceInches))
             throw new InvalidDataException("Exported table information has a nonrectangular frame.");
-        var texts=copies.OfType<TextEntity>().ToArray();var boxes=texts.Select(text=>text.GetBounds()).ToArray();
+        var texts=copies.Where(IsEditableText).Cast<DiscreteEntity>().ToArray();var boxes=texts.Select(text=>text.GetBounds()).ToArray();
         var anchors=texts.Select(text=>text.Center).ToArray();
         // Retain the existing visible inset, measuring the final native glyphs rather than the earlier Rhino name.
         double padding=boxes.SelectMany(box=>new[]{box.Min.X-area.Min.X,area.Max.X-box.Max.X,box.Min.Y-area.Min.Y,area.Max.Y-box.Max.Y})
@@ -674,7 +1153,7 @@ public static class NativeProjectBuilder
         if(pattern.HasInvalidDerivedPerimeter(out groups))
         {
             var outside=pattern.GetInternalEntitiesOutsideDerivedPerimeter();
-            if(outside.Count>0&&outside.All(entity=>entity is TextEntity&&
+            if(outside.Count>0&&outside.All(entity=>IsEditableText(entity)&&
                 (ToolMap[entity.Layer].ProcessType==ProcessType.Reference||ToolMap[entity.Layer].ProcessType==ProcessType.Mark||
                  ToolMap[entity.Layer].ProcessType==ProcessType.Inkjet||ToolMap[entity.Layer].ProcessType==ProcessType.Print)))
                 Console.WriteLine("OUTSIDE LABEL|"+pattern.Name+"|Non-cutting text retained; native nesting clearance may include its bounds.");
@@ -703,12 +1182,14 @@ public static class NativeProjectBuilder
             foreach(var item in placed)
             {
                 var entity=item.Entity;double originX=item.Origin.X,originY=item.Origin.Y;
-                var tool=ToolMap[entity.Layer];System.Windows.Media.SolidColorBrush brush;
+                ToolReference tool;
+                if(!ToolMap.TryGetValue(entity.Layer,out tool))tool=new ToolReference(ProcessType.Reference,0);
+                System.Windows.Media.SolidColorBrush brush;
                 if(!PreviewToolBrushes.TryGetValue(tool.ProcessType+":"+tool.Index.ToString(CultureInfo.InvariantCulture),out brush))
                     brush=tool.ProcessType==ProcessType.Cut?System.Windows.Media.Brushes.Crimson:
                         tool.ProcessType==ProcessType.Reference?System.Windows.Media.Brushes.Gray:System.Windows.Media.Brushes.Teal;
                 var pen=new System.Windows.Media.Pen(brush,PreviewStrokePixels);pen.Freeze();
-                var text=entity as TextEntity;
+                var text=IsEditableText(entity)?(DiscreteEntity)entity:null;
                 if(text==null&&!(entity is ContinuousEntity))
                 {
                     var box=entity.GetBounds();
@@ -751,9 +1232,16 @@ public static class NativeProjectBuilder
     }
     static IEnumerable<Entity> WorkspaceEntities(Pattern pattern)
     {
-        if(pattern.Rotation==0) { foreach(var entity in pattern.Entities)yield return entity;yield break; }
+        var entities=pattern.Entities.AsEnumerable();
+        if(pattern.Entities.OfType<ContinuousEntity>().Any(curve=>curve.HasSeam||curve.DynamicEntities.OfType<NativeNotch>().Any())) {
+            try { entities=ExpandNativeEffects(pattern.Entities).ToArray(); }
+            catch(Exception error) { Console.WriteLine("Native effect preview unavailable for "+pattern.Name+": "+error.Message); }
+        }
+        if(pattern.Rotation==0) { foreach(var entity in entities)yield return entity;yield break; }
         var turn=new Transform2d();turn.Rotate(pattern.Rotation);
-        foreach(var entity in pattern.Entities) {
+        // Transform the saved outlines, since the PS10 merge reader regenerates PS11 font outlines at a different scale.
+        var display=entities.SelectMany(entity=>entity is FontEntity?((FontEntity)entity).AbsolutePrimitives.Cast<Entity>():new[]{entity});
+        foreach(var entity in display) {
             var copy=entity.Clone();
             if(!copy.Transform(turn))throw new InvalidOperationException("Could not orient a pattern in the definition workspace.");
             yield return copy;
@@ -783,6 +1271,97 @@ public static class NativeProjectBuilder
         // Only patterns are read. MaterialCollection's global-library import callback is never invoked.
         using(var reader=XmlReader.Create(new StringReader(collection.ToString(SaveOptions.DisableFormatting)),new XmlReaderSettings {DtdProcessing=DtdProcessing.Prohibit,XmlResolver=null,MaxCharactersInDocument=MaximumMergeXmlBytes}))
             return (Pattern[])serializer.ReadObject(reader);
+    }
+    [DataContract(Name="ClipboardPatternContainer",Namespace="http://autometrix.com/xml")]
+    sealed class WorkspaceClipboard
+    {
+        // PS11 serializes its base-class tool map before the workspace pattern collection.
+        [DataMember(Order=0)] public ReadOnlyDictionary<Layer,ToolReference> ToolReferenceMap;
+        [DataMember(Order=1)] public Dictionary<Guid,Autometrix.Core.Imaging.BackgroundPhotoFilePaths> FilePaths;
+        [DataMember(Order=2)] public ReadOnlyCollection<Group> PatternGroups;
+        [DataMember(Order=3)] public ReadOnlyCollection<Pattern> Patterns;
+        [DataMember(Order=4)] public string ProjectFileName;
+    }
+    [DataContract(Name="ClipboardEntityContainer",Namespace="http://autometrix.com/xml")]
+    sealed class EditorClipboard
+    {
+        [DataMember(Order=0)] public ReadOnlyDictionary<Layer,ToolReference> ToolReferenceMap;
+        [DataMember(Order=1)] public EntityCollection Entities;
+    }
+    static XElement SerializeClipboard(object container)
+    {
+        var xml=new StringBuilder();
+        using(var writer=XmlWriter.Create(xml))Autometrix.Core.Serialization.Operations.Write(container,writer,null);
+        return XElement.Parse(xml.ToString());
+    }
+    static void WriteWorkspaceClipboard(string output,List<Pattern> patterns,Dictionary<Guid,string> partStates)
+    {
+        var tools=new ReadOnlyDictionary<Layer,ToolReference>(ToolMap);
+        var container=new WorkspaceClipboard {
+            ToolReferenceMap=tools,
+            // Native paste queries this dictionary even for patterns with no photos.
+            FilePaths=new Dictionary<Guid,Autometrix.Core.Imaging.BackgroundPhotoFilePaths>(),
+            PatternGroups=new List<Group>().AsReadOnly(),Patterns=patterns.AsReadOnly(),ProjectFileName=""
+        };
+        var workspace=new XDocument(SerializeClipboard(container));
+        if(partStates.Count>0)AddPartStates(workspace,partStates,clipboard:true);
+        var entities=new List<Entity>();
+        foreach(var pattern in patterns) {
+            var pose=new Transform2d();pose.Rotate(pattern.Rotation);pose.Translate(pattern.Location.X,pattern.Location.Y);
+            foreach(var entity in pattern.Entities) {
+                var copy=entity.Clone();
+                if(!copy.Transform(pose))throw new InvalidOperationException("Could not position PatternSmith editor geometry.");
+                entities.Add(copy);
+            }
+        }
+        var editor=SerializeClipboard(new EditorClipboard {ToolReferenceMap=tools,Entities=new EntityCollection(entities)});
+        var document=new XDocument(new XElement("PatternSmithClipboard",workspace.Root,editor));
+        using(var writer=XmlWriter.Create(output,new XmlWriterSettings{Encoding=new UTF8Encoding(false)}))document.Save(writer);
+    }
+    static void AddPartStates(XDocument document,Dictionary<Guid,string> states,bool clipboard=false)
+    {
+        XNamespace a=document.Root.Name.Namespace;
+        int written=0;
+        var patterns=document.Root.Element(a+"Patterns");
+        if(clipboard)patterns=patterns.Element(XName.Get("list",vTools.Commands.PatternSmithPartContract.CollectionNamespace));
+        foreach(var pattern in patterns.Elements()) {
+            Guid id;string state;
+            if(!Guid.TryParse((string)pattern.Element(a+"PersistentId"),out id)||!states.TryGetValue(id,out state))continue;
+            pattern.Add(new XElement(a+vTools.Commands.PatternSmithPartContract.StateMember,state));written++;
+            // Pattern.With replaces the outer pattern but retains its constraints
+            // during ordinary workspace edits such as move and rename.
+            var constraints=pattern.Element(a+"Constraints");
+            if(constraints!=null)constraints.Add(new XElement(XName.Get(vTools.Commands.PatternSmithPartContract.StateMember,
+                vTools.Commands.PatternSmithPartContract.ConstraintNamespace),state));
+        }
+        if(written!=states.Count)throw new InvalidDataException("Could not match vTools metadata to the serialized patterns.");
+    }
+    static bool StorePatternSmith11FontSizes(XDocument document)
+    {
+        XNamespace p="http://autometrix.com/xml/plotting",e="http://autometrix.com/xml/entities",
+            g="http://autometrix.com/xml/geometry",i="http://www.w3.org/2001/XMLSchema-instance";
+        var patterns=document.Root.Element(document.Root.Name.Namespace+"Patterns");
+        var fonts=patterns.Descendants(p+"Entity").Where(node=>((string)node.Attribute(i+"type")??"").Split(':').Last()=="Font");
+        int resized=0;
+        foreach(var font in fonts) {
+            var fontData=font.Element(e+"Font");
+            var size=fontData==null?null:fontData.Element("Size");
+            var scale=font.Element(e+"ScaleFactor");
+            var x=scale==null?null:scale.Element(g+"X");var y=scale==null?null:scale.Element(g+"Y");
+            var outlines=font.Element(e+"Entities");
+            if(size==null||x==null||y==null||outlines==null)throw new InvalidDataException("A table label has incomplete native font metrics.");
+            double sy=(double)y,aspect=(double)x/sy;
+            float points=(float)((double)size*sy*FontPointsPerInch);
+            if(points<=0||Single.IsNaN(points)||Single.IsInfinity(points)||aspect<=0||Double.IsNaN(aspect)||Double.IsInfinity(aspect))
+                throw new InvalidDataException("A table label has invalid native font metrics.");
+            // PS10 normalizes the font to 40 pt and stores local outlines in inches. PS11 edits the
+            // physical font and expects the local outline cache in points, while absolute geometry stays in inches.
+            size.SetValue(points);x.SetValue(aspect);y.SetValue(1.0);
+            foreach(var coordinate in outlines.Descendants().Where(value=>value.Name==g+"X"||value.Name==g+"Y"))
+                coordinate.SetValue((double)coordinate*FontPointsPerInch);
+            resized++;
+        }
+        return resized>0;
     }
     static double[] MergeBounds(IEnumerable<Pattern> patterns)
     {
@@ -955,6 +1534,11 @@ public static class NativeProjectBuilder
             foreach(var layer in patterns.SelectMany(pattern=>pattern.Entities).Select(entity=>entity.Layer).Distinct()) {
                 ToolReference tool;if(!tools.TryGetValue(layer.Id,out tool))throw new InvalidDataException("The existing project has a pattern layer without a tool mapping.");ToolMap[layer]=tool;
             }
+            var effects=patterns.SelectMany(pattern=>pattern.Entities).OfType<ContinuousEntity>();
+            foreach(var layer in effects.SelectMany(entity=>entity.DynamicEntities.OfType<NativeNotch>().Select(effect=>effect.Layer)
+                .Concat(entity.HasSeam?new[]{entity.Seam.Layer}:new Layer[0])).Distinct()) {
+                ToolReference tool;if(tools.TryGetValue(layer.Id,out tool))ToolMap[layer]=tool;
+            }
             var preview=MakePreview(patterns);
             Progress(80,"Writing merged patterns, nests and preview");
             using(var stream=new FileStream(output,FileMode.CreateNew))using(var archive=new ZipArchive(stream,ZipArchiveMode.Create)) {
@@ -970,15 +1554,257 @@ public static class NativeProjectBuilder
             Progress(100,"Merged export ready");return 0;
         }
     }
+    static T ReadEffectChoice<T>(XElement node,string field) where T:struct
+    {
+        T choice;
+        if(!Enum.TryParse(S(node,field,""),out choice)||!Enum.IsDefined(typeof(T),choice))
+            throw new InvalidDataException("Invalid PatternSmith "+node.Name.LocalName+" "+field+".");
+        return choice;
+    }
+    static Entity ReadEffectSource(XElement source,Seam seam)
+    {
+        var layer=new Layer("Source");
+        switch(source.Name.LocalName) {
+            case "Line":
+                return new LineEntity(layer,NoLayers,P(source.Element("A")),P(source.Element("B")),seam,NoDynamic);
+            case "Polyline":
+                var points=Points(source.Element("Points"));
+                if(B(source,"Closed",false)&&points[0]!=points[points.Count-1])points.Add(points[0]);
+                return new PolyEntity(layer,NoLayers,points,seam,NoDynamic);
+            case "Circle":
+                return new Circle2d(P(source.Element("Center")),D(source,"Radius",0),ReadEffectChoice<CircularDirection>(source,"Direction"))
+                    .GetEntity(layer,NoLayers,seam,NoDynamic);
+            case "Arc":
+                return new Arc2d(P(source.Element("Center")),D(source,"Radius",0),D(source,"StartAngle",0),D(source,"SweepAngle",0))
+                    .GetEntity(layer,NoLayers,seam,NoDynamic);
+            case "Bezier":
+            case "BezierGroup":
+                return new BezierGroup2d(Points(source.Element("Points"))).GetEntity(layer,NoLayers,seam,NoDynamic);
+            case "Spline":
+                return new Spline2d(Points(source.Element("Points")),B(source,"Closed",false)).GetEntity(layer,NoLayers,seam,NoDynamic);
+            case "Ellipse":
+                return new Ellipse2d(P(source.Element("Center")),D(source,"A",0),D(source,"B",0),D(source,"Rotation",0),
+                    ReadEffectChoice<CircularDirection>(source,"Direction")).GetEntity(layer,NoLayers,seam,NoDynamic);
+            case "Rectangle":
+                return new RectangleEntity(layer,NoLayers,seam,NoDynamic,P(source.Element("A")),new PositiveDouble(D(source,"Width",0)),
+                    new PositiveDouble(D(source,"Height",0)),D(source,"Rotation",0),ReadEffectChoice<CircularDirection>(source,"Direction"));
+            default:throw new InvalidDataException("Unsupported PatternSmith effect source "+source.Name.LocalName+".");
+        }
+    }
+    static XElement EffectPoint(string name,Point2d point)
+    {
+        return new XElement(name,new XElement("X",point.X),new XElement("Y",point.Y));
+    }
+    static XElement WriteEffectPrimitive(Entity entity,string layer)
+    {
+        XElement primitive;
+        var line=entity as LineEntity;var point=entity as PointEntity;var poly=entity as PolyEntity;
+        var arc=entity as ArcEntity;var circle=entity as CircleEntity;var bezier=entity as BezierGroupEntity;
+        var rect=entity as RectangleEntity;var single=entity as BezierEntity;var spline=entity as SplineEntity;
+        if(rect!=null)poly=rect.AsPoly;
+        if(line!=null)primitive=new XElement("Line",EffectPoint("A",line.A),EffectPoint("B",line.B));
+        else if(point!=null)primitive=new XElement("Point",EffectPoint("Center",point.Center));
+        else if(poly!=null)primitive=new XElement("Polyline",new XElement("IsClosed",poly.IsClosed),
+            new XElement("Points",poly.Points.Select(p=>EffectPoint("P",p))));
+        else if(circle!=null)primitive=new XElement("Circle",EffectPoint("Center",circle.Center),
+            new XElement("Radius",circle.Radius),new XElement("Direction",circle.Direction));
+        else if(arc!=null)primitive=new XElement("Arc",EffectPoint("Center",arc.Center),
+            new XElement("Radius",arc.Radius),new XElement("StartAngle",arc.StartAngle),new XElement("SweepAngle",arc.SweepAngle));
+        else if(bezier!=null)primitive=new XElement("BezierGroup",new XElement("ControlPoints",bezier.ControlPoints.Select(p=>EffectPoint("P",p))));
+        else if(single!=null)primitive=new XElement("Bezier",new XElement("ControlPoints",single.ControlPoints.Select(p=>EffectPoint("P",p))));
+        else if(spline!=null)primitive=new XElement("BezierGroup",new XElement("ControlPoints",spline.Geometry.BezierControlPoints.Select(p=>EffectPoint("P",p))));
+        else throw new InvalidDataException("Unsupported native effect primitive "+entity.GetType().Name+".");
+        primitive.SetAttributeValue("layer",layer);
+        return primitive;
+    }
+    static NativeNotch ReadImportNotch(XElement effect,ContinuousEntity source,NativeNotchExecution execution,Layer layer=null)
+    {
+        var position=new Autometrix.Core.Entities.Notches.Position(D(effect,"Distance",0),
+            ReadEffectChoice<Autometrix.Core.Entities.Notches.Placement>(effect,"Placement"),
+            ReadEffectChoice<Autometrix.Core.Entities.Notches.DistanceUnits>(effect,"DistanceUnits"),
+            ReadEffectChoice<Autometrix.Core.Entities.Notches.Side>(effect,"Side"),source.GetArcLength());
+        return new NativeNotch(layer??new Layer(S(effect,"layer","")),ReadEffectChoice<NativeNotchStyle>(effect,"Style"),
+            new PositiveDouble(D(effect,"Depth",0)),new NonnegativeDouble(D(effect,"Width",0)),position,execution);
+    }
+    static NativeNotchExecution ImportNotchExecution(XElement effect)
+    {
+        return effect.Attribute("ExecutionStyle")==null
+            ? DefaultNotchExecutionStyle
+            : ReadEffectChoice<NativeNotchExecution>(effect,"ExecutionStyle");
+    }
+    static ContinuousEntity ReadImportEffectSource(XElement recipe,out ContinuousEntity original,out Dictionary<XElement,NativeNotch> inline)
+    {
+        var allowance=recipe.Element("Seam");
+        var seam=allowance==null?null:new Seam(new Layer(S(allowance,"layer","")),D(allowance,"Width",0),
+            ReadEffectChoice<SeamStyle>(allowance,"StartStyle"),ReadEffectChoice<SeamStyle>(allowance,"EndStyle"));
+        var source=ReadEffectSource(recipe.Elements().First(),seam) as ContinuousEntity;
+        if(source==null||!source.IsValid())throw new InvalidDataException("Invalid PatternSmith curve for a seam, notch, or anchor.");
+        original=source;
+        inline=new Dictionary<XElement,NativeNotch>();
+        foreach(var effect in recipe.Elements("Notch")) {
+            if(ImportNotchExecution(effect)!=NativeNotchExecution.Inline)continue;
+            var notch=ReadImportNotch(effect,source,NativeNotchExecution.Inline);
+            if(notch.Style!=NativeNotchStyle.V&&notch.Style!=NativeNotchStyle.Castle)
+                throw new InvalidDataException("An inline notch requires a V or Castle profile.");
+            inline.Add(effect,notch);
+        }
+        return inline.Count==0?source:source.With(dynamicEntities:new ReadOnlyCollection<DynamicEntity>(inline.Values.Cast<DynamicEntity>().ToList()));
+    }
+    static XElement[] WriteImportNotchPrimitives(Entity[] pieces,string layer,
+        Autometrix.Core.Entities.Notches.Style style)
+    {
+        if((style==Autometrix.Core.Entities.Notches.Style.V||style==Autometrix.Core.Entities.Notches.Style.Castle)&&pieces.Length>1) {
+            var lines=pieces.OfType<LineEntity>().ToList();
+            if(lines.Count==pieces.Length) {
+                var points=new LinkedList<Point2d>(new[]{lines[0].A,lines[0].B});
+                lines.RemoveAt(0);
+                while(lines.Count>0) {
+                    int index=lines.FindIndex(candidate=>candidate.A.DistanceTo(points.First.Value)<=MinimumGeometryDistance||
+                        candidate.B.DistanceTo(points.First.Value)<=MinimumGeometryDistance||
+                        candidate.A.DistanceTo(points.Last.Value)<=MinimumGeometryDistance||
+                        candidate.B.DistanceTo(points.Last.Value)<=MinimumGeometryDistance);
+                    if(index<0)break;
+                    var line=lines[index];lines.RemoveAt(index);
+                    if(line.A.DistanceTo(points.First.Value)<=MinimumGeometryDistance)points.AddFirst(line.B);
+                    else if(line.B.DistanceTo(points.First.Value)<=MinimumGeometryDistance)points.AddFirst(line.A);
+                    else if(line.A.DistanceTo(points.Last.Value)<=MinimumGeometryDistance)points.AddLast(line.B);
+                    else points.AddLast(line.A);
+                }
+                if(lines.Count==0)return new[]{new XElement("Polyline",new XAttribute("layer",layer),
+                    new XElement("IsClosed",false),new XElement("Points",points.Select(point=>EffectPoint("P",point))))};
+            }
+        }
+        return pieces.Select(primitive=>WriteEffectPrimitive(primitive,layer)).ToArray();
+    }
+    static ContinuousEntity[] ReadImportAllowance(ContinuousEntity source,Autometrix.Core.Entities.Cycles.EntityGroupResult chain,bool splice)
+    {
+        var options=new PerimeterPathOptions();
+        if(!source.IsClosed)return chain!=null?chain.SeamAsEntities(source).ContinuousEntities.ToArray():
+            Autometrix.Core.Entities.Extensions.CollectionExtensions.GetSeamEntities(source,null,null,options).ToArray();
+        var offset=source.GetSeamEntity();
+        return !splice||offset==null?new[]{offset}:
+            offset.GetSplicedDynamics(ContinuousEntity.GetInlineDynamicPrimitiveConstructors(source,offset,options)).ToArray();
+    }
+
+    static IEnumerable<XElement> ResolveImportEffects(XElement recipe,ContinuousEntity source,
+        Autometrix.Core.Entities.Cycles.EntityGroupResult chain,Dictionary<XElement,NativeNotch> inline,
+        ContinuousEntity original,Autometrix.Core.Entities.Cycles.EntityGroupResult originalChain)
+    {
+        var allowance=recipe.Element("Seam");
+        ContinuousEntity sewCurve=null;
+        var inlinePieces=new Dictionary<Guid,List<Entity>>();
+        if(inline.Count>0) {
+            // The SDK keeps the stroke's layer ID even when it clones the inline notch.
+            foreach(var notch in inline.Values)inlinePieces.Add(notch.Layer.Id,new List<Entity>());
+            var spliced=allowance!=null?ReadImportAllowance(source,chain,true):
+                original.GetSplicedDynamics(ContinuousEntity.GetInlineDynamicPrimitiveConstructors(
+                    source,original,new PerimeterPathOptions())).ToArray();
+            foreach(var stroke in spliced.OfType<NotchPrimitive>()) {
+                List<Entity> pieces;
+                if(!inlinePieces.TryGetValue(stroke.Layer.Id,out pieces))
+                    throw new InvalidDataException("PatternSmith returned an unrecognized inline notch.");
+                pieces.Add(stroke);
+            }
+        }
+        if(allowance!=null) {
+            // Use the original cut edge with its caps, and extract exact profiles from a separate spliced copy.
+            var allowanceCurves=ReadImportAllowance(original,originalChain,false);
+            if(allowanceCurves.Length==0||allowanceCurves.Any(curve=>curve==null||!curve.IsValid()))
+                throw new InvalidDataException("PatternSmith could not generate a valid seam allowance.");
+            foreach(var curve in allowanceCurves) {
+                var primitive=WriteEffectPrimitive(curve,S(allowance,"layer",""));
+                primitive.SetAttributeValue("seam",true);
+                yield return primitive;
+            }
+        }
+        foreach(var effect in recipe.Elements().Skip(1).Where(node=>node.Name!="Seam")) {
+            string key=S(effect,"layer","");
+            var layer=new Layer(key);
+            DynamicEntity attachment;
+            if(effect.Name=="Anchor") {
+                attachment=new Autometrix.Core.Entities.Anchors.Anchor(layer,
+                    ReadEffectChoice<Autometrix.Core.Entities.Anchors.AnchorEntityType>(effect,"EntityType"),
+                    Int32.Parse(S(effect,"Count","0"),CultureInfo.InvariantCulture),
+                    new PositiveDouble(D(effect,"Radius",0)),new PositiveDouble(D(effect,"Length",0)),
+                    new NonnegativeDouble(D(effect,"DistanceFromStart",0)),new NonnegativeDouble(D(effect,"DistanceFromEnd",0)));
+            } else if(effect.Name=="Notch") {
+                NativeNotch notch;
+                bool spliced=inline.TryGetValue(effect,out notch);
+                if(!spliced)notch=ReadImportNotch(effect,source,NativeNotchExecution.Discrete);
+                var strokes=spliced?inlinePieces[notch.Layer.Id].ToArray():source.GetDynamicEntityPrimitives(notch).ToArray();
+                var fragments=WriteImportNotchPrimitives(strokes,key,notch.Style);
+                if(spliced&&(fragments.Length!=1||fragments[0].Name!="Polyline"))
+                    throw new InvalidDataException("PatternSmith could not build a complete inline notch on the cut edge.");
+                if(fragments.Length==0)continue;
+                var position=notch.Position;
+                var anchor=source.GetPosition(notch);
+                if(sewCurve==null)sewCurve=allowance==null?source:source.With(seam:Seam.EmptySeam);
+                var sewAnchor=sewCurve.GetPosition(notch).Location;
+                yield return new XElement("Notch",new XAttribute("style",notch.Style),new XAttribute("depth",D(effect,"Depth",0)),
+                    new XAttribute("width",D(effect,"Width",0)),new XAttribute("angle",anchor.Rotation),
+                    new XAttribute("inline",spliced),
+                    new XAttribute("percent",position.DistanceUnits!=Autometrix.Core.Entities.Notches.DistanceUnits.Native),
+                    new XAttribute("external",position.Side==Autometrix.Core.Entities.Notches.Side.External),
+                    EffectPoint("Anchor",anchor.Location),EffectPoint("SewAnchor",sewAnchor),fragments);
+                continue;
+            } else throw new InvalidDataException("Unknown PatternSmith effect "+effect.Name.LocalName+".");
+            foreach(var primitive in source.GetDynamicEntityPrimitives(attachment))
+                yield return WriteEffectPrimitive(primitive,key);
+        }
+    }
     // Kept separate so AssemblyResolve is installed before JIT touches vendor types.
+    static int ReadImportSplines(XElement request,string output)
+    {
+        var result=new XElement("PatternSmithSplineCurves");
+        foreach(var item in request.Elements("Spline")) {
+            string ordinal=S(item,"id","");
+            try {
+                var spline=new Spline2d(item.Elements("P").Select(P),B(item,"closed",false));
+                result.Add(new XElement("Curve",new XAttribute("id",ordinal),spline.BezierControlPoints.Select(
+                    point=>new XElement("P",new XAttribute("x",point.X),new XAttribute("y",point.Y)))));
+            } catch(Exception error) { Console.Error.WriteLine("Spline "+ordinal+": "+error.Message); }
+        }
+        foreach(var recipes in request.Elements("Effects").GroupBy(item=>S(item,"group","single:"+S(item,"id","")))) {
+            var sources=new Dictionary<XElement,ContinuousEntity>();
+            var originals=new Dictionary<XElement,ContinuousEntity>();
+            var inlineNotches=new Dictionary<XElement,Dictionary<XElement,NativeNotch>>();
+            var responses=new Dictionary<XElement,XElement>();
+            foreach(var item in recipes) {
+                var response=new XElement("Effects",new XAttribute("id",S(item,"id","")));
+                result.Add(response);responses.Add(item,response);
+                try {
+                    Dictionary<XElement,NativeNotch> inline;
+                    ContinuousEntity original;
+                    sources.Add(item,ReadImportEffectSource(item,out original,out inline));
+                    originals.Add(item,original);inlineNotches.Add(item,inline);
+                }
+                catch(Exception error) { response.SetAttributeValue("error",error.Message); }
+            }
+            var seamed=originals.Values.Where(source=>source.HasSeam&&!source.IsClosed).ToArray();
+            var originalChain=seamed.Length<2?null:new EntityCollection(seamed).GetGroupedEntities(PerimeterOptions.OnlyContinuous);
+            var chain=originalChain==null||!inlineNotches.Values.Any(notches=>notches.Count>0)?null:
+                new EntityCollection(sources.Values.Where(source=>source.HasSeam&&!source.IsClosed))
+                    .GetGroupedEntities(PerimeterOptions.OnlyContinuous);
+            foreach(var source in sources) {
+                var response=responses[source.Key];
+                try { response.Add(ResolveImportEffects(source.Key,source.Value,chain,inlineNotches[source.Key],
+                    originals[source.Key],originalChain).ToArray()); }
+                catch(Exception error) { response.SetAttributeValue("error",error.Message); }
+            }
+        }
+        using(var file=new FileStream(output,FileMode.CreateNew,FileAccess.Write,FileShare.None))result.Save(file);
+        return 0;
+    }
     static int Build(string input, string output)
     {
         if (File.Exists(output)) throw new IOException("Output already exists: " + output);
         XDocument request;
         using (var reader=XmlReader.Create(input,new XmlReaderSettings { DtdProcessing=DtdProcessing.Prohibit })) request=XDocument.Load(reader);
         if(request.Root!=null&&request.Root.Name=="PatternSmithMerge")return MergeProjects(request.Root,output);
+        if(request.Root!=null&&request.Root.Name=="PatternSmithReadSplines")return ReadImportSplines(request.Root,output);
         if (request.Root == null || request.Root.Name != "PatternSmithRequest" || S(request.Root,"units",DefaultUnits) != "inches") throw new ArgumentException("Expected PatternSmithRequest units=inches.");
-        Layers.Clear();ToolMap.Clear();ValidatedPerimeters.Clear();ConvertedSplines.Clear();RequestedSplines.Clear();completedEntities=0;totalEntities=request.Root.Elements("Table").Elements("Pattern").Elements().Count();
+        Layers.Clear();ToolMap.Clear();ValidatedPerimeters.Clear();ConvertedSplines.Clear();RequestedSplines.Clear();completedEntities=0;
+        totalEntities=request.Root.Elements("Table").Elements("Pattern").Elements().Count(node=>node.Name!="EffectSet");
         ReadPreviewTools(request.Root);
         distanceIndexLeafSegments=Math.Max(1,int.Parse(S(request.Root,"distanceIndexLeafSegments",DefaultDistanceIndexLeafSegments.ToString(CultureInfo.InvariantCulture)),CultureInfo.InvariantCulture));
         progressIntervalMilliseconds=Math.Max(0,int.Parse(S(request.Root,"progressIntervalMilliseconds",DefaultProgressIntervalMilliseconds.ToString(CultureInfo.InvariantCulture)),CultureInfo.InvariantCulture));
@@ -1000,8 +1826,10 @@ public static class NativeProjectBuilder
         }
         Phase("entity assembly");
         var patterns=new List<Pattern>();var templates=new List<MaterialTemplate>();var instances=new List<MaterialInstance>();var nests=new List<Nest>();
+        var partStates=new Dictionary<Guid,string>();
         var recipesById=new Dictionary<string,string>(StringComparer.Ordinal);
         var templatesByRecipe=new Dictionary<string,MaterialTemplate>(StringComparer.Ordinal);
+        bool clipboard=B(request.Root,"clipboardPatterns",false);
         double workspaceY=0,workspaceGap=D(request.Root,"workspaceGap",DefaultWorkspaceGap);
         if(workspaceGap<0)throw new ArgumentException("Workspace gap must be nonnegative inches.");
         var materialTables=request.Root.Elements("Table").Where(table=>B(table,"materialAssigned",DefaultMaterialAssigned)).ToArray();
@@ -1015,7 +1843,11 @@ public static class NativeProjectBuilder
             if(width<=0 || length<=0)throw new ArgumentException("Table width and length must be positive inches.");
             double hue=D(table,"materialHue",0),saturation=D(table,"materialSaturation",0),lightness=D(table,"materialLightness",DefaultMaterialLightness),alpha=D(table,"materialAlpha",1),cost=D(table,"materialCost",DefaultMaterialCost);
             string materialId="";RollInstance instance=null;
-            if(B(table,"materialAssigned",DefaultMaterialAssigned)) {
+            if(clipboard) {
+                if(B(table,"populated",DefaultPopulated))throw new ArgumentException("Copy workspace patterns, not an entire nest.");
+                // Project-only IDs may identify different rolls in the destination project.
+                materialId=S(table,"clipboardCatalogId","");
+            } else if(B(table,"materialAssigned",DefaultMaterialAssigned)) {
                 double copySpacing=D(table,"copySpacing",DefaultCopySpacing),edgeSpacing=D(table,"edgeSpacing",DefaultEdgeSpacing),cutSpeed=D(table,"maxCutSpeed",DefaultMaximumCutSpeed),plotSpeed=D(table,"maxPlotSpeed",DefaultMaximumPlotSpeed);
                 int minimumPower=int.Parse(S(table,"minimumPower",DefaultMinimumPower.ToString(CultureInfo.InvariantCulture)),CultureInfo.InvariantCulture),maximumPower=int.Parse(S(table,"maximumPower",DefaultMaximumPower.ToString(CultureInfo.InvariantCulture)),CultureInfo.InvariantCulture);
                 bool enablePower=B(table,"enablePower",DefaultEnablePowerSettings);
@@ -1050,25 +1882,29 @@ public static class NativeProjectBuilder
             var tablePatterns=new Dictionary<string,Pattern>();
             var copyLocations=new Dictionary<string,Point2d>();
             var copyRotations=new Dictionary<string,double>();
+            var flipped=new HashSet<string>();
             var annotations=new HashSet<string>();
             foreach(var item in table.Elements("Pattern")) {
                 string key=S(item,"id",Guid.NewGuid().ToString());
-                var pattern=PatternFromRequest(item);
+                Point2d copyLocation;
+                var pattern=PatternFromRequest(item,out copyLocation,clipboard);
                 if(B(item,"faceDown",false))pattern=pattern.With(name:pattern.Name+FaceDownSuffix);
-                bool assigned=PatternHasMaterial(item,table);
-                if(assigned&&instance==null)throw new ArgumentException("A pattern material requires an assigned material group.");
+                bool assigned=PatternHasMaterial(item,table)&&(!clipboard||materialId.Length>0);
+                if(assigned&&instance==null&&!clipboard)throw new ArgumentException("A pattern material requires an assigned material group.");
                 if(assigned)pattern=pattern.With(constraints:pattern.Constraints.With(materialId:new MaterialIdConstraint(materialId,
                     B(item,"enforceMaterial",B(table,"populated",DefaultPopulated))?MaterialConstraintType.Strict:MaterialConstraintType.Loose)),
                     patternFillColorStyle:DefaultPatternFillStyle,patternFillColor:new HSLColor(hue,saturation,lightness,alpha),patternFillStriped:DefaultPatternFillStriped);
                 else pattern=pattern.With(patternFillColorStyle:PatternFillColorStyle.None,patternFillStriped:false);
-                tablePatterns.Add(key,pattern);copyLocations.Add(key,pattern.Location);copyRotations.Add(key,pattern.Rotation);
+                tablePatterns.Add(key,pattern);copyLocations.Add(key,copyLocation);copyRotations.Add(key,pattern.Rotation);
+                if(B(item,"sourceFlipped",false))flipped.Add(key);
+                if(item.Attribute("partState")!=null)partStates.Add(pattern.PersistentId,S(item,"partState",""));
                 if(B(item,"annotation",false))annotations.Add(key);
             }
             if(tablePatterns.Count>0) {
               if(table.Attribute("workspaceX")!=null) {
                 double angle=D(table,"workspaceRotation",0),x=D(table,"workspaceX",0),y=D(table,"workspaceY",0);
                 foreach(string key in tablePatterns.Keys.ToArray()) {
-                    var local=copyLocations[key];var pattern=tablePatterns[key].With(
+                    var local=tablePatterns[key].Location;var pattern=tablePatterns[key].With(
                         location:new Point2d(x+local.X*Math.Cos(angle)-local.Y*Math.Sin(angle),y+local.X*Math.Sin(angle)+local.Y*Math.Cos(angle)),
                         rotation:copyRotations[key]+angle);
                     tablePatterns[key]=pattern;patterns.Add(pattern);
@@ -1078,7 +1914,7 @@ public static class NativeProjectBuilder
                 double minX=bounds.Min(item=>item.Box.Min.X+item.Origin.X),minY=bounds.Min(item=>item.Box.Min.Y+item.Origin.Y),maxY=bounds.Max(item=>item.Box.Max.Y+item.Origin.Y);
                 workspaceY-=maxY-minY;
                 foreach(string key in tablePatterns.Keys.ToArray()) {
-                    var local=copyLocations[key];
+                    var local=tablePatterns[key].Location;
                     var pattern=tablePatterns[key].With(location:new Point2d(local.X-minX,local.Y-minY+workspaceY));
                     tablePatterns[key]=pattern;patterns.Add(pattern);
                 }
@@ -1089,7 +1925,7 @@ public static class NativeProjectBuilder
             if(B(table,"populated",DefaultPopulated))foreach(var pair in tablePatterns) {
                 if(annotations.Contains(pair.Key))continue;
                 var placements=table.Elements("Copy").Where(c=>S(c,"pattern","")==pair.Key).ToList();
-                if(placements.Count==0)copies.Add(new Copy(pair.Value,copyLocations[pair.Key],copyRotations[pair.Key],Axis.None));
+                if(placements.Count==0)copies.Add(new Copy(pair.Value,copyLocations[pair.Key],copyRotations[pair.Key],flipped.Contains(pair.Key)?Axis.Y:Axis.None));
                 else foreach(var place in placements) {
                     Axis flip; if(!Enum.TryParse<Axis>(S(place,"flip","None"),true,out flip) || (flip!=Axis.None && flip!=Axis.X && flip!=Axis.Y))throw new ArgumentException("Copy flip must be None, X or Y.");
                     copies.Add(new Copy(pair.Value,P(place),D(place,"rotation",copyRotations[pair.Key]),flip));
@@ -1101,6 +1937,11 @@ public static class NativeProjectBuilder
             Console.WriteLine("TABLE " + name + " length=" + length + " width=" + width + " patterns=" + tablePatterns.Count + " copies=" + copies.Count);
         }
         if(patterns.Count==0)throw new ArgumentException("Request must contain at least one pattern.");
+        if(clipboard) {
+            Progress(90,"Writing clipboard patterns");
+            WriteWorkspaceClipboard(output,patterns,partStates);
+            Progress(100,"Clipboard patterns ready");return 0;
+        }
         if(nests.Count==0) {
             // The native project contract requires a current roll even when no pattern has a material.
             var table=request.Root.Element("Table");
@@ -1131,6 +1972,17 @@ public static class NativeProjectBuilder
             using(var stream=new FileStream(stage,FileMode.Open,FileAccess.ReadWrite))using(var zip=new ZipArchive(stream,ZipArchiveMode.Update)) {
                 var old=zip.GetEntry("version.xml");if(old!=null)old.Delete();
                 using(var version=zip.CreateEntry("version.xml").Open())new XDocument(new XElement("Versions",new XElement("PatternSmith",typeof(Project).Assembly.GetName().Version.ToString()))).Save(version);
+                var document=ReadMergeProject(zip);XNamespace a="http://autometrix.com/xml",z="http://schemas.microsoft.com/2003/10/Serialization/";
+                if(document.Root.Element(a+"Patterns").Elements().Count()!=patterns.Count || document.Root.Element(a+"Nests").Elements().Count()!=nests.Count)throw new InvalidDataException("Serialized object count mismatch.");
+                var ids=document.Descendants().Attributes(z+"Id").Select(x=>x.Value).ToList();
+                var uniqueIds=new HashSet<string>(ids);
+                if(uniqueIds.Count!=ids.Count || document.Descendants().Attributes(z+"Ref").Any(x=>!uniqueIds.Contains(x.Value)))throw new InvalidDataException("Serialized object references are invalid.");
+                bool resizedFonts=!B(request.Root,"legacyTableFontSizing",DefaultLegacyTableFontSizing)&&StorePatternSmith11FontSizes(document);
+                if(partStates.Count>0)AddPartStates(document,partStates);
+                if(resizedFonts||partStates.Count>0) {
+                    zip.GetEntry("project.xml").Delete();
+                    using(var data=zip.CreateEntry("project.xml",CompressionLevel.Optimal).Open())document.Save(data,SaveOptions.DisableFormatting);
+                }
             }
             // Validate constructed objects and plain XML. MaterialCollection's
             // OnDeserialized callback imports materials into the workstation's
@@ -1146,13 +1998,6 @@ public static class NativeProjectBuilder
                 if(!project.Patterns.Any(p=>Object.ReferenceEquals(p,copy.Source)))throw new InvalidDataException("Copy source is outside the project pattern collection.");
                 var bounds=copy.GetBounds();
                 foreach(double coordinate in new[]{bounds.Min.X,bounds.Min.Y,bounds.Max.X,bounds.Max.Y})if(Double.IsNaN(coordinate)||Double.IsInfinity(coordinate))throw new InvalidDataException("Copy has invalid bounds.");
-            }
-            using(var stream=new FileStream(stage,FileMode.Open,FileAccess.Read,FileShare.Read))using(var zip=new ZipArchive(stream,ZipArchiveMode.Read))using(var xml=zip.GetEntry("project.xml").Open())using(var reader=XmlReader.Create(xml,new XmlReaderSettings{DtdProcessing=DtdProcessing.Prohibit})) {
-                var document=XDocument.Load(reader);XNamespace a="http://autometrix.com/xml",z="http://schemas.microsoft.com/2003/10/Serialization/";
-                if(document.Root.Element(a+"Patterns").Elements().Count()!=patterns.Count || document.Root.Element(a+"Nests").Elements().Count()!=nests.Count)throw new InvalidDataException("Serialized object count mismatch.");
-                var ids=document.Descendants().Attributes(z+"Id").Select(x=>x.Value).ToList();
-                var uniqueIds=new HashSet<string>(ids);
-                if(uniqueIds.Count!=ids.Count || document.Descendants().Attributes(z+"Ref").Any(x=>!uniqueIds.Contains(x.Value)))throw new InvalidDataException("Serialized object references are invalid.");
             }
             File.Move(stage,output);
         } finally { if(File.Exists(stage))File.Delete(stage); }
@@ -1214,6 +2059,12 @@ namespace vTools.Commands
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.AutomaticCurveWorkerLimit","Maximum automatic native spline conversion workers, from 1 through 32; automatic selection also leaves one logical CPU available.")]
     private const int AutomaticCurveWorkerLimit=4; // Positive automatic worker ceiling, one through 32; explicit CurveConversionWorkers bypasses this preference.
     private const string TableAnnotationPerimeter="Element"; // Native element-derived frame for non-cutting table-information patterns.
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.TableLabelFontFamily","Installed Windows font family for editable PatternSmith table headers. Other exported labels retain their existing stroke font.")]
+    private const string TableLabelFontFamily="Arial"; // Installed Windows font family; exported in the Regular style.
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultTargetVersion","PatternSmith version targeted by the export window. PatternSmith10 uses legacy editable table fonts; PatternSmith11 uses physical point sizes.",OptionKeys=TargetVersionKey)]
+    private const PatternSmithTargetVersion DefaultTargetVersion=PatternSmithTargetVersion.PatternSmith11; // Default target when no compatible choice has been saved.
+    private const bool LegacyTableLabelFontSizing=false; // Migration fallback: true selects PS10; false uses the factory target.
+    private const string TargetVersionKey="target_version"; // Saved enum name for the selected PatternSmith export target.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.CatalogReconnectIntervalMilliseconds","Milliseconds between nonblocking material-library retries while the export window is open; zero disables automatic retries. Manual Reconnect remains available.")]
     private const int CatalogReconnectIntervalMilliseconds=10000; // Zero disables automatic reconnect; positive milliseconds bound the retry frequency after server/file failures.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.PublishTouchDelayMilliseconds","Nonnegative milliseconds between safely replacing a saved project and updating its write time so PatternSmith can prompt to reload it.")]
@@ -1230,17 +2081,19 @@ namespace vTools.Commands
     private static readonly PreviewDisplay.ObjectHighlightStyle UnsupportedHighlightStyle=global::vTools.CommandDefaults.Highlight("vExportPatternSmith","vTools.Commands.vExportPatternSmith.UnsupportedHighlightStyle",
       new(System.Drawing.Color.FromArgb(255,128,0),System.Drawing.Color.Black,System.Drawing.Color.Black,1){StrokeEmphasis=6,OutlineEmphasis=8,UseObjectCurveColor=false}); // Orange/black screen-space feedback; zero fill opacity leaves original shaded objects unobscured.
     private const string NestedRotationKey="vNest.rotation"; // Finite invariant-culture degrees saved on placed part objects; original parts without this key use zero.
+    private const string NestedFlipKey="vNest.flipped"; // true marks an actual mirrored placement; false or absent leaves the copy unmirrored.
     private const double RotationMetadataTolerance=1e-9; // Fixed degree consistency tolerance between members of one placed part; does not change output coordinates.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.MaximumBlockDepth","Positive recursion limit for prepared blocks; rejects deeper definitions without exporting an incomplete file.")]
     private const int MaximumBlockDepth=32; // Positive maximum number of recursively nested block definitions.
-    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.ApproximationAngleRadians","Positive maximum tangent-angle step in radians for rational/general curve approximation.")]
-    private const double ApproximationAngleRadians=Math.PI/180.0; // Positive maximum tangent-angle step for rational/general curve polyline approximation.
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.ApproximationAngleRadians","Positive kink angle in radians; cubic fitting preserves corners sharper than this angle.")]
+    private const double ApproximationAngleRadians=Math.PI/180.0; // Positive kink angle in radians for cubic fitting of rational or higher-degree curves.
+    private const double CubicFitToleranceDivisor=4.0; // Use one quarter of the permitted error for cubic fitting, leaving room for endpoint alignment and native refitting.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.PointMarkerRadiusInches","Positive native point marker radius in inches; does not resize curves or text.")]
     private const double PointMarkerRadiusInches=0.125; // Positive reference-point marker radius in native PatternSmith inches.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.TextTransformRelativeTolerance","Positive relative tolerance when checking text for uniform scale and perpendicular axes; invalid transforms are rejected.")]
     private const double TextTransformRelativeTolerance=1e-10; // Positive relative tolerance for native text's required uniform, orthogonal plane transform.
     private const int PrimaryToolIndex=0; // Zero-based default slot for each named processing tool; CUT2 uses slot one.
-    private const string NativeBuilderResourceName="vTools.PatternSmith.Builder.exe"; // Manifest resource identifier of the isolated .NET Framework serializer helper.
+    internal const string NativeBuilderResourceName="vTools.PatternSmith.Builder.exe"; // Manifest resource identifier of the isolated .NET Framework serializer helper.
     private const string SupportedPatternSmithVersion="10.2.17.873"; // Exact installed native schema/API version validated by the isolated helper.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.BuilderTimeoutMilliseconds","Positive maximum milliseconds for the isolated native writer; timeout preserves the existing destination.")]
     private const int BuilderTimeoutMilliseconds=120000; // Positive maximum milliseconds allowed for native serialization.
@@ -1249,10 +2102,10 @@ namespace vTools.Commands
     private const string RuntimeFolderName="vTools"; // Single temporary-directory component below the user's temp root.
     private const string BuilderFolderName="PatternSmith"; // Single temporary-directory component below RuntimeFolderName.
     private const string NativeOutputFileName="output.project"; // Short native-writer filename in its isolated runtime directory; avoids classic .NET path limits.
-    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultCurveMode","NativeSpline converts smooth cubic curves to native fit-point splines within document tolerance; Bezier retains their exact cubic control points.",OptionKeys="curve_mode")]
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultCurveMode","NativeSpline writes editable fit-point splines; Bezier keeps exact cubic control points where possible. Other smooth curves are fitted within tolerance.",OptionKeys="curve_mode")]
     [global::vTools.CommandChoices("vExportPatternSmith","curve_mode",false,"NativeSpline","Bezier")]
     private const string DefaultCurveMode="NativeSpline"; // NativeSpline or Bezier; analytic lines, arcs, circles and polylines retain their native types.
-    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultCurveErrorInches","Maximum native spline thinning error in inches, zero or greater; zero disables Thin. Bezier mode remains exact.",OptionKeys="curve_error")]
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultCurveErrorInches","Maximum native spline thinning error in inches, zero or greater; zero disables Thin. Bezier output is not thinned.",OptionKeys="curve_error")]
     private const double DefaultCurveErrorInches=0.010; // Nonnegative inches, independent of Rhino document units; zero leaves converted fit points unthinned.
     private const int CurveErrorDecimalPlaces=3; // Displayed fractional inches in the thinning-error field, matching the 0.010-inch factory value.
     private const double CurveErrorIncrementInches=0.001; // Positive numeric-step size in inches for spline thinning error.
@@ -1306,6 +2159,8 @@ namespace vTools.Commands
     private const vExportDXF.ExportExplodeMode DefaultPrepExplode=vExportDXF.ExportExplodeMode.Full; // No keeps curves; SplitAtCorners separates kinks; Full separates components.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultPrepNotchJoin","True joins V/U notch geometry in PS export copies; false leaves notch components separate.",OptionKeys="notch_join")]
     private const bool DefaultPrepNotchJoin=true; // true joins eligible notch contacts; false preserves separate components.
+    [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultNativeEffects","On: keep verified seam allowances and notches editable in PatternSmith.\nOff: export their prepared curves.",OptionKeys="native_effects")]
+    private const bool DefaultNativeEffects=false; // true tries native editable effects; false retains prepared curve export.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultPrepTextBreak","True exports multiline text as separate rows; false preserves multiline entities.",OptionKeys="text_break")]
     private const bool DefaultPrepTextBreak=true; // true splits rows; false preserves multiline text.
     [global::vTools.CommandDefault("vExportPatternSmith","vTools.Commands.vExportPatternSmith.DefaultPrepOptimize","True cleans temporary PS export copies; false skips optimization.",OptionKeys="optimize")]
@@ -1363,6 +2218,7 @@ namespace vTools.Commands
     private const double EtaMaximumWorkloadScale=4; // Largest trusted workload multiplier or divisor for a previous successful stage timing.
 
     private static readonly Dictionary<uint,(string Drawing,string Output)> SessionFilenames=[];
+    private enum PatternSmithTargetVersion {PatternSmith10,PatternSmith11}
     internal enum ExistingFileAction {Cancel,Overwrite,Merge}
     private static string ProjectFileHash(string path)
     {
@@ -1449,13 +2305,18 @@ namespace vTools.Commands
       internal string Description=>ToolProcessName(Process)+(MountName.Length>0?" ["+MountName+"]":"");
       public override string ToString()=>Name;
     }
-    private sealed record ToolConfiguration(string Source,string Plotter,IReadOnlyList<ConfiguredTool> Tools,string Warning);
+    private sealed record ConfiguredCutter(string Id,string Name,IReadOnlyList<ConfiguredTool> Tools);
+    private sealed record ToolConfiguration(string Source,string Plotter,IReadOnlyList<ConfiguredTool> Tools,string Warning)
+    {
+      internal IReadOnlyList<ConfiguredCutter> Cutters {get;init;}=[];
+      internal string? SelectedCutterId {get;init;}
+    }
     private sealed class ToolPicker
     {
       internal readonly Eto.Forms.DropDown Choice;
       internal readonly Eto.Forms.Label Details=new(){Wrap=Eto.Forms.WrapMode.Word,VerticalAlignment=Eto.Forms.VerticalAlignment.Center};
       internal readonly System.Windows.Controls.TreeView Tree=new(){BorderThickness=new(0)};
-      private readonly IReadOnlyList<ConfiguredTool> _tools;
+      private IReadOnlyList<ConfiguredTool> _tools=[];
       private readonly Dictionary<string,System.Windows.Controls.TreeViewItem> _nodes=new(StringComparer.OrdinalIgnoreCase);
       private readonly Dictionary<System.Windows.Controls.TreeViewItem,(System.Windows.Controls.Border Row,System.Windows.Controls.ContentPresenter Header,double HeaderOffset)> _rowFrames=[];
       private readonly double _rowHeight,_rowGap,_swatchSize,_swatchBorder,_swatchGap;
@@ -1465,7 +2326,6 @@ namespace vTools.Commands
       internal ConfiguredTool? Selected=>_tools.FirstOrDefault(tool=>tool.Key.Equals(Choice.SelectedKey,StringComparison.OrdinalIgnoreCase));
       internal ToolPicker(IReadOnlyList<ConfiguredTool> tools,ConfiguredTool? selected,Func<Eto.Drawing.Color,Eto.Drawing.Bitmap> swatch)
       {
-        _tools=tools;
         _swatchSize=Math.Max(1,Config(nameof(ToolPickerSwatchSize),ToolPickerSwatchSize));
         _rowHeight=Math.Max(Math.Max(Tree.FontSize+2,_swatchSize+2),Config(nameof(ToolPickerRowHeight),ToolPickerRowHeight));
         _rowGap=Math.Max(0,Config(nameof(ToolPickerRowGap),ToolPickerRowGap));
@@ -1476,14 +2336,6 @@ namespace vTools.Commands
         Tree.HorizontalContentAlignment=System.Windows.HorizontalAlignment.Stretch;
         Choice=new(){Width=Config(nameof(MappingNameColumnWidth),MappingNameColumnWidth),ToolTip="Choose a configured PatternSmith tool. Categories are expanded; process and mount are shown beside the picker."};
         Choice.ItemImageBinding=Eto.Forms.Binding.Property<Eto.Forms.ImageListItem,Eto.Drawing.Image>(item=>item.Image!);
-        foreach(var tool in tools)Choice.Items.Add(new Eto.Forms.ImageListItem {Key=tool.Key,Text=tool.Name,Image=swatch(tool.Color??Eto.Drawing.Colors.Transparent)});
-        foreach(string category in ToolCategories)
-        {
-          var entries=tools.Where(tool=>tool.Category==category).ToArray();if(entries.Length==0)continue;
-          var branch=new System.Windows.Controls.TreeViewItem {Header=category,IsExpanded=true,FontWeight=System.Windows.FontWeights.SemiBold,HorizontalContentAlignment=System.Windows.HorizontalAlignment.Stretch};
-          foreach(var tool in entries)branch.Items.Add(Node(tool));Tree.Items.Add(branch);
-        }
-        foreach(var tool in tools.Where(tool=>tool.Category.Length==0))Tree.Items.Add(Node(tool));
         Tree.PreviewMouseDown+=(_,e)=>
         {
           if(e.ChangedButton!=System.Windows.Input.MouseButton.Left)return;
@@ -1499,7 +2351,21 @@ namespace vTools.Commands
           else if(e.Key==System.Windows.Input.Key.Escape&&_native!=null){_native.IsDropDownOpen=false;_native.Focus();e.Handled=true;}
         };
         Choice.Load+=(_,_)=>Install();Choice.SelectedIndexChanged+=(_,_)=>Refresh();
-        Choice.SelectedIndex=-1;if(selected!=null)Choice.SelectedKey=selected.Key;Refresh();Install();
+        SetTools(tools,selected,swatch);Install();
+      }
+      internal void SetTools(IReadOnlyList<ConfiguredTool> tools,ConfiguredTool? selected,Func<Eto.Drawing.Color,Eto.Drawing.Bitmap> swatch)
+      {
+        if(_native!=null)_native.IsDropDownOpen=false;
+        _tools=tools;Choice.Items.Clear();Tree.Items.Clear();_nodes.Clear();_rowFrames.Clear();
+        foreach(var tool in tools)Choice.Items.Add(new Eto.Forms.ImageListItem {Key=tool.Key,Text=tool.Name,Image=swatch(tool.Color??Eto.Drawing.Colors.Transparent)});
+        foreach(string category in ToolCategories)
+        {
+          var entries=tools.Where(tool=>tool.Category==category).ToArray();if(entries.Length==0)continue;
+          var branch=new System.Windows.Controls.TreeViewItem {Header=category,IsExpanded=true,FontWeight=System.Windows.FontWeights.SemiBold,HorizontalContentAlignment=System.Windows.HorizontalAlignment.Stretch};
+          foreach(var tool in entries)branch.Items.Add(Node(tool));Tree.Items.Add(branch);
+        }
+        foreach(var tool in tools.Where(tool=>tool.Category.Length==0))Tree.Items.Add(Node(tool));
+        Choice.SelectedIndex=-1;if(selected!=null)Choice.SelectedKey=selected.Key;Refresh();
       }
       private System.Windows.Controls.TreeViewItem Node(ConfiguredTool tool)
       {
@@ -1551,7 +2417,7 @@ namespace vTools.Commands
       }
       private void Refresh()
       {
-        Details.Text=Selected?.Description??"Choose a tool";
+        Details.Text=Selected?.Description??(_tools.Count==0?"No compatible tools":"Choose a tool");
         if(_syncing)return;_syncing=true;
         try{foreach(var pair in _nodes)pair.Value.IsSelected=Selected?.Key==pair.Key;}finally{_syncing=false;}
       }
@@ -1695,23 +2561,60 @@ namespace vTools.Commands
           tools.Add(new(id,name.Length>0?name:ToolProcessName(process),process,index,color,((string?)element.Element(ns+"ToolMountConstraint"))?.Trim()??""));
         }
         if(tools.Count==0)throw new InvalidDataException("No supported PatternSmith tools were found.");
-        string plotter="";
+        string? selected=null;
+        var cutters=new List<ConfiguredCutter>();
         try
         {
           string settings=new[]{"PatternSmith11","PatternSmith10"}.Select(version=>Path.Combine(vendor,version,"user.settings")).FirstOrDefault(File.Exists)??"";
-          string selected=settings.Length==0?"":Read(settings).Descendants("SelectedPlotter").FirstOrDefault()?.Value??"";
-          if(selected.Length>0)
+          if(settings.Length>0)selected=Read(settings).Descendants().FirstOrDefault(item=>item.Name.LocalName=="SelectedPlotter")?.Value.Trim();
+        }
+        catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or XmlException)
+        {Log.Write(nameof(vExportPatternSmith),"selected cutter could not be read: {0}",ex.Message);}
+        try
+        {
+          var cutterIds=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+          foreach(var device in Read(Path.Combine(vendor,"Plotting","Devices.xml")).Descendants(ns+"Plotter"))
           {
-            var device=Read(Path.Combine(vendor,"Plotting","Devices.xml")).Descendants(ns+"Plotter").FirstOrDefault(item=>string.Equals((string?)item.Element(ns+"Id"),selected,StringComparison.OrdinalIgnoreCase));
-            plotter=(string?)device?.Element(ns+"Connection")?.Element(ns+"Name")??"";
+            string id=((string?)device.Element(ns+"Id"))?.Trim()??"";
+            if(id.Length==0||!cutterIds.Add(id))continue;
+            var connection=device.Element(ns+"Connection");var machine=device.Element(ns+"MachineInfo");
+            string name=new[]{(string?)connection?.Element(ns+"Name"),(string?)machine?.Element(ns+"ProductName"),(string?)connection?.Element(ns+"OriginalName"),id}
+              .First(value=>!string.IsNullOrWhiteSpace(value))!.Trim();
+            cutters.Add(new(id,name,tools.Where(tool=>CutterSupportsTool(device,ns,tool)).ToArray()));
           }
         }
         catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or XmlException)
-        {Log.Write(nameof(vExportPatternSmith),"configured plotter could not be read: {0}",ex.Message);}
-        return new(path,plotter,tools,"");
+        {Log.Write(nameof(vExportPatternSmith),"configured cutters could not be read: {0}",ex.Message);}
+        var active=cutters.FirstOrDefault(cutter=>string.Equals(cutter.Id,selected,StringComparison.OrdinalIgnoreCase))??cutters.FirstOrDefault();
+        return new(path,active?.Name??"",tools,""){Cutters=cutters,SelectedCutterId=active?.Id};
       }
       catch(Exception ex) when(ex is IOException or UnauthorizedAccessException or XmlException or InvalidDataException or ArgumentException or NotSupportedException)
       {Log.Write(nameof(vExportPatternSmith),"configured tools unavailable: {0}",ex.Message);return new(path,"",[],"Configured PS tools unavailable; showing saved/default tools.");}
+    }
+    private static bool CutterSupportsTool(XElement device,XNamespace ns,ConfiguredTool tool)
+    {
+      var machine=device.Element(ns+"MachineInfo");
+      var mounts=device.Element(ns+"MountPoints")?.Elements(ns+"MountPoint").ToArray();
+      bool IsMount(XElement mount,string type)=>string.Equals((string?)mount.Element(ns+"MountPointType"),type,StringComparison.OrdinalIgnoreCase);
+      int Heads(string type,string count)=>mounts?.Count(mount=>IsMount(mount,type))??
+        (int.TryParse((string?)machine?.Element(ns+count),NumberStyles.Integer,CultureInfo.InvariantCulture,out var heads)?heads:int.MaxValue);
+      bool Steered(int head)
+      {
+        var names=mounts?.Where(mount=>IsMount(mount,"Steering")).Select(mount=>((string?)mount.Element(ns+"Name"))?.Trim()).ToArray();
+        if(names?.Any(name=>string.Equals(name,"Steered1",StringComparison.OrdinalIgnoreCase)||string.Equals(name,"Steered2",StringComparison.OrdinalIgnoreCase))==true)
+          return names.Contains("Steered"+head.ToString(CultureInfo.InvariantCulture),StringComparer.OrdinalIgnoreCase);
+        return Heads("Steering","SteeredHeadCount")>=head;
+      }
+      return tool.Process switch
+      {
+        "Mark"=>Heads("Marking","MarkingHeadCount")>0,
+        "Inkjet"=>Heads("Marking","MarkingHeadCount")>0&&(!bool.TryParse((string?)machine?.Element(ns+"DotMarkUnlocked"),out bool dotMark)||dotMark),
+        "Print"=>machine?.Element(ns+"TijIpAddress") is not {} printer||!string.IsNullOrWhiteSpace(printer.Value),
+        "Drill"=>Heads("Drilling","DrillingHeadCount")>0,
+        "Cut" or "Notch" or "Punch" or "Crease"=>tool.Mount.ToUpperInvariant() switch
+        {"STEERED1"=>Steered(1),"STEERED2"=>Steered(2),_=>Heads("Steering","SteeredHeadCount")>0},
+        _=>true
+      };
     }
     private static string NormalizeProjectPath(string value)
     {
@@ -1733,7 +2636,7 @@ namespace vTools.Commands
       section.Remove("last_output_by_document");
     }
     private static T Config<T>(string key,T factory)=>global::vTools.CommandDefaults.Get("vExportPatternSmith","vTools.Commands.vExportPatternSmith."+key,factory);
-    private sealed record PreparationConfiguration(vExportDXF.ExportSettings Export,vCleanup.ExportGeometrySettings Geometry);
+    private sealed record PreparationConfiguration(vExportDXF.ExportSettings Export,vCleanup.ExportGeometrySettings Geometry,bool NativeEffects);
     private static PreparationConfiguration ReadPreparation()=>ToolsOptionStore.Read<PreparationConfiguration>("vExportPatternSmith",section=>
     {
       bool Flag(string key,string field,bool factory)=>ToolsOptionStore.TryGetBool(section,key,out var value)?value:Config(field,factory);
@@ -1748,12 +2651,15 @@ namespace vTools.Commands
         Flag("move_origin",nameof(DefaultPrepMoveOrigin),DefaultPrepMoveOrigin),NumberOption("end_trim",nameof(DefaultPrepEndTrim),DefaultPrepEndTrim)),
         new(NumberOption("cleanup_threshold",nameof(DefaultPrepShortThreshold),DefaultPrepShortThreshold),Flag("cleanup_simplify",nameof(DefaultPrepSimplify),DefaultPrepSimplify),
           Flag("cleanup_overlaps",nameof(DefaultPrepOverlaps),DefaultPrepOverlaps),NumberOption("cleanup_tolerance",nameof(DefaultPrepOverlapTolerance),DefaultPrepOverlapTolerance,true),
-          Flag("cleanup_segments",nameof(DefaultPrepOverlapSegments),DefaultPrepOverlapSegments)));
+          Flag("cleanup_segments",nameof(DefaultPrepOverlapSegments),DefaultPrepOverlapSegments)),
+        Flag("native_effects",nameof(DefaultNativeEffects),DefaultNativeEffects));
     });
     private sealed class PreparationControls:Eto.Forms.Panel
     {
       private readonly Eto.Forms.CheckBox _optimize=new(){Text="Clean export copies"},_grain=new(){Text="Remove grain"},_origin=new(){Text="Move origin"},
         _join=new(){Text="Join notches"},_text=new(){Text="Split multiline text"},_simplify=new(){Text="Simplify curves"},_overlaps=new(){Text="Find overlaps"},_segments=new(){Text="Remove overlapping portions only"};
+      private readonly Eto.Forms.CheckBox _nativeEffects=new(){Text="Native seams and notches",
+        ToolTip="Keep matching seam allowances and notches editable in PatternSmith. Other effects keep their prepared curves."};
       private readonly Eto.Forms.DropDown _notches=new(){DataStore=Enum.GetNames<NotchTrimMode>()},_explode=new(){DataStore=Enum.GetNames<vExportDXF.ExportExplodeMode>()},
         _action=new(){DataStore=Enum.GetNames<vCleanup.ExportCleanupAction>()};
       private readonly Eto.Forms.DropDown _layer;
@@ -1763,11 +2669,12 @@ namespace vTools.Commands
         _short=new(){MinValue=0,MaxValue=double.MaxValue,DecimalPlaces=6},_tolerance=new(){MinValue=RhinoMath.ZeroTolerance,MaxValue=double.MaxValue,DecimalPlaces=6};
       internal PreparationConfiguration Values=>new(new((NotchTrimMode)_notches.SelectedIndex,_documentLayerPicker?LayerSelector.GetDropDownValue(_layer,_layerFallback):_layer.SelectedKey??_layerFallback,_join.Checked==true,_text.Checked==true,
         _optimize.Checked==true,(vExportDXF.ExportExplodeMode)_explode.SelectedIndex,(vCleanup.ExportCleanupAction)_action.SelectedIndex,_grain.Checked==true,_origin.Checked==true,_trim.Value),
-        new(_short.Value,_simplify.Checked==true,_overlaps.Checked==true,_tolerance.Value,_segments.Checked==true));
+        new(_short.Value,_simplify.Checked==true,_overlaps.Checked==true,_tolerance.Value,_segments.Checked==true),_nativeEffects.Checked==true);
       internal event EventHandler? RemoveGrainChanged;
       internal PreparationControls(RhinoDoc? doc=null,Eto.Forms.Control? curveType=null,Eto.Forms.Control? curveError=null)
       {
         var settings=ReadPreparation();var own=settings.Export;var geometry=settings.Geometry;
+        _nativeEffects.Checked=settings.NativeEffects;
         _layerFallback=own.NotchSplitLayer;doc??=RhinoDoc.ActiveDoc;_documentLayerPicker=doc!=null;
         int choiceWidth=Math.Max(1,Config(nameof(PreparationChoiceWidth),PreparationChoiceWidth)),numberWidth=Math.Max(1,Config(nameof(PreparationNumberWidth),PreparationNumberWidth));
         if(doc!=null)_layer=LayerSelector.CreateDropDown(doc,own.NotchSplitLayer,width:choiceWidth);
@@ -1807,10 +2714,17 @@ namespace vTools.Commands
         geometryRows.AddRange([_grain,_origin,_text,Row("Explode curves",_explode),Row("End trim (model units)",_trim)]);
         var column=new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Vertical,HorizontalContentAlignment=Eto.Forms.HorizontalAlignment.Stretch,Spacing=MappingSpacing,Padding=MappingSpacing,
           Items={Section("Geometry",geometryRows.ToArray()),
-            Section("Notches",Row("Treatment",_notches),Row("Split layer",_layer),_join),
+            Section("Seams and notches",_nativeEffects,Row("Treatment",_notches),Row("Split layer",_layer),_join),
             Section("Cleanup",_optimize,_simplify,_overlaps,_segments,Row("Findings",_action),Row("Short threshold (model units)",_short),Row("Overlap tolerance (model units)",_tolerance))}};
-        _notches.SelectedIndexChanged+=(_,_)=>_layer.Enabled=(NotchTrimMode)_notches.SelectedIndex==NotchTrimMode.Split;
-        _layer.Enabled=own.NotchTrim==NotchTrimMode.Split;
+        void UpdateNotchControls()
+        {
+          var mode=(NotchTrimMode)_notches.SelectedIndex;
+          _layer.Enabled=mode==NotchTrimMode.Split;
+          _join.Enabled=mode!=NotchTrimMode.Trim || _nativeEffects.Checked!=true;
+        }
+        _notches.SelectedIndexChanged+=(_,_)=>UpdateNotchControls();
+        _nativeEffects.CheckedChanged+=(_,_)=>UpdateNotchControls();
+        UpdateNotchControls();
         Content=new Eto.Forms.Scrollable {Content=column};
       }
       internal void Save(JsonObject section)
@@ -1818,6 +2732,7 @@ namespace vTools.Commands
         var current=Values;var own=current.Export;var geometry=current.Geometry;
         if(string.IsNullOrWhiteSpace(own.NotchSplitLayer))throw new InvalidOperationException("Choose a split layer.");
         section["notch_trim"]=own.NotchTrim.ToString();section["notch_split_layer"]=own.NotchSplitLayer;section["notch_join"]=own.NotchJoin;
+        section["native_effects"]=current.NativeEffects;
         section["text_break"]=own.TextBreak;section["optimize"]=own.Optimize;section["explode"]=own.Explode.ToString();section["cleanup_action"]=own.CleanupAction.ToString();
         section["remove_grain"]=own.RemoveGrain;section["move_origin"]=own.MoveOrigin;section["end_trim"]=own.EndTrim;
         section["cleanup_threshold"]=geometry.Threshold;section["cleanup_simplify"]=geometry.SimplifyCurves;section["cleanup_overlaps"]=geometry.FindOverlaps;
@@ -1829,7 +2744,8 @@ namespace vTools.Commands
 
     private static XDocument PrepareRequest(RhinoDoc doc,IReadOnlyList<RhinoObject> sources,
       IReadOnlyList<vExportDXF.PreparedExportEntry> entries,Transform exportTranslation,bool removeGrain=false,
-      Action<int,string>? report=null,CancellationToken cancellationToken=default,Func<string,bool>? approveMixedFaces=null,Action<string>? unsupportedNotice=null)
+      Action<int,string>? report=null,CancellationToken cancellationToken=default,Func<string,bool>? approveMixedFaces=null,
+      Action<string>? unsupportedNotice=null,PreparationConfiguration? preparation=null)
     {
         var clock=System.Diagnostics.Stopwatch.StartNew();var curveSettings=ReadCurveConversionSettings();
         if(doc.ModelUnitSystem is UnitSystem.None or UnitSystem.Unset or UnitSystem.CustomUnits)
@@ -1843,6 +2759,7 @@ namespace vTools.Commands
         int configuredWorkers=Config(nameof(CurveConversionWorkers),CurveConversionWorkers);
         int workers=configuredWorkers==0?Math.Min(Math.Max(1,Environment.ProcessorCount-1),Math.Clamp(Config(nameof(AutomaticCurveWorkerLimit),AutomaticCurveWorkerLimit),1,32)):Math.Clamp(configuredWorkers,1,32);
         var root=new XElement("PatternSmithRequest",new XAttribute("units","inches"),new XAttribute("conversionWorkers",workers),new XAttribute("workspaceGap",Number(Math.Max(0,global::vTools.CommandDefaults.Get("vExportPatternSmith","vTools.Commands.vExportPatternSmith.WorkspaceGapInches",WorkspaceGapInches)))),
+          new XAttribute("legacyTableFontSizing",ToolsOptionStore.Read("vExportPatternSmith",ReadTargetVersion)==PatternSmithTargetVersion.PatternSmith10),
           new XAttribute("reuseEquivalentSplines",Config(nameof(ReuseEquivalentSplines),ReuseEquivalentSplines)),new XAttribute("splineCacheMegabytes",Math.Clamp(Config(nameof(SplineCacheMegabytes),SplineCacheMegabytes),1,4096)),
           new XAttribute("distanceIndexLeafSegments",Math.Clamp(Config(nameof(DistanceIndexLeafSegments),DistanceIndexLeafSegments),1,256)),new XAttribute("progressIntervalMilliseconds",Math.Max(0,Config(nameof(NativeProgressIntervalMilliseconds),NativeProgressIntervalMilliseconds))));
         if(Config(nameof(CacheSplineConversions),CacheSplineConversions))root.SetAttributeValue("splineCacheDirectory",Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),RuntimeFolderName,BuilderFolderName,SplineCacheFolderName));
@@ -1897,6 +2814,8 @@ namespace vTools.Commands
               new XAttribute("length",Number(table==null?Config(nameof(StandaloneMaterialLengthInches),StandaloneMaterialLengthInches):table.Length*scale)),
               new XAttribute("populated",table!=null?"true":"false"));
             var workspaceOrigin=table?.Plane.Origin??Point3d.Origin;
+            // Apply the shared origin shift to the workspace only; nested copy coordinates stay table-local.
+            workspaceOrigin.Transform(exportTranslation);
             if(table!=null&&Math.Abs(table.Plane.Normal*Vector3d.ZAxis-1)>RotationMetadataTolerance)
               throw new InvalidOperationException("Preserving PatternSmith workspace placement requires tables in the world XY plane.");
             element.SetAttributeValue("workspaceX",Number(workspaceOrigin.X*scale));element.SetAttributeValue("workspaceY",Number(workspaceOrigin.Y*scale));
@@ -1915,12 +2834,30 @@ namespace vTools.Commands
           pattern.SetAttributeValue("faceDown",faceDown);
           if(entry.TableAnnotation)pattern.SetAttributeValue("fitAnnotation",true);
           if(table!=null&&!annotation)pattern.SetAttributeValue("sourceRotation",Number(NestedSourceRotation(doc,entry.SourceIds)));
-          foreach(var entity in SerializeObject(doc,prepared,transform,tolerance,0,null,annotation,removeGrain,curveSettings,Ignore))
+          if(!annotation)
+          {
+            var enforcement=entry.SourceIds.Select(id=>doc.Objects.FindId(id)?.Attributes.GetUserString(PatternSmithPartContract.MaterialEnforcedKey))
+              .Where(value=>!string.IsNullOrEmpty(value)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if(assigned!=null&&enforcement.Length==1&&bool.TryParse(enforcement[0],out bool enforce))
+              pattern.SetAttributeValue("enforceMaterial",enforce);
+            var partState=NestWorkflow.ExportPatternSmithPartState(doc,entry.SourceIds,table?.Group??-1,scale) with {CuttingFaceDown=faceDown};
+            var settings=partState.Settings;
+            pattern.SetAttributeValue("partState",System.Text.Json.JsonSerializer.Serialize(partState));
+            pattern.SetAttributeValue("copies",settings?.Copies??NestWorkflow.ConfiguredDefaultCopies);
+            pattern.SetAttributeValue("allowNesting",settings?.Included??true);
+            if(NestWorkflow.PatternSmithRotationStep(settings) is {} step)pattern.SetAttributeValue("rotationStep",Number(RhinoMath.ToRadians(step)));
+            if(table!=null&&NestedSourceFlipped(doc,entry.SourceIds))pattern.SetAttributeValue("sourceFlipped",true);
+          }
+          bool nativeEffects=preparation?.NativeEffects==true && !annotation && (bool?)pattern.Attribute("sourceFlipped")!=true;
+          string? tableLabelFont=entry.TableAnnotation?ConfiguredTableLabelFont():null;
+          foreach(var entity in SerializeObject(doc,prepared,transform,tolerance,0,null,annotation,removeGrain,curveSettings,Ignore,tableLabelFont,nativeEffects))
           {
             if(annotation&&!note&&entity.Name.LocalName is not ("Text" or "Point"))entity.SetAttributeValue("excludeFromPerimeter",false);
             if(entry.TableAnnotation&&table!=null&&entity.Name.LocalName=="Text"&&entity.Value.Equals(table.Name,StringComparison.OrdinalIgnoreCase))entity.Value=tableName!;
             pattern.Add(entity);
           }
+          if(nativeEffects) AddNativeEffectCandidates(doc,pattern,entry.SourceIds,transform*exportTranslation,scale,tolerance,
+            preparation!.Export.NotchTrim,curveSettings);
           if(title&&!entry.SourceIds.Select(doc.Objects.FindId).Any(obj=>obj!=null&&vTitle.IsTitleFrame(obj))) {
             foreach(var source in entry.SourceIds.Select(doc.Objects.FindId).Where(obj=>obj?.Geometry is TextEntity)) {
               using var frame=vTitle.CreateFrameForTitlePreview(source!, (TextEntity)source!.Geometry);
@@ -1953,6 +2890,14 @@ namespace vTools.Commands
       }
       return RhinoMath.ToRadians(angle??0);
     }
+    private static bool NestedSourceFlipped(RhinoDoc doc,IReadOnlyList<Guid> sourceIds)
+    {
+      var flags=sourceIds.Select(id=>doc.Objects.FindId(id)?.Attributes.GetUserString(NestedFlipKey))
+        .Where(value=>!string.IsNullOrWhiteSpace(value)).Select(value=>bool.TryParse(value,out bool flag)?flag:
+          throw new InvalidOperationException("A nested part has invalid flip metadata.")).Distinct().ToArray();
+      if(flags.Length>1)throw new InvalidOperationException("A prepared part combines flipped and unflipped objects.");
+      return flags.FirstOrDefault();
+    }
     private static void OrderRequestTables(XElement root)
     {
       string Key(string name)=>System.Text.RegularExpressions.Regex.Replace(name,"[0-9]+",match=>
@@ -1962,22 +2907,37 @@ namespace vTools.Commands
       root.ReplaceNodes(tables);
     }
 
-    private static Result RunWithWindow(RhinoDoc doc,RunMode mode)
+    internal static Result RunWithWindow(RhinoDoc doc,RunMode mode,bool clipboard=false,bool showMappings=true)
     {
+      string command=clipboard?nameof(vCopyToPatternSmith):nameof(vExportPatternSmith);
       using var cancellation=new CancellationTokenSource();EventHandler escape=(_,_)=>cancellation.Cancel();RhinoApp.EscapeKeyPressed+=escape;
       try
       {
         StatusBar.ShowProgressMeter(0,100,"Reading PatternSmith export sources (Esc to cancel)",true,false);
         var selected=doc.Objects.GetSelectedObjects(false,false).ToArray();
-        var targets=selected.Length>0?selected:doc.Objects.GetObjectList(new ObjectEnumeratorSettings
+        if(clipboard&&selected.Length==0)
+        {
+          using var picker=new Rhino.Input.Custom.GetObject();
+          picker.SetCommandPrompt("Select objects to copy to PatternSmith");
+          picker.GroupSelect=true;picker.GetMultiple(1,0);
+          if(picker.CommandResult()!=Result.Success)return picker.CommandResult();
+          selected=picker.Objects().Select(reference=>reference.Object()).OfType<RhinoObject>().DistinctBy(obj=>obj.Id).ToArray();
+        }
+        var targets=clipboard||selected.Length>0?selected:doc.Objects.GetObjectList(new ObjectEnumeratorSettings
           {NormalObjects=true,HiddenObjects=false,LockedObjects=false,IncludeLights=false,IncludeGrips=false,IncludePhantoms=false}).ToArray();
         if(targets.Length==0)return Result.Nothing;
+        if(clipboard)RequireWorkspaceClipboardSources(doc,targets);
         var ignored=new Dictionary<string,int>(StringComparer.Ordinal);
         bool anySupported=false;
         foreach(var target in targets)anySupported|=InspectExportObject(doc,target,0,ignored);
         string ignoredMessage=UnsupportedMessage(ignored);
         if(!anySupported)
-        {RhinoApp.WriteLine(nameof(vExportPatternSmith)+": "+ignoredMessage+" No supported geometry to export.");return Result.Nothing;}
+        {RhinoApp.WriteLine(command+": "+ignoredMessage+" No supported geometry to copy or export.");return Result.Nothing;}
+        if(clipboard&&!showMappings)
+        {
+          if(ignoredMessage.Length>0)RhinoApp.WriteLine(command+": "+ignoredMessage);
+          return CopyWithDefaults(doc,targets,cancellation.Token);
+        }
         var initial=CreateMappingRequest(doc,targets);
         var catalog=ReadCatalogWithUi(cancellation.Token);
         StatusBar.HideProgressMeter();
@@ -1986,7 +2946,7 @@ namespace vTools.Commands
         var ids=MaterialLibrary.PatternSmithCustomIds(names,catalog.ReservedIds.Except(ownCatalogIds,StringComparer.OrdinalIgnoreCase));
         string outputPath=Path.ChangeExtension(string.IsNullOrWhiteSpace(doc.Path)?Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),string.IsNullOrWhiteSpace(doc.Name)?DefaultFileStem:doc.Name):doc.Path,"project");
         outputPath=SessionOutputPath(doc,outputPath);
-        using var mappings=new ExportMappingDialog(initial,catalog,ids,outputPath,doc:doc);
+        using var mappings=new ExportMappingDialog(initial,catalog,ids,outputPath,doc:doc,clipboard:clipboard);
         mappings.ReportUnsupportedObjects(ignoredMessage);
         mappings.SetUnsupportedSources(targets.Select(obj=>obj.Id));
         mappings.PreparationSourceFingerprint=()=>string.Join(";",targets.Select(source=>doc.Objects.FindId(source.Id)).Select(obj=>obj==null?"deleted":
@@ -1996,16 +2956,12 @@ namespace vTools.Commands
           .Distinct().Select(key=>key+"="+doc.Strings.GetValue(PartGroupData.NestSection,key)));
         mappings.PrepareConversion=(owner,token,report)=>
         {
-          XDocument? request=null;Exception? preparationError=null;var preparation=owner.Preparation;
-          var result=vExportDXF.RunPreparedExport(doc,RunMode.Interactive,(working,sources,entries,translation,removeGrain)=>
-          {
-            request=PrepareRequest(working,sources,entries,translation,removeGrain,report,token,owner.ApproveMixedFaces,owner.ReportUnsupportedObjects);
-            owner.ApplyConversionSettings(request.Root!);return Result.Success;
-          },stage=>{report(0,stage);RhinoApp.Wait();token.ThrowIfCancellationRequested();},
-            preparation.Export with {CleanupAction=owner.TakeCleanupAction(preparation.Export.CleanupAction)},targets,preparation.Geometry,owner.ReviewFindings,
-            owner.KeepPreparationResponsive,owner.ShowFindings,error=>preparationError=error,owner.SetCleanupFeedback);
-          if(result==Result.Failure)throw new InvalidOperationException("Curve preparation failed: "+(preparationError?.Message??"see the vTools log for details"),preparationError);
+          var preparation=owner.Preparation;
+          preparation=preparation with {Export=preparation.Export with {CleanupAction=owner.TakeCleanupAction(preparation.Export.CleanupAction)}};
+          var (result,request)=PreparePatternSmithRequest(doc,targets,preparation,token,report,
+            owner.KeepPreparationResponsive,owner.ReviewFindings,owner.ApproveMixedFaces,owner.ReportUnsupportedObjects,owner.ShowFindings,owner.SetCleanupFeedback);
           if(result!=Result.Success||request==null)throw new OperationCanceledException("Curve preparation was cancelled.");
+          owner.ApplyConversionSettings(request.Root!);
           return request;
         };
         mappings.ExecuteExport=owner=>
@@ -2014,6 +2970,12 @@ namespace vTools.Commands
             owner.ApplyResolvedMappings(request.Root!);ValidateToolMappings(request.Root!);
             owner.SetTimingWorkload(request.Root!);
             string preparedProject=owner.PrepareNativeProject(request);
+            if(clipboard)
+            {
+              owner.ExportToken.ThrowIfCancellationRequested();
+              WriteClipboard(PatternSmithClipboard.ReadPreparedPayload(preparedProject),request.Root!);
+              return Result.Success;
+            }
             string? destination=owner.ResolveDestination();
             if(destination==null)return Result.Cancel;
             owner.ExportToken.ThrowIfCancellationRequested();
@@ -2042,9 +3004,158 @@ namespace vTools.Commands
         try{return mappings.ShowSemiModal(doc,RhinoEtoApp.MainWindowForDocument(doc))?Result.Success:Result.Cancel;}
         finally{mappings.ClearUnsupportedHighlights();}
       }
-      catch(OperationCanceledException){RhinoApp.WriteLine("vExportPatternSmith: export cancelled.");return Result.Cancel;}
-      catch(Exception ex){Log.Write(nameof(vExportPatternSmith),"export failed: {0}",ex);RhinoApp.WriteLine("vExportPatternSmith: "+ex.Message);return Result.Failure;}
+      catch(OperationCanceledException){RhinoApp.WriteLine(command+": cancelled.");return Result.Cancel;}
+      catch(Exception ex){Log.Write(command,"export failed: {0}",ex);RhinoApp.WriteLine(command+": "+ex.Message);return Result.Failure;}
       finally{RhinoApp.EscapeKeyPressed-=escape;StatusBar.HideProgressMeter();}
+    }
+    private static void WriteClipboard(PatternSmithClipboard.PreparedPayload payload,XElement request)
+    {
+      PatternSmithClipboard.Write(payload);
+      RhinoApp.WriteLine($"{nameof(vCopyToPatternSmith)}: copied {CountText.Format(request.Elements("Table").Elements("Pattern").Count(),"pattern")}. Press Ctrl+V in PatternSmith.");
+    }
+
+    private static Result CopyWithDefaults(RhinoDoc doc,RhinoObject[] targets,CancellationToken token)
+    {
+      var preparation=ReadPreparation();
+      void Report(int percent,string stage)=>StatusBar.UpdateProgressMeter(stage,percent,true);
+      Action responsive=()=>{RhinoApp.Wait();token.ThrowIfCancellationRequested();};
+      var review=vCopyToPatternSmith.BeginCleanupReview(doc,targets,preparation.Export,preparation.Geometry);
+      RhinoApp.WriteLine($"{nameof(vCopyToPatternSmith)}: preparing patterns. Esc to cancel.");
+      var (result,request)=PreparePatternSmithRequest(doc,targets,preparation,token,Report,responsive,review,unsupported:message=>
+      {
+        if(message.Length>0)RhinoApp.WriteLine($"{nameof(vCopyToPatternSmith)}: {message}");
+      });
+      if(result!=Result.Success||request==null)return result;
+      var payload=ConvertClipboardCopy(request,preparation.Export.NotchSplitLayer,token,Report);
+      token.ThrowIfCancellationRequested();
+      WriteClipboard(payload,request.Root!);
+      return Result.Success;
+    }
+
+    private static (Result Result,XDocument? Request) PreparePatternSmithRequest(RhinoDoc doc,RhinoObject[] targets,
+      PreparationConfiguration preparation,CancellationToken token,Action<int,string>? report=null,Action? responsive=null,
+      Func<int,int,string?,vCleanup.ExportCleanupAction?>? review=null,Func<string,bool>? approveMixedFaces=null,Action<string>? unsupported=null,
+      Action<int,int>? findingsChanged=null,Action<vExportDXF.ExportCleanupFeedback>? cleanupReviewReady=null)
+    {
+      XDocument? request=null;Exception? error=null;
+      void CheckResponsive(){token.ThrowIfCancellationRequested();responsive?.Invoke();}
+      token.ThrowIfCancellationRequested();
+      // Native inline notches need their strokes available separately after trimming, not baked into the cut curve.
+      var export=preparation.NativeEffects && preparation.Export.NotchTrim==NotchTrimMode.Trim
+        ?preparation.Export with {NotchJoin=false}:preparation.Export;
+      var preserve=preparation.NativeEffects && export.Optimize && preparation.Geometry.SimplifyCurves
+        ?NativeEffectShapeSources(doc,targets,export.NotchTrim):null;
+      var result=vExportDXF.RunPreparedExport(doc,RunMode.Interactive,(working,sources,entries,translation,removeGrain)=>
+      {
+        request=PrepareRequest(working,sources,entries,translation,removeGrain,report,token,approveMixedFaces,unsupported,preparation);
+        return Result.Success;
+      },stage=>{report?.Invoke(0,stage);CheckResponsive();},export,targets,preparation.Geometry,review,CheckResponsive,
+        findingsChanged,ex=>error=ex,cleanupReviewReady,recordSource:preparation.NativeEffects,preserveSourceShapes:preserve);
+      if(result==Result.Failure)throw new InvalidOperationException("Curve preparation failed: "+(error?.Message??"see the vTools log for details"),error);
+      return (result,request);
+    }
+
+    private static void RequireWorkspaceClipboardSources(RhinoDoc doc,IEnumerable<RhinoObject> targets)
+    {
+      if(ReadTables(doc,targets.Select(obj=>obj.Id).ToHashSet()).Count>0)
+        throw new InvalidOperationException("Copy original workspace parts. Use PatternSmith project export for placed nests.");
+    }
+
+    internal static (XDocument Request,string SplitLayer) PrepareRhinoClipboardPaste(RhinoDoc doc,uint sequence,CancellationToken token)
+    {
+      var targets=doc.Objects.GetObjectList(new ObjectEnumeratorSettings
+        {NormalObjects=true,HiddenObjects=true,LockedObjects=true,IdefObjects=false})
+        .ToArray();
+      if(!targets.Any(obj=>InspectExportObject(doc,obj,0,null)))throw new InvalidOperationException("The Rhino clipboard has no supported flat geometry.");
+      RequireWorkspaceClipboardSources(doc,targets);
+      var preparation=ReadPreparation();
+      string? reason=null;
+      var review=vCopyToPatternSmith.BeginCleanupReview(doc,targets,preparation.Export,preparation.Geometry,sequence,message=>reason=message);
+      var (result,request)=PreparePatternSmithRequest(doc,targets,preparation,token,review:review);
+      token.ThrowIfCancellationRequested();
+      if(result!=Result.Success||request==null)
+        throw new InvalidOperationException(reason??"Rhino clipboard preparation did not produce any geometry.");
+      return (request,preparation.Export.NotchSplitLayer);
+    }
+
+    internal static PatternSmithClipboard.PreparedPayload ConvertClipboardCopy(XDocument request,string splitLayer,
+      CancellationToken token,Action<int,string>? report=null,bool background=false)
+    {
+      var root=request.Root!;
+      var saved=ToolsOptionStore.Read(nameof(vExportPatternSmith),section=>ToolsOptionStore.Clone(section) as JsonObject??new());
+      var materialTables=AssignedMaterialTables(root).ToArray();
+      if(materialTables.Length>0)
+      {
+        var catalog=background?LoadMaterialCatalog(token):ReadCatalogWithUi(token);
+        var presets=MaterialLibrary.LoadMaterialPresets().ToDictionary(material=>material.Name,StringComparer.OrdinalIgnoreCase);
+        foreach(var table in materialTables)
+        {
+          string name=(string)table.Attribute("material")!;
+          var preference=InitialMaterialPreference(saved,name,presets.GetValueOrDefault(name)?.PatternSmith);
+          var material=ExportMappingDialog.MatchMaterial(name,preference,catalog);
+          if(ExportMappingDialog.MaterialNeedsReview(name,preference,material,catalog))
+            throw new InvalidOperationException($"Review the material mapping for '{name}' with {nameof(vCopyToPatternSmith)}.");
+          if(material!=null)ApplyCatalogMaterial(table,material,clipboard:true);
+        }
+      }
+      var configured=ReadConfiguredTools();
+      var available=SelectedCutter(configured)?.Tools??configured.Tools;
+      ApplyLayerTools(root,splitLayer,(layer,entity)=>ExportMappingDialog.LayerChoices(saved,configured,available,layer,entity).Selected,
+        $" with {nameof(vCopyToPatternSmith)}");
+      ApplyOutputFormat(root,clipboard:true);
+      ValidateToolMappings(root);
+      string output=Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString("N")+".xml");
+      try
+      {
+        BuildNativeProject(request,output,token,report,background:background);
+        token.ThrowIfCancellationRequested();
+        return PatternSmithClipboard.ReadPreparedPayload(output);
+      }
+      finally{ExportMappingDialog.DeleteNativeProject(output);}
+    }
+
+    private static void ApplyCatalogMaterial(XElement table,CatalogMaterial material,bool clipboard)
+    {
+      table.SetAttributeValue("materialId",material.Id);
+      table.SetAttributeValue("material",material.Name);
+      if(clipboard)table.SetAttributeValue("clipboardCatalogId",material.Id);
+      foreach(var attribute in material.Settings.Attributes())table.SetAttributeValue(attribute.Name,attribute.Value);
+    }
+
+    private static ConfiguredCutter? SelectedCutter(ToolConfiguration configured)=>
+      configured.Cutters.FirstOrDefault(cutter=>cutter.Id==configured.SelectedCutterId)??configured.Cutters.FirstOrDefault();
+
+    private static IEnumerable<IGrouping<string,XElement>> MappedLayerGroups(XElement root)=>
+      root.Elements("Table").Elements("Pattern").Descendants().Where(entity=>entity.Attribute("sourceLayer")!=null)
+        .GroupBy(entity=>(string)entity.Attribute("sourceLayer")!,StringComparer.OrdinalIgnoreCase);
+
+    private static void ApplyLayerTools(XElement root,string splitLayer,Func<string,XElement,ConfiguredTool?> select,string hint="")
+    {
+      foreach(var group in MappedLayerGroups(root))
+      {
+        Tool tool;
+        if(select(group.Key,group.First()) is {} selected)tool=new(selected.Process,selected.Index);
+        else if(group.Key.Equals(splitLayer,StringComparison.OrdinalIgnoreCase))
+        {
+          tool=DefaultToolForLayer(group.Key.Split(new[]{"::"},StringSplitOptions.None).Last(),Color.Black);
+          if(tool.Process=="Unmapped")tool=new("Reference",PrimaryToolIndex);
+        }
+        else throw new InvalidOperationException($"Choose a PatternSmith tool for layer '{group.Key}'{hint}.");
+        foreach(var entity in group)SetToolAttributes(entity,tool.Process,tool.Index);
+      }
+    }
+
+    private static void ApplyOutputFormat(XElement root,bool clipboard,bool legacyTableFonts=false)
+    {
+      root.SetAttributeValue("legacyTableFontSizing",!clipboard&&legacyTableFonts);
+      if(clipboard)root.SetAttributeValue("clipboardPatterns",true);
+    }
+
+    private static JsonNode? InitialMaterialPreference(JsonObject saved,string name,MaterialLibrary.PatternSmithReference? presetLink)
+    {
+      var previous=(saved["materials"] as JsonObject)?.FirstOrDefault(pair=>pair.Key.Equals(name,StringComparison.OrdinalIgnoreCase)).Value;
+      var baseline=MaterialLibrary.ReadPatternSmith((saved["material_baselines"] as JsonObject)?.FirstOrDefault(pair=>pair.Key.Equals(name,StringComparison.OrdinalIgnoreCase)).Value);
+      return presetLink!=null&&presetLink!=baseline?MaterialLibrary.PatternSmithJson(presetLink):previous;
     }
     private static XElement CreateMappingRequest(RhinoDoc doc,IReadOnlyList<RhinoObject> targets)
     {
@@ -2187,7 +3298,8 @@ namespace vTools.Commands
     }
 
     private static IEnumerable<XElement> SerializeObject(RhinoDoc doc,RhinoObject obj,Transform transform,
-      double tolerance,int depth,Color? parentColor,bool tableAnnotation=false,bool removeGrain=false,CurveConversionSettings? curveSettings=null,Action<string>? ignored=null)
+      double tolerance,int depth,Color? parentColor,bool tableAnnotation=false,bool removeGrain=false,CurveConversionSettings? curveSettings=null,Action<string>? ignored=null,
+      string? tableLabelFont=null,bool exportOrigin=false)
     {
       if(depth>Math.Max(1,Config(nameof(MaximumBlockDepth),MaximumBlockDepth)))throw new InvalidOperationException("Prepared blocks exceed the supported nesting depth.");
       if(removeGrain&&vExportDXF.IsExportGrain(doc,obj))yield break;
@@ -2196,13 +3308,22 @@ namespace vTools.Commands
       {
         if(instance.InstanceDefinition is not {} definition)throw new InvalidOperationException("A prepared block definition is missing.");
         foreach(var child in definition.GetObjects())
-          foreach(var entity in SerializeObject(doc,child,transform*instance.InstanceXform,tolerance,depth+1,color,tableAnnotation,removeGrain,curveSettings,ignored))yield return entity;
+          foreach(var entity in SerializeObject(doc,child,transform*instance.InstanceXform,tolerance,depth+1,color,tableAnnotation,removeGrain,curveSettings,ignored,tableLabelFont,exportOrigin))yield return entity;
         yield break;
       }
       if(NestTableMetadata.HasDecorationRole(obj.Attributes)&&!tableAnnotation)yield break;
       if(tableAnnotation&&obj.Geometry is Hatch)yield break;
       Tool tool=tableAnnotation?new("Reference",PrimaryToolIndex):ResolveTool(doc,obj.Attributes,color);
-      foreach(var entity in SerializeGeometry(doc,obj.Geometry,transform,tool,tolerance,depth,curveSettings,ignored))yield return entity;
+      if(tableLabelFont!=null&&obj.Geometry is TextEntity text)
+      {
+        yield return SerializeTextCore(doc,text,transform,tool,tolerance,tableLabelFont);yield break;
+      }
+      foreach(var entity in SerializeGeometry(doc,obj.Geometry,transform,tool,tolerance,depth,curveSettings,ignored))
+      {
+        if(exportOrigin && obj.Geometry is Curve && obj.Attributes.GetUserString(vExportDXF.PreparedSourceKey) is {} id)
+          entity.SetAttributeValue("origin",id);
+        yield return entity;
+      }
     }
     private static IEnumerable<XElement> SerializeGeometry(RhinoDoc doc,GeometryBase source,Transform transform,Tool tool,
       double tolerance,int depth,CurveConversionSettings? curveSettings,Action<string>? ignored)
@@ -2266,6 +3387,203 @@ namespace vTools.Commands
       return bounds.IsValid&&bounds.Diagonal.Length<=RhinoMath.ZeroTolerance; // Kernel-zero spatial extent only; closed curves and invalid nonempty geometry must not be mistaken for empty curves.
     }
 
+    private sealed record NativeNotchCandidate(Guid Source,Guid[] Pieces,XElement Effect);
+
+    private static HashSet<Guid> NativeEffectShapeSources(RhinoDoc doc,RhinoObject[] targets,NotchTrimMode trim)
+    {
+      var curves=targets.Where(obj=>obj.Geometry is Curve).ToArray();
+      var ids=curves.Select(obj=>obj.Id).ToHashSet();
+      var preserve=new HashSet<Guid>();
+      foreach(var seam in vSeam.ExportAllowances(doc,curves))
+      {
+        preserve.UnionWith(seam.Outputs);
+        preserve.UnionWith(seam.SignedWidths.Keys);
+      }
+      if(trim!=NotchTrimMode.Split)
+        foreach(var obj in curves.Where(obj=>obj.Attributes.GetUserString(MatchingNotches.Prefix+"object_role")=="notch"))
+        {
+          var sources=NativeNotchReferences(obj.Attributes).Where(ids.Contains).ToArray();
+          preserve.Add(obj.Id);
+          preserve.UnionWith(sources);
+        }
+      return preserve;
+    }
+
+    private static Guid[] NativeNotchReferences(ObjectAttributes attributes)
+    {
+      var references=MatchingNotches.ReferenceIds(attributes);
+      if(references.Length==0 && Guid.TryParse(attributes.GetUserString(MatchingNotches.Prefix+"curve_id"),out var id))references=[id];
+      if(references.Length==0 && attributes.GetUserString(MatchingNotches.SourceCurveIdsKey) is {} savedIds)
+        try{references=System.Text.Json.JsonSerializer.Deserialize<Guid[]>(savedIds)??[];}catch(System.Text.Json.JsonException){}
+      return references;
+    }
+
+    private static void AddNativeEffectCandidates(RhinoDoc doc,XElement pattern,Guid[] sourceIds,Transform transform,
+      double scale,double tolerance,NotchTrimMode trim,CurveConversionSettings curves)
+    {
+      var objects=sourceIds.Select(doc.Objects.FindId).Where(obj=>obj is {IsDeleted:false,Geometry:Curve})
+        .Cast<RhinoObject>().DistinctBy(obj=>obj.Id).ToDictionary(obj=>obj.Id);
+      var effects=objects.Values.Where(obj=>vSeam.IsAttachedAllowance(obj) ||
+        obj.Attributes.GetUserString(MatchingNotches.Prefix+"object_role")=="notch").Select(obj=>obj.Id.ToString("N")).ToArray();
+      if(effects.Length>0)pattern.SetAttributeValue("effectOrigins",string.Join(";",effects));
+      var prepared=pattern.Elements().Where(entity=>Guid.TryParseExact((string?)entity.Attribute("origin"),"N",out _))
+        .ToLookup(entity=>Guid.ParseExact((string)entity.Attribute("origin")!,"N"));
+      var notchCandidates=new List<NativeNotchCandidate>();
+      if(trim!=NotchTrimMode.Split)
+        foreach(var group in objects.Values.Where(obj=>obj.Attributes.GetUserString(MatchingNotches.Prefix+"object_role")=="notch")
+          .GroupBy(obj=>obj.Attributes.GetUserString(MatchingNotches.Prefix+"component_set")??obj.Id.ToString("N")))
+        {
+          var parts=group.ToArray();
+          if(parts.All(obj=>prepared.Contains(obj.Id)) && ReadNativeNotchCandidate(doc,objects,parts,transform,scale,tolerance,trim) is {} notch)
+          {
+            CopyPreparedTool(notch.Effect,prepared[parts[0].Id].First());
+            notchCandidates.Add(notch);
+          }
+        }
+
+      foreach(var seam in vSeam.ExportAllowances(doc,objects.Values.ToArray()))
+      {
+        if(!seam.Outputs.All(prepared.Contains) || !seam.SignedWidths.Keys.All(prepared.Contains))continue;
+        var tools=seam.Outputs.SelectMany(id=>prepared[id]).Select(entity=>
+          ((string?)entity.Attribute("sourceLayer"),(string?)entity.Attribute("tool"),(string?)entity.Attribute("index"))).Distinct().ToArray();
+        if(tools.Length!=1)continue;
+        var allowanceTool=prepared[seam.Outputs[0]].First();
+        var notches=notchCandidates.Where(notch=>seam.SignedWidths.ContainsKey(notch.Source)).ToArray();
+        var baseSources=new Dictionary<Guid,XElement>();
+        foreach(var pair in seam.SignedWidths)
+        {
+          var source=EffectSource(pair.Key);
+          if(source==null)break;
+          if(pair.Value!=0)
+          {
+            var effect=new XElement("Seam",new XAttribute("Width",Number(pair.Value*scale)));
+            if(seam.Styles?.GetValueOrDefault(pair.Key) is {} authored)
+            {
+              effect.SetAttributeValue("StartStyle",authored.Start);
+              effect.SetAttributeValue("EndStyle",authored.End);
+            }
+            CopyPreparedTool(effect,allowanceTool);
+            source.Add(effect);
+          }
+          baseSources.Add(pair.Key,source);
+        }
+        if(baseSources.Count!=seam.SignedWidths.Count)continue;
+        var replaced=seam.Outputs.Concat(baseSources.Keys).ToArray();
+        if(notches.Length>0)
+        {
+          var combined=baseSources.ToDictionary(pair=>pair.Key,pair=>new XElement(pair.Value));
+          foreach(var notch in notches)combined[notch.Source].Add(new XElement(notch.Effect));
+          AddSet(replaced.Concat(notches.SelectMany(notch=>notch.Pieces)),combined.Values);
+        }
+        AddSet(replaced,baseSources.Values);
+      }
+      foreach(var group in notchCandidates.GroupBy(notch=>notch.Source))
+      {
+        var source=EffectSource(group.Key);
+        if(source==null)continue;
+        foreach(var notch in group)source.Add(new XElement(notch.Effect));
+        AddSet(group.SelectMany(notch=>notch.Pieces).Append(group.Key),[source]);
+      }
+
+      void AddSet(IEnumerable<Guid> replaced,IEnumerable<XElement> candidates)=>pattern.Add(new XElement("EffectSet",
+        new XAttribute("replace",string.Join(";",replaced.Distinct().Select(id=>id.ToString("N")))),
+        new XAttribute("tolerance",Number(tolerance)),candidates));
+
+      XElement? EffectSource(Guid id)
+      {
+        if(!prepared.Contains(id) || !objects.TryGetValue(id,out var obj) || obj.Geometry is not Curve original)return null;
+        var first=prepared[id].First();
+        // A single native source cannot represent pieces deliberately moved to different tool layers.
+        if(prepared[id].Any(piece=>(string?)piece.Attribute("sourceLayer")!=(string?)first.Attribute("sourceLayer")))return null;
+        using var geometry=original.DuplicateCurve();
+        if(!geometry.Transform(transform))return null;
+        var bounds=geometry.GetBoundingBox(true);
+        if(!bounds.IsValid || Math.Abs(bounds.Min.Z)>tolerance || Math.Abs(bounds.Max.Z)>tolerance)return null;
+        try
+        {
+          var entities=SerializeCurve(geometry,new Tool((string)first.Attribute("tool")!,int.Parse((string)first.Attribute("index")!,CultureInfo.InvariantCulture),
+            (string?)first.Attribute("sourceLayer")),tolerance,curves).ToArray();
+          if(entities.Length==0)return null;
+          if(first.Attribute("excludeFromPerimeter") is {} excluded)
+            foreach(var entity in entities)entity.SetAttributeValue(excluded.Name,excluded.Value);
+          return new XElement("Source",entities);
+        }
+        catch(InvalidOperationException){return null;}
+      }
+    }
+
+    private static void CopyPreparedTool(XElement target,XElement source)
+    {
+      foreach(string name in new[]{"tool","index","sourceLayer"})
+        target.SetAttributeValue(name,(string?)source.Attribute(name));
+    }
+
+    private static NativeNotchCandidate? ReadNativeNotchCandidate(RhinoDoc doc,IReadOnlyDictionary<Guid,RhinoObject> objects,
+      RhinoObject[] pieces,Transform transform,double scale,double tolerance,NotchTrimMode trim)
+    {
+      string prefix=MatchingNotches.Prefix;
+      var attributes=pieces[0].Attributes;
+      string? Meta(string name)=>attributes.GetUserString(prefix+name);
+      var type=MatchingNotches.CanonicalType(Meta("notch_type"));
+      string? style=MatchingNotches.ProfileType(type) switch {"I"=>"Slit","T"=>"T","V"=>"V","U"=>"Castle",_=>null};
+      if(style==null || (!MatchingNotches.TryPoint(doc,attributes,"curve_point",out var anchor) &&
+        !MatchingNotches.TryPoint(Meta("curve_point"),out anchor)) ||
+        !double.TryParse(Meta("notch_length"),NumberStyles.Float,CultureInfo.InvariantCulture,out double depth) ||
+        !double.IsFinite(depth) || depth<=0)return null;
+      double.TryParse(Meta("notch_width"),NumberStyles.Float,CultureInfo.InvariantCulture,out double width);
+      if(!double.IsFinite(width) || width<0 || style!="Slit" && width<=0)return null;
+      double.TryParse(Meta("notch_offset"),NumberStyles.Float,CultureInfo.InvariantCulture,out double offset);
+      if(offset>0 && style is "Slit" or "T")depth=Math.Min(depth,offset);
+      bool NearAnchor(RhinoObject obj,out double parameter)
+      {
+        parameter=0;
+        return obj.Geometry is Curve curve && curve.ClosestPoint(anchor,out parameter) &&
+          curve.PointAt(parameter).DistanceTo(anchor)*scale<=tolerance;
+      }
+      var references=NativeNotchReferences(attributes);
+      var sources=references.Distinct().Where(id=>objects.TryGetValue(id,out var obj) && NearAnchor(obj,out _)).Take(2).ToArray();
+      // A joined sew curve replaces the old IDs; a later move can also leave the legacy point behind.
+      if(sources.Length==0 && references.Length>0 && !references.Any(objects.ContainsKey))
+      {
+        var joined=objects.Values.Where(vSeam.IsJoinedAllowanceSource).ToArray();
+        double cosine=Math.Cos(ConfiguredApproximationAngle());
+        if(MatchingNotches.TryPoint(Meta("tangent_hint"),out var hint))
+        {
+          var direction=new Vector3d(hint.X,hint.Y,hint.Z);
+          if(direction.Unitize())
+            sources=joined.Where(obj=>NearAnchor(obj,out double parameter) &&
+              Math.Abs(((Curve)obj.Geometry).TangentAt(parameter)*direction)>=cosine).Select(obj=>obj.Id).Take(2).ToArray();
+        }
+        if(sources.Length==0 && style is "V" or "Castle" && pieces.Length==1 &&
+          pieces[0].Geometry is Curve stroke && stroke.TryGetPolyline(out var points) && points.Count>=3)
+        {
+          var chord=points[^1]-points[0];
+          var mouth=points[0]+chord*.5;
+          if(chord.Unitize())
+          {
+            var matches=new List<(Guid Id,Point3d Anchor)>();
+            foreach(var obj in joined)
+            {
+              var curve=(Curve)obj.Geometry;
+              if(!curve.ClosestPoint(mouth,out double t) || Math.Abs(curve.TangentAt(t)*chord)<cosine)continue;
+              var point=curve.PointAt(t);
+              if(Math.Abs(point.DistanceTo(mouth)-Math.Abs(offset))*scale<=tolerance)
+                matches.Add((obj.Id,point));
+            }
+            if(matches.Count==1){sources=[matches[0].Id];anchor=matches[0].Anchor;}
+          }
+        }
+      }
+      if(sources.Length!=1)return null;
+      anchor.Transform(transform);
+      var effect=new XElement("Notch",new XAttribute("Style",style),new XAttribute("Depth",Number(depth*scale)),new XAttribute("Width",Number(width*scale)),
+        new XAttribute("DistanceUnits",Meta("mode")=="percent"?"Fractional":"Native"),
+        new XAttribute("ExecutionStyle",trim==NotchTrimMode.Trim && style is "V" or "Castle"?"Inline":"Discrete"),
+        new XAttribute("Side",MatchingNotches.IsExternalType(type)?"External":"Internal"),
+        new XAttribute("pieces",string.Join(";",pieces.Select(obj=>obj.Id.ToString("N")))),P(anchor));
+      return new(sources[0],pieces.Select(obj=>obj.Id).ToArray(),effect);
+    }
+
     private static IEnumerable<XElement> SerializeCurve(Curve curve,Tool tool,double tolerance,CurveConversionSettings? curveSettings=null)
     {
       if(ZeroLengthCurve(curve))yield break;
@@ -2289,31 +3607,143 @@ namespace vTools.Commands
       }
       if(curve.TryGetPolyline(out var polyline))
       {yield return WithTool(new XElement("Polyline",new XAttribute("closed",curve.IsClosed?"true":"false"),polyline.Select(P)),tool);yield break;}
+      XElement BezierRequest(IEnumerable<Point3d> points,bool closed,double approximationError)
+      {
+        string mode=curveSettings.Mode;
+        if(mode is not ("NativeSpline" or "Bezier"))throw new InvalidOperationException("Choose NativeSpline or Bezier in vSettings / vExportPatternSmith / curve_mode.");
+        var request=WithTool(new XElement("BezierGroup",new XAttribute("closed",closed),
+          new XAttribute("tolerance",Number(tolerance-approximationError)),
+          approximationError>0?new XAttribute("approximationError",Number(approximationError)):null,points.Select(P)),tool);
+        ApplySplineConversion(request,mode=="NativeSpline",curveSettings.ThinError);
+        return request;
+      }
+
       if(curve is PolyCurve)
       {
         var segments=curve.DuplicateSegments();
-        try{foreach(var segment in segments)foreach(var entity in SerializeCurve(segment,tool,tolerance,curveSettings))yield return entity;}
+        try
+        {
+          double angle=ConfiguredApproximationAngle();
+          double cosine=Math.Cos(angle);
+          int start=0;
+          while(start<segments.Length)
+          {
+            int end=start+1;
+            while(end<segments.Length && CanKeepSmoothJunction(segments[end-1],segments[end],tolerance,cosine))end++;
+            if(end-start>1 && TryCombineSmoothControls(segments.AsSpan(start,end-start),tolerance,out var points,out var error))
+              yield return BezierRequest(points,curve.IsClosed&&start==0&&end==segments.Length&&
+                CanKeepSmoothJunction(segments[^1],segments[0],tolerance,cosine),error);
+            else
+              for(int i=start;i<end;i++)
+                foreach(var entity in SerializeCurve(segments[i],tool,tolerance,curveSettings))yield return entity;
+            start=end;
+          }
+        }
         finally{foreach(var segment in segments)segment.Dispose();}
         yield break;
       }
+
+      var (controls,fitError)=CubicControls(curve,tolerance);
+      yield return BezierRequest(controls,curve.IsClosed,fitError);
+    }
+
+    private static bool CanKeepSmoothJunction(Curve first,Curve second,double tolerance,double cosine) =>
+      !first.IsClosed && !second.IsClosed &&
+      first.PointAtEnd.DistanceTo(second.PointAtStart)<=tolerance/CubicFitToleranceDivisor &&
+      first.TangentAtEnd*second.TangentAtStart>=cosine;
+
+    private static bool TryCombineSmoothControls(ReadOnlySpan<Curve> segments,double tolerance,
+      out List<Point3d> points,out double error)
+    {
+      points=[];error=0;
+      try
+      {
+        foreach(var segment in segments)
+        {
+          var (controls,fit)=CubicControls(segment,tolerance);
+          if(points.Count==0)points.AddRange(controls);
+          else
+          {
+            fit+=points[^1].DistanceTo(controls[0]);
+            points.AddRange(controls.Skip(1));
+          }
+          error=Math.Max(error,fit);
+        }
+        return error<tolerance;
+      }
+      catch(InvalidOperationException){return false;}
+    }
+
+    private static (List<Point3d> Controls,double Error) CubicControls(Curve curve,double tolerance)
+    {
       using(var nurbs=curve.ToNurbsCurve())
       {
         if(nurbs!=null&&!nurbs.IsRational&&nurbs.Degree<=3&&(nurbs.Degree==3||nurbs.IncreaseDegree(3))&&
           nurbs.MakePiecewiseBezier(false)&&nurbs.Points.Count>=4&&(nurbs.Points.Count-1)%3==0)
         {
-          string mode=curveSettings.Mode;
-          if(mode is not ("NativeSpline" or "Bezier"))throw new InvalidOperationException("Choose NativeSpline or Bezier in vSettings / vExportPatternSmith / curve_mode.");
-          yield return WithTool(new XElement("BezierGroup",new XAttribute("nativeSpline",mode=="NativeSpline"?"true":"false"),
-            new XAttribute("closed",curve.IsClosed?"true":"false"),new XAttribute("tolerance",Number(tolerance)),new XAttribute("thinError",Number(curveSettings.ThinError)),nurbs.Points.Select(point=>P(point.Location))),tool);yield break;
+          return (nurbs.Points.Select(point=>point.Location).ToList(),0);
         }
       }
-      using var approximation=curve.ToPolyline(tolerance,Config(nameof(ApproximationAngleRadians),ApproximationAngleRadians),0,0);
-      if(approximation==null||!approximation.TryGetPolyline(out polyline))
-        throw new InvalidOperationException("Could not approximate a prepared curve at the document tolerance.");
-      yield return WithTool(new XElement("Polyline",new XAttribute("closed",curve.IsClosed?"true":"false"),polyline.Select(P)),tool);
+      return FitCubicControls(curve,tolerance);
+    }
+
+    private static double ConfiguredApproximationAngle()
+    {
+      double angle=Config(nameof(ApproximationAngleRadians),ApproximationAngleRadians);
+      return double.IsFinite(angle)&&angle>0?angle:ApproximationAngleRadians;
+    }
+
+    private static (List<Point3d> Controls,double Error) FitCubicControls(Curve curve,double tolerance)
+    {
+      var failure=new InvalidOperationException("Could not fit a smooth "+curve.GetType().Name+" within the document tolerance.");
+      double fit=Math.Max(RhinoMath.SqrtEpsilon,tolerance/CubicFitToleranceDivisor);
+      if(fit*2>=tolerance)throw failure;
+      var segments=BezierCurve.CreateCubicBeziers(curve,fit,ConfiguredApproximationAngle());
+      if(segments==null||segments.Length==0)throw failure;
+      var points=new List<Point3d>();
+      double adjustment=0;
+      try
+      {
+        foreach(var segment in segments)
+        {
+          if(segment==null||segment.ControlVertexCount!=4)throw failure;
+          var start=segment.GetControlVertex3d(0);
+          if(!start.IsValid)throw failure;
+          if(points.Count==0)points.Add(start);
+          else adjustment=Math.Max(adjustment,start.DistanceTo(points[^1]));
+          for(int index=1;index<4;index++)
+          {
+            var point=segment.GetControlVertex3d(index);
+            if(!point.IsValid)throw failure;
+            points.Add(point);
+          }
+        }
+      }
+      finally{foreach(var segment in segments)segment?.Dispose();}
+      var end=curve.IsClosed?curve.PointAtStart:curve.PointAtEnd;
+      adjustment=Math.Max(adjustment,Math.Max(points[0].DistanceTo(curve.PointAtStart),points[^1].DistanceTo(end)));
+      if(adjustment>fit)throw failure;
+      points[0]=curve.PointAtStart;points[^1]=end;
+      // Align seams exactly. A Bezier moves by at most the largest displacement of its controls.
+      return (points,fit+adjustment);
+    }
+
+    private static void ApplySplineConversion(XElement curve,bool native,double thinError)
+    {
+      curve.SetAttributeValue("nativeSpline",native);
+      curve.SetAttributeValue("thinError",Number(Math.Max(0,thinError-((double?)curve.Attribute("approximationError")??0))));
+    }
+
+    private static string ConfiguredTableLabelFont()
+    {
+      string family=Config(nameof(TableLabelFontFamily),TableLabelFontFamily).Trim();
+      return family.Length==0?TableLabelFontFamily:family;
     }
 
     private static XElement SerializeText(RhinoDoc doc,TextEntity text,Transform transform,Tool tool,double tolerance)
+      =>SerializeTextCore(doc,text,transform,tool,tolerance,null);
+
+    private static XElement SerializeTextCore(RhinoDoc doc,TextEntity text,Transform transform,Tool tool,double tolerance,string? fontFamily)
     {
       double displayHeight=text.TextHeight*AnnotationTextTransform.ResolveDisplayDimensionScale(doc,text,doc.Views.ActiveView?.ActiveViewport);
       Point3d center=text.Plane.Origin;
@@ -2333,10 +3763,12 @@ namespace vTools.Commands
         Math.Abs(x*y)>textTolerance*x.Length*y.Length)
         throw new InvalidOperationException("Nonuniformly scaled or skewed text cannot be exported as native PatternSmith text.");
       bool mirrorY=Vector3d.CrossProduct(x,y).Z<0;
-      string content=text.PlainText.ToUpperInvariant().Replace('\u201c','"').Replace('\u201d','"');
-      return WithTool(new XElement("Text",new XAttribute("x",Number(center.X)),new XAttribute("y",Number(center.Y)),
+      string content=fontFamily==null?text.PlainText.ToUpperInvariant().Replace('\u201c','"').Replace('\u201d','"'):text.PlainText;
+      var entity=new XElement("Text",new XAttribute("x",Number(center.X)),new XAttribute("y",Number(center.Y)),
         new XAttribute("rotation",Number(Math.Atan2(x.Y,x.X))),new XAttribute("height",Number(displayHeight*x.Length)),
-        new XAttribute("characterRotation","0"),new XAttribute("mirrorY",mirrorY?"true":"false"),content),tool);
+        new XAttribute("characterRotation","0"),new XAttribute("mirrorY",mirrorY?"true":"false"),content);
+      if(fontFamily!=null)entity.SetAttributeValue("fontFamily",fontFamily);
+      return WithTool(entity,tool);
     }
 
     private static Tool ResolveTool(RhinoDoc doc,ObjectAttributes attributes,Color color)
@@ -2374,11 +3806,14 @@ namespace vTools.Commands
       return attributes.LayerIndex>=0&&attributes.LayerIndex<doc.Layers.Count?doc.Layers[attributes.LayerIndex].Color:attributes.ObjectColor;
     }
     private static XElement P(Point3d point)=>new("P",new XAttribute("x",Number(point.X)),new XAttribute("y",Number(point.Y)));
+    private static void SetToolAttributes(XElement entity,string process,int index)
+    {entity.SetAttributeValue("tool",process);entity.SetAttributeValue("index",index);}
     private static XElement WithTool(XElement entity,Tool tool)
-    {entity.SetAttributeValue("tool",tool.Process);entity.SetAttributeValue("index",tool.Index);if(tool.SourceLayer!=null)entity.SetAttributeValue("sourceLayer",tool.SourceLayer);return entity;}
+    {SetToolAttributes(entity,tool.Process,tool.Index);if(tool.SourceLayer!=null)entity.SetAttributeValue("sourceLayer",tool.SourceLayer);return entity;}
     private static void ValidateToolMappings(XElement root)
     {
-      foreach(var entity in root.Elements("Table").Elements("Pattern").Elements())
+      foreach(var entity in root.Elements("Table").Elements("Pattern").Descendants().Where(entity=>entity.Parent?.Name=="Pattern"
+        && entity.Name!="EffectSet" || entity.Attribute("tool")!=null))
         if(!ToolProcesses.Contains((string?)entity.Attribute("tool"),StringComparer.Ordinal)||!int.TryParse((string?)entity.Attribute("index"),out int index)||index<0||index>MaximumToolIndex)
           throw new InvalidOperationException("Choose a PatternSmith tool for layer '"+((string?)entity.Attribute("sourceLayer")??"unknown")+"'.");
     }
@@ -2418,22 +3853,28 @@ namespace vTools.Commands
       private readonly IReadOnlyDictionary<string,string> _customIds;
       private readonly PreparationControls _preparation;
       internal PreparationConfiguration Preparation=>_preparation.Values;
-      private sealed class LayerToolMapping(string layer,XElement[] entities,ToolPicker picker)
+      private sealed class LayerToolMapping(string layer,XElement[] entities,ToolPicker picker,Eto.Forms.Control label)
       {
         internal readonly string Layer=layer;
         internal readonly XElement[] Entities=entities;
         internal readonly ToolPicker Picker=picker;
+        internal readonly Eto.Forms.TableLayout View=LayerMapRow(label,picker.Choice,picker.Details);
+        internal readonly Dictionary<string,string?> CutterSelections=new(StringComparer.OrdinalIgnoreCase);
         internal ConfiguredTool? Selected=>Picker.Selected;
       }
       private readonly List<LayerToolMapping> _tools=[];
-      private readonly Dictionary<LayerToolMapping,Eto.Forms.Control> _toolLayers=[];
-      private LayerToolMapping[] _visibleTools=[];
       private readonly Dictionary<int,Eto.Drawing.Bitmap> _swatches=[];
-      private readonly Eto.Forms.TableLayout _toolGrid=new(){Spacing=new Eto.Drawing.Size(MappingSpacing,MappingSpacing)};
       private readonly ToolConfiguration _configuredTools;
+      private ConfiguredCutter? _activeCutter;
+      private IReadOnlyList<ConfiguredTool> ActiveTools=>_activeCutter?.Tools??_configuredTools.Tools;
+      private readonly Eto.Forms.DropDown _cutterPicker=new(){ToolTip="Show tools compatible with this configured cutter. This does not change PatternSmith's selected machine."};
+      private readonly Eto.Forms.Label _emptyLayerMap=new(){Text="No layers to map."};
+      private Eto.Forms.Control? _layerMapHeader;
       private readonly Eto.Forms.TabControl _mappingTabs=new();
       private readonly Eto.Forms.ComboBox _outputPath=new(){ReadOnly=false,AutoComplete=false,ToolTip="Destination .project file. Enter a filename, choose a successful recent export, or browse; source geometry is unchanged."};
       private readonly Eto.Forms.Button _browse=new(){Text="Browse..."};
+      private readonly Eto.Forms.DropDown _targetVersion=new(){DataStore=new[]{"PatternSmith 10","PatternSmith 11"},
+        ToolTip="Match editable table label sizes to the version you will use to edit the project."};
       private readonly Eto.Forms.Label _catalogSource=new();
       private readonly Eto.Forms.Button _reconnect=new(){Text="Reconnect",ToolTip="Reload the PatternSmith material library without closing this window. Failed connections leave existing choices unchanged."};
       private readonly System.Diagnostics.Stopwatch _catalogRetryClock=System.Diagnostics.Stopwatch.StartNew();
@@ -2441,9 +3882,10 @@ namespace vTools.Commands
       private CancellationTokenSource? _catalogCancel;
       private bool _catalogManualReconnect,_catalogReconnectNeeded;
       internal string OutputPath=>NormalizeProjectPath(_outputPath.Text);
+      private PatternSmithTargetVersion TargetVersion=>_targetVersion.SelectedIndex==0?PatternSmithTargetVersion.PatternSmith10:PatternSmithTargetVersion.PatternSmith11;
       private readonly Eto.Forms.DropDown _curves=new(){DataStore=new[]{"NativeSpline","Bezier"}};
       private readonly Eto.Forms.NumericStepper _curveError=new(){MinValue=0,MaxValue=double.MaxValue,DecimalPlaces=CurveErrorDecimalPlaces,Increment=CurveErrorIncrementInches,Width=MappingWidthColumnWidth,
-        ToolTip="PatternSmith Thin maximum error in inches. Zero disables thinning; exact Bezier output is not thinned."};
+        ToolTip="PatternSmith Thin maximum error in inches. Zero disables thinning; Bezier output is not thinned."};
       private readonly Eto.Forms.Label _status=new();
       private readonly Eto.Forms.ProgressBar _progress=new(){MinValue=0,MaxValue=100};
       private readonly Eto.Forms.Button _export=new(){Text="Export"},_cancel=new(){Text="Cancel"};
@@ -2510,8 +3952,10 @@ namespace vTools.Commands
         _timing.Observe(percent,stage,_exportClock.Elapsed.TotalSeconds);
         SetStatusMessage(stage+Environment.NewLine+"Elapsed "+Duration(_exportClock.Elapsed)+" | Remaining "+_timing.Remaining(_exportClock.Elapsed.TotalSeconds));
       }
-      internal ExportMappingDialog(XElement request,CatalogResult catalog,IReadOnlyDictionary<string,string>? customIds=null,string? outputPath=null,ToolConfiguration? configuredTools=null,RhinoDoc? doc=null)
+      private readonly bool _clipboard;
+      internal ExportMappingDialog(XElement request,CatalogResult catalog,IReadOnlyDictionary<string,string>? customIds=null,string? outputPath=null,ToolConfiguration? configuredTools=null,RhinoDoc? doc=null,bool clipboard=false)
       {
+        _clipboard=clipboard;
         _request=request;_catalog=catalog;_document=doc;_catalogReconnectNeeded=!catalog.Identity.StartsWith("server:",StringComparison.Ordinal);
         _persistentConversionCache=Config(nameof(CacheSplineConversions),CacheSplineConversions);
         _conversionCacheRoot=_persistentConversionCache
@@ -2520,7 +3964,9 @@ namespace vTools.Commands
         _preparation=new(doc,_curves,_curveError);
         _catalogSource.Text="Materials: "+catalog.Source;_reconnect.Click+=(_,_)=>ReconnectCatalog();
         _configuredTools=configuredTools??ReadConfiguredTools();
+        _activeCutter=SelectedCutter(_configuredTools);
         _saved=ToolsOptionStore.Read("vExportPatternSmith",section=>ToolsOptionStore.Clone(section) as JsonObject??new());
+        _targetVersion.SelectedIndex=(int)ReadTargetVersion(_saved);
         _highlightFindings.Checked=ToolsOptionStore.TryGetBool(_saved,"highlight_findings",out bool showFindings)?showFindings:Config(nameof(DefaultHighlightFindings),DefaultHighlightFindings);
         _outputPath.DataStore=RecentOutputPaths(_saved);
         _outputPath.Text=outputPath??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),DefaultFileStem+".project");
@@ -2529,7 +3975,8 @@ namespace vTools.Commands
           catalog.ReservedIds.Concat(catalog.Materials.Select(material=>material.Id)),new Dictionary<string,string>(StringComparer.OrdinalIgnoreCase));
         _customColors=ToolsOptionStore.Clone(_saved["custom_colors"]) as JsonObject??new();
         var globalMaterials=MaterialLibrary.LoadMaterialPresets().ToDictionary(material=>material.Name,StringComparer.OrdinalIgnoreCase);
-        Title="PatternSmith Export";Padding=MappingSpacing;Resizable=true;
+        Title=clipboard?"Copy to PatternSmith":"PatternSmith Export";Padding=MappingSpacing;Resizable=true;
+        if(clipboard)_export.Text="Copy";
         ClientSize=new Eto.Drawing.Size(Math.Max(400,Config(nameof(MappingDialogWidth),MappingDialogWidth)),Math.Max(280,Config(nameof(MappingDialogHeight),MappingDialogHeight)));
         _curves.SelectedIndex=ReadCurveMode()=="Bezier"?1:0;
         _curveError.Value=ReadCurveError();_curveError.Enabled=_curves.SelectedIndex==0;_curves.SelectedIndexChanged+=(_,_)=>_curveError.Enabled=_curves.SelectedIndex==0;
@@ -2541,10 +3988,8 @@ namespace vTools.Commands
         foreach(var group in AssignedMaterialTables(request).GroupBy(table=>(string)table.Attribute("material")!,StringComparer.OrdinalIgnoreCase))
         {
           string name=group.Key;
-          var saved=(_saved["materials"] as JsonObject)?.FirstOrDefault(pair=>pair.Key.Equals(name,StringComparison.OrdinalIgnoreCase)).Value;
           var presetLink=globalMaterials.GetValueOrDefault(name)?.PatternSmith;
-          var baseline=MaterialLibrary.ReadPatternSmith((_saved["material_baselines"] as JsonObject)?.FirstOrDefault(pair=>pair.Key.Equals(name,StringComparison.OrdinalIgnoreCase)).Value);
-          if(presetLink!=null&&presetLink!=baseline)saved=MaterialLibrary.PatternSmithJson(presetLink);
+          var saved=InitialMaterialPreference(_saved,name,presetLink);
           _materialBaselines[name]=MaterialLibrary.PatternSmithJson(presetLink);
           _selectionPreferences[name]=ToolsOptionStore.Clone(saved);
           var matched=MatchMaterial(name,saved,catalog);
@@ -2571,39 +4016,20 @@ namespace vTools.Commands
           new Eto.Forms.TableRow(new Eto.Forms.TableCell(_materialSummary,true)),
           new Eto.Forms.TableRow(new Eto.Forms.TableCell(_materialSearch,true)),
           new Eto.Forms.TableRow(new Eto.Forms.TableCell(_catalogTree,true)){ScaleHeight=true}}};
-        var tools=new Eto.Forms.StackLayout {Spacing=MappingSpacing,Padding=MappingSpacing,HorizontalContentAlignment=Eto.Forms.HorizontalAlignment.Stretch,
-          Items={new Eto.Forms.Label {Text=_configuredTools.Warning.Length>0?_configuredTools.Warning:"PS tools"+(_configuredTools.Plotter.Length>0?" / "+_configuredTools.Plotter:"")},_toolGrid}};
-        foreach(var group in request.Elements("Table").Elements("Pattern").Elements().Where(entity=>entity.Attribute("sourceLayer")!=null).GroupBy(entity=>(string)entity.Attribute("sourceLayer")!,StringComparer.OrdinalIgnoreCase))
+        foreach(var group in MappedLayerGroups(request))
         {
-          var saved=(_saved["layers"] as JsonObject)?[group.Key] as JsonObject;
-          string process=saved?["process"]?.GetValue<string>()??(string)group.First().Attribute("tool")!;
-          int index=saved?["index"]?.GetValue<int>()??(int)group.First().Attribute("index")!;
-          string savedId=saved?["tool_id"]?.GetValue<string>()??"";
-          if(savedId.Length>0&&_configuredTools.Tools.Count>0)
-          {
-            var linked=_configuredTools.Tools.FirstOrDefault(tool=>tool.Id.Equals(savedId,StringComparison.OrdinalIgnoreCase));
-            process=linked?.Process??"Unmapped";index=linked?.Index??PrimaryToolIndex;
-          }
-          IReadOnlyList<ConfiguredTool> available=_configuredTools.Tools;
-          if(available.Count==0)
-          {
-            var defaults=ToolProcesses.Select(role=>new ConfiguredTool("",ToolProcessName(role),role,PrimaryToolIndex)).ToList();
-            if(ToolProcesses.Contains(process,StringComparer.Ordinal)&&index>PrimaryToolIndex&&index<=MaximumToolIndex)
-              defaults.Add(new("",ToolProcessName(process)+" "+(index+1).ToString(CultureInfo.InvariantCulture),process,index));
-            available=defaults;
-          }
-          var picker=new ToolPicker(available,available.FirstOrDefault(tool=>tool.Process==process&&tool.Index==index),Swatch);
+          var (available,selected)=LayerChoices(group.Key,group.First());
+          var picker=new ToolPicker(available,selected,Swatch);
           var color=uint.TryParse((string?)group.First().Attribute("layerColor"),NumberStyles.HexNumber,CultureInfo.InvariantCulture,out var argb)?Eto.Drawing.Color.FromArgb(unchecked((int)argb)):Eto.Drawing.Colors.Gray;
           var layerImage=Swatch(color);
           var layer=new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Horizontal,Spacing=MappingSpacing/2,Width=MappingNameColumnWidth,Items={new Eto.Forms.ImageView {Image=layerImage},new Eto.Forms.Label {Text=group.Key,ToolTip=group.Key,Wrap=Eto.Forms.WrapMode.Word,Width=Math.Max(1,MappingNameColumnWidth-layerImage.Width-MappingSpacing/2)}}};
-          var row=new LayerToolMapping(group.Key,group.ToArray(),picker);
-          _toolLayers.Add(row,layer);_tools.Add(row);
+          _tools.Add(new LayerToolMapping(group.Key,group.ToArray(),picker,layer));
         }
-        _preparation.RemoveGrainChanged+=(_,_)=>UpdateToolAvailability();UpdateToolAvailability();
         var tabs=_mappingTabs;
         tabs.Pages.Add(new Eto.Forms.TabPage {Text="Materials map",Content=materials});
-        tabs.Pages.Add(new Eto.Forms.TabPage {Text="Layers map",Content=new Eto.Forms.Scrollable {Content=tools}});
+        tabs.Pages.Add(new Eto.Forms.TabPage {Text="Layers map",Content=CreateLayerMapView()});
         tabs.Pages.Add(new Eto.Forms.TabPage {Text="Preparation",Content=_preparation});
+        _preparation.RemoveGrainChanged+=(_,_)=>UpdateToolAvailability();UpdateToolAvailability();
         _status.Wrap=Eto.Forms.WrapMode.Word;SetStatusMessage(_stage);
         _status.Load+=(_,_)=>{if(_status.ControlObject is System.Windows.FrameworkElement native)native.MinHeight=Math.Max(1,Config(nameof(ProgressStatusHeight),ProgressStatusHeight));};
         _progressTimer.Interval=Math.Max(1,Config(nameof(ProgressTickMilliseconds),ProgressTickMilliseconds))/1000d;
@@ -2625,10 +4051,17 @@ namespace vTools.Commands
         _conversionTimer.Interval=Math.Max(1,Config(nameof(ProgressTickMilliseconds),ProgressTickMilliseconds))/1000d;
         _conversionTimer.Elapsed+=(_,_)=>{CheckCatalogReconnect();CheckConversion();};
         Shown+=(_,_)=>{_conversionTimer.Start();if(PrepareConversion!=null)Eto.Forms.Application.Instance.AsyncInvoke(()=>CheckConversion(true));};
-        ExecuteState=busy=>{foreach(var page in tabs.Pages)page.Content.Enabled=!busy;_outputPath.Enabled=_browse.Enabled=_findings.Enabled=!busy;_reconnect.Enabled=!busy&&_catalogTask==null;_curves.Enabled=!busy;_curveError.Enabled=!busy&&_curves.SelectedIndex==0;_export.Enabled=!busy;_cancel.Enabled=true;UpdateToolAvailability();};
+        ExecuteState=busy=>{foreach(var page in tabs.Pages)page.Content.Enabled=!busy;_outputPath.Enabled=_browse.Enabled=_targetVersion.Enabled=_findings.Enabled=!busy;_reconnect.Enabled=!busy&&_catalogTask==null;_curves.Enabled=!busy;_curveError.Enabled=!busy&&_curves.SelectedIndex==0;_export.Enabled=!busy;_cancel.Enabled=true;UpdateToolAvailability();};
         Content=new Eto.Forms.TableLayout {Spacing=new Eto.Drawing.Size(MappingSpacing,MappingSpacing),Rows={
-          new Eto.Forms.TableRow(new Eto.Forms.TableLayout {Spacing=new Eto.Drawing.Size(MappingSpacing,MappingSpacing),Rows={new Eto.Forms.TableRow(new Eto.Forms.Label {Text="File"},new Eto.Forms.TableCell(_outputPath,true),_browse)}}),
-          new Eto.Forms.TableRow(new Eto.Forms.TableLayout {Spacing=new Eto.Drawing.Size(MappingSpacing,0),Rows={new Eto.Forms.TableRow(new Eto.Forms.TableCell(_catalogSource,true),_reconnect)}}),
+          new Eto.Forms.TableRow(clipboard
+            ?new Eto.Forms.TableLayout {Spacing=new Eto.Drawing.Size(MappingSpacing,0),Rows={new Eto.Forms.TableRow(new Eto.Forms.TableCell(_catalogSource,true),_reconnect)}}
+            :new Eto.Forms.TableLayout {Spacing=new Eto.Drawing.Size(MappingSpacing,MappingSpacing),Rows={
+              new Eto.Forms.TableRow(new Eto.Forms.Label {Text="File",VerticalAlignment=Eto.Forms.VerticalAlignment.Center},
+                new Eto.Forms.TableCell(new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Horizontal,Spacing=MappingSpacing,VerticalContentAlignment=Eto.Forms.VerticalAlignment.Center,
+                  Items={new Eto.Forms.StackLayoutItem(_outputPath,true),_browse}},true)),
+              new Eto.Forms.TableRow(new Eto.Forms.Label {Text="Export to",VerticalAlignment=Eto.Forms.VerticalAlignment.Center},
+                new Eto.Forms.TableCell(new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Horizontal,Spacing=MappingSpacing,VerticalContentAlignment=Eto.Forms.VerticalAlignment.Center,
+                  Items={_targetVersion,new Eto.Forms.StackLayoutItem(_catalogSource,true),_reconnect}},true))}}),
           new Eto.Forms.TableRow(new Eto.Forms.TableCell(tabs,true)){ScaleHeight=true},
           new Eto.Forms.TableRow(_progress),
           new Eto.Forms.TableRow(new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Horizontal,Spacing=MappingSpacing,VerticalContentAlignment=Eto.Forms.VerticalAlignment.Center,
@@ -2666,8 +4099,9 @@ namespace vTools.Commands
       }
       private string MappingFingerprint()=>System.Text.Json.JsonSerializer.Serialize(new
       {
+        target=TargetVersion,
         materials=_materials.Select(row=>new {row.Name,row.CustomId,row.NeedsReview,catalogId=row.Material?.Id,catalogName=row.Material?.Name,settings=row.Material?.Settings.ToString(SaveOptions.DisableFormatting)}),
-        tools=_tools.Select(row=>new {row.Layer,process=row.Selected?.Process,index=row.Selected?.Index}),colors=_customColors.ToJsonString()
+        cutter=_activeCutter?.Id,tools=_tools.Where(ToolIsRequired).Select(row=>new {row.Layer,process=row.Selected?.Process,index=row.Selected?.Index}),colors=_customColors.ToJsonString()
       });
       private void StartNativeProject(XDocument request,Action<XDocument,string,CancellationToken,Action<int,string>>? build=null)
       {
@@ -2675,7 +4109,7 @@ namespace vTools.Commands
         _nativeMappingFingerprint=MappingFingerprint();_nativePending=false;
         string directory=Path.Combine(Path.GetTempPath(),RuntimeFolderName,BuilderFolderName);Directory.CreateDirectory(directory);
         var copy=new XDocument(request);copy.Root!.SetAttributeValue("prepareSplinesOnly",null);
-        var job=new NativeProjectJob(copy.ToString(SaveOptions.DisableFormatting),Path.Combine(directory,Guid.NewGuid().ToString("N")+".project"),new CancellationTokenSource());
+        var job=new NativeProjectJob(copy.ToString(SaveOptions.DisableFormatting),Path.Combine(directory,Guid.NewGuid().ToString("N")+(_clipboard?".xml":".project")),new CancellationTokenSource());
         _nativeJob=job;_conversionClock.Start();_conversionStage="Preparing native project";_conversionPercent=70;
         void Progress(int percent,string stage)=>Eto.Forms.Application.Instance.AsyncInvoke(()=>
         {
@@ -2698,7 +4132,7 @@ namespace vTools.Commands
         try
         {
           job.Work.GetAwaiter().GetResult();_nativeProject=job.Path;_nativeProjectFingerprint=job.Fingerprint;
-          _conversionStage="Export ready";_conversionPercent=100;_conversionClock.Stop();
+          _conversionStage=_clipboard?"Ready to copy":"Export ready";_conversionPercent=100;_conversionClock.Stop();
         }
         catch{DeleteNativeProject(job.Path);throw;}
         finally{job.Cancellation.Dispose();}
@@ -2831,8 +4265,7 @@ namespace vTools.Commands
       internal void ApplyConversionSettings(XElement root)
       {
         root.SetAttributeValue("splineCacheDirectory",_conversionCacheRoot);
-        foreach(var curve in root.Descendants("BezierGroup"))
-        {curve.SetAttributeValue("nativeSpline",_curves.SelectedIndex==0);curve.SetAttributeValue("thinError",Number(_curveError.Value));}
+        foreach(var curve in root.Descendants("BezierGroup"))ApplySplineConversion(curve,_curves.SelectedIndex==0,_curveError.Value);
       }
       private void StopConversion()
       {
@@ -2933,7 +4366,7 @@ namespace vTools.Commands
         },TaskScheduler.Default);
       }
       private Action<bool>? ExecuteState;
-      private static CatalogMaterial? MatchMaterial(string name,JsonNode? saved,CatalogResult catalog)
+      internal static CatalogMaterial? MatchMaterial(string name,JsonNode? saved,CatalogResult catalog)
       {
         if(saved is JsonObject mapping&&PatternSmithCatalog.SameIdentity(mapping["catalog"]?.GetValue<string>()??"",catalog.Identity))
           return catalog.Materials.FirstOrDefault(item=>item.Id==mapping["id"]?.GetValue<string>()&&item.Name==mapping["name"]?.GetValue<string>()&&
@@ -2943,7 +4376,7 @@ namespace vTools.Commands
         var preferred=exact.Where(item=>PreferredGroup(item.Group)).ToArray();if(preferred.Length==1)exact=preferred;
         return exact.Length==1?exact[0]:null;
       }
-      private static bool MaterialNeedsReview(string name,JsonNode? saved,CatalogMaterial? matched,CatalogResult catalog)
+      internal static bool MaterialNeedsReview(string name,JsonNode? saved,CatalogMaterial? matched,CatalogResult catalog)
       {
         if(matched!=null||saved==null||saved is JsonValue value&&value.TryGetValue<string>(out var text)&&text.Length==0)return false;
         if(!catalog.Available||saved is not JsonObject mapping||mapping["id"] is not JsonValue idValue||
@@ -3023,18 +4456,84 @@ namespace vTools.Commands
       {int key=color.ToArgb();if(!_swatches.TryGetValue(key,out var image))_swatches[key]=image=LayerSelector.CreateColorSwatch(color);return image;}
       private bool ToolIsRequired(LayerToolMapping row)=>
         !Preparation.Export.RemoveGrain||!row.Entities.All(entity=>(bool?)entity.Attribute("grainOnly")==true);
+      private (IReadOnlyList<ConfiguredTool> Tools,ConfiguredTool? Selected) LayerChoices(string layer,XElement entity)=>
+        LayerChoices(_saved,_configuredTools,ActiveTools,layer,entity);
+      internal static (IReadOnlyList<ConfiguredTool> Tools,ConfiguredTool? Selected) LayerChoices(JsonObject mappings,
+        ToolConfiguration configured,IReadOnlyList<ConfiguredTool> available,string layer,XElement entity)
+      {
+        var saved=(mappings["layers"] as JsonObject)?[layer] as JsonObject;
+        string process=saved?["process"]?.GetValue<string>()??(string)entity.Attribute("tool")!;
+        int index=saved?["index"]?.GetValue<int>()??(int)entity.Attribute("index")!;
+        string? id=saved?["tool_id"]?.GetValue<string>();
+        if(configured.Tools.Count==0)
+        {
+          var defaults=ToolProcesses.Select(role=>new ConfiguredTool("",ToolProcessName(role),role,PrimaryToolIndex)).ToList();
+          if(ToolProcesses.Contains(process,StringComparer.Ordinal)&&index>PrimaryToolIndex&&index<=MaximumToolIndex)
+            defaults.Add(new("",ToolProcessName(process)+" "+(index+1).ToString(CultureInfo.InvariantCulture),process,index));
+          available=defaults;
+        }
+        else if(!string.IsNullOrEmpty(id))
+          return (available,available.FirstOrDefault(tool=>tool.Id.Equals(id,StringComparison.OrdinalIgnoreCase)));
+        return (available,available.FirstOrDefault(tool=>tool.Process==process&&tool.Index==index));
+      }
+      private void SelectCutter()
+      {
+        int index=_cutterPicker.SelectedIndex;
+        if(_busy||index<0||index>=_configuredTools.Cutters.Count)return;
+        var cutter=_configuredTools.Cutters[index];var previous=_activeCutter;
+        if(cutter==previous)return;
+        _activeCutter=cutter;
+        foreach(var row in _tools)
+        {
+          var current=row.Selected;
+          if(previous!=null)row.CutterSelections[previous.Id]=current?.Key;
+          var (available,initial)=LayerChoices(row.Layer,row.Entities[0]);
+          var selected=row.CutterSelections.TryGetValue(cutter.Id,out var saved)
+            ?available.FirstOrDefault(tool=>tool.Key==saved)
+            :current!=null?available.FirstOrDefault(tool=>tool.Key==current.Key):initial;
+          row.Picker.SetTools(available,selected,Swatch);
+        }
+        UpdateToolAvailability();
+      }
+      private static Eto.Forms.TableLayout LayerMapRow(Eto.Forms.Control layer,Eto.Forms.Control picker,Eto.Forms.Control? details=null)=>
+        new() {Spacing=new Eto.Drawing.Size(MappingSpacing,0),Padding=new Eto.Drawing.Padding(0,0,0,MappingSpacing),
+          Rows={new Eto.Forms.TableRow(layer,picker,new Eto.Forms.TableCell(details,true))}};
+      private Eto.Forms.Control CreateLayerMapView()
+      {
+        var rows=new Eto.Forms.StackLayout {HorizontalContentAlignment=Eto.Forms.HorizontalAlignment.Stretch};
+        _layerMapHeader=LayerMapRow(new Eto.Forms.Label {Text="Rhino layer",Width=MappingNameColumnWidth},
+          new Eto.Forms.Label {Text="PatternSmith tool",Width=Config(nameof(MappingNameColumnWidth),MappingNameColumnWidth)});
+        rows.Items.Add(_layerMapHeader);
+        foreach(var row in _tools.OrderBy(row=>row.Layer,StringComparer.CurrentCultureIgnoreCase))rows.Items.Add(row.View);
+        rows.Items.Add(_emptyLayerMap);
+        var content=new Eto.Forms.StackLayout {Spacing=MappingSpacing,Padding=MappingSpacing,
+          HorizontalContentAlignment=Eto.Forms.HorizontalAlignment.Stretch};
+        if(_configuredTools.Warning.Length>0)content.Items.Add(new Eto.Forms.Label {Text=_configuredTools.Warning,Wrap=Eto.Forms.WrapMode.Word});
+        if(_configuredTools.Cutters.Count>1)
+        {
+          _cutterPicker.DataStore=_configuredTools.Cutters.Select(cutter=>cutter.Name).ToArray();
+          _cutterPicker.SelectedIndex=Array.FindIndex(_configuredTools.Cutters.ToArray(),cutter=>cutter==_activeCutter);
+          _cutterPicker.SelectedIndexChanged+=(_,_)=>SelectCutter();
+          content.Items.Add(new Eto.Forms.StackLayout {Orientation=Eto.Forms.Orientation.Horizontal,Spacing=MappingSpacing,
+            VerticalContentAlignment=Eto.Forms.VerticalAlignment.Center,Items={new Eto.Forms.Label {Text="Cutter"},_cutterPicker}});
+        }
+        else if(_configuredTools.Plotter.Length>0)content.Items.Add(new Eto.Forms.Label {Text="Cutter: "+_configuredTools.Plotter});
+        content.Items.Add(rows);
+        Log.Write(nameof(vExportPatternSmith),"layer map rows={0} active={1}",_tools.Count,_tools.Count(ToolIsRequired));
+        return new Eto.Forms.Scrollable {Content=content,ExpandContentWidth=true};
+      }
       private void UpdateToolAvailability()
       {
-        var visible=_tools.Where(ToolIsRequired).ToArray();
-        if(_toolGrid.Rows.Count==0||!_visibleTools.SequenceEqual(visible))
-        {
-          _toolGrid.Rows.Clear();
-          _toolGrid.Rows.Add(new Eto.Forms.TableRow(new Eto.Forms.Label {Text="Rhino layer"},new Eto.Forms.Label {Text="PatternSmith tool"},null,new Eto.Forms.TableCell(null,true)));
-          foreach(var row in visible)_toolGrid.Rows.Add(new Eto.Forms.TableRow(_toolLayers[row],row.Picker.Choice,row.Picker.Details,new Eto.Forms.TableCell(null,true)));
-          _visibleTools=visible;
-        }
+        bool any=false;
+        // Collapse the whole row without reparenting its native picker.
         foreach(var row in _tools)
-        row.Picker.Choice.Enabled=!_busy&&ToolIsRequired(row);
+        {
+          bool required=ToolIsRequired(row);
+          row.Picker.Choice.Enabled=!_busy&&required;
+          row.View.Visible=required;any|=required;
+        }
+        if(_layerMapHeader!=null)_layerMapHeader.Visible=any;
+        _emptyLayerMap.Visible=!any;_cutterPicker.Enabled=!_busy;
       }
       private static void UpdateMappingValues(MaterialMappingRow row)
       {
@@ -3148,8 +4647,11 @@ namespace vTools.Commands
       {
         if(_busy)return;
         _conversionOwnsStatus=false;
-        try{_outputPath.Text=OutputPath;}catch(Exception ex) when(ex is IOException or ArgumentException or InvalidOperationException or NotSupportedException)
-        {ShowExportBlock(ex.Message);if(Visible)_outputPath.Focus();return;}
+        if(!_clipboard)
+        {
+          try{_outputPath.Text=OutputPath;}catch(Exception ex) when(ex is IOException or ArgumentException or InvalidOperationException or NotSupportedException)
+          {ShowExportBlock(ex.Message);if(Visible)_outputPath.Focus();return;}
+        }
         if(_materials.FirstOrDefault(row=>row.NeedsReview) is {} review)
         {
           _mappingTabs.SelectedIndex=0;_materialGrid.SelectedRow=_materials.IndexOf(review);CurrentMaterialChanged();
@@ -3167,24 +4669,19 @@ namespace vTools.Commands
         {
           CatalogMaterial? material=row.Material;
           materialIds[row.Name]=material==null?JsonValue.Create(""):new JsonObject { ["id"]=material.Id,["name"]=material.Name,["group"]=material.Group,["catalog"]=_catalog.Identity };
-          foreach(var table in row.Tables)
-          {
-            table.SetAttributeValue("materialId",material?.Id??row.CustomId);
-            table.SetAttributeValue("material",material?.Name??row.Name);
-            if(material==null){ApplyCustomColor(table,row.Name);continue;}
-            foreach(var attribute in material.Settings.Attributes())table.SetAttributeValue(attribute.Name,attribute.Value);
-          }
+          foreach(var table in row.Tables)ApplyMaterialMapping(table,row);
         }
         foreach(var row in _tools.Where(ToolIsRequired))
         {
           var selected=row.Selected!;string process=selected.Process;int index=selected.Index;
           layers[row.Layer]=new JsonObject { ["process"]=process,["index"]=index };
-          if(_configuredTools.Tools.FirstOrDefault(tool=>tool.Process==process&&tool.Index==index) is {} configured)
-          {((JsonObject)layers[row.Layer]!)["tool_id"]=configured.Id;((JsonObject)layers[row.Layer]!)["tool_name"]=configured.Name;}
-          foreach(var entity in row.Entities){entity.SetAttributeValue("tool",process);entity.SetAttributeValue("index",index);}
+          if(selected.Id.Length>0)
+          {((JsonObject)layers[row.Layer]!)["tool_id"]=selected.Id;((JsonObject)layers[row.Layer]!)["tool_name"]=selected.Name;}
+          foreach(var entity in row.Entities)SetToolAttributes(entity,process,index);
         }
         string mode=_curves.SelectedIndex==1?"Bezier":"NativeSpline";
-        foreach(var curve in _request.Descendants("BezierGroup")){curve.SetAttributeValue("nativeSpline",mode=="NativeSpline"?"true":"false");curve.SetAttributeValue("thinError",Number(_curveError.Value));}
+        ApplyTargetVersion(_request);
+        foreach(var curve in _request.Descendants("BezierGroup"))ApplySplineConversion(curve,mode=="NativeSpline",_curveError.Value);
         if(!ToolsOptionStore.Update("vExportPatternSmith",section=>
         {
           if(section["materials"] is not JsonObject savedMaterials)section["materials"]=savedMaterials=new();
@@ -3197,6 +4694,7 @@ namespace vTools.Commands
           foreach(var pair in _customColors)colors[pair.Key]=ToolsOptionStore.Clone(pair.Value);
           section["curve_mode"]=mode;
           section["curve_error"]=_curveError.Value;
+          if(!_clipboard)section[TargetVersionKey]=TargetVersion.ToString();
           section["highlight_findings"]=_highlightFindings.Checked==true;
           _preparation.Save(section);
         })){ShowExportBlock("Could not save mappings: "+ToolsOptionStore.LastError);return;}
@@ -3207,7 +4705,7 @@ namespace vTools.Commands
         {
           ReportProgress(0,"Preparing export");
           WaitForConversion();
-          if(ExecuteExport(this)==Rhino.Commands.Result.Success){_busy=false;ReportProgress(100,"Export complete");Close(true);}
+          if(ExecuteExport(this)==Rhino.Commands.Result.Success){_busy=false;ReportProgress(100,_clipboard?"Copied":"Export complete");Close(true);}
           else ReportProgress(0,"Export cancelled; no destination was replaced");
         }
         catch(OperationCanceledException){ReportProgress(0,"Export cancelled; no destination was replaced");}
@@ -3221,26 +4719,27 @@ namespace vTools.Commands
           string name=(string)table.Attribute("material")!;
           var row=_materials.SingleOrDefault(item=>item.Name.Equals(name,StringComparison.OrdinalIgnoreCase))
             ??throw new InvalidOperationException("Review the material mapping for '"+name+"'.");
-          table.SetAttributeValue("materialId",row.Material?.Id??row.CustomId);table.SetAttributeValue("material",row.Material?.Name??row.Name);
-          if(row.Material is {} material)foreach(var attribute in material.Settings.Attributes())table.SetAttributeValue(attribute.Name,attribute.Value);
-          else ApplyCustomColor(table,row.Name);
+          ApplyMaterialMapping(table,row);
         }
-        foreach(var group in root.Elements("Table").Elements("Pattern").Elements().Where(entity=>entity.Attribute("sourceLayer")!=null).GroupBy(entity=>(string)entity.Attribute("sourceLayer")!,StringComparer.OrdinalIgnoreCase))
-        {
-          var mapping=_tools.FirstOrDefault(tool=>tool.Layer.Equals(group.Key,StringComparison.OrdinalIgnoreCase));
-          Tool tool;
-          if(mapping?.Selected is {} selected)tool=new(selected.Process,selected.Index);
-          else if(group.Key.Equals(Preparation.Export.NotchSplitLayer,StringComparison.OrdinalIgnoreCase))
-          {tool=DefaultToolForLayer(group.Key.Split(new[]{"::"},StringSplitOptions.None).Last(),Color.Black);if(tool.Process=="Unmapped")tool=new("Reference",PrimaryToolIndex);}
-          else throw new InvalidOperationException("Choose a PatternSmith tool for layer '"+group.Key+"'.");
-          foreach(var entity in group){entity.SetAttributeValue("tool",tool.Process);entity.SetAttributeValue("index",tool.Index);}
-        }
+        ApplyLayerTools(root,Preparation.Export.NotchSplitLayer,(layer,_)=>_tools.FirstOrDefault(tool=>tool.Layer.Equals(layer,StringComparison.OrdinalIgnoreCase))?.Selected);
         ApplyConversionSettings(root);
+        ApplyTargetVersion(root);
         root.Element("PreviewTools")?.Remove();
-        root.Add(new XElement("PreviewTools",_configuredTools.Tools.Where(tool=>tool.Color.HasValue).Select(tool=>
+        root.Add(new XElement("PreviewTools",ActiveTools.Where(tool=>tool.Color.HasValue).Select(tool=>
           new XElement("Tool",new XAttribute("process",tool.Process),new XAttribute("index",tool.Index),
             new XAttribute("color","#"+unchecked((uint)tool.Color!.Value.ToArgb()).ToString("X8",CultureInfo.InvariantCulture))))));
       }
+      private void ApplyTargetVersion(XElement root)=>
+        ApplyOutputFormat(root,_clipboard,TargetVersion==PatternSmithTargetVersion.PatternSmith10);
+
+      private void ApplyMaterialMapping(XElement table,MaterialMappingRow row)
+      {
+        if(row.Material is {} material){ApplyCatalogMaterial(table,material,_clipboard);return;}
+        table.SetAttributeValue("materialId",row.CustomId);table.SetAttributeValue("material",row.Name);
+        if(_clipboard)table.SetAttributeValue("clipboardCatalogId",null);
+        ApplyCustomColor(table,row.Name);
+      }
+
       internal vCleanup.ExportCleanupAction? ReviewFindings(int overlaps,int shortFindings,string? deletionNotice)
       {
         if(overlaps<=0&&shortFindings<=0)return vCleanup.ExportCleanupAction.Ignore;
@@ -3349,6 +4848,13 @@ namespace vTools.Commands
       }
     }
 
+    private static PatternSmithTargetVersion ReadTargetVersion(JsonObject? section)
+    {
+      if(ToolsOptionStore.TryGetString(section,TargetVersionKey,out var name)&&
+        Enum.TryParse<PatternSmithTargetVersion>(name,true,out var saved)&&Enum.IsDefined(saved))return saved;
+      var fallback=Config(nameof(LegacyTableLabelFontSizing),LegacyTableLabelFontSizing)?PatternSmithTargetVersion.PatternSmith10:DefaultTargetVersion;
+      return Config(nameof(DefaultTargetVersion),fallback);
+    }
     private static string ReadCurveMode()=>ToolsOptionStore.Read("vExportPatternSmith",section=>ToolsOptionStore.TryGetString(section,"curve_mode",out var value)?value:Config(nameof(DefaultCurveMode),DefaultCurveMode));
     private static double ReadCurveError()=>ToolsOptionStore.Read("vExportPatternSmith",section=>ToolsOptionStore.TryGetDouble(section,"curve_error",out double value)&&double.IsFinite(value)&&value>=0?value:Math.Max(0,Config(nameof(DefaultCurveErrorInches),DefaultCurveErrorInches)));
 
@@ -3443,11 +4949,31 @@ public sealed partial class vExportPatternSmith
         if(background)Eto.Forms.Application.Instance.AsyncInvoke(()=>{if(!cancellationToken.IsCancellationRequested)Rhino.RhinoApp.WriteLine(message);});
         else Rhino.RhinoApp.WriteLine(message);
       }
+      int flatEffectPatterns=output.Split('\n').Count(line=>line.StartsWith("NATIVE EFFECT FALLBACK|",StringComparison.Ordinal));
+      if(flatEffectPatterns>0)
+      {
+        string message="vExportPatternSmith: kept prepared seam or notch curves in "+CountText.Format(flatEffectPatterns,"pattern")+
+          " because the editable effects could not reproduce the export geometry.";
+        if(background)Eto.Forms.Application.Instance.AsyncInvoke(()=>{if(!cancellationToken.IsCancellationRequested)Rhino.RhinoApp.WriteLine(message);});
+        else Rhino.RhinoApp.WriteLine(message);
+      }
+      const string openCutPrefix="OPEN CUT PATH|";
+      var openOutlines=output.Split('\n').Where(line=>line.StartsWith(openCutPrefix,StringComparison.Ordinal))
+        .Select(line=>line[openCutPrefix.Length..].TrimEnd('\r')).ToArray();
+      if(openOutlines.Length>0)
+      {
+        string message="vExportPatternSmith: open cut paths exported with nesting disabled: "+string.Join(", ",openOutlines)+".";
+        if(background)Eto.Forms.Application.Instance.AsyncInvoke(()=>{if(!cancellationToken.IsCancellationRequested)Rhino.RhinoApp.WriteLine(message);});
+        else Rhino.RhinoApp.WriteLine(message);
+      }
       if (!string.IsNullOrWhiteSpace(error)) Log.Write(nameof(vExportPatternSmith), "native builder diagnostics: {0}", error.Trim());
       if (process.ExitCode != 0)
         throw new InvalidOperationException("PatternSmith project building failed: " + (string.IsNullOrWhiteSpace(error) ? output.Trim() : error.Trim()));
       if(prepareOnly){report?.Invoke(100,"Curves ready");return;}
       report?.Invoke(98,"Verifying exported project");if(!background)Rhino.RhinoApp.Wait();cancellationToken.ThrowIfCancellationRequested();
+      if((bool?)request.Root.Attribute("clipboardPatterns")==true)
+        PatternSmithClipboard.ReadPreparedPayload(nativeOutput);
+      else
       using (var archive = System.IO.Compression.ZipFile.OpenRead(nativeOutput))
       {
         var entry = archive.GetEntry("project.xml") ?? throw new System.IO.InvalidDataException("The generated project has no project.xml.");
@@ -3512,7 +5038,7 @@ public sealed partial class vExportPatternSmith
     return output.ToString();
   }
 
-  private static string FindPatternSmithLibrary()
+  internal static string FindPatternSmithLibrary()
   {
     var roots = new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) }
       .Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(StringComparer.OrdinalIgnoreCase);
@@ -3543,6 +5069,15 @@ public sealed partial class vExportPatternSmith
 
 namespace vTools.Commands
 {
+  internal static class PatternSmithPartContract
+  {
+    internal const string StateMember="VToolsPartState"; // Opaque JSON data-contract extension on a native Pattern, preserved on save.
+    internal const string ConstraintNamespace="http://autometrix.com/xml/nesting"; // Native namespace of the companion constraint record.
+    internal const string CollectionNamespace="http://schemas.datacontract.org/2004/07/System.Collections.ObjectModel"; // WPF clipboard read-only collection wrappers.
+    internal const string MaterialEnforcedKey="PatternSmith.materialEnforced"; // true preserves native Strict material, false preserves Loose for assigned standalone parts.
+    internal const double FreeRotationStep=0.001; // Native rotation step in radians used by PatternSmith to represent unrestricted rotation.
+  }
+
   internal static class PatternSmithMaterialIdentity
   {
     // Project-only IDs, separate from the friendly material name.

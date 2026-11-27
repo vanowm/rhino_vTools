@@ -7,14 +7,10 @@ namespace vTools;
 internal static class EmbeddedDependencies
 {
   // Bundled dependency identities; fixed build resources, not user-configurable settings.
-  private const string PackingName = "RectpackSharp"; // Exact assembly simple name of the bundled rectangle packer.
-  private const string PackingResource = "vTools.Dependencies.RectpackSharp.dll"; // Manifest resource containing the bundled packer.
   private const string PolygonName = "Clipper2Lib"; // Exact assembly simple name of the bundled polygon engine.
   private const string PolygonResource = "vTools.Dependencies.Clipper2Lib.dll"; // Manifest resource containing the bundled polygon engine.
   private static readonly object Sync = new();
 
-  internal static void EnsureAll() { EnsurePacking(); EnsurePolygons(); }
-  internal static void EnsurePacking() => Ensure(PackingName, PackingResource);
   internal static void EnsurePolygons() => Ensure(PolygonName, PolygonResource);
 
   private static void Ensure(string name, string resourceName)

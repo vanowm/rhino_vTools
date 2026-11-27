@@ -25,7 +25,7 @@ namespace vTools.Commands
   public sealed partial class vShade : vToolsCommand
   {
     // Option defaults and customizable output settings
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultOffset", "Bisector length in model units; zero or greater.", OptionKeys = "offset")] private const double DefaultOffset = 4.0; // Bisector length in model units; zero or greater.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultOffset", "Signed bisector offset in model units: positive inward, negative outward, zero at the corner.", OptionKeys = "offset")] private const double DefaultOffset = 4.0; // Positive inward, negative outward, zero at the corner; model units.
 
     private static readonly double ConfiguredDefaultOffset = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultOffset", DefaultOffset); // Resolved once from advanced defaults; restart Rhino after changes.
     [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultChamfer", "Perpendicular chamfer width in model units; zero or greater.", OptionKeys = "chamfer")] private const double DefaultChamfer = 1.0; // Perpendicular chamfer width in model units; zero or greater.
@@ -63,6 +63,7 @@ namespace vTools.Commands
     private const string ReinforcementPartObjectName = "ShadeReinforcementPart"; // Object name for detached finished-size reinforcement cutting outlines.
     private const string ReinforcementPartLabelName = "ShadeReinforcementPartLabel"; // Object name for detached copies of corner-identifying labels.
     private const string ReinforcementPartGroupPrefix = "vShade_Reinf_"; // Separate output group prefix followed by session and corner identifiers.
+    private const int ReinforcementPoseSamples = 16; // Evenly spaced closed-outline sample count used to recover rigid placement; at least three.
     [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.TunePickRadiusPixels", "Maximum screen-space distance in pixels for picking a connector or corner.")] private const double TunePickRadiusPixels = 14.0; // Maximum screen-space distance in pixels for picking a connector or corner.
 
     private static readonly double ConfiguredTunePickRadiusPixels = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.TunePickRadiusPixels", TunePickRadiusPixels); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -107,59 +108,27 @@ namespace vTools.Commands
     private const string MetadataPrefix = "vShade."; // Prefix for user-string keys written to every vShade output object.
     private const string MetadataVersion = "1"; // Serialized vShade metadata schema version.
     private const string SessionStateSection = "vShade.sessions"; // Document-string section containing resumable shade snapshots keyed by session GUID.
+    private const string ReinforcementPoseKey = MetadataPrefix + "reinforcement_pose"; // JSON model-coordinate samples of the generated reinforcement outline before placement.
     private const string ShadeGroupPrefix = "vShade_"; // Prefix for the output group name; the session GUID follows it.
     private const int OutputDrawOrderStep = 1; // Positive draw-order increment placing new shade output above existing document objects; never changes geometry or Z.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultSplitWidth", "Material width in model units; must exceed twice the 0.5-unit joint overlap.", OptionKeys = "splitWidth")] private const double DefaultSplitWidth = 63.0; // Material width in model units; must exceed twice the 0.5-unit joint overlap.
+    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.DefaultSplitWidth", "Initial material width in model units for the shared part-split workflow; must exceed the total cut overlap.", OptionKeys = "splitWidth")] private const double DefaultSplitWidth = 63.0; // Initial shared split width in model units, greater than the total cut overlap.
 
     private static readonly double ConfiguredDefaultSplitWidth = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultSplitWidth", DefaultSplitWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-    private const double SplitJointOverlap = 0.5; // Total overlap across each split in model units; each part extends 0.25 past the seam.
-    private const double SplitLayoutGap = 1.0; // Empty model-unit spacing between laid-out copies.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitAngleStepDegrees", "Angular sampling interval in degrees for initial material-length search.")] private const double SplitAngleStepDegrees = 5.0; // Angular sampling interval in degrees for initial material-length search.
-
-    private static readonly double ConfiguredSplitAngleStepDegrees = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitAngleStepDegrees", SplitAngleStepDegrees); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitBoundarySamples", "Boundary samples for inexpensive initial layout scoring; positive integer.")] private const int SplitBoundarySamples = 256; // Boundary samples for inexpensive initial layout scoring; positive integer.
-
-    private static readonly int ConfiguredSplitBoundarySamples = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitBoundarySamples", SplitBoundarySamples); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.WholeFitRefinementPasses", "Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.")] private const int WholeFitRefinementPasses = 16; // Angle step halvings around the narrowest whole-shade fit; positive integer, without introducing cut allowance.
-
-    private static readonly int ConfiguredWholeFitRefinementPasses = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.WholeFitRefinementPasses", WholeFitRefinementPasses); // Resolved once from advanced defaults; restart Rhino after changes.
-    private const int SplitMaxParts = 16; // Maximum number of panel parts proposed automatically; positive integer.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamRefinementSteps", "Candidate positions evaluated per seam on each optimization pass; positive integer.")] private const int SplitSeamRefinementSteps = 16; // Candidate positions evaluated per seam on each optimization pass; positive integer.
-
-    private static readonly int ConfiguredSplitSeamRefinementSteps = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitSeamRefinementSteps", SplitSeamRefinementSteps); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamRefinementPasses", "Coordinate-descent passes over all proposed seams; positive integer.")] private const int SplitSeamRefinementPasses = 3; // Coordinate-descent passes over all proposed seams; positive integer.
-
-    private static readonly int ConfiguredSplitSeamRefinementPasses = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitSeamRefinementPasses", SplitSeamRefinementPasses); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitDragRefreshMilliseconds", "Minimum interval in milliseconds between expensive Boolean preview rebuilds while dragging.")] private const int SplitDragRefreshMilliseconds = 90; // Minimum interval in milliseconds between expensive Boolean preview rebuilds while dragging.
-
-    private static readonly int ConfiguredSplitDragRefreshMilliseconds = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitDragRefreshMilliseconds", SplitDragRefreshMilliseconds); // Resolved once from advanced defaults; restart Rhino after changes.
-    private const bool AllowSplitDragObjectSnaps = true; // true uses Rhino object snaps and their cursor cues while pivoting cuts; false uses free cursor points.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitPreviewAlpha", "Alpha channel from 0 (invisible) to 255 (opaque) for destination-colored preview strokes.")] private const int SplitPreviewAlpha = 200; // Alpha channel from 0 (invisible) to 255 (opaque) for destination-colored preview strokes.
-
-    private static readonly int ConfiguredSplitPreviewAlpha = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitPreviewAlpha", SplitPreviewAlpha); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitGhostTransparency", "Panel-preview transparency from 0 (opaque) to 1 (invisible).")] private const double SplitGhostTransparency = 0.4; // Panel-preview transparency from 0 (opaque) to 1 (invisible).
-
-    private static readonly double ConfiguredSplitGhostTransparency = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitGhostTransparency", SplitGhostTransparency); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitSeamColor", "RGB preview color for movable source-shade seam lines.", "#FFFFA500")] private static readonly Color SplitSeamColor = global::vTools.CommandDefaults.GetColor("vShade", "vTools.Commands.vShade.SplitSeamColor", Color.Orange); // RGB preview color for movable source-shade seam lines.
-    private const string SplitPartObjectName = "ShadeSplitPart"; // Name of laid-out, clipped panel curves.
-    private const string SplitSeamObjectName = "ShadeSplitCut"; // Name of Reference-layer seam lines on the source shade.
-    private const string SplitOverlapLayerName = "PLOT"; // Existing or new Rhino layer for part-to-part overlap marks and digits.
-    private static readonly Color DefaultSplitPlotColor = new Layer().Color; // Rhino's default new-layer RGB color when PLOT does not yet exist.
-    private const string SplitOverlapLineObjectName = "ShadeOverlapLine"; // Name of each part's line marking the adjacent part's overlapping edge.
-    private const string SplitOverlapLabelObjectName = "ShadeOverlapLabel"; // Name of each digit identifying the adjacent split part.
-    private const double SplitOverlapLabelHeight = 0.4; // Common seam digit height in model units; fits within the 0.5-unit overlap.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitOverlapLabelMargin", "Minimum model-unit clearance from cut and plot edges around a seam digit.")] private const double SplitOverlapLabelMargin = 0.04; // Minimum model-unit clearance from cut and plot edges around a seam digit.
-
-    private static readonly double ConfiguredSplitOverlapLabelMargin = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitOverlapLabelMargin", SplitOverlapLabelMargin); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitLabelGlyphScale", "Positive glyph-outline scale; 1 preserves the label's fixed text height.")] private const double SplitLabelGlyphScale = 1.0; // Positive glyph-outline scale; 1 preserves the label's fixed text height.
-
-    private static readonly double ConfiguredSplitLabelGlyphScale = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitLabelGlyphScale", SplitLabelGlyphScale); // Resolved once from advanced defaults; restart Rhino after changes.
-    private const double SplitLabelGlyphSpacing = 0.0; // Additional model-unit glyph spacing; zero preserves native kerning.
-    [global::vTools.CommandDefault("vShade", "vTools.Commands.vShade.SplitCoincidentBoundaryToleranceMultiplier", "Model-tolerance multiplier for omitting boundary detail exactly coincident with the cut outline.")] private const double SplitCoincidentBoundaryToleranceMultiplier = 2.0; // Model-tolerance multiplier for omitting boundary detail exactly coincident with the cut outline.
-
-    private static readonly double ConfiguredSplitCoincidentBoundaryToleranceMultiplier = global::vTools.CommandDefaults.Get("vShade", "vTools.Commands.vShade.SplitCoincidentBoundaryToleranceMultiplier", SplitCoincidentBoundaryToleranceMultiplier); // Resolved once from advanced defaults; restart Rhino after changes.
+    [CommandDefault("vShade", "vTools.Commands.vShade.DefaultSplitSeamType", "Regular overlaps by twice Seam; Overlap overlaps by Seam and puts each sew line at the opposite cut edge.", OptionKeys = "splitSeamType")]
+    private const PartSplitWorkflow.SeamType DefaultSplitSeamType = PartSplitWorkflow.SeamType.Overlap; // Regular or Overlap; independent of vPartSplit.
+    private static readonly PartSplitWorkflow.SeamType ConfiguredDefaultSplitSeamType = CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultSplitSeamType", DefaultSplitSeamType); // Initial shade seam type until saved.
+    [CommandChoicesAttribute("vShade", "splitSeamType", false, "Regular", "Overlap")]
+    private const string SplitSeamTypeKey = "splitSeamType"; // Stored seam-type name for shade splits.
+    [CommandDefault("vShade", "vTools.Commands.vShade.DefaultShadeMaterial", "vNest material preset for the main shade. Split pieces inherit it. Choose None to leave new shades unassigned.", OptionKeys = ShadeMaterialKey)]
+    private const string DefaultShadeMaterial = "Paper"; // Name of an existing vNest material preset; blank leaves the part unassigned.
+    private static readonly string ConfiguredDefaultShadeMaterial = CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultShadeMaterial", DefaultShadeMaterial); // Fallback when no shade material preference is saved.
+    [CommandDefault("vShade", "vTools.Commands.vShade.DefaultReinforcementMaterial", "vNest material preset for detached reinforcement parts. Choose None to leave new reinforcements unassigned.", OptionKeys = ReinforcementMaterialKey)]
+    private const string DefaultReinforcementMaterial = "Pink"; // Name of an existing vNest material preset; blank leaves the part unassigned.
+    private static readonly string ConfiguredDefaultReinforcementMaterial = CommandDefaults.Get("vShade", "vTools.Commands.vShade.DefaultReinforcementMaterial", DefaultReinforcementMaterial); // Fallback when no reinforcement material preference is saved.
 
     private const string OptionsSectionName = "vShade";
+    internal const string ShadeMaterialKey = "shadeMaterial"; // Saved name of the vNest preset for the main shade.
+    internal const string ReinforcementMaterialKey = "reinforcementMaterial"; // Saved name of the vNest preset for detached reinforcements.
     private const string OffsetKey = "offset";
     private const string ChamferKey = "chamfer";
     private const string LegacyLengthKey = "length";
@@ -196,6 +165,9 @@ namespace vTools.Commands
     private static bool _join = ConfiguredDefaultJoin;
     private static string _layer = ConfiguredDefaultLayer;
     private static double _splitWidth = ConfiguredDefaultSplitWidth;
+    private static PartSplitWorkflow.SeamType _splitSeamType = ConfiguredDefaultSplitSeamType;
+    private static MaterialLibrary.MaterialPreset? _shadeMaterial;
+    private static MaterialLibrary.MaterialPreset? _reinforcementMaterial;
     private static ScallopSize _tuneScallopSize = new(ConfiguredDefaultScallopSize, ConfiguredDefaultScallopPercent); // Per-command click-to-apply scallop bulge; zero selects a line.
 
     private sealed record CurvePick(
@@ -213,7 +185,24 @@ namespace vTools.Commands
       Line? OffsetLine,
       Line? PerpendicularLine,
       Point3d FirstCapEnd,
-      Point3d SecondCapEnd);
+      Point3d SecondCapEnd)
+    {
+      internal double SignedOffset => Vector3d.Multiply(OffsetEnd - Corner, InteriorDirection);
+
+      internal ShadeGeometry WithOffset(double offset)
+      {
+        var end = Corner + InteriorDirection * offset;
+        var shift = end - OffsetEnd;
+        return this with
+        {
+          OffsetEnd = end,
+          OffsetLine = offset != 0.0 ? new Line(Corner, end) : null,
+          PerpendicularLine = PerpendicularLine is { } cap ? new Line(cap.From + shift, cap.To + shift) : null,
+          FirstCapEnd = PerpendicularLine.HasValue ? FirstCapEnd + shift : Point3d.Unset,
+          SecondCapEnd = PerpendicularLine.HasValue ? SecondCapEnd + shift : Point3d.Unset
+        };
+      }
+    }
 
     private readonly record struct ShadeOptionState(
       OptionDouble Offset,
@@ -259,6 +248,13 @@ namespace vTools.Commands
 
     private sealed record ShadeConnectionGeometry(ShadeConnection Connection, Curve Curve);
 
+    private sealed class ShadeSources : IDisposable
+    {
+      internal Dictionary<Guid, Curve> Curves { get; } = [];
+      internal List<Curve> Owned { get; } = [];
+      public void Dispose() { foreach (var curve in Owned) curve.Dispose(); }
+    }
+
     private readonly record struct ScallopSize(double Value, bool Percent);
 
     private sealed class ShadeSnapshot
@@ -267,6 +263,7 @@ namespace vTools.Commands
 
       public List<PlacementSnapshot> Placements { get; set; } = [];
       public List<ScallopSnapshot> Scallops { get; set; } = [];
+      public List<Guid>? OutputIds { get; set; }
       public bool Scallop { get; set; }
       public bool UseCurve { get; set; } = ConfiguredDefaultUseCurve;
       public string LabelPrefix { get; set; } = ConfiguredDefaultLabelPrefix;
@@ -360,7 +357,8 @@ namespace vTools.Commands
       var outputIds = new List<Guid>();
       var scallopSizes = new Dictionary<(int From, int To), ScallopSize>();
       var labelValue = doc.Strings.GetValue(OptionsSectionName, LabelKey) ?? ConfiguredDefaultLabel;
-      var selectedShadeIds = doc.Objects.GetSelectedObjects(false, false)
+      var selectedObjects = doc.Objects.GetSelectedObjects(false, false).ToArray();
+      var selectedShadeIds = selectedObjects
         .Select(obj => obj.Attributes.GetUserString(MetadataPrefix + "session"))
         .Where(value => Guid.TryParse(value, out _))
         .Distinct()
@@ -379,8 +377,13 @@ namespace vTools.Commands
           RhinoApp.WriteLine("vShade: the selected shade has no valid resumable state.");
           return Result.Failure;
         }
+        if (!selectedObjects.Any(obj => outputIds.Contains(obj.Id)))
+        {
+          RhinoApp.WriteLine("vShade: select the original shade, not a copy, to continue it.");
+          return Result.Failure;
+        }
         var last = placements[^1];
-        _offset = last.Geometry.OffsetLine?.Length ?? 0.0;
+        _offset = last.Geometry.SignedOffset;
         _chamfer = last.Geometry.PerpendicularLine?.Length ?? 0.0;
         _reinforcement = last.Reinforcement;
         _connect = last.Connect;
@@ -465,7 +468,7 @@ namespace vTools.Commands
           RebuildOutputs(
             doc,
             sessionId,
-            placements.Take(historyPosition).ToList(),
+            placements,
             scallopSizes,
             outputIds,
             out chainCount,
@@ -488,7 +491,7 @@ namespace vTools.Commands
           {
             var obj = doc.Objects.FindId(id);
             if (obj == null ||
-                obj.Attributes.GetUserString(MetadataPrefix + "role") is "bisector" or "cut" or "reinforcement_part" ||
+                obj.Attributes.GetUserString(MetadataPrefix + "role") is "bisector" or "cut" or "reinforcement_part" or "reinforcement_part_label" ||
                 obj.Attributes.LayerIndex == layerIndex)
               continue;
 
@@ -503,7 +506,7 @@ namespace vTools.Commands
           for (var index = 0; index < placements.Count; index++)
             placements[index] = placements[index] with { OutputLayerIndex = layerIndex };
           if (historyPosition > 0)
-            SaveShadeState(doc, sessionId, placements.Take(historyPosition).ToList(), scallopSizes);
+            SaveShadeState(doc, sessionId, placements.Take(historyPosition).ToList(), scallopSizes, outputIds);
           for (var index = 0; index < history.Count; index++)
             history[index] = history[index] with
             {
@@ -543,7 +546,7 @@ namespace vTools.Commands
       var splitCompleted = false;
       bool SplitShade()
       {
-        splitCompleted = RunSplit(doc, mode, sessionId, outputIds, undoRecords.BeginSplit);
+        splitCompleted = RunSplit(doc, outputIds, undoRecords.BeginSplit);
         return splitCompleted;
       }
 
@@ -688,6 +691,8 @@ namespace vTools.Commands
             continue;
           }
           historyPosition = placements.Count;
+          placement = placements[existingCornerIndex >= 0 ? existingCornerIndex : historyPosition - 1];
+          geometry = placement.Geometry;
           if (existingCornerIndex < 0)
           {
             labelValue = placement.NextLabel;
@@ -846,8 +851,8 @@ namespace vTools.Commands
         if (getResult == GetResult.Number)
         {
           var offset = getter.Number();
-          if (!double.IsFinite(offset) || offset < 0.0)
-            RhinoApp.WriteLine("vShade: Offset must be a non-negative number.");
+          if (!double.IsFinite(offset))
+            RhinoApp.WriteLine("vShade: Offset must be a finite number.");
           else
           {
             _offset = offset;
@@ -993,7 +998,7 @@ namespace vTools.Commands
         return false;
       }
 
-      var offsetLine = _offset > 0.0
+      var offsetLine = _offset != 0.0
         ? new Line(corner, offsetEnd)
         : (Line?)null;
       var halfChamfer = _chamfer * 0.5;
@@ -1007,14 +1012,10 @@ namespace vTools.Commands
       var secondCapEnd = Point3d.Unset;
       if (perpendicularLine is { } cap)
       {
-        var from2d = ProjectPoint(cplane, cap.From, out _);
-        var to2d = ProjectPoint(cplane, cap.To, out _);
-        var fromOffset = new Vector2d(from2d.X - corner2d.X, from2d.Y - corner2d.Y);
-        var toOffset = new Vector2d(to2d.X - corner2d.X, to2d.Y - corner2d.Y);
-        var fromDistance = Math.Abs(Cross(d1, fromOffset));
-        var toDistance = Math.Abs(Cross(d1, toOffset));
-        firstCapEnd = fromDistance <= toDistance ? cap.From : cap.To;
-        secondCapEnd = fromDistance <= toDistance ? cap.To : cap.From;
+        // Keep the same source side at each cap end when the offset crosses the corner.
+        bool firstIsFrom = Vector2d.Multiply(d1, new Vector2d(-bisector2d.Y, bisector2d.X)) <= 0.0;
+        firstCapEnd = firstIsFrom ? cap.From : cap.To;
+        secondCapEnd = firstIsFrom ? cap.To : cap.From;
       }
 
       geometry = new ShadeGeometry(
@@ -1069,7 +1070,7 @@ namespace vTools.Commands
     private static bool RebuildOutputs(
       RhinoDoc doc,
       Guid sessionId,
-      IReadOnlyList<ShadePlacement> placements,
+      List<ShadePlacement> inputPlacements,
       IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes,
       List<Guid> existingOutputIds,
       out int chainCount,
@@ -1081,19 +1082,15 @@ namespace vTools.Commands
       var connectionGeometry = new List<ShadeConnectionGeometry>();
       var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
-      var originalPlacements = placements;
 
       try
       {
-        placements = PrepareSourceCaps(doc, placements, scallopSizes, tolerance);
-        var connections = BuildConnections(cplane, placements, tolerance);
+        var reinforcementPoses = _createReinf
+          ? CaptureReinforcementPoses(doc, sessionId, inputPlacements, existingOutputIds, tolerance)
+          : null;
+        var (orientedPlacements, placements, connections) = BuildShadeBoundary(
+          doc, cplane, inputPlacements, scallopSizes, tolerance, connectionGeometry);
         chainCount = CountConnectedChains(connections);
-        foreach (var connection in connections)
-          connectionGeometry.Add(new ShadeConnectionGeometry(
-            connection,
-            CreateConnectionCurve(doc, cplane, connection, placements, scallopSizes, tolerance)));
-        if (connectionGeometry.Any(item => item.Curve is not LineCurve))
-          ValidateScallopPerimeter(placements, connectionGeometry, tolerance);
 
         foreach (var placement in placements)
         {
@@ -1284,7 +1281,7 @@ namespace vTools.Commands
         if (_cutOffset > tolerance)
           AddCutOutlines(doc, cplane, placements, connectionGeometry, sessionId, tolerance, newOutputIds);
         if (_createReinf)
-          AddReinforcementParts(doc,cplane,placements,connectionGeometry,sessionId,tolerance,newOutputIds);
+          AddReinforcementParts(doc,cplane,placements,connectionGeometry,sessionId,tolerance,newOutputIds,reinforcementPoses);
 
         var groupName = ShadeGroupPrefix + sessionId.ToString("N");
         var groupedIds = newOutputIds.Where(id =>
@@ -1294,14 +1291,18 @@ namespace vTools.Commands
           var groupIndex = doc.Groups.FindName(groupName)?.Index ?? doc.Groups.Add(groupName);
           if (groupIndex < 0 || !doc.Groups.AddToGroup(groupIndex, groupedIds))
             throw new InvalidOperationException("could not group shade output");
+          if(_shadeMaterial!=null&&FindSplitSource(doc,groupedIds)!=null)
+            NestWorkflow.AssignInitialPartMaterial(doc,groupIndex,_shadeMaterial);
         }
 
         BringOutputForward(doc,newOutputIds);
-        SaveShadeState(doc, sessionId, originalPlacements, scallopSizes);
+        SaveShadeState(doc, sessionId, orientedPlacements, scallopSizes, newOutputIds);
         foreach (var id in existingOutputIds)
           doc.Objects.Delete(id, quiet: true);
         existingOutputIds.Clear();
         existingOutputIds.AddRange(newOutputIds);
+        for (int index = 0; index < inputPlacements.Count; index++)
+          inputPlacements[index] = orientedPlacements[index];
         doc.Views.Redraw();
         return true;
       }
@@ -1523,10 +1524,12 @@ namespace vTools.Commands
       RhinoDoc doc,
       Guid sessionId,
       IReadOnlyList<ShadePlacement> placements,
-      IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes)
+      IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes,
+      IReadOnlyList<Guid> outputIds)
     {
       var snapshot = new ShadeSnapshot
       {
+        OutputIds = outputIds.ToList(),
         Scallop = _scallop,
         UseCurve = _useCurve,
         LabelPrefix = _labelPrefix,
@@ -1634,16 +1637,11 @@ namespace vTools.Commands
         _createReinf = snapshot.CreateReinf;
         layerOption = snapshot.LayerOption;
 
-        var settings = new ObjectEnumeratorSettings
-        {
-          NormalObjects = true,
-          LockedObjects = true,
-          HiddenObjects = true,
-          DeletedObjects = false
-        };
-        outputIds.AddRange(doc.Objects.GetObjectList(settings)
-          .Where(obj => obj.Attributes.GetUserString(MetadataPrefix + "session") == sessionId.ToString())
-          .Select(obj => obj.Id));
+        if (snapshot.OutputIds is { } savedIds)
+          outputIds.AddRange(savedIds.Distinct().Where(id =>
+            doc.Objects.FindId(id) is { } obj && BelongsToShadeSession(obj, sessionId)));
+        else
+          outputIds.AddRange(FindLegacyShadeOutput(doc, sessionId, placements));
         return outputIds.Count > 0;
       }
       catch (Exception ex)
@@ -1651,6 +1649,138 @@ namespace vTools.Commands
         Log.Write("vShade", $"restore failed session={sessionId}: {ex}");
         return false;
       }
+    }
+
+    private static bool BelongsToShadeSession(RhinoObject obj, Guid sessionId) =>
+      Guid.TryParse(obj.Attributes.GetUserString(MetadataPrefix + "session"), out var id) && id == sessionId;
+
+    private static List<Guid> FindLegacyShadeOutput(RhinoDoc doc, Guid sessionId, IReadOnlyList<ShadePlacement> placements)
+    {
+      var session = sessionId.ToString("N");
+      var rootGroup = doc.Groups.FindName(ShadeGroupPrefix + session)?.Index ?? -1;
+      var reinforcementGroups = placements.ToDictionary(placement => placement.Sequence, placement =>
+        doc.Groups.FindName(ReinforcementPartGroupPrefix + session + "_" + placement.Sequence.ToString(CultureInfo.InvariantCulture))?.Index ?? -1);
+      double tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
+      var settings = new ObjectEnumeratorSettings { NormalObjects = true, LockedObjects = true, HiddenObjects = true };
+      // Legacy copies inherit the session strings. Restrict ownership to the original groups and exact corner guides.
+      var candidates = doc.Objects.GetObjectList(settings)
+        .Where(obj => BelongsToShadeSession(obj, sessionId) && obj.Attributes.GetUserString("vPartSplit.session") == null)
+        .Where(obj =>
+        {
+          var attributes = obj.Attributes;
+          var role = attributes.GetUserString(MetadataPrefix + "role");
+          var groups = attributes.GetGroupList() ?? [];
+          if (!int.TryParse(attributes.GetUserString(MetadataPrefix + "sequence"), out int sequence) ||
+              sequence < 1 || sequence > placements.Count) return false;
+          if (role is "reinforcement_part" or "reinforcement_part_label")
+            return reinforcementGroups[sequence] >= 0 && groups.Contains(reinforcementGroups[sequence]);
+          if (role != "bisector") return rootGroup >= 0 && groups.Contains(rootGroup);
+          return obj.Geometry is Curve curve && curve.IsLinear(tolerance) &&
+            placements[sequence - 1].Geometry.OffsetLine is { } expected &&
+            SameEndpoints(curve, expected.From, expected.To, tolerance);
+        }).ToArray();
+      var duplicates = candidates.GroupBy(obj => (
+        Role: obj.Attributes.GetUserString(MetadataPrefix + "role"),
+        Sequence: obj.Attributes.GetUserString(MetadataPrefix + "sequence"),
+        From: obj.Attributes.GetUserString(MetadataPrefix + "from_sequence")))
+        .Where(group => group.Skip(1).Any()).ToArray();
+      if (duplicates.Length != 0)
+      {
+        RhinoApp.WriteLine("vShade: original and copied objects share shade ownership. Separate copies from the original groups before tuning.");
+        throw new InvalidOperationException("legacy shade has ambiguous original output");
+      }
+      return candidates.Select(obj => obj.Id).ToList();
+    }
+
+    private static bool SameEndpoints(Curve curve, Point3d first, Point3d second, double tolerance) =>
+      (curve.PointAtStart.DistanceTo(first) <= tolerance && curve.PointAtEnd.DistanceTo(second) <= tolerance) ||
+      (curve.PointAtStart.DistanceTo(second) <= tolerance && curve.PointAtEnd.DistanceTo(first) <= tolerance);
+
+    private static ShadeSources ResolveShadeSources(RhinoDoc doc, IReadOnlyList<ShadePlacement> placements, double tolerance)
+    {
+      var result = new ShadeSources();
+      try
+      {
+        RhinoObject[]? live = null;
+        double endpointTolerance = Math.Max(tolerance, tolerance * ConfiguredEndpointCoincidenceToleranceFactor);
+        var anchors = placements.SelectMany(placement => new[] { placement.FirstSourceId, placement.SecondSourceId }
+          .Where(id => id != Guid.Empty).Select(id => (Id: id, Corner: placement.Geometry.Corner))).GroupBy(value => value.Id);
+        foreach (var group in anchors)
+        {
+          var points = group.Select(value => value.Corner).Distinct().ToArray();
+          var current = doc.Objects.FindId(group.Key)?.Geometry as Curve;
+          bool joined = current != null && points.Any(point => current.ClosestPoint(point, out _, endpointTolerance) &&
+            point.DistanceTo(current.PointAtStart) > endpointTolerance && point.DistanceTo(current.PointAtEnd) > endpointTolerance);
+          if (current != null && !joined)
+          {
+            result.Curves.Add(group.Key, current);
+            continue;
+          }
+          if (points.Length < 2) continue;
+          var first = points[0];
+          var second = points.MaxBy(point => first.DistanceToSquared(point));
+          if (first.DistanceTo(second) <= endpointTolerance) continue;
+          Curve? Find(IEnumerable<Curve> candidates)
+          {
+            Curve? match = null;
+            foreach (var candidate in candidates)
+            {
+              if (!candidate.ClosestPoint(first, out _, endpointTolerance) ||
+                  !candidate.ClosestPoint(second, out _, endpointTolerance)) continue;
+              var segments = candidate.DuplicateSegments();
+              try
+              {
+                foreach (var segment in segments)
+                {
+                  if (!SameEndpoints(segment, first, second, endpointTolerance)) continue;
+                  if (match != null)
+                  {
+                    match.Dispose();
+                    return null;
+                  }
+                  match = segment.DuplicateCurve();
+                }
+              }
+              finally { foreach (var segment in segments) segment.Dispose(); }
+            }
+            return match;
+          }
+          var recovered = current == null ? null : Find([current]);
+          if (recovered == null)
+          {
+            live ??= doc.Objects.GetObjectList(ObjectType.Curve).Where(obj => !obj.IsDeleted &&
+              obj.Attributes.GetUserString(MetadataPrefix + "session") == null).ToArray();
+            recovered = Find(live.Where(obj => obj.Id != group.Key).Select(obj => obj.Geometry).OfType<Curve>());
+          }
+          if (recovered == null) continue;
+          result.Owned.Add(recovered);
+          result.Curves.Add(group.Key, recovered);
+          Log.Write("vShade", $"recovered joined source side {group.Key}");
+        }
+        return result;
+      }
+      catch
+      {
+        result.Dispose();
+        throw;
+      }
+    }
+
+    private static (IReadOnlyList<ShadePlacement> Oriented, IReadOnlyList<ShadePlacement> Capped, List<ShadeConnection> Connections)
+      BuildShadeBoundary(RhinoDoc doc, Plane cplane, IReadOnlyList<ShadePlacement> input,
+        IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes, double tolerance, List<ShadeConnectionGeometry> geometry)
+    {
+      using var sources = ResolveShadeSources(doc, input, tolerance);
+      var oriented = OrientCornerOffsets(cplane, input, sources.Curves, tolerance);
+      var capped = PrepareSourceCaps(sources.Curves, oriented, scallopSizes, tolerance);
+      var connections = BuildConnections(cplane, capped, tolerance);
+      var sides = ClosedPerimeterSides(cplane, connections, tolerance);
+      foreach (var connection in connections)
+        geometry.Add(new ShadeConnectionGeometry(connection,
+          CreateConnectionCurve(sources.Curves, cplane, connection, capped, scallopSizes, sides, tolerance)));
+      if (geometry.Any(item => item.Curve is not LineCurve))
+        ValidateScallopPerimeter(capped, geometry, tolerance);
+      return (oriented, capped, connections);
     }
 
     private static void TuneScallopSizes(
@@ -1670,20 +1800,24 @@ namespace vTools.Commands
       var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
       while (true)
       {
-        var effectivePlacements = PrepareSourceCaps(doc, placements, scallopSizes, tolerance);
-        var connectors = BuildConnections(cplane, effectivePlacements, tolerance)
-          .Select(connection => new ShadeConnectionGeometry(
-            connection,
-            CreateConnectionCurve(doc, cplane, connection, effectivePlacements, scallopSizes, tolerance)))
-          .ToArray();
-        if (connectors.Length == 0)
-        {
-          RhinoApp.WriteLine("vShade: there are no connected perimeter segments to tune.");
-          return;
-        }
-
+        var connectors = new List<ShadeConnectionGeometry>();
         try
         {
+          try
+          {
+            BuildShadeBoundary(doc, cplane, placements, scallopSizes, tolerance, connectors);
+          }
+          catch (Exception ex)
+          {
+            Log.Write("vShade", $"scallop tuning could not prepare the shade: {ex}");
+            RhinoApp.WriteLine($"vShade: cannot tune these sides: {ex.Message}. The shade is unchanged.");
+            return;
+          }
+          if (connectors.Count == 0)
+          {
+            RhinoApp.WriteLine("vShade: there are no connected perimeter segments to tune.");
+            return;
+          }
           var hovered = -1;
           var pickCurves = connectors.Select(item => item.Curve).ToArray();
           using var getter = new GetPoint();
@@ -1803,7 +1937,7 @@ namespace vTools.Commands
           getter.SetCommandPrompt("Click a shade corner to apply Offset; press Enter when done");
           getter.AcceptNothing(true);
           getter.AcceptNumber(true, false);
-          var offsetOption = new OptionDouble(_offset, 0.0, double.MaxValue);
+          var offsetOption = new OptionDouble(_offset);
           getter.AddOptionDouble("Offset", ref offsetOption);
           getter.MouseMove += (_, e) =>
           {
@@ -1819,15 +1953,18 @@ namespace vTools.Commands
           var getResult = getter.Get();
           if (getResult == GetResult.Option)
           {
-            _offset = offsetOption.CurrentValue;
-            SaveOptions();
+            if (double.IsFinite(offsetOption.CurrentValue))
+            {
+              _offset = offsetOption.CurrentValue;
+              SaveOptions();
+            }
             continue;
           }
           if (getResult == GetResult.Number)
           {
             var value = getter.Number();
-            if (!double.IsFinite(value) || value < 0.0)
-              RhinoApp.WriteLine("vShade: Offset must be a non-negative number.");
+            if (!double.IsFinite(value))
+              RhinoApp.WriteLine("vShade: Offset must be a finite number.");
             else
             {
               _offset = value;
@@ -1843,26 +1980,10 @@ namespace vTools.Commands
           var placementIndex = targets[hovered].PlacementIndex;
           var previous = placements[placementIndex];
           var geometry = previous.Geometry;
-          var offsetEnd = geometry.Corner + geometry.InteriorDirection * _offset;
-          var shift = offsetEnd - geometry.OffsetEnd;
-          if (shift.Length <= RhinoMath.ZeroTolerance)
+          var moved = geometry.WithOffset(_offset);
+          if (geometry.OffsetEnd.DistanceTo(moved.OffsetEnd) <= RhinoMath.ZeroTolerance)
             continue;
-          var perpendicular = geometry.PerpendicularLine is { } cap
-            ? new Line(cap.From + shift, cap.To + shift)
-            : (Line?)null;
-          placements[placementIndex] = previous with
-          {
-            Geometry = geometry with
-            {
-              OffsetEnd = offsetEnd,
-              OffsetLine = _offset > 0.0 ? new Line(geometry.Corner, offsetEnd) : null,
-              PerpendicularLine = perpendicular,
-              FirstCapEnd = perpendicular.HasValue
-                ? geometry.FirstCapEnd + shift : Point3d.Unset,
-              SecondCapEnd = perpendicular.HasValue
-                ? geometry.SecondCapEnd + shift : Point3d.Unset
-            }
-          };
+          placements[placementIndex] = previous with { Geometry = moved };
           if (!refreshBoundaryOutput())
           {
             placements[placementIndex] = previous;
@@ -1917,10 +2038,11 @@ namespace vTools.Commands
     private static List<ShadeConnection> BuildConnections(
       Plane cplane,
       IReadOnlyList<ShadePlacement> placements,
-      double tolerance)
+      double tolerance,
+      bool useCornerChords = false)
     {
       var active = placements
-        .Where(placement => placement.Connect && placement.Geometry.PerpendicularLine.HasValue)
+        .Where(placement => useCornerChords || placement.Connect && placement.Geometry.PerpendicularLine.HasValue)
         .ToArray();
       var connections = new List<ShadeConnection>();
       if (active.Length < 2)
@@ -1936,8 +2058,8 @@ namespace vTools.Commands
           for (var firstEnd = 0; firstEnd < 2; firstEnd++)
           for (var secondEnd = 0; secondEnd < 2; secondEnd++)
           {
-            var firstPoint = CapEnd(first, firstEnd);
-            var secondPoint = CapEnd(second, secondEnd);
+            var firstPoint = useCornerChords ? first.Geometry.Corner : CapEnd(first, firstEnd);
+            var secondPoint = useCornerChords ? second.Geometry.Corner : CapEnd(second, secondEnd);
             var line = new Line(firstPoint, secondPoint);
             if (!line.IsValid || line.Length <= tolerance)
               continue;
@@ -1983,11 +2105,11 @@ namespace vTools.Commands
         if (connectedPairs.Contains(pair) ||
             usedEnds.Contains((candidate.FromSequence, candidate.FromEnd)) ||
             usedEnds.Contains((candidate.ToSequence, candidate.ToEnd)) ||
-            EndpointAlreadyConnected(connections, candidate.Line.From, tolerance) ||
-            EndpointAlreadyConnected(connections, candidate.Line.To, tolerance) ||
+            !useCornerChords && (EndpointAlreadyConnected(connections, candidate.Line.From, tolerance) ||
+            EndpointAlreadyConnected(connections, candidate.Line.To, tolerance)) ||
             connections.Any(connection =>
               HasForbiddenIntersection(cplane, candidate.Line, connection.Line, tolerance)) ||
-            active.Any(placement =>
+            !useCornerChords && active.Any(placement =>
               HasForbiddenIntersection(
                 cplane,
                 candidate.Line,
@@ -2008,18 +2130,141 @@ namespace vTools.Commands
         usedEnds.Add((candidate.FromSequence, candidate.FromEnd));
         usedEnds.Add((candidate.ToSequence, candidate.ToEnd));
         parents[fromRoot] = toRoot;
-        Log.Write(
+        if (!useCornerChords) Log.Write(
           "vShade",
           $"connection {candidate.FromSequence}<->{candidate.ToSequence} " +
           $"sharedSource={candidate.SharedSource} from={FormatPoint(candidate.Line.From)} " +
           $"to={FormatPoint(candidate.Line.To)}");
       }
 
-      Log.Write(
+      if (!useCornerChords) Log.Write(
         "vShade",
         $"perimeter corners={active.Length} connections={connections.Count} " +
         $"closed={active.Length > 2 && connections.Count == active.Length}");
       return connections;
+    }
+
+    private static Dictionary<ShadeConnection, bool>? ClosedPerimeterSides(
+      Plane cplane, IReadOnlyList<ShadeConnection> connections, double tolerance)
+    {
+      if (connections.Count < 3) return null;
+      var incident = connections.SelectMany(edge => new[]
+        { (edge.FromSequence, Edge: edge), (edge.ToSequence, Edge: edge) })
+        .ToLookup(item => item.Item1, item => item.Edge);
+      if (incident.Any(group => group.Count() != 2)) return null;
+
+      // Walk the perimeter, including the cap between every two connectors, to find its winding.
+      var traversal = new Dictionary<ShadeConnection, bool>();
+      var edge = connections[0];
+      int start = edge.FromSequence, corner = start;
+      var origin = edge.Line.From;
+      var last = Vector2d.Zero;
+      double area = 0.0;
+      do
+      {
+        bool forward = edge.FromSequence == corner;
+        if (!traversal.TryAdd(edge, forward)) return null;
+        var a = ProjectVector(cplane, (forward ? edge.Line.From : edge.Line.To) - origin);
+        var b = ProjectVector(cplane, (forward ? edge.Line.To : edge.Line.From) - origin);
+        area += Cross(last, a) + Cross(a, b);
+        last = b;
+        corner = forward ? edge.ToSequence : edge.FromSequence;
+        edge = incident[corner].First(other => other != edge);
+      } while (corner != start);
+      if (traversal.Count != connections.Count || Math.Abs(area) <= tolerance * tolerance) return null;
+      return traversal.ToDictionary(pair => pair.Key, pair => pair.Value == (area > 0.0));
+    }
+
+    private static Dictionary<int, Vector3d> SourceInwardDirections(
+      Plane cplane, IReadOnlyList<ShadePlacement> placements, IReadOnlyDictionary<Guid, Curve> sources, double tolerance)
+    {
+      var result = new Dictionary<int, Vector3d>();
+      if (sources.Count < 2 || placements.Any(p => !sources.ContainsKey(p.FirstSourceId) || !sources.ContainsKey(p.SecondSourceId)))
+        return result;
+      double cornerTolerance = Math.Max(tolerance, tolerance * ConfiguredEndpointCoincidenceToleranceFactor);
+      var bridges = new List<Curve>();
+      Curve[] joined = [];
+      try
+      {
+        var usedEnds = new HashSet<(Guid Id, bool Start)>();
+        (bool Start, Point3d Point) NearestEnd(Guid id, Point3d corner)
+        {
+          var curve = sources[id]!;
+          bool start = curve.PointAtStart.DistanceToSquared(corner) <= curve.PointAtEnd.DistanceToSquared(corner);
+          return (start, start ? curve.PointAtStart : curve.PointAtEnd);
+        }
+        foreach (var placement in placements)
+        {
+          var corner = placement.Geometry.Corner;
+          var a = NearestEnd(placement.FirstSourceId, corner);
+          var b = NearestEnd(placement.SecondSourceId, corner);
+          if (!usedEnds.Add((placement.FirstSourceId, a.Start)) || !usedEnds.Add((placement.SecondSourceId, b.Start)))
+            return result;
+          if (a.Point.DistanceTo(b.Point) <= cornerTolerance) continue;
+
+          // Bridge only explicitly picked pairs. The reference may use a tangent-defined corner in a gap.
+          bridges.Add(corner.DistanceTo(a.Point) > cornerTolerance && corner.DistanceTo(b.Point) > cornerTolerance
+            ? new PolylineCurve(new[] { a.Point, corner, b.Point })
+            : new LineCurve(a.Point, b.Point));
+        }
+        joined = Curve.JoinCurves(sources.Values.OfType<Curve>().Concat(bridges), cornerTolerance);
+        if (joined.Length != 1 || !joined[0].IsClosed) return result;
+        var outline = joined[0];
+        var orientation = outline.ClosedCurveOrientation(cplane);
+        if (orientation == CurveOrientation.Undefined) return result;
+
+        // At a corner, either incident tangent's inward normal agrees with the inward bisector sign.
+        foreach (var placement in placements)
+        {
+          var geometry = placement.Geometry;
+          if (!outline.ClosestPoint(geometry.Corner, out double t, cornerTolerance)) continue;
+          var inward = Vector3d.CrossProduct(cplane.Normal, outline.TangentAt(t));
+          if (!inward.Unitize()) continue;
+          if (orientation == CurveOrientation.Clockwise) inward = -inward;
+          if (Math.Abs(Vector3d.Multiply(inward, geometry.InteriorDirection)) > RhinoMath.ZeroTolerance)
+            result[placement.Sequence] = inward;
+        }
+        return result;
+      }
+      finally
+      {
+        foreach (var bridge in bridges) bridge.Dispose();
+        foreach (var curve in joined) curve.Dispose();
+      }
+    }
+
+    private static IReadOnlyList<ShadePlacement> OrientCornerOffsets(
+      Plane cplane, IReadOnlyList<ShadePlacement> placements, IReadOnlyDictionary<Guid, Curve> sources, double tolerance)
+    {
+      if (placements.Count < 2) return placements;
+      var sourceInward = SourceInwardDirections(cplane, placements, sources, tolerance);
+      var inward = new Dictionary<int, Vector3d>();
+      if (sourceInward.Count < placements.Count)
+      {
+        var chords = BuildConnections(cplane, placements, tolerance, useCornerChords: true);
+        if (ClosedPerimeterSides(cplane, chords, tolerance) is {} sides)
+          foreach (var (edge, onLeft) in sides)
+          {
+            var normal = Vector3d.CrossProduct(cplane.Normal, edge.Line.Direction);
+            if (!normal.Unitize()) continue;
+            if (!onLeft) normal = -normal;
+            inward[edge.FromSequence] = inward.GetValueOrDefault(edge.FromSequence) + normal;
+            inward[edge.ToSequence] = inward.GetValueOrDefault(edge.ToSequence) + normal;
+          }
+      }
+      var origin = placements[0].Geometry.Corner;
+      var middle = origin + placements.Aggregate(Vector3d.Zero, (sum, part) => sum + (part.Geometry.Corner - origin)) / placements.Count;
+      return placements.Select(placement =>
+      {
+        var geometry = placement.Geometry;
+        bool hasPerimeter = sourceInward.TryGetValue(placement.Sequence, out var direction) ||
+          inward.TryGetValue(placement.Sequence, out direction);
+        if (!hasPerimeter) direction = middle - geometry.Corner;
+        var deadZone = hasPerimeter ? RhinoMath.ZeroTolerance : tolerance;
+        if (Vector3d.Multiply(direction, geometry.InteriorDirection) >= -deadZone) return placement;
+        var moved = (geometry with { InteriorDirection = -geometry.InteriorDirection }).WithOffset(geometry.SignedOffset);
+        return placement with { Geometry = moved };
+      }).ToArray();
     }
 
     private static Point3d CapEnd(ShadePlacement placement, int end) =>
@@ -2066,11 +2311,12 @@ namespace vTools.Commands
     }
 
     private static Curve CreateConnectionCurve(
-      RhinoDoc doc,
+      IReadOnlyDictionary<Guid, Curve> sources,
       Plane cplane,
       ShadeConnection connection,
       IReadOnlyList<ShadePlacement> placements,
       IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes,
+      IReadOnlyDictionary<ShadeConnection, bool>? scallopSides,
       double tolerance)
     {
       var hasOverride = scallopSizes.TryGetValue(ConnectionKey(connection), out var overrideSize);
@@ -2080,7 +2326,7 @@ namespace vTools.Commands
       {
         var shared = new[] { from.FirstSourceId, from.SecondSourceId }
           .Where(id => id != Guid.Empty && (id == to.FirstSourceId || id == to.SecondSourceId)).Distinct().ToArray();
-        if (shared.Length == 1 && doc.Objects.FindId(shared[0])?.Geometry is Curve source && !source.IsLinear(tolerance))
+        if (shared.Length == 1 && sources.TryGetValue(shared[0], out var source) && !source.IsLinear(tolerance))
           return TrimScallopCurve(source, connection.Line, tolerance);
       }
       if ((hasOverride && overrideSize.Value <= 0.0) || (!hasOverride && !_scallop))
@@ -2091,21 +2337,35 @@ namespace vTools.Commands
         throw new InvalidOperationException("scallop connector has no perpendicular direction");
 
       var midpoint = 0.5 * (connection.Line.From + connection.Line.To);
-      var insideSides=placements.Where(placement=>placement.Connect&&placement.Geometry.PerpendicularLine.HasValue&&
-          placement.Sequence!=connection.FromSequence&&placement.Sequence!=connection.ToSequence)
-        .Select(placement=>Vector3d.Multiply(side,placement.Geometry.Corner-midpoint))
-        .Where(distance=>Math.Abs(distance)>tolerance).ToArray();
-      // A common half-plane identifies the selected boundary's interior, including closing diagonals.
-      var orientation=insideSides.Length>0&&(insideSides.All(distance=>distance>0)||insideSides.All(distance=>distance<0))
-        ?insideSides[0]:Vector3d.Multiply(side,from.Geometry.InteriorDirection+to.Geometry.InteriorDirection);
-      if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
-        orientation = Vector3d.Multiply(side, from.Geometry.InteriorDirection);
-      if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
-        orientation = Vector3d.Multiply(side, to.Geometry.InteriorDirection);
-      if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
-        throw new InvalidOperationException("could not determine the inside of a scallop connector");
-      if (orientation < 0.0)
-        side = -side;
+      if (scallopSides != null && scallopSides.TryGetValue(connection, out bool onLeft))
+      {
+        if (!onLeft) side = -side;
+      }
+      else
+      {
+        var a = from.Geometry.Corner;
+        var b = to.Geometry.Corner;
+        var referenceSide = Vector3d.CrossProduct(cplane.Normal, b - a);
+        var orientation = Vector3d.Multiply(side, from.Geometry.InteriorDirection + to.Geometry.InteriorDirection);
+        if (referenceSide.Unitize())
+        {
+          var inside = placements.Where(placement => placement.Connect && placement.Geometry.PerpendicularLine.HasValue &&
+              placement.Sequence != connection.FromSequence && placement.Sequence != connection.ToSequence)
+            .Select(placement => Vector3d.Multiply(referenceSide, placement.Geometry.Corner - a))
+            .Where(distance => Math.Abs(distance) > tolerance).ToArray();
+          double alignment = Vector3d.Multiply(side, referenceSide);
+          if (Math.Abs(alignment) > RhinoMath.ZeroTolerance && inside.Length > 0 &&
+              (inside.All(distance => distance > 0.0) || inside.All(distance => distance < 0.0)))
+            orientation = alignment * Math.Sign(inside[0]);
+        }
+        if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
+          orientation = Vector3d.Multiply(side, from.Geometry.InteriorDirection);
+        if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
+          orientation = Vector3d.Multiply(side, to.Geometry.InteriorDirection);
+        if (Math.Abs(orientation) <= RhinoMath.ZeroTolerance)
+          throw new InvalidOperationException("could not determine the inside of a scallop connector");
+        if (orientation < 0.0) side = -side;
+      }
 
       var size = hasOverride
         ? overrideSize
@@ -2121,7 +2381,7 @@ namespace vTools.Commands
       return new ArcCurve(arc);
     }
 
-    private static IReadOnlyList<ShadePlacement> PrepareSourceCaps(RhinoDoc doc, IReadOnlyList<ShadePlacement> placements,
+    private static IReadOnlyList<ShadePlacement> PrepareSourceCaps(IReadOnlyDictionary<Guid, Curve> sources, IReadOnlyList<ShadePlacement> placements,
       IReadOnlyDictionary<(int From, int To), ScallopSize> scallopSizes, double tolerance)
     {
       if (!_useCurve) return placements;
@@ -2135,7 +2395,11 @@ namespace vTools.Commands
           bool used = placements.Any(other => other.Sequence != placement.Sequence && other.Connect &&
             other.Geometry.PerpendicularLine.HasValue && (id == other.FirstSourceId || id == other.SecondSourceId) &&
             !scallopSizes.ContainsKey((Math.Min(placement.Sequence, other.Sequence), Math.Max(placement.Sequence, other.Sequence))));
-          if (!used || id == Guid.Empty || doc.Objects.FindId(id)?.Geometry is not Curve source || source.IsLinear(tolerance))
+          if (!used || id == Guid.Empty)
+            return CapEnd(placement, end);
+          if (!sources.TryGetValue(id, out var source))
+            throw new InvalidOperationException($"could not locate the original side at corner {placement.Sequence}; check the joined source curves or set UseCurve=No");
+          if (source.IsLinear(tolerance))
             return CapEnd(placement, end);
           var center = cap.PointAt(0.5); var direction = cap.Direction;
           if (!direction.Unitize()) throw new InvalidOperationException("corner cap has no direction");
@@ -2413,7 +2677,7 @@ namespace vTools.Commands
       string labelValue,
       bool splitAvailable)
     {
-      var offsetOption = new OptionDouble(_offset, 0.0, double.MaxValue);
+      var offsetOption = new OptionDouble(_offset);
       var chamferOption = new OptionDouble(_chamfer, 0.0, double.MaxValue);
       var reinforcementOption = new OptionDouble(_reinforcement, 0.0, double.MaxValue);
       var createReinfOption = new OptionToggle(_createReinf,"No","Yes");
@@ -2469,7 +2733,8 @@ namespace vTools.Commands
       ShadeOptionState options,
       ref string labelValue)
     {
-      _offset = options.Offset.CurrentValue;
+      if (double.IsFinite(options.Offset.CurrentValue))
+        _offset = options.Offset.CurrentValue;
       _chamfer = options.Chamfer.CurrentValue;
       _reinforcement = options.Reinforcement.CurrentValue;
       _createReinf = options.CreateReinf.CurrentValue;
@@ -2611,6 +2876,8 @@ namespace vTools.Commands
 
     private static void LoadOptions()
     {
+      static string ReadMaterial(System.Text.Json.Nodes.JsonObject? section,string key,string fallback)=>
+        section?[key] is System.Text.Json.Nodes.JsonValue value&&value.TryGetValue<string>(out var name)?name:fallback;
       var values = ToolsOptionStore.Read(
         OptionsSectionName,
         section =>
@@ -2632,8 +2899,11 @@ namespace vTools.Commands
           var join = _join;
           var layer = _layer;
           var splitWidth = _splitWidth;
+          var splitSeamType = ConfiguredDefaultSplitSeamType;
+          var shadeMaterial = ReadMaterial(section,ShadeMaterialKey,ConfiguredDefaultShadeMaterial);
+          var reinforcementMaterial = ReadMaterial(section,ReinforcementMaterialKey,ConfiguredDefaultReinforcementMaterial);
 
-          if (ToolsOptionStore.TryGetDouble(section, OffsetKey, out var savedOffset) && savedOffset >= 0.0)
+          if (ToolsOptionStore.TryGetDouble(section, OffsetKey, out var savedOffset) && double.IsFinite(savedOffset))
             offset = savedOffset;
           if (ToolsOptionStore.TryGetDouble(section, ChamferKey, out var savedChamfer) &&
               double.IsFinite(savedChamfer) && savedChamfer >= 0.0)
@@ -2674,12 +2944,15 @@ namespace vTools.Commands
           if (ToolsOptionStore.TryGetString(section, FinishedLayerKey, out var savedLayer)||ToolsOptionStore.TryGetString(section, LayerKey, out savedLayer))
             layer = DuplicateCommandSupport.NormalizeLayerOption(savedLayer);
           if (ToolsOptionStore.TryGetDouble(section, SplitWidthKey, out var savedSplitWidth) &&
-              double.IsFinite(savedSplitWidth) && savedSplitWidth > 2 * SplitJointOverlap)
+              double.IsFinite(savedSplitWidth) && savedSplitWidth > 0.0)
             splitWidth = savedSplitWidth;
+          if(ToolsOptionStore.TryGetString(section,SplitSeamTypeKey,out var savedType)&&
+            Enum.TryParse<PartSplitWorkflow.SeamType>(savedType,true,out var parsedType)&&Enum.IsDefined(parsedType))
+            splitSeamType=parsedType;
 
           return (offset, chamfer, reinforcement, scallop, scallopSize, scallopPercent,
             tuneScallopSize, tuneScallopPercent,
-            cutOffset, cutLayer, connect, join, layer, splitWidth, createReinf, useCurve, labelPrefix);
+              cutOffset, cutLayer, connect, join, layer, splitWidth, createReinf, useCurve, labelPrefix, splitSeamType, shadeMaterial, reinforcementMaterial);
         });
 
       _offset = values.offset;
@@ -2698,6 +2971,16 @@ namespace vTools.Commands
       _join = values.join;
       _layer = DuplicateCommandSupport.NormalizeLayerOption(values.layer);
       _splitWidth = values.splitWidth;
+      _splitSeamType = values.splitSeamType;
+      var materials=string.IsNullOrWhiteSpace(values.shadeMaterial)&&string.IsNullOrWhiteSpace(values.reinforcementMaterial)?
+        []:MaterialLibrary.LoadMaterialPresets();
+      MaterialLibrary.MaterialPreset? Resolve(string name)
+      {
+        string normalized=MaterialLibrary.MaterialPresetName(name);
+        return materials.FirstOrDefault(preset=>preset.Name.Equals(normalized,StringComparison.OrdinalIgnoreCase));
+      }
+      _shadeMaterial=Resolve(values.shadeMaterial);
+      _reinforcementMaterial=Resolve(values.reinforcementMaterial);
     }
 
     private static void SaveOptions() =>
@@ -2720,6 +3003,7 @@ namespace vTools.Commands
         section[JoinKey] = _join;
         section[FinishedLayerKey] = _layer;
         section[SplitWidthKey] = _splitWidth;
+        section[SplitSeamTypeKey] = _splitSeamType.ToString();
       });
 
     private static bool HasForbiddenIntersection(
@@ -2922,286 +3206,18 @@ namespace vTools.Commands
       public void Dispose() => EndRecord();
     }
 
-    private sealed record SplitProposal(Plane Frame, double MinY, double MaxY, List<double> Seams, double MaterialLength);
-
-    private sealed class SplitPanel(Curve outline, BoundingBox bounds, Brep? face) : IDisposable
+    private static bool RunSplit(RhinoDoc doc, IReadOnlyList<Guid> outputIds, Action beginSplitUndo)
     {
-      public Curve Outline { get; } = outline;
-      public BoundingBox Bounds { get; } = bounds;
-      public Brep? Face { get; } = face;
-      public List<(GeometryBase Geometry, Color Color)> PreviewDetails { get; } = [];
-      // Label geometry is owned by PreviewDetails; these attributes accompany the same cached pieces at commit.
-      public List<(GeometryBase Geometry, ObjectAttributes Attributes)> LabelDetails { get; } = [];
-      public void Dispose()
-      {
-        Outline.Dispose();
-        Face?.Dispose();
-        foreach (var detail in PreviewDetails)
-          detail.Geometry.Dispose();
-        foreach (var detail in LabelDetails)
-          detail.Attributes.Dispose();
-      }
-    }
-
-    private static bool RunSplit(
-      RhinoDoc doc, RunMode mode, Guid sessionId, IReadOnlyList<Guid> outputIds,
-      Action beginSplitUndo)
-    {
-      var sourceObject = FindSplitSource(doc, outputIds);
-      var source = sourceObject?.Geometry as Curve;
+      var source = FindSplitSource(doc, outputIds);
       if (source == null)
       {
         RhinoApp.WriteLine("vShade: Split needs a closed cut or shade boundary.");
         return false;
       }
-      var sourceColor = doc.Layers[sourceObject!.Attributes.LayerIndex]?.Color ?? Color.Black;
-      Log.Write("vShade", $"split source={sourceObject.Id} role=" +
-        $"{sourceObject.Attributes.GetUserString(MetadataPrefix + "role")} " +
-        $"layer={doc.Layers[sourceObject.Attributes.LayerIndex]?.FullPath}");
-
-      var cplane = doc.Views.ActiveView?.ActiveViewport.ConstructionPlane() ?? Plane.WorldXY;
-      if (!source.TryGetPlane(out var sourcePlane, doc.ModelAbsoluteTolerance))
-      {
-        RhinoApp.WriteLine("vShade: Split needs a planar shade boundary.");
-        return false;
-      }
-      if (sourcePlane.Normal * cplane.Normal < 0.0)
-        sourcePlane = new Plane(sourcePlane.Origin, sourcePlane.XAxis, -sourcePlane.YAxis);
-      if (!TryProposeSplit(source, sourcePlane, _splitWidth, out var proposal))
-      {
-        RhinoApp.WriteLine("vShade: could not fit the closed planar shade within SplitWidth.");
-        return false;
-      }
-
-      var tolerance = Math.Max(doc.ModelAbsoluteTolerance, RhinoMath.ZeroTolerance);
-      var seamHover = -1;
-      var seamMoving = -1;
-      var dragPivot = Point3d.Unset;
-      var dragAxis = Vector3d.Unset;
-      var lastDragRefresh = 0L;
-      var dragging = false;
-      var manualSplits = false;
-      var panels = new List<SplitPanel>();
-
-      bool UpdateDrag(Point3d cursor)
-      {
-        if (seamMoving < 0 || !dragPivot.IsValid)
-          return false;
-        var direction = sourcePlane.ClosestPoint(cursor) - dragPivot;
-        if (direction.Length <= tolerance)
-          return false;
-        var angle = SplitDragAngle(sourcePlane, direction, dragAxis);
-        SplitProposal next;
-        int pivotSeamIndex = seamMoving;
-        var proposed = manualSplits
-          ? TryAdjustManualSplit(source, sourcePlane, _splitWidth, proposal, seamMoving, angle, dragPivot, tolerance, out next)
-          : TryProposeSplitAtPivot(source, sourcePlane, _splitWidth, angle, dragPivot, out next, out pivotSeamIndex);
-        if (!proposed ||
-            !TryReplaceSplitPanels(doc, outputIds, source, next, tolerance, panels))
-          return false;
-        proposal = next with { MaterialLength = SplitMaterialLength(panels) };
-        seamMoving = pivotSeamIndex;
-        return true;
-      }
-
-      try
-      {
-        if (!TryBuildSplitPanels(doc, outputIds, source, proposal, tolerance, panels))
-        {
-          RhinoApp.WriteLine("vShade: could not form closed split parts.");
-          return false;
-        }
-        proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
-
-        RhinoApp.WriteLine($"vShade: proposed {CountText.Format(panels.Count, "part")}, {proposal.MaterialLength:G5} material length. Drag an orange cut to adjust it; Enter accepts the cuts.");
-        while (true)
-        {
-          using var getter = new GetPoint();
-          getter.EnableTransparentCommands(true);
-          getter.PermitObjectSnap(AllowSplitDragObjectSnaps);
-          getter.EnableObjectSnapCursors(AllowSplitDragObjectSnaps);
-          getter.SetCommandPrompt("Drag split cuts; Enter to place ghosted parts");
-          getter.AcceptNothing(true);
-          getter.AcceptNumber(true, false);
-          var widthOption = new OptionDouble(_splitWidth, SplitJointOverlap * 2 + tolerance, double.MaxValue);
-          getter.AddOptionDouble("SplitWidth", ref widthOption);
-          var resetIndex = getter.AddOption("Auto");
-          var addIndex = getter.AddOption("AddSplit");
-          getter.MouseMove += (_, e) =>
-          {
-            dragging = seamMoving >= 0 && e.LeftButtonDown;
-            if (!e.LeftButtonDown)
-              seamHover = FindSplitSeam(e.Viewport, e.WindowPoint.X, e.WindowPoint.Y, source, proposal);
-          };
-          getter.MouseDown += (_, e) =>
-          {
-            seamMoving = FindSplitSeam(e.Viewport, e.WindowPoint.X, e.WindowPoint.Y, source, proposal);
-            if (seamMoving >= 0)
-            {
-              using var seam = BuildSplitSeam(
-                source, proposal.Frame, proposal.Seams[seamMoving], tolerance);
-              if (seam == null)
-              {
-                seamMoving = -1;
-                return;
-              }
-              var down = sourcePlane.ClosestPoint(e.Point);
-              dragPivot = down.DistanceTo(seam.PointAtStart) <= down.DistanceTo(seam.PointAtEnd)
-                ? seam.PointAtEnd : seam.PointAtStart;
-              dragAxis = proposal.Frame.XAxis;
-              getter.SetBasePoint(dragPivot, false);
-              getter.Constrain(source, true);
-              lastDragRefresh = 0;
-              dragging = true;
-            }
-          };
-          getter.DynamicDraw += (_, e) =>
-          {
-            // DynamicDraw receives the point after Rhino resolves object snaps.
-            var now = System.Environment.TickCount64;
-            if (dragging && e.CurrentPoint.IsValid &&
-                now - lastDragRefresh >= ConfiguredSplitDragRefreshMilliseconds)
-            {
-              lastDragRefresh = now;
-              UpdateDrag(e.CurrentPoint);
-            }
-            DrawSplitPreview(e.Display, doc, source, proposal, panels, cplane,
-              DefaultSplitPreviewAnchor(source, cplane),
-              seamMoving >= 0 ? seamMoving : seamHover, sourceColor);
-          };
-          var result = getter.Get(onMouseUp: true);
-          if (result == GetResult.Option)
-          {
-            if (getter.Option()?.Index == addIndex)
-            {
-              using var addGetter = new GetPoint();
-              addGetter.EnableTransparentCommands(true);
-              addGetter.PermitObjectSnap(AllowSplitDragObjectSnaps);
-              addGetter.EnableObjectSnapCursors(AllowSplitDragObjectSnaps);
-              addGetter.Constrain(sourcePlane, false);
-              addGetter.SetCommandPrompt("Location for additional parallel split");
-              addGetter.DynamicDraw += (_, e) =>
-              {
-                DrawSplitPreview(e.Display, doc, source, proposal, panels, cplane,
-                  DefaultSplitPreviewAnchor(source, cplane), -1, sourceColor);
-                if (TryInsertSplit(source, proposal, e.CurrentPoint, _splitWidth, tolerance, out var candidate))
-                {
-                  using var cut = BuildSplitSeam(source, candidate.Frame, FrameY(candidate.Frame, e.CurrentPoint), tolerance);
-                  if (cut != null) PreviewDisplay.DrawOutlinedCurve(e.Display, cut, SplitSeamColor);
-                }
-              };
-              if (addGetter.Get() == GetResult.Point)
-              {
-                if (TryInsertSplit(source, proposal, addGetter.Point(), _splitWidth, tolerance, out var candidate) &&
-                    TryReplaceSplitPanels(doc, outputIds, source, candidate, tolerance, panels))
-                {
-                  proposal = candidate with { MaterialLength = SplitMaterialLength(panels) };
-                  manualSplits = true;
-                  Log.Write("vShade", $"manual split added cuts={proposal.Seams.Count}");
-                }
-                else RhinoApp.WriteLine("vShade: split must cross the shade, remain distinct and keep all parts within SplitWidth.");
-              }
-              seamMoving = seamHover = -1;
-              dragging = false;
-              continue;
-            }
-            if (getter.Option()?.Index == resetIndex ||
-                Math.Abs(_splitWidth - widthOption.CurrentValue) > tolerance)
-            {
-              if (!TryProposeSplit(source, sourcePlane, widthOption.CurrentValue, out var next) ||
-                  !TryReplaceSplitPanels(doc, outputIds, source, next, tolerance, panels))
-              {
-                RhinoApp.WriteLine("vShade: no valid layout for that width.");
-                continue;
-              }
-              _splitWidth = widthOption.CurrentValue;
-              SaveOptions();
-              proposal = next;
-              proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
-              manualSplits = false;
-            }
-            continue;
-          }
-          if (result == GetResult.Number)
-          {
-            var newWidth = getter.Number();
-            if (!double.IsFinite(newWidth) || newWidth <= SplitJointOverlap * 2 + tolerance ||
-                !TryProposeSplit(source, sourcePlane, newWidth, out var next) ||
-                !TryReplaceSplitPanels(doc, outputIds, source, next, tolerance, panels))
-              RhinoApp.WriteLine("vShade: enter a larger valid SplitWidth.");
-            else
-            {
-              _splitWidth = newWidth;
-              SaveOptions();
-              proposal = next;
-              proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
-              manualSplits = false;
-            }
-            continue;
-          }
-          if (result == GetResult.Nothing)
-            break;
-          if (result != GetResult.Point)
-            return false;
-          if (seamMoving < 0)
-            continue;
-
-          var updated = UpdateDrag(getter.Point());
-          seamMoving = -1;
-          dragging = false;
-          dragPivot = Point3d.Unset;
-          if (!updated)
-            RhinoApp.WriteLine("vShade: that pivot cannot form valid parts within SplitWidth; last valid preview kept.");
-        }
-
-        var placementAnchor = DefaultSplitPreviewAnchor(source, cplane);
-        while (true)
-        {
-          using var getter = new GetPoint();
-          getter.EnableTransparentCommands(true);
-          getter.SetCommandPrompt("Place split parts; Enter uses the shown location");
-          getter.AcceptNothing(true);
-          getter.AcceptNumber(true, false);
-          var widthOption = new OptionDouble(_splitWidth, SplitJointOverlap * 2 + tolerance, double.MaxValue);
-          getter.AddOptionDouble("SplitWidth", ref widthOption);
-          getter.MouseMove += (_, e) => placementAnchor = e.Point;
-          getter.DynamicDraw += (_, e) => DrawSplitPreview(
-            e.Display, doc, source, proposal, panels, cplane, placementAnchor, -1, sourceColor);
-          var result = getter.Get();
-          if (result == GetResult.Option || result == GetResult.Number)
-          {
-            var newWidth = result == GetResult.Number ? getter.Number() : widthOption.CurrentValue;
-            if (!double.IsFinite(newWidth) || newWidth <= SplitJointOverlap * 2 + tolerance ||
-                !TryProposeSplit(source, sourcePlane, newWidth, out var next) ||
-                !TryReplaceSplitPanels(doc, outputIds, source, next, tolerance, panels))
-            {
-              RhinoApp.WriteLine("vShade: enter a larger valid SplitWidth.");
-              continue;
-            }
-            _splitWidth = newWidth;
-            SaveOptions();
-            proposal = next;
-            proposal = proposal with { MaterialLength = SplitMaterialLength(panels) };
-            continue;
-          }
-          if (result is not (GetResult.Point or GetResult.Nothing))
-            return false;
-          if (result == GetResult.Point)
-            placementAnchor = getter.Point();
-          if (CommitSplit(doc, source, sessionId,
-                outputIds, proposal, panels, cplane, placementAnchor, tolerance, beginSplitUndo))
-          {
-            RhinoApp.WriteLine($"vShade: created {CountText.Format(panels.Count, "split part")} within width {_splitWidth:G5}; material length {proposal.MaterialLength:G5}.");
-            return true;
-          }
-          return false;
-        }
-      }
-      finally
-      {
-        foreach (var panel in panels)
-          panel.Dispose();
-      }
+      var ids = outputIds.Where(id => id == source.Id || doc.Objects.FindId(id)?.Attributes.GetUserString(MetadataPrefix + "role")
+        is "boundary" or "perpendicular" or "connection" or "scallop" or "reinforcement" or "label").ToArray();
+      return PartSplitWorkflow.Run(doc, ids, _splitWidth, width => { beginSplitUndo(); _splitWidth = width; },
+        _splitSeamType, type=>_splitSeamType=type) == Result.Success;
     }
 
     private static RhinoObject? FindSplitSource(RhinoDoc doc, IReadOnlyList<Guid> outputIds) =>
@@ -3210,774 +3226,6 @@ namespace vTools.Commands
         .Where(obj => obj!.Attributes.GetUserString(MetadataPrefix + "role") is "cut" or "boundary")
         .OrderBy(obj => obj!.Attributes.GetUserString(MetadataPrefix + "role") == "cut" ? 0 : 1)
         .FirstOrDefault();
-
-    private static double PlaneAngle(Plane plane, Vector3d direction) =>
-      Math.Atan2(direction * plane.YAxis, direction * plane.XAxis);
-
-    private static double SplitDragAngle(Plane plane, Vector3d direction, Vector3d previousAxis)
-    {
-      // Either endpoint can move without reversing the laid-out parts' frame.
-      if (direction * previousAxis < 0.0) direction = -direction;
-      return PlaneAngle(plane, direction);
-    }
-
-    private static PlanarPartSplitter.Settings SplitPlannerSettings(double width) => new(
-      width, SplitJointOverlap / 2, SplitJointOverlap, SplitLayoutGap, ConfiguredSplitAngleStepDegrees,
-      ConfiguredSplitBoundarySamples, SplitMaxParts, ConfiguredSplitSeamRefinementSteps, ConfiguredSplitSeamRefinementPasses);
-
-    private static PlanarPartSplitter.Proposal SharedSplitProposal(SplitProposal proposal) =>
-      new(proposal.Frame, proposal.MinY, proposal.MaxY, proposal.Seams, proposal.MaterialLength);
-
-    private static SplitProposal ShadeSplitProposal(PlanarPartSplitter.Proposal proposal) =>
-      new(proposal.Frame, proposal.MinY, proposal.MaxY, proposal.Seams, proposal.MaterialLength);
-
-    private static bool TryProposeSplitAtPivot(
-      Curve source, Plane sourcePlane, double width, double angle, Point3d pivot,
-      out SplitProposal proposal, out int pivotSeamIndex)
-    {
-      var valid = PlanarPartSplitter.TryAtPivot(source, sourcePlane, SplitPlannerSettings(width),
-        angle, pivot, out var shared, out pivotSeamIndex);
-      proposal = valid ? ShadeSplitProposal(shared) : null!;
-      return valid;
-    }
-
-    private static bool TryProposeSplit(Curve source, Plane cplane, double width, out SplitProposal proposal)
-    {
-      if(TryWholeSplitProposal(source,cplane,width,out proposal))return true;
-      var valid = PlanarPartSplitter.TryPropose(source, cplane, SplitPlannerSettings(width), out var shared);
-      proposal = valid ? ShadeSplitProposal(shared) : null!;
-      return valid;
-    }
-
-    private static bool TryWholeSplitProposal(Curve source,Plane plane,double width,out SplitProposal proposal)
-    {
-      proposal=null!;
-      if(!double.IsFinite(width)||width<=0)return false;
-      var parameters=source.DivideByCount(ConfiguredSplitBoundarySamples,true);
-      if(parameters==null||parameters.Length<3)return false;
-      var points=source.TryGetPolyline(out var polyline)?polyline.ToArray():parameters.Select(source.PointAt).ToArray();
-      var angles=Enumerable.Range(0,(int)Math.Ceiling(180/ConfiguredSplitAngleStepDegrees)).Select(index=>RhinoMath.ToRadians(index*ConfiguredSplitAngleStepDegrees))
-        .Concat(points.Zip(points.Skip(1),(a,b)=>PlaneAngle(plane,b-a))).Distinct();
-      SplitProposal? whole=null;double bestWidth=double.PositiveInfinity,bestAngle=0;
-      void Test(double angle)
-      {
-        var frame=PlanarPartSplitter.RotatedFrame(plane,angle);var bounds=source.GetBoundingBox(frame);
-        if(!bounds.IsValid)return;
-        double span=bounds.Diagonal.Y;
-        if(span<bestWidth){bestWidth=span;bestAngle=angle;}
-        if(span<=width+RhinoMath.ZeroTolerance&&(whole==null||bounds.Diagonal.X<whole.MaterialLength))
-          whole=new(frame,bounds.Min.Y,bounds.Max.Y,[],bounds.Diagonal.X);
-      }
-      foreach(double angle in angles)Test(angle);
-      double step=RhinoMath.ToRadians(ConfiguredSplitAngleStepDegrees)/2;
-      for(int pass=0;whole==null&&pass<ConfiguredWholeFitRefinementPasses;pass++,step/=2)
-      {double center=bestAngle;Test(center-step);Test(center+step);}
-      if(whole==null)return false;
-      proposal=whole;return true;
-    }
-
-    private static bool ValidSplitSeams(SplitProposal proposal, double width, double tolerance) =>
-      proposal.Seams.Count==0?proposal.MaxY>proposal.MinY&&proposal.MaxY-proposal.MinY<=width+tolerance:
-        PlanarPartSplitter.Valid(SharedSplitProposal(proposal),
-          SplitPlannerSettings(width) with { MaxParts = Math.Max(SplitMaxParts, proposal.Seams.Count + 1) }, tolerance);
-
-    private static bool TryInsertSplit(Curve source, SplitProposal proposal, Point3d point,
-      double width, double tolerance, out SplitProposal next)
-    {
-      next = proposal;
-      if (!point.IsValid) return false;
-      double y = FrameY(proposal.Frame, point);
-      if (y <= proposal.MinY + tolerance || y >= proposal.MaxY - tolerance ||
-          proposal.Seams.Any(seam => Math.Abs(seam - y) <= tolerance)) return false;
-      var candidate = proposal with { Seams = proposal.Seams.Append(y).OrderBy(seam => seam).ToList() };
-      if (!ValidSplitSeams(candidate, width, tolerance)) return false;
-      using var cut = BuildSplitSeam(source, candidate.Frame, y, tolerance);
-      if (cut == null) return false;
-      next = candidate;
-      return true;
-    }
-
-    private static bool TryAdjustManualSplit(Curve source, Plane plane, double width, SplitProposal proposal,
-      int seamIndex, double angle, Point3d pivot, double tolerance, out SplitProposal next)
-    {
-      next = proposal;
-      if (seamIndex < 0 || seamIndex >= proposal.Seams.Count || !pivot.IsValid) return false;
-      var frame = PlanarPartSplitter.RotatedFrame(plane, angle);
-      var bounds = source.GetBoundingBox(frame);
-      if (!bounds.IsValid) return false;
-      double shift = FrameY(frame, pivot) - proposal.Seams[seamIndex];
-      var candidate = new SplitProposal(frame, bounds.Min.Y, bounds.Max.Y,
-        proposal.Seams.Select(y => y + shift).ToList(), proposal.MaterialLength);
-      if (!ValidSplitSeams(candidate, width, tolerance)) return false;
-      next = candidate;
-      return true;
-    }
-
-    private static bool TryReplaceSplitPanels(
-      RhinoDoc doc, IReadOnlyList<Guid> outputIds,
-      Curve source, SplitProposal proposal, double tolerance, List<SplitPanel> panels)
-    {
-      var replacement = new List<SplitPanel>();
-      if (!TryBuildSplitPanels(doc, outputIds, source, proposal, tolerance, replacement))
-        return false;
-      foreach (var panel in panels)
-        panel.Dispose();
-      panels.Clear();
-      panels.AddRange(replacement);
-      return true;
-    }
-
-    private static double SplitMaterialLength(IReadOnlyList<SplitPanel> panels) =>
-      panels.Sum(panel => panel.Bounds.Max.X - panel.Bounds.Min.X) +
-      Math.Max(0, panels.Count - 1) * SplitLayoutGap;
-
-    private static bool TryBuildSplitPanels(
-      RhinoDoc doc, IReadOnlyList<Guid> outputIds,
-      Curve source, SplitProposal proposal, double tolerance, List<SplitPanel> panels)
-    {
-      try
-      {
-        for (var index = 0; index <= proposal.Seams.Count; index++)
-        {
-          var lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1] - SplitJointOverlap / 2;
-          var upper = index == proposal.Seams.Count ? proposal.MaxY : proposal.Seams[index] + SplitJointOverlap / 2;
-          var outline = BuildExactSplitOutline(
-            source, proposal.Frame, lower, upper,
-            index > 0, index < proposal.Seams.Count, tolerance);
-          if (outline == null)
-          {
-            throw new InvalidOperationException($"part {index + 1} could not be assembled from the original cut boundary");
-          }
-          var faces = Brep.CreatePlanarBreps(outline, tolerance);
-          var face = faces?.FirstOrDefault();
-          if (faces != null)
-            foreach (var extra in faces.Skip(1))
-              extra.Dispose();
-          panels.Add(new SplitPanel(
-            outline, outline.GetBoundingBox(proposal.Frame), face));
-        }
-        for (var index = 0; index < panels.Count; index++)
-        {
-          var panel = panels[index];
-          foreach (var sourceId in outputIds)
-          {
-            var obj = doc.Objects.FindId(sourceId);
-            if (obj == null || obj.Attributes.LayerIndex < 0 ||
-                obj.Attributes.LayerIndex >= doc.Layers.Count)
-              continue;
-            if(obj.Attributes.GetUserString(MetadataPrefix+"role") is "reinforcement_part" or "reinforcement_part_label") continue;
-            var color = doc.Layers[obj.Attributes.LayerIndex]?.Color ?? Color.Black;
-            if (obj.Geometry is Curve detail && !ReferenceEquals(detail, source) &&
-                obj.Attributes.GetUserString(MetadataPrefix + "role") is not ("bisector" or "cut"))
-            {
-              bool boundary = obj.Attributes.GetUserString(MetadataPrefix + "role") == "boundary";
-              foreach (var clipped in ClipSplitPartDetail(
-                detail, panel, proposal.Frame, tolerance, boundary))
-                panel.PreviewDetails.Add((clipped, color));
-            }
-          }
-        }
-        foreach (var obj in SplitLabelObjects(doc, outputIds))
-          BuildSplitLabelPieces(doc, obj, proposal, panels, tolerance);
-        return true;
-      }
-      catch (Exception ex)
-      {
-        foreach (var panel in panels)
-          panel.Dispose();
-        panels.Clear();
-        Log.Write("vShade", $"split layout rejected: {ex.Message}");
-        return false;
-      }
-    }
-
-    private static Curve? BuildExactSplitOutline(
-      Curve source, Plane frame, double lower, double upper,
-      bool cutLower, bool cutUpper, double tolerance)
-    {
-      var seams = new List<Curve>();
-      var pieces = new List<Curve>();
-      try
-      {
-        if (cutLower)
-        {
-          var seam = BuildSplitSeam(source, frame, lower, tolerance);
-          if (seam == null) return null;
-          seams.Add(seam);
-        }
-        if (cutUpper)
-        {
-          var seam = BuildSplitSeam(source, frame, upper, tolerance);
-          if (seam == null) return null;
-          seams.Add(seam);
-        }
-
-        var parameters = new List<double>();
-        foreach (var seam in seams)
-        {
-          if (!source.ClosestPoint(seam.PointAtStart, out double first) ||
-              !source.ClosestPoint(seam.PointAtEnd, out double last) ||
-              source.PointAt(first).DistanceTo(seam.PointAtStart) > tolerance ||
-              source.PointAt(last).DistanceTo(seam.PointAtEnd) > tolerance)
-            return null;
-          parameters.Add(first);
-          parameters.Add(last);
-        }
-        var splitParameters = parameters
-          .Where(t => t > source.Domain.T0 + RhinoMath.ZeroTolerance &&
-                      t < source.Domain.T1 - RhinoMath.ZeroTolerance)
-          .Distinct()
-          .OrderBy(t => t)
-          .ToArray();
-        var split = splitParameters.Length == 0
-          ? new[] { source.DuplicateCurve() }
-          : source.Split(splitParameters);
-        if (split == null || split.Length == 0)
-          return null;
-        foreach (var piece in split)
-        {
-          var y = FrameY(frame, piece.PointAtNormalizedLength(0.5));
-          if (y >= lower - tolerance && y <= upper + tolerance)
-            pieces.Add(piece);
-          else
-            piece.Dispose();
-        }
-        if (pieces.Count == 0)
-          return null;
-        pieces.AddRange(seams.Select(seam => seam.DuplicateCurve()));
-        var joined = Curve.JoinCurves(pieces, tolerance, preserveDirection: false);
-        if (joined.Length != 1 || !joined[0].IsClosed)
-        {
-          foreach (var curve in joined) curve.Dispose();
-          return null;
-        }
-        return joined[0];
-      }
-      finally
-      {
-        foreach (var seam in seams) seam.Dispose();
-        foreach (var piece in pieces) piece.Dispose();
-      }
-    }
-
-    private static double FrameY(Plane frame, Point3d point) => (point - frame.Origin) * frame.YAxis;
-
-    private static int FindSplitSeam(
-      Rhino.Display.RhinoViewport viewport, int x, int y, Curve source, SplitProposal proposal)
-    {
-      if (!viewport.GetFrustumLine(x, y, out var ray) ||
-          !Intersection.LinePlane(ray, proposal.Frame, out var parameter))
-        return -1;
-      var cursorY = FrameY(proposal.Frame, ray.PointAt(parameter));
-      var cursorX = (ray.PointAt(parameter) - proposal.Frame.Origin) * proposal.Frame.XAxis;
-      var bounds = source.GetBoundingBox(proposal.Frame);
-      if (cursorX < bounds.Min.X || cursorX > bounds.Max.X)
-        return -1;
-      var nearest = ConfiguredTunePickRadiusPixels;
-      var result = -1;
-      for (var index = 0; index < proposal.Seams.Count; index++)
-      {
-        var point = ray.PointAt(parameter) + proposal.Frame.YAxis * (proposal.Seams[index] - cursorY);
-        var pixel = viewport.WorldToClient(point);
-        var dx = pixel.X - x;
-        var dy = pixel.Y - y;
-        var distance = Math.Sqrt(dx * dx + dy * dy);
-        if (distance >= nearest)
-          continue;
-        nearest = distance;
-        result = index;
-      }
-      return result;
-    }
-
-    private static Point3d DefaultSplitPreviewAnchor(Curve source, Plane plane)
-    {
-      var bounds = source.GetBoundingBox(plane);
-      return plane.PointAt(bounds.Max.X + SplitLayoutGap * 4, bounds.Min.Y);
-    }
-
-    private static Transform PanelTransform(
-      Plane frame, Plane cplane, Point3d anchor, BoundingBox bounds, double xOffset)
-    {
-      var target = new Plane(anchor, cplane.XAxis, cplane.YAxis);
-      return Transform.Translation(target.XAxis * (xOffset - bounds.Min.X) -
-                                   target.YAxis * bounds.Min.Y) *
-             Transform.PlaneToPlane(frame, target);
-    }
-
-    private static void DrawSplitPreview(
-      Rhino.Display.DisplayPipeline display,
-      RhinoDoc doc,
-      Curve source,
-      SplitProposal proposal,
-      IReadOnlyList<SplitPanel> panels,
-      Plane cplane,
-      Point3d anchor,
-      int highlightedSeam,
-      Color sourceColor)
-    {
-      var cutLayerIndex = doc.Layers.FindByFullPath(_cutLayer, -1);
-      var cutColor = cutLayerIndex >= 0 ? doc.Layers[cutLayerIndex].Color : sourceColor;
-      var fadedCut = FadedSplitColor(cutColor);
-      var plotLayerIndex = doc.Layers.FindByFullPath(SplitOverlapLayerName, -1);
-      var plotColor = plotLayerIndex >= 0
-        ? doc.Layers[plotLayerIndex].Color
-        : DefaultSplitPlotColor;
-      var fadedPlot = FadedSplitColor(plotColor);
-      for (var index = 0; index < proposal.Seams.Count; index++)
-      {
-        using var seam = BuildSplitSeam(
-          source, proposal.Frame, proposal.Seams[index], doc.ModelAbsoluteTolerance);
-        if (seam != null)
-        {
-          if (index == highlightedSeam)
-            PreviewDisplay.DrawOutlinedCurve(display, seam, SplitSeamColor);
-          else
-            PreviewDisplay.DrawCurve(display, seam, SplitSeamColor);
-        }
-      }
-      var xOffset = 0.0;
-      using var ghostMaterial = new Rhino.Display.DisplayMaterial(sourceColor)
-      {
-        Transparency = ConfiguredSplitGhostTransparency,
-        BackTransparency = ConfiguredSplitGhostTransparency
-      };
-      for (var panelIndex = 0; panelIndex < panels.Count; panelIndex++)
-      {
-        var panel = panels[panelIndex];
-        var transform = PanelTransform(proposal.Frame, cplane, anchor, panel.Bounds, xOffset);
-        if (panel.Face != null)
-        {
-          using var face = panel.Face.DuplicateBrep();
-          face.Transform(transform);
-          display.DrawBrepShaded(face, ghostMaterial);
-        }
-        foreach (var detail in panel.PreviewDetails)
-        {
-          using var copy = detail.Geometry.Duplicate();
-          if (copy == null)
-            continue;
-          copy.Transform(transform);
-          var color = FadedSplitColor(detail.Color);
-          if (copy is Curve curve)
-            PreviewDisplay.DrawCurve(display, curve, color);
-          else if (copy is TextEntity label)
-            display.DrawAnnotation(label, color);
-        }
-        foreach (var seamIndex in new[] { panelIndex - 1, panelIndex })
-        {
-          if (seamIndex < 0 || seamIndex >= proposal.Seams.Count)
-            continue;
-          var overlapY = OverlapMarkY(proposal.Seams[seamIndex], panelIndex, seamIndex);
-          using var overlapLine = BuildSplitSeam(
-            source, proposal.Frame, overlapY, doc.ModelAbsoluteTolerance);
-          if (overlapLine == null)
-            continue;
-          using var overlapLabel = CreateOverlapLabel(
-            doc, source, proposal.Frame, overlapLine, proposal.Seams[seamIndex], overlapY,
-            seamIndex + 1);
-          overlapLine.Transform(transform);
-          overlapLabel.Transform(transform);
-          PreviewDisplay.DrawCurve(display, overlapLine, fadedPlot);
-          display.DrawAnnotation(overlapLabel, fadedPlot);
-        }
-        using var preview = panel.Outline.DuplicateCurve();
-        preview.Transform(transform);
-        PreviewDisplay.DrawCurve(display, preview, fadedCut);
-        xOffset += panel.Bounds.Max.X - panel.Bounds.Min.X + SplitLayoutGap;
-      }
-    }
-
-    private static Color FadedSplitColor(Color color) =>
-      Color.FromArgb(ConfiguredSplitPreviewAlpha, color.R, color.G, color.B);
-
-    private static Curve? BuildSplitSeam(Curve source, Plane frame, double y, double tolerance) =>
-      PlanarPartSplitter.Seam(source, frame, y, tolerance);
-
-    private static double OverlapMarkY(double seamY, int partIndex, int seamIndex) =>
-      seamY + (seamIndex == partIndex ? -SplitJointOverlap / 2 : SplitJointOverlap / 2);
-
-    private static TextEntity CreateOverlapLabel(
-      RhinoDoc doc,
-      Curve source,
-      Plane frame,
-      Curve overlapLine,
-      double seamY,
-      double overlapY,
-      int seamNumber)
-    {
-      var cutY = 2.0 * seamY - overlapY;
-      using var cutLine = BuildSplitSeam(
-        source, frame, cutY, doc.ModelAbsoluteTolerance);
-      var overlapBounds = overlapLine.GetBoundingBox(frame);
-      var cutBounds = cutLine?.GetBoundingBox(frame) ?? overlapBounds;
-      double minX = Math.Max(overlapBounds.Min.X, cutBounds.Min.X);
-      double maxX = Math.Min(overlapBounds.Max.X, cutBounds.Max.X);
-      if (maxX <= minX)
-      {
-        minX = overlapBounds.Min.X;
-        maxX = overlapBounds.Max.X;
-      }
-      var origin = frame.PointAt((minX + maxX) / 2.0, seamY);
-      var text = new TextEntity
-      {
-        DimensionStyleId = doc.DimStyles.Current.Id,
-        Plane = new Plane(origin, frame.XAxis, frame.YAxis),
-        TextHeight = SplitOverlapLabelHeight,
-        Justification = TextJustification.BottomLeft,
-        DimensionScale = ConfiguredDefaultLabelDimensionScale,
-        TextOrientation = TextOrientation.InPlane,
-        DrawForward = false,
-        PlainText = LabelSequences.FormatDisplayLabel(seamNumber.ToString(CultureInfo.InvariantCulture))
-      };
-      if (!AnnotationTextTransform.ApplyFixedDisplayTextHeight(
-        doc, text, doc.Views.ActiveView?.ActiveViewport,
-        SplitOverlapLabelHeight, ConfiguredDefaultLabelDimensionScale))
-        Log.Write("vShade", $"split seam text height override failed scale={doc.ModelSpaceTextScale:G17}");
-      var bounds = OverlapLabelGlyphBounds(doc, text, frame);
-      if (bounds.IsValid)
-      {
-        text.Transform(Transform.Translation(
-          frame.XAxis * (((minX + maxX) / 2.0) - bounds.Center.X) +
-          frame.YAxis * (seamY - bounds.Center.Y)));
-      }
-      return text;
-    }
-
-    private static BoundingBox OverlapLabelGlyphBounds(RhinoDoc doc, TextEntity text, Plane frame)
-    {
-      var parentStyle = doc.DimStyles.FindId(text.DimensionStyleId) ?? doc.DimStyles.Current;
-      using var measurement = (TextEntity)text.Duplicate();
-      measurement.ParentDimensionStyle = parentStyle;
-      measurement.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(
-        doc, text, doc.Views.ActiveView?.ActiveViewport);
-      using var style = measurement.GetDimensionStyle(parentStyle);
-      var outlines = measurement.CreateCurves(style ?? parentStyle, true,
-        ConfiguredSplitLabelGlyphScale, SplitLabelGlyphSpacing);
-      if (outlines == null || outlines.Length == 0)
-        return text.GetBoundingBox(frame);
-      var bounds = BoundingBox.Empty;
-      foreach (var outline in outlines)
-      {
-        try { bounds.Union(outline.GetBoundingBox(frame)); }
-        finally { outline.Dispose(); }
-      }
-      return bounds.IsValid ? bounds : text.GetBoundingBox(frame);
-    }
-
-    private static RhinoObject[] SplitLabelObjects(RhinoDoc doc,IReadOnlyList<Guid> outputIds)
-    {
-      var output=outputIds.Select(doc.Objects.FindId).Where(obj=>obj!=null).Cast<RhinoObject>().ToArray();
-      var groups=output.Where(obj=>obj.Attributes.GetUserString(MetadataPrefix+"role")!="bisector")
-        .SelectMany(obj=>obj.Attributes.GetGroupList()??[]).Distinct();
-      return output.Concat(groups.SelectMany(group=>doc.Groups.GroupMembers(group)))
-        .Where(obj=>obj.Geometry is TextEntity or TextDot).DistinctBy(obj=>obj.Id).ToArray();
-    }
-
-    private static void BuildSplitLabelPieces(RhinoDoc doc, RhinoObject obj, SplitProposal proposal,
-      IReadOnlyList<SplitPanel> panels, double tolerance)
-    {
-      if (obj.Attributes.GetUserString(MetadataPrefix + "role") is "reinforcement_part_label") return;
-      void Add(SplitPanel panel, GeometryBase geometry)
-      {
-        panel.PreviewDetails.Add((geometry, obj.Attributes.DrawColor(doc)));
-        panel.LabelDetails.Add((geometry, obj.Attributes.Duplicate()));
-      }
-      if (obj.Geometry is TextDot dot)
-      {
-        double y = FrameY(proposal.Frame, dot.Point);
-        for (int index = 0; index < panels.Count; index++)
-        {
-          double lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
-          double upper = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
-          if (y >= lower - tolerance && y <= upper + tolerance &&
-              panels[index].Outline.Contains(dot.Point, proposal.Frame, tolerance) != PointContainment.Outside)
-          { Add(panels[index], dot.Duplicate()); break; }
-        }
-        return;
-      }
-      if (obj.Geometry is not TextEntity text) return;
-      var parent = doc.DimStyles.FindId(text.DimensionStyleId) ?? doc.DimStyles.Current;
-      using var measurement = (TextEntity)text.Duplicate();
-      measurement.ParentDimensionStyle = parent;
-      measurement.DimensionScale = AnnotationTextTransform.ResolveDisplayDimensionScale(doc, text, doc.Views.ActiveView?.ActiveViewport);
-      using var style = measurement.GetDimensionStyle(parent);
-      var glyphs = measurement.CreateCurves(style ?? parent, true, ConfiguredSplitLabelGlyphScale, SplitLabelGlyphSpacing) ?? [];
-      try
-      {
-        var bounds = BoundingBox.Empty;
-        foreach (var glyph in glyphs) bounds.Union(glyph.GetBoundingBox(proposal.Frame));
-        if (!bounds.IsValid) bounds = text.GetBoundingBox(proposal.Frame);
-        bool crosses = proposal.Seams.Any(y => bounds.Min.Y < y - tolerance && bounds.Max.Y > y + tolerance);
-        if (!crosses)
-        {
-          double y = bounds.Center.Y;
-          for (int index = 0; index < panels.Count; index++)
-          {
-            double lower = index == 0 ? proposal.MinY : proposal.Seams[index - 1];
-            double upper = index == panels.Count - 1 ? proposal.MaxY : proposal.Seams[index];
-            if (y < lower - tolerance || y > upper + tolerance) continue;
-            bool Inside(Curve glyph)
-            {
-              if (panels[index].Outline.Contains(glyph.PointAtStart, proposal.Frame, tolerance) == PointContainment.Outside) return false;
-              using var intersections = Intersection.CurveCurve(glyph, panels[index].Outline, tolerance, tolerance);
-              return intersections != null && intersections.Count == 0;
-            }
-            bool contained = glyphs.Length == 0
-              ? panels[index].Outline.Contains(text.Plane.Origin, proposal.Frame, tolerance) != PointContainment.Outside
-              : glyphs.All(Inside);
-            if (contained) { Add(panels[index], text.Duplicate()); return; }
-          }
-        }
-        if (glyphs.Length == 0 && crosses)
-          throw new InvalidOperationException($"could not outline text '{text.PlainText}' crossing a split");
-        foreach (var panel in panels)
-        foreach (var glyph in glyphs)
-        foreach (var clipped in ClipSplitDetail(glyph, panel.Outline, proposal.Frame, tolerance))
-          Add(panel, clipped);
-      }
-      finally { foreach (var glyph in glyphs) glyph.Dispose(); }
-    }
-
-    private static bool CommitSplit(
-      RhinoDoc doc, Curve source, Guid sessionId, IReadOnlyList<Guid> outputIds,
-      SplitProposal proposal, IReadOnlyList<SplitPanel> panels,
-      Plane cplane, Point3d anchor, double tolerance, Action beginSplitUndo)
-    {
-      var created = new List<Guid>();
-      var sourceSeams = new List<Guid>();
-      var createdGroups = new List<int>();
-      var splitId = Guid.NewGuid();
-      try
-      {
-        beginSplitUndo();
-        var referenceLayer = UzipCommon.EnsureLayer(doc, ReferenceLayerName, ReferenceLayerColor);
-        var cutLayer = UzipCommon.EnsureLayer(doc, _cutLayer);
-        var overlapLayer = proposal.Seams.Count > 0
-          ? UzipCommon.EnsureLayer(doc, SplitOverlapLayerName)
-          : -1;
-        foreach (var y in proposal.Seams)
-        {
-          using var seam = BuildSplitSeam(source, proposal.Frame, y, tolerance);
-          if (seam == null)
-            throw new InvalidOperationException("a cut line no longer crosses the shade twice");
-          var attributes = new ObjectAttributes { LayerIndex = referenceLayer, Name = SplitSeamObjectName };
-          attributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-          attributes.SetUserString(MetadataPrefix + "source_session", sessionId.ToString());
-          var id = doc.Objects.AddCurve(seam, attributes);
-          if (id == Guid.Empty)
-            throw new InvalidOperationException("could not create a split cut line");
-          created.Add(id);
-          sourceSeams.Add(id);
-        }
-
-        var xOffset = 0.0;
-        for (var index = 0; index < panels.Count; index++)
-        {
-          var partIds = new List<Guid>();
-          var panel = panels[index];
-          var transform = PanelTransform(proposal.Frame, cplane, anchor, panel.Bounds, xOffset);
-          foreach (var seamIndex in new[] { index - 1, index })
-          {
-            if (seamIndex < 0 || seamIndex >= proposal.Seams.Count)
-              continue;
-            var overlapY = OverlapMarkY(proposal.Seams[seamIndex], index, seamIndex);
-            using var overlapLine = BuildSplitSeam(source, proposal.Frame, overlapY, tolerance);
-            if (overlapLine == null)
-              throw new InvalidOperationException("could not mark the overlap on a split part");
-            using var overlapLabel = CreateOverlapLabel(
-              doc, source, proposal.Frame, overlapLine, proposal.Seams[seamIndex], overlapY,
-              seamIndex + 1);
-            overlapLine.Transform(transform);
-            overlapLabel.Transform(transform);
-            var overlapAttributes = new ObjectAttributes
-            {
-              LayerIndex = overlapLayer,
-              Name = SplitOverlapLineObjectName
-            };
-            overlapAttributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-            overlapAttributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-            var overlapId = doc.Objects.AddCurve(overlapLine, overlapAttributes);
-            if (overlapId == Guid.Empty)
-              throw new InvalidOperationException("could not add an overlap line");
-            created.Add(overlapId);
-            partIds.Add(overlapId);
-
-            var labelAttributes = new ObjectAttributes
-            {
-              LayerIndex = overlapLayer,
-              Name = SplitOverlapLabelObjectName
-            };
-            labelAttributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-            labelAttributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-            var overlapLabelId = doc.Objects.AddText(overlapLabel, labelAttributes);
-            if (overlapLabelId == Guid.Empty)
-              throw new InvalidOperationException("could not add an overlap label");
-            created.Add(overlapLabelId);
-            partIds.Add(overlapLabelId);
-            var placedFrame = proposal.Frame;
-            placedFrame.Transform(transform);
-            var placedLabel = doc.Objects.FindId(overlapLabelId)?.Geometry as TextEntity ?? overlapLabel;
-            var glyphBounds = OverlapLabelGlyphBounds(doc, placedLabel, placedFrame);
-            var cutY = 2.0 * proposal.Seams[seamIndex] - overlapY;
-            var clearance = Math.Min(
-              glyphBounds.Min.Y - Math.Min(cutY, overlapY),
-              Math.Max(cutY, overlapY) - glyphBounds.Max.Y);
-            Log.Write("vShade", $"split label={overlapLabelId} part={index + 1} " +
-              $"seam={seamIndex + 1} cutY={cutY:G17} " +
-              $"plotY={overlapY:G17} height={overlapLabel.TextHeight:G6} " +
-              $"glyphY=[{glyphBounds.Min.Y:G6},{glyphBounds.Max.Y:G6}] " +
-              $"clearance={clearance:G6} fits={glyphBounds.IsValid && clearance >= ConfiguredSplitOverlapLabelMargin} " +
-              $"displayScale={AnnotationTextTransform.ResolveDisplayDimensionScale(doc, overlapLabel, doc.Views.ActiveView?.ActiveViewport):G6} " +
-              $"modelScale={doc.ModelSpaceTextScale:G6} layer={doc.Layers[overlapLayer]?.FullPath}");
-          }
-
-          foreach (var sourceId in outputIds)
-          {
-            var obj = doc.Objects.FindId(sourceId);
-            if (obj?.Geometry is not Curve detail || ReferenceEquals(detail, source) ||
-                obj.Attributes.GetUserString(MetadataPrefix + "role") is "bisector" or "cut")
-              continue;
-            bool boundary = obj.Attributes.GetUserString(MetadataPrefix + "role") == "boundary";
-            foreach (var clipped in ClipSplitPartDetail(
-              detail, panel, proposal.Frame, tolerance, boundary))
-            {
-              using (clipped)
-              {
-                clipped.Transform(transform);
-                var detailAttributes = new ObjectAttributes
-                {
-                  LayerIndex = obj.Attributes.LayerIndex,
-                  Name = SplitPartObjectName
-                };
-                detailAttributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-                detailAttributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-                var detailId = doc.Objects.AddCurve(clipped, detailAttributes);
-                if (detailId == Guid.Empty)
-                  throw new InvalidOperationException("could not copy split detail");
-                created.Add(detailId);
-                partIds.Add(detailId);
-              }
-            }
-          }
-          foreach (var detail in panel.LabelDetails)
-          {
-            using var copy = detail.Geometry.Duplicate();
-            if (copy == null)
-              continue;
-            copy.Transform(transform);
-            using var labelAttributes = detail.Attributes.Duplicate();
-            labelAttributes.RemoveFromAllGroups();labelAttributes.Name=SplitPartObjectName;
-            labelAttributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-            labelAttributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-            var labelId = doc.Objects.Add(copy, labelAttributes);
-            if (labelId == Guid.Empty)
-              throw new InvalidOperationException("could not copy split text or label outlines");
-            created.Add(labelId);
-            partIds.Add(labelId);
-          }
-          using var outline = panel.Outline.DuplicateCurve();
-          outline.Transform(transform);
-          var attributes = new ObjectAttributes
-          {
-            LayerIndex = cutLayer,
-            Name = SplitPartObjectName
-          };
-          attributes.SetUserString(MetadataPrefix + "split", splitId.ToString());
-          attributes.SetUserString(MetadataPrefix + "source_session", sessionId.ToString());
-          attributes.SetUserString(MetadataPrefix + "part", (index + 1).ToString(CultureInfo.InvariantCulture));
-          var id = doc.Objects.AddCurve(outline, attributes);
-          if (id == Guid.Empty)
-            throw new InvalidOperationException($"could not create part {index + 1}");
-          created.Add(id);
-          partIds.Add(id);
-          Log.Write("vShade", $"split part={index + 1} cut={id} layer={doc.Layers[cutLayer]?.FullPath}");
-          var partGroup = doc.Groups.Add(
-            "vShadeSplit_" + splitId.ToString("N") + "_" + (index + 1).ToString(CultureInfo.InvariantCulture));
-          if (partGroup < 0)
-            throw new InvalidOperationException($"could not create group for part {index + 1}");
-          createdGroups.Add(partGroup);
-          if (!doc.Groups.AddToGroup(partGroup, partIds))
-            throw new InvalidOperationException($"could not group part {index + 1}");
-          xOffset += panel.Bounds.Max.X - panel.Bounds.Min.X + SplitLayoutGap;
-        }
-
-        if (sourceSeams.Count > 0)
-        {
-          var shadeGroupName = ShadeGroupPrefix + sessionId.ToString("N");
-          var shadeGroup = doc.Groups.FindName(shadeGroupName)?.Index;
-          if (!shadeGroup.HasValue)
-          {
-            shadeGroup = doc.Groups.Add(shadeGroupName);
-            if (shadeGroup.Value >= 0)
-              createdGroups.Add(shadeGroup.Value);
-          }
-          if (!shadeGroup.HasValue || shadeGroup.Value < 0 ||
-              !doc.Groups.AddToGroup(shadeGroup.Value, sourceSeams))
-            throw new InvalidOperationException("could not add split cuts to the original shade group");
-        }
-        BringOutputForward(doc,created);
-        doc.Views.Redraw();
-        Log.Write("vShade", $"split source={sessionId} parts={panels.Count} width={_splitWidth:G17} cuts={proposal.Seams.Count}");
-        return true;
-      }
-      catch (Exception ex)
-      {
-        foreach (var id in created)
-          doc.Objects.Delete(id, quiet: true);
-        foreach (var groupIndex in createdGroups)
-          doc.Groups.Delete(groupIndex);
-        doc.Views.Redraw();
-        Log.Write("vShade", $"split failed: {ex}");
-        RhinoApp.WriteLine($"vShade: split failed: {ex.Message}");
-        return false;
-      }
-    }
-
-    private static IEnumerable<Curve> ClipSplitDetail(Curve detail, Curve clip, Plane frame, double tolerance) =>
-      PlanarPartSplitter.ClipCurve(detail, clip, frame, tolerance);
-
-    private static IEnumerable<Curve> ClipSplitPartDetail(
-      Curve detail, SplitPanel panel, Plane frame, double tolerance, bool boundary)
-    {
-      if (!boundary)
-        return ClipSplitDetail(detail, panel.Outline, frame, tolerance);
-      var segments = detail.DuplicateSegments();
-      if (segments == null || segments.Length <= 1)
-      {
-        if (segments != null)
-          foreach (var segment in segments) segment.Dispose();
-        return ClipSplitDetail(detail, panel.Outline, frame, tolerance)
-          .Where(KeepDistinctCutDetail).ToArray();
-      }
-      var retained = new List<Curve>();
-      try
-      {
-        foreach (var segment in segments)
-          foreach (var clipped in ClipSplitDetail(segment, panel.Outline, frame, tolerance))
-            if (KeepDistinctCutDetail(clipped))
-              retained.Add(clipped);
-        return retained;
-      }
-      finally
-      {
-        foreach (var segment in segments) segment.Dispose();
-      }
-
-      bool KeepDistinctCutDetail(Curve candidate)
-      {
-        foreach (double fraction in new[] { 0.0, 0.5, 1.0 })
-        {
-          var point = candidate.PointAtNormalizedLength(fraction);
-          if (!panel.Outline.ClosestPoint(point, out double parameter) ||
-              point.DistanceTo(panel.Outline.PointAt(parameter)) >
-                tolerance * ConfiguredSplitCoincidentBoundaryToleranceMultiplier)
-            return true;
-        }
-        candidate.Dispose();
-        return false;
-      }
-    }
   }
 }
 
@@ -4002,11 +3250,12 @@ namespace vTools.Commands
         if(_createReinf&&placements.Count>0)
         {
           double tolerance=Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance);
+          using var sources = ResolveShadeSources(doc, placements, tolerance);
           AddReinforcementParts(doc,doc.Views.ActiveView?.ActiveViewport.ConstructionPlane()??Plane.WorldXY,
-            PrepareSourceCaps(doc,placements,scallopSizes,tolerance),Array.Empty<ShadeConnectionGeometry>(),sessionId,tolerance,retained);
+            PrepareSourceCaps(sources.Curves,placements,scallopSizes,tolerance),Array.Empty<ShadeConnectionGeometry>(),sessionId,tolerance,retained);
         }
         BringOutputForward(doc,retained.Skip(retainedCount));
-        SaveShadeState(doc,sessionId,placements,scallopSizes);
+        SaveShadeState(doc,sessionId,placements,scallopSizes,retained);
         foreach(var id in oldParts) doc.Objects.Delete(id,true);
         outputIds.Clear(); outputIds.AddRange(retained);
         doc.Views.Redraw();
@@ -4022,7 +3271,8 @@ namespace vTools.Commands
     }
 
     private static void AddReinforcementParts(RhinoDoc doc,Plane plane,IReadOnlyList<ShadePlacement> placements,
-      IReadOnlyList<ShadeConnectionGeometry> connections,Guid sessionId,double tolerance,List<Guid> outputIds)
+      IReadOnlyList<ShadeConnectionGeometry> connections,Guid sessionId,double tolerance,List<Guid> outputIds,
+      IReadOnlyDictionary<int, ReinforcementPose>? poses = null)
     {
       var originalObjects=outputIds.Select(doc.Objects.FindId).Where(obj=>obj!=null).Cast<RhinoObject>().ToArray();
       var cutCurves=originalObjects.Where(obj=>obj.Attributes.GetUserString(MetadataPrefix+"role")=="cut").Select(obj=>obj.Geometry).OfType<Curve>().ToArray();
@@ -4033,6 +3283,7 @@ namespace vTools.Commands
       var finished=Curve.JoinCurves(finishedPieces,tolerance,false);
       try
       {
+        var placed = new HashSet<int>();
         var borders=cutCurves.Length>0?cutCurves:finished.Where(curve=>curve.IsClosed).ToArray();
         foreach(var placement in placements)
         {
@@ -4046,13 +3297,25 @@ namespace vTools.Commands
             : incident.Length==2?ReinforcementPartOutline(arc,cap,incident[0],incident[1],placement.Sequence,tolerance):null;
           if(part==null) { Log.Write("vShade","reinforcement part skipped corner={0}: no closed finished-size outline",placement.Sequence); continue; }
           var border=borders.OrderBy(curve=>curve.ClosestPoint(placement.Geometry.OffsetEnd,out var parameter)?curve.PointAt(parameter).DistanceTo(placement.Geometry.OffsetEnd):double.MaxValue).FirstOrDefault();
-          if(border==null) continue;
           double gap=ReinforcementPartGapInches*RhinoMath.UnitScale(UnitSystem.Inches,doc.ModelUnitSystem);
           if(!double.IsFinite(gap)||gap<=0) gap=ReinforcementPartGapInches;
-          var translation=ReinforcementPartTranslation(part,border,plane,-placement.Geometry.InteriorDirection,gap,tolerance);
-          part.Transform(translation);
+          var samples = SampleReinforcementOutline(part);
+          Transform transform;
+          if (poses != null && poses.TryGetValue(placement.Sequence, out var pose))
+          {
+            using var area = AreaMassProperties.Compute(part);
+            if (area == null) throw new InvalidOperationException("could not locate the updated reinforcement center");
+            transform = Transform.Translation(pose.Center - (pose.Rotation * area.Centroid)) * pose.Rotation;
+          }
+          else
+          {
+            if (border == null) continue;
+            transform = ReinforcementPartTranslation(part,border,plane,-placement.Geometry.InteriorDirection,gap,tolerance);
+          }
+          if (!part.Transform(transform)) throw new InvalidOperationException("could not position the updated reinforcement");
           using var attributes=CreateIdentifiedAttributes(UzipCommon.EnsureLayer(doc,_cutLayer),ReinforcementPartObjectName,
             "reinforcement_part",sessionId,placement.Sequence,placement.FirstSourceId,placement.SecondSourceId);
+          attributes.SetUserString(ReinforcementPoseKey, System.Text.Json.JsonSerializer.Serialize(samples.Select(Components)));
           var id=doc.Objects.AddCurve(part,attributes);
           if(id==Guid.Empty) throw new InvalidOperationException("could not add detached reinforcement part");
           outputIds.Add(id); var groupIds=new List<Guid> {id};
@@ -4060,7 +3323,7 @@ namespace vTools.Commands
             obj.Attributes.GetUserString(MetadataPrefix+"sequence")==sequence);
           if(sourceLabel?.Geometry is TextEntity sourceText)
           {
-            using var text=(TextEntity)sourceText.Duplicate(); text.Transform(translation);
+            using var text=(TextEntity)sourceText.Duplicate(); text.Transform(transform);
             using var labelAttributes=sourceLabel.Attributes.Duplicate(); labelAttributes.RemoveFromAllGroups();
             labelAttributes.Name=ReinforcementPartLabelName; labelAttributes.SetUserString(MetadataPrefix+"role","reinforcement_part_label");
             var labelId=doc.Objects.AddText(text,labelAttributes);
@@ -4070,10 +3333,85 @@ namespace vTools.Commands
           var name=ReinforcementPartGroupPrefix+sessionId.ToString("N")+"_"+sequence;
           int group=doc.Groups.FindName(name)?.Index??doc.Groups.Add(name);
           if(group<0||!doc.Groups.AddToGroup(group,groupIds)) throw new InvalidOperationException("could not group detached reinforcement part");
+          NestWorkflow.AssignInitialPartMaterial(doc,group,_reinforcementMaterial);
+          placed.Add(placement.Sequence);
           Log.Write("vShade","reinforcement part corner={0} clearance={1:G17} {2} layer={3}",placement.Sequence,gap,doc.ModelUnitSystem,_cutLayer);
         }
+        if (poses != null && poses.Keys.Any(sequence => !placed.Contains(sequence)))
+          throw new InvalidOperationException("could not regenerate an existing detached reinforcement in place");
       }
       finally { foreach(var curve in finished) curve.Dispose(); foreach(var curve in finishedPieces) curve.Dispose(); }
+    }
+
+    private readonly record struct ReinforcementPose(Transform Rotation, Point3d Center);
+
+    private static Point3d[] SampleReinforcementOutline(Curve curve) =>
+      Enumerable.Range(0, ReinforcementPoseSamples)
+        .Select(i => curve.PointAtNormalizedLength((double)i / ReinforcementPoseSamples)).ToArray();
+
+    private static bool TryGetReinforcementPose(Point3d[] baseline, Curve existing, double tolerance, out ReinforcementPose pose)
+    {
+      pose = default;
+      if (baseline.Length != ReinforcementPoseSamples || baseline.Any(point => !point.IsValid)) return false;
+      var moved = SampleReinforcementOutline(existing);
+      if (moved.Any(point => !point.IsValid)) return false;
+      int far = Enumerable.Range(1, baseline.Length - 1).MaxBy(i => baseline[0].DistanceToSquared(baseline[i]));
+      var axis = baseline[far] - baseline[0];
+      int offAxis = Enumerable.Range(1, baseline.Length - 1).MaxBy(i =>
+        Vector3d.CrossProduct(axis, baseline[i] - baseline[0]).SquareLength);
+      var from = new Plane(baseline[0], axis, baseline[offAxis] - baseline[0]);
+      var to = new Plane(moved[0], moved[far] - moved[0], moved[offAxis] - moved[0]);
+      if (!from.IsValid || !to.IsValid) return false;
+      var match = Transform.PlaneToPlane(from, to);
+      if (baseline.Where((point, i) => (match * point).DistanceTo(moved[i]) > tolerance).Any()) return false;
+      using var area = AreaMassProperties.Compute(existing);
+      if (area == null || !area.Centroid.IsValid) return false;
+      from.Origin = to.Origin = Point3d.Origin;
+      pose = new ReinforcementPose(Transform.PlaneToPlane(from, to), area.Centroid);
+      return true;
+    }
+
+    private static Dictionary<int, ReinforcementPose> CaptureReinforcementPoses(RhinoDoc doc, Guid session,
+      IReadOnlyList<ShadePlacement> placements, IReadOnlyList<Guid> ids, double tolerance)
+    {
+      var result = new Dictionary<int, ReinforcementPose>();
+      var objects = ids.Select(doc.Objects.FindId).OfType<RhinoObject>().ToArray();
+      ShadeSnapshot? previous = null;
+      Curve[]? boundary = null;
+      try
+      {
+        foreach (var obj in objects.Where(obj => obj.Attributes.GetUserString(MetadataPrefix + "role") == "reinforcement_part"))
+        {
+          if (obj.Geometry is not Curve existing ||
+              !int.TryParse(obj.Attributes.GetUserString(MetadataPrefix + "sequence"), out int sequence) ||
+              !placements.Any(placement => placement.Sequence == sequence)) continue;
+          Point3d[] baseline = [];
+          if (obj.Attributes.GetUserString(ReinforcementPoseKey) is { Length: > 0 } saved)
+            baseline = (System.Text.Json.JsonSerializer.Deserialize<double[][]>(saved) ?? []).Select(RestorePoint).ToArray();
+          else
+          {
+            if (previous == null && doc.Strings.GetValue(SessionStateSection, session.ToString("N")) is { Length: > 0 } json)
+              previous = System.Text.Json.JsonSerializer.Deserialize<ShadeSnapshot>(json);
+            var corner = previous?.Placements.FirstOrDefault(item => item.Sequence == sequence);
+            var arc = objects.FirstOrDefault(candidate =>
+              candidate.Attributes.GetUserString(MetadataPrefix + "role") == "reinforcement" &&
+              candidate.Attributes.GetUserString(MetadataPrefix + "sequence") == sequence.ToString(System.Globalization.CultureInfo.InvariantCulture))?.Geometry as Curve;
+            if (corner is { HasPerpendicularLine: true } && arc != null)
+            {
+              boundary ??= Curve.JoinCurves(objects.Where(candidate => candidate.Attributes.GetUserString(MetadataPrefix + "role")
+                is "boundary" or "perpendicular" or "connection" or "scallop").Select(candidate => candidate.Geometry).OfType<Curve>(), tolerance, false);
+              var cap = new Line(RestorePoint(corner.FirstCapEnd), RestorePoint(corner.SecondCapEnd));
+              using var outline = ReinforcementPartOutlineFromBoundary(arc, cap, boundary, tolerance);
+              if (outline != null) baseline = SampleReinforcementOutline(outline);
+            }
+          }
+          if (!TryGetReinforcementPose(baseline, existing, tolerance * ConfiguredEndpointCoincidenceToleranceFactor, out var pose))
+            throw new InvalidOperationException($"could not recover the placement of detached reinforcement {sequence}; no shade objects were changed");
+          result.Add(sequence, pose);
+        }
+        return result;
+      }
+      finally { if (boundary != null) foreach (var loop in boundary) loop.Dispose(); }
     }
 
     private static Curve? ReinforcementPartOutlineFromBoundary(Curve arc,Line cap,IReadOnlyList<Curve> boundaries,double tolerance)

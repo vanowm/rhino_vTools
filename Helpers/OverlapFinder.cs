@@ -52,7 +52,7 @@ internal static class OverlapFinder
   private sealed record ConnectivityCurve(
     Guid ObjectId,
     Curve Curve,
-    BoundingBox Bounds,string? Partition);
+    BoundingBox Bounds);
 
   internal sealed record Result(
     HashSet<Guid> CoveredObjectIds,
@@ -97,7 +97,7 @@ internal static class OverlapFinder
       .Select(obj => new ConnectivityCurve(
         obj.Id,
         (Curve)obj.Geometry,
-        obj.Geometry.GetBoundingBox(accurate: true),obj.Attributes.GetUserString(vExportDXF.CleanupPartitionKey)))
+        obj.Geometry.GetBoundingBox(accurate: true)))
       .ToList();
 
     uint key = 1;
@@ -162,10 +162,6 @@ internal static class OverlapFinder
           var secondObjectId = SourceObjectId(secondKey, objectByKey, parentByKey);
           if (firstObjectId == Guid.Empty || firstObjectId == secondObjectId)
             continue;
-          var firstPartition=parentByKey[firstKey].Attributes.GetUserString(vExportDXF.CleanupPartitionKey);
-          var secondPartition=parentByKey[secondKey].Attributes.GetUserString(vExportDXF.CleanupPartitionKey);
-          if(!string.Equals(firstPartition,secondPartition,StringComparison.Ordinal))continue;
-
           var samePath = CurvesAreSamePathSameSize(
             firstCurve, secondCurve, firstLength, secondLength, tolerance);
           var firstCovered = firstLength <= secondLength &&
@@ -636,7 +632,6 @@ internal static class OverlapFinder
       {
         if (candidate.ObjectId == sourceObjectId ||
             candidate.ObjectId == excludedOverlapObjectId ||
-            !string.Equals(sourceData?.Partition,candidate.Partition,StringComparison.Ordinal)||
             !BoundingBoxContains(candidate.Bounds, endpoint, tolerance) ||
             !candidate.Curve.ClosestPoint(endpoint, out var parameter) ||
             endpoint.DistanceTo(candidate.Curve.PointAt(parameter)) > tolerance)

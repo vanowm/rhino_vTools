@@ -14,7 +14,7 @@ namespace vTools;
 /// Rhino plug-in entry point for the vTools command set.
 /// </summary>
 [System.Runtime.InteropServices.Guid("2607512e-a1fc-4cf9-9329-a293431437a0")]
-public class vToolsPlugIn : PlugIn
+public class vToolsPlugIn : FileImportPlugIn
 {
   // Defaults and customizable constants
   [global::vTools.CommandDefault("vToolsPlugIn", "vTools.vToolsPlugIn.CommandHelpPanelRestoreTimeoutMilliseconds", "Maximum milliseconds to wait for a startup-restored Command Help panel before leaving later panel activation to Rhino.")] private const int CommandHelpPanelRestoreTimeoutMilliseconds = 10000; // Maximum milliseconds to wait for a startup-restored Command Help panel before leaving later panel activation to Rhino.
@@ -30,6 +30,16 @@ public class vToolsPlugIn : PlugIn
   public vToolsPlugIn() { Instance = this; }
 
   public static vToolsPlugIn Instance { get; private set; } = null!;
+
+  protected override FileTypeList AddFileTypes(Rhino.FileIO.FileReadOptions options)
+  {
+    var types=new FileTypeList();
+    types.AddFileType(vImportPatternSmith.FileTypeName,vImportPatternSmith.Extension);
+    return types;
+  }
+
+  protected override bool ReadFile(string filename,int index,RhinoDoc doc,Rhino.FileIO.FileReadOptions options)
+    =>vImportPatternSmith.Import(doc,filename,!doc.IsHeadless&&!options.BatchMode,options.OpenMode)==Result.Success;
 
   protected override LoadReturnCode OnLoad(ref string errorMessage)
   {
@@ -47,6 +57,9 @@ public class vToolsPlugIn : PlugIn
     HideSetState.StartPolling();
     PerpGumballMonitor.Start();
     NestTableSelectionDisplay.Start();
+    vSeam.StartSourceTracking();
+    vPasteFromPatternSmith.StartViewportPaste();
+    vCopyToPatternSmith.StartPasteBridge();
 
     var commandNames = CollectRegisteredCommandNames();
     EnsureRestoredCommandHelpPanelIsActive();
@@ -58,6 +71,9 @@ public class vToolsPlugIn : PlugIn
 
   protected override void OnShutdown()
   {
+    vImportPatternSmith.CancelPendingOpens();
+    vPasteFromPatternSmith.StopViewportPaste();
+    vCopyToPatternSmith.StopPasteBridge();
     StopCommandHelpPanelRestoreCheck();
     vFilterExec.StopPending();
     FpsDisplay.Stop();
@@ -66,6 +82,7 @@ public class vToolsPlugIn : PlugIn
     HideSetState.StopPolling();
     PerpGumballMonitor.Stop();
     NestTableSelectionDisplay.Stop();
+    vSeam.StopSourceTracking();
     base.OnShutdown();
   }
 

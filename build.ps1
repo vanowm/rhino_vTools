@@ -2,8 +2,20 @@ param(
     [switch]$Publish,
     [switch]$Rebuild,
     [switch]$ComposeOnly,
-    [string]$Message
+    [string]$Message,
+    [switch]$NoRetry
 )
+
+function Test-InteractiveBuildInput {
+    param(
+        [string[]]$LaunchArguments = [Environment]::GetCommandLineArgs(),
+        [bool]$Interactive = (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected)
+    )
+    if (-not $Interactive -or $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or $env:CODEX_CI) {
+        return $false
+    }
+    return -not ($LaunchArguments | Where-Object { $_ -match '^[-/]noni' })
+}
 
 function Test-ExplorerBuildLaunch {
     param(
@@ -97,8 +109,10 @@ function Update-InstalledToolbar {
 
 $script:buildHadIssues = $false
 $script:buildCompletedCleanly = $false
+$script:lockRetryDeclined = $false
 
 $pauseForExplorer = -not $ComposeOnly -and (Test-ExplorerBuildLaunch -ScriptPath $PSCommandPath)
+$canRetryRelease = -not $ComposeOnly -and -not $NoRetry -and (Test-InteractiveBuildInput)
 # Finally also covers current-output skips, locked DLLs, and nonzero build exits.
 try {
 Set-Location $PSScriptRoot
@@ -242,6 +256,26 @@ function Test-FileLocked {
             $stream.Dispose()
         }
     }
+}
+
+function Get-LockedReleaseDlls {
+    foreach ($relativePath in $releaseDllPaths) {
+        $dllPath = Join-Path $PSScriptRoot $relativePath
+        if (Test-FileLocked -Path $dllPath) { $dllPath }
+    }
+}
+
+function Read-ReleaseLockRetry {
+    param([string[]]$Paths, [string]$Action)
+    if (-not $canRetryRelease) { return $false }
+    Write-Host 'Waiting for locked Release DLLs:' -ForegroundColor Yellow
+    $Paths | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+    try {
+        $answer = Read-Host "Close Rhino or the app using the DLL, then press Enter to $Action, or type Q to stop"
+        if ($null -ne $answer -and [string]::IsNullOrWhiteSpace($answer)) { return $true }
+        $script:lockRetryDeclined = $true
+    } catch { }
+    return $false
 }
 
 function Resolve-ReleaseOutputDirectory {
@@ -453,91 +487,89 @@ if ($releaseOutputsCurrent -and -not $Rebuild) {
     $script:buildCompletedCleanly = $true; exit 0
 }
 
-Write-Host 'Checking Release DLL availability...' -ForegroundColor Cyan
-$lockedReleaseDlls = @(
-    foreach ($relativePath in $releaseDllPaths) {
-        $dllPath = Join-Path $PSScriptRoot $relativePath
-        if (Test-FileLocked -Path $dllPath) {
-            $dllPath
-        }
-    }
-)
-
-if ($lockedReleaseDlls.Count -gt 0) {
-    $script:buildHadIssues = $true
-    Write-Host 'WARNING: Release build skipped because the following DLL is locked:' -ForegroundColor Yellow
-    $lockedReleaseDlls | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-    if ($Publish) {
-        Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
-    }
-    $script:buildCompletedCleanly = $true; exit 0
-}
-
 $buildArguments = @('build', $projectFile.FullName, '-c', 'Release', '--no-incremental')
 if (-not $Publish) {
     $buildArguments += '-p:AutoCommitVersionOnRelease=false'
 }
 
-try {
-    Write-Host 'Preserving current Release outputs...' -ForegroundColor Cyan
-    $releaseSnapshot = New-ReleaseOutputSnapshot -DllPaths $releaseDllPaths -ErrorAction Stop
-} catch {
-    $script:buildHadIssues = $true; Write-Error "Unable to preserve the existing Release outputs before building: $($_.Exception.Message)"
-    $script:buildHadIssues = $true; exit 1
-}
-$buildExitCode = 1
-$buildInvocationException = $null
-try {
-    Write-Host "Compiling ${projectName} ${expectedVersion}; streaming compiler output..." -ForegroundColor Cyan
-    & dotnet @buildArguments 2>&1 | ForEach-Object { if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }; Write-Host $_ }
-    $buildExitCode = $LASTEXITCODE
-} catch {
-    $buildInvocationException = $_
-}
-
-if ($buildExitCode -ne 0) {
-    try {
-        Restore-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
-        Write-Host 'Restored the previous Release outputs after the failed build.' -ForegroundColor Yellow
-    } catch {
-        $script:buildHadIssues = $true; Write-Warning "Release recovery snapshot retained at '$($releaseSnapshot.Root)'."
-        $script:buildHadIssues = $true; Write-Error "Release build failed and the previous outputs could not be restored: $($_.Exception.Message)"
-        if ($buildExitCode -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($buildExitCode -eq 0); exit $buildExitCode
-    }
-    Remove-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
-
-    if ($null -ne $buildInvocationException) {
-        $script:buildHadIssues = $true; Write-Error "Unable to start the Release build: $($buildInvocationException.Exception.Message)"
-        if ($buildExitCode -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($buildExitCode -eq 0); exit $buildExitCode
-    }
-
-    $lockedAfterBuild = @(
-        foreach ($relativePath in $releaseDllPaths) {
-            $dllPath = Join-Path $PSScriptRoot $relativePath
-            if (Test-FileLocked -Path $dllPath) {
-                $dllPath
-            }
-        }
-    )
-
-    if ($lockedAfterBuild.Count -gt 0) {
+while ($true) {
+    Write-Host 'Checking Release DLL availability...' -ForegroundColor Cyan
+    $lockedReleaseDlls = @(Get-LockedReleaseDlls)
+    if ($lockedReleaseDlls.Count -gt 0) {
+        if (Read-ReleaseLockRetry -Paths $lockedReleaseDlls -Action 'retry') { continue }
         $script:buildHadIssues = $true
-    Write-Host 'WARNING: Release build failed because the following DLL became locked:' -ForegroundColor Yellow
-        $lockedAfterBuild | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
-        if ($Publish) {
-            Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow
-        }
+        Write-Host 'WARNING: Release build skipped because the following DLL is locked:' -ForegroundColor Yellow
+        $lockedReleaseDlls | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        if ($Publish) { Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow }
         $script:buildCompletedCleanly = $true; exit 0
     }
-    if ($buildExitCode -ne 0) { $script:buildHadIssues = $true }; $script:buildCompletedCleanly = ($buildExitCode -eq 0); exit $buildExitCode
+
+    try {
+        Write-Host 'Preserving current Release outputs...' -ForegroundColor Cyan
+        $releaseSnapshot = New-ReleaseOutputSnapshot -DllPaths $releaseDllPaths -ErrorAction Stop
+    } catch {
+        $script:buildHadIssues = $true; Write-Error "Unable to preserve the existing Release outputs before building: $($_.Exception.Message)"
+        exit 1
+    }
+    $buildExitCode = 1
+    $buildInvocationException = $null
+    try {
+        Write-Host "Compiling ${projectName} ${expectedVersion}; streaming compiler output..." -ForegroundColor Cyan
+        & dotnet @buildArguments 2>&1 | ForEach-Object { if (Test-BuildOutputIssue $_) { $script:buildHadIssues = $true }; Write-Host $_ }
+        $buildExitCode = $LASTEXITCODE
+    } catch {
+        $buildInvocationException = $_
+    }
+    if ($buildExitCode -eq 0) {
+        Remove-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
+        break
+    }
+
+    $retryAfterRestore = $false
+    while ($true) {
+        try {
+            Restore-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
+            Write-Host 'Restored the previous Release outputs after the failed build.' -ForegroundColor Yellow
+            break
+        } catch {
+            $restoreError = $_
+            $lockedDuringRestore = @(Get-LockedReleaseDlls)
+            if ($lockedDuringRestore.Count -gt 0 -and
+                (Read-ReleaseLockRetry -Paths $lockedDuringRestore -Action 'restore the previous outputs and retry')) {
+                $retryAfterRestore = $true
+                continue
+            }
+            $script:buildHadIssues = $true; Write-Warning "Release recovery snapshot retained at '$($releaseSnapshot.Root)'."
+            Write-Error "Release build failed and the previous outputs could not be restored: $($restoreError.Exception.Message)"
+            exit $buildExitCode
+        }
+    }
+    Remove-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
+    if ($null -ne $buildInvocationException) {
+        $script:buildHadIssues = $true; Write-Error "Unable to start the Release build: $($buildInvocationException.Exception.Message)"
+        exit $buildExitCode
+    }
+    if ($retryAfterRestore) { continue }
+
+    $lockedAfterBuild = @(Get-LockedReleaseDlls)
+    if ($lockedAfterBuild.Count -gt 0) {
+        if (Read-ReleaseLockRetry -Paths $lockedAfterBuild -Action 'retry') { continue }
+        $script:buildHadIssues = $true
+        Write-Host 'WARNING: Release build failed because the following DLL became locked:' -ForegroundColor Yellow
+        $lockedAfterBuild | ForEach-Object { Write-Host "  $_" -ForegroundColor Yellow }
+        if ($Publish) { Write-Host 'The pending message remains for the next build.' -ForegroundColor Yellow }
+        $script:buildCompletedCleanly = $true; exit 0
+    }
+    $script:buildHadIssues = $true
+    exit $buildExitCode
 }
 
-Remove-ReleaseOutputSnapshot -Snapshot $releaseSnapshot
 Update-InstalledToolbar
 Write-Host "${projectName} ${expectedVersion}: Release build completed." -ForegroundColor Green
 $script:buildCompletedCleanly = $true
 } finally {
-    if (Test-PauseBuildWindow -Explorer $pauseForExplorer -Completed $script:buildCompletedCleanly -HadIssues $script:buildHadIssues) {
+    if (-not $script:lockRetryDeclined -and
+        (Test-PauseBuildWindow -Explorer $pauseForExplorer -Completed $script:buildCompletedCleanly -HadIssues $script:buildHadIssues)) {
         try { [void](Read-Host 'Press Enter to close this build window') } catch { }
     }
 }

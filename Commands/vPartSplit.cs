@@ -32,12 +32,23 @@ namespace vTools.Commands
   internal static class PartSplitWorkflow
   {
     // Option defaults and customizable interaction/output settings
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", "Material width in model units; must exceed twice Seam.", OptionKeys = "width")] internal const double DefaultWidth = 60.0; // Material width in model units; must exceed twice Seam.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", "Material width in model units; must exceed the total overlap of the two cut edges.", OptionKeys = "width")] internal const double DefaultWidth = 60.0; // Material width in model units; must exceed the total cut overlap.
 
     internal static readonly double ConfiguredDefaultWidth = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultWidth", DefaultWidth); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", "Extra model-unit allowance on each part at each common cut; zero disables overlap.", OptionKeys = "seam")] internal const double DefaultSeam = 0.5; // Extra model-unit allowance on each part at each common cut; zero disables overlap.
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", "Sew line to own cut edge in model units. Regular overlaps by twice Seam, Overlap by Seam. Zero adds no allowance.", OptionKeys = "seam")] internal const double DefaultSeam = 0.5; // Nonnegative distance in model units from sew line to own cut edge.
 
     internal static readonly double ConfiguredDefaultSeam = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeam", DefaultSeam); // Resolved once from advanced defaults; restart Rhino after changes.
+    [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeamType", "Regular sews at the split with a full allowance on each part. Overlap puts each sew line on the other part's cut edge, for a total overlap of Seam.", OptionKeys = "seamType")]
+    private const SeamType DefaultSeamType = SeamType.Regular; // Regular or Overlap; the split is the midpoint in both modes.
+    private static readonly SeamType ConfiguredDefaultSeamType = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSeamType", DefaultSeamType); // Initial SeamType until saved.
+    [CommandChoicesAttribute("vPartSplit", "seamType", false, "Regular", "Overlap")]
+    private static readonly string[] SeamTypeNames = CommandChoices.Values(typeof(PartSplitWorkflow), nameof(SeamTypeNames)); // Command-line choices in seam-type enum order.
+    [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultTrimToSewLine", "None: Trim details to each piece's cut edge.\nSeam: Trim only the existing seam perimeter to the new sew line.\nAll: Trim all inner curves to the new sew line, except notches.\nThe sew line is the original split for Regular and the offset line for Overlap. Also applies to vShade Split.", OptionKeys = TrimToSewLineKey)]
+    private const SeamTrim DefaultTrimToSewLine = SeamTrim.None; // None, Seam, or All; never changes the new cutting outline or notches.
+    private static readonly SeamTrim ConfiguredDefaultTrimToSewLine = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultTrimToSewLine", DefaultTrimToSewLine); // Fallback before a vSettings command option is saved.
+    [CommandChoicesAttribute("vPartSplit", "trimToSewLine", false, "None", "Seam", "All")]
+    internal const string TrimToSewLineKey = "trimToSewLine"; // Saved named trim mode shared by vPartSplit and vShade Split.
+    internal const string LegacyTrimToSewLineKey = "trimSeamPerimeterToSewLine"; // Previous boolean; true migrates to Seam, false to None.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultMode", "Mode index: 0 balances physical piece lengths; 1 fills each material width before the final remainder.", OptionKeys = "mode")] internal const int DefaultMode = 0; // Mode index: 0 balances physical piece lengths; 1 fills material width before the final remainder.
 
     internal static readonly int ConfiguredDefaultMode = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultMode", DefaultMode); // Resolved once from advanced defaults; restart Rhino after changes.
@@ -48,11 +59,19 @@ namespace vTools.Commands
 
     private static readonly double ConfiguredDefaultDistance = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDistance", DefaultDistance); // Resolved once from advanced defaults; restart Rhino after changes.
     private const int OriginalLayoutIndex = 0; // Fixed Original index in LayoutNames, independent of the default.
-    [global::vTools.CommandChoicesAttribute("vPartSplit", "layout", true, "Original", "Vertical")] private static readonly string[] LayoutNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(LayoutNames)); // Available copy-arrangement modes.
+    [global::vTools.CommandChoicesAttribute("vPartSplit", "layout", true, "Original", "Horizontal")] private static readonly string[] LayoutNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(LayoutNames)); // Available copy-arrangement modes; Horizontal retains the saved compact layout index.
     private const int EvenModeIndex = 0; // Fixed index of Even in ModeNames, independent of the configurable default mode.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDirection", "Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.", OptionKeys = "direction")] private const SplitDirection DefaultDirection = SplitDirection.Start; // Start/End fills from one end; Inward fills from outer ends; Outward fills from the center.
 
     private static readonly SplitDirection ConfiguredDefaultDirection = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultDirection", DefaultDirection); // Resolved once from advanced defaults; restart Rhino after changes.
+    [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSyncSplits", "True adds, removes or replans splits around a moved cut to keep pieces within Width; false permits individual edits and prompts before placing oversized pieces.", OptionKeys = "syncSplits")]
+    private const bool DefaultSyncSplits = false; // true constrains split moves to a fitting layout; false edits only the picked split.
+    private static readonly bool ConfiguredDefaultSyncSplits = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultSyncSplits", DefaultSyncSplits); // Initial SyncSplits value until saved.
+    [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultAutoGoal", "MinimumSplits uses the fewest cuts; MinimumMaterial minimizes fitted roll length including spacing and can add cuts.", OptionKeys = "autoGoal")]
+    private const AutoGoal DefaultAutoGoal = AutoGoal.MinimumSplits; // Initial goal: MinimumSplits or MinimumMaterial.
+    private static readonly AutoGoal ConfiguredDefaultAutoGoal = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultAutoGoal", DefaultAutoGoal); // Initial AutoGoal until saved.
+    [CommandChoicesAttribute("vPartSplit", "autoGoal", false, "MinimumSplits", "MinimumMaterial")]
+    private static readonly string[] AutoGoalNames = CommandChoices.Values(typeof(PartSplitWorkflow), nameof(AutoGoalNames)); // Auto planner goals in enum order.
     [global::vTools.CommandChoicesAttribute("vPartSplit", "direction", false, "Start", "End", "Inward", "Outward")] private static readonly string[] DirectionNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(DirectionNames)); // Per-part cut-placement and copy-order choices.
     [global::vTools.CommandChoicesAttribute("vPartSplit", "mode", true, "Even", "MaxWidth")] private static readonly string[] ModeNames = global::vTools.CommandChoices.Values(typeof(global::vTools.Commands.PartSplitWorkflow), nameof(ModeNames)); // Command-line values for the two split-spacing modes.
     private const double InitialLayoutGap = PlanarPartSplitter.DefaultGap; // Minimum model-unit separation used for the initial preview anchor.
@@ -89,6 +108,9 @@ namespace vTools.Commands
     [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.AutoFitRefinementPasses", "Maximum continuous cut-position bisection passes per piece and direction; 1 through 40. Stops sooner at document tolerance.")]
     private const int AutoFitRefinementPasses = 20; // Bisection passes for maximal fitting intervals between sampled stations; 1 through 40.
     private static readonly int ConfiguredAutoFitRefinementPasses = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.AutoFitRefinementPasses", AutoFitRefinementPasses); // Resolved once from vSettings.
+    [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.FitWorkers", "Maximum worker threads for independent split-width fits, capped at available logical processors. One runs fits serially.")]
+    private const int FitWorkers = 8; // Positive worker limit; 1 uses serial geometry fitting.
+    private static readonly int ConfiguredFitWorkers = Math.Clamp(CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.FitWorkers", FitWorkers),1,System.Environment.ProcessorCount); // Resolved once from vSettings.
     private const int MaximumAutoFitRefinementPasses = 40; // Maximum bisection depth; bounds automatic refinement work.
     private const int MinimumAutoFitStations = 4; // Minimum useful subdivision count for fitted-width split search.
     private const int MaximumAutoFitStations = 64; // Maximum initial division count; bounds the automatic interval-search cost.
@@ -115,13 +137,13 @@ namespace vTools.Commands
     private static readonly Color InvalidCutPreviewColor = CommandDefaults.GetColor("vPartSplit", "vTools.Commands.PartSplitWorkflow.InvalidCutPreviewColor", Color.Red); // RGB rejected-endpoint cue; invalid clicks do not accept or change the last valid panels.
     private const string ReferenceLayer = "Reference"; // Existing or new Rhino layer for nominal split cuts on the original part.
     private const string BoundaryName = "PartSplitBoundary"; // Object name for each new part's closed cutting perimeter.
-    private const string CutName = "PartSplitCut"; // Object name for a nominal Reference-layer cut on the original part.
-    private const string SewName = "PartSplitSewLine"; // Object name for nominal split lines included inside each output part.
+    private const string CutName = "PartSplitCut"; // Object name for a Reference-layer split reaching the original cut perimeter.
+    private const string SewName = "PartSplitSewLine"; // Object name for split sew lines spanning the output cut perimeter.
     private const string SewLayer = "PLOT"; // Existing or new Rhino layer for the split parts' sew lines.
     [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.MinimumFinishedAreaRatio", "Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.")] private const double MinimumFinishedAreaRatio = 0.5; // Minimum finished-loop/cut-loop area ratio for untagged PLOT loops; rejects small internal holes as a finished perimeter.
 
     private static readonly double ConfiguredMinimumFinishedAreaRatio = global::vTools.CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.MinimumFinishedAreaRatio", MinimumFinishedAreaRatio); // Resolved once from advanced defaults; restart Rhino after changes.
-    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", "true adds matching seam labels using vNotches settings; false omits new seam labels.", OptionKeys = "label")]
+    [global::vTools.CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", "True labels the first matching notch per split using vNotches settings; false omits new seam labels.", OptionKeys = "label")]
     private const bool DefaultLabel = false; // true labels mating seams; false retains the unlabeled split workflow.
     private static readonly bool ConfiguredDefaultLabel = CommandDefaults.Get("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultLabel", DefaultLabel); // Resolved once from advanced defaults.
     [CommandDefault("vPartSplit", "vTools.Commands.PartSplitWorkflow.DefaultNotches", "true adds paired seam notches using vNotches settings; false omits seam notches independently of Label.",OptionKeys="notches")]
@@ -153,16 +175,27 @@ namespace vTools.Commands
     private const string Section = "vPartSplit";
     private static double _width = ConfiguredDefaultWidth;
     private static double _seam = ConfiguredDefaultSeam;
+    private static SeamType _seamType = ConfiguredDefaultSeamType;
+    private static SeamTrim _trimToSewLine = ConfiguredDefaultTrimToSewLine;
     private static int _mode = ConfiguredDefaultMode;
     private static int _layout = ConfiguredDefaultLayout;
     private static double _distance = ConfiguredDefaultDistance;
     private static SplitDirection _direction = ConfiguredDefaultDirection;
     private static bool _label = ConfiguredDefaultLabel;
     private static bool _notches = ConfiguredDefaultNotches;
+    private static bool _syncSplits = ConfiguredDefaultSyncSplits;
+    private static AutoGoal _autoGoal = ConfiguredDefaultAutoGoal;
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Part,SourceDetails> SourceCache = new();
+
+    private enum AutoGoal { MinimumSplits, MinimumMaterial }
+    internal enum SeamType { Regular, Overlap }
+    internal enum SeamTrim { None, Seam, All }
+
+    private sealed record PlannedCuts(PlanarPartSplitter.Settings Settings,AutoGoal Goal,SeamType SeamType,PlanarPartSplitter.Proposal Proposal,List<LocalCut>? Cuts);
 
     private sealed class State(Part part) : IDisposable
     {
+      private PlannedCuts? _lastPlan;
       internal Part Part { get; } = part;
       internal PlanarPartSplitter.Proposal Proposal { get; set; } = null!;
       internal List<Panel> Panels { get; set; } = [];
@@ -181,6 +214,11 @@ namespace vTools.Commands
       internal List<LocalCut>? CachedCuts;
       internal List<CutPreview> CutPreviews { get; } = [];
       internal OriginalSpacing? Spacing;
+      internal bool MatchesPlan(PlanarPartSplitter.Settings settings,AutoGoal goal)=>
+        _lastPlan is {} plan&&plan.Settings==settings&&plan.Goal==goal&&plan.SeamType==_seamType&&
+        ReferenceEquals(plan.Proposal,Proposal)&&ReferenceEquals(plan.Cuts,Cuts);
+      internal void RememberPlan(PlanarPartSplitter.Settings settings,AutoGoal goal)=>_lastPlan=new(settings,goal,_seamType,Proposal,Cuts);
+      internal void ForgetPlan()=>_lastPlan=null;
       public void Dispose()
       {
         foreach(var panel in Panels)panel.Dispose();foreach(var cut in CutPreviews)cut.Dispose();
@@ -188,7 +226,8 @@ namespace vTools.Commands
         Part.Dispose();
       }
     }
-    private sealed record Output(List<Guid> Added, List<int> Groups, List<Guid> Copies);
+    private sealed record Output(List<Guid> Added, List<int> Groups, List<Guid> Copies)
+    { internal Dictionary<string,string> NestSettings {get;init;}=[]; }
     private sealed class PlacementConfirmationPreview(Action<DisplayPipeline> draw) : DisplayConduit,IDisposable
     {
       protected override void DrawForeground(DrawEventArgs e)=>draw(e.Display);
@@ -196,7 +235,7 @@ namespace vTools.Commands
     }
     private sealed record LocalCut(Plane Frame)
     {internal Point3d? Start {get;init;} internal Point3d? End {get;init;}}
-    private sealed record SourceItem(Item Item,BoundingBox Bounds,bool Boundary);
+    private sealed record SourceItem(Item Item,BoundingBox Bounds,bool CutEdge,bool FinishedEdge);
     private sealed record SourceDetails(List<SourceItem> Items,double Area,Curve? FinishedBoundary) : IDisposable
     {
       internal double NominalArea {get;init;}=Area; // Finished-boundary area when available; otherwise the outer cutting area.
@@ -216,9 +255,12 @@ namespace vTools.Commands
       private readonly List<LocalCut>? _beforeCuts;
       private readonly List<Panel> _beforePanels;
       private readonly int _beforeActive;
+      private readonly int _originalSeam;
       private readonly Plane _frame;
       private readonly double _grabY,_seamY,_tolerance;
       private Point3d _lastAttempt=Point3d.Unset;
+      private Vector3d _orthoDirection=Vector3d.Unset;
+      private Point3d _orthoEndpoint=Point3d.Unset;
       private bool _valid,_accepted,_disposed;
       internal int Seam {get;private set;}
       internal bool Pivoting {get;}
@@ -227,7 +269,7 @@ namespace vTools.Commands
       internal bool Valid=>_valid;
       internal CutMove(State state,int seam,Point3d grab,bool pivoting,double tolerance)
       {
-        _state=state;Seam=seam;Pivoting=pivoting;_tolerance=tolerance;
+        _state=state;Seam=_originalSeam=seam;Pivoting=pivoting;_tolerance=tolerance;
         _beforeProposal=state.Proposal;_beforeCuts=state.Cuts;_beforePanels=state.Panels;_beforeActive=state.ActiveCut;
         var cut=CachedCutPreviews(state,tolerance)[seam].Line;grab=state.Part.Plane.ClosestPoint(grab);
         _frame=state.Cuts?[seam].Frame??state.Proposal.Frame;_seamY=state.Cuts==null?state.Proposal.Seams[seam]:0;
@@ -241,17 +283,42 @@ namespace vTools.Commands
         var projected=_state.Part.Plane.ClosestPoint(point);
         var boundary=SplitBoundary(_state.Part,_tolerance);
         if(Pivoting&&boundary.ClosestPoint(projected,out double parameter))projected=boundary.PointAt(parameter);
+        return UpdateCandidate(projected);
+      }
+      internal bool UpdateOrtho(Point3d point,Plane cplane)
+      {
+        if(_disposed||!point.IsValid)return false;
+        var direction=OrthoCutDirection(_state.Part.Plane,cplane,point-Pivot);
+        if(direction.IsValid&&direction!=_orthoDirection)
+        {
+          _orthoDirection=direction;
+          _orthoEndpoint=OrthoCutEndpoint(SplitBoundary(_state.Part,_tolerance),Pivot,direction,_tolerance);
+        }
+        if(direction.IsValid&&_orthoEndpoint.IsValid)return UpdateCandidate(_orthoEndpoint);
+        _lastAttempt=Point3d.Unset;return _valid=false;
+      }
+      private bool UpdateCandidate(Point3d projected)
+      {
         if(_lastAttempt.IsValid&&_lastAttempt.DistanceTo(projected)<=RhinoMath.ZeroTolerance)return _valid;
         _lastAttempt=projected;_valid=false;
         var target=Pivoting?Pivot:_frame.PointAt(0,_seamY+PlanarPartSplitter.FrameY(_frame,projected)-_grabY);
         var direction=projected-Pivot;
         if(Pivoting&&direction.Length<=_tolerance)return false;
         if(Pivoting&&direction*_frame.XAxis<0)direction=-direction;
+        var across=Pivoting?direction:_frame.XAxis;if(!across.Unitize())return false;
+        var candidate=new LocalCut(new Plane(Pivoting?Pivot:target,across,Vector3d.CrossProduct(_state.Part.Plane.Normal,across)))
+          {Start=Pivoting?Pivot:null,End=Pivoting?projected:null};
+        if(_syncSplits)
+        {
+          if(!TryPlanSyncedMove(_state,_beforeProposal,_beforeCuts,_beforePanels,_originalSeam,candidate,_tolerance,
+              out var next,out var synced,out var fitted,out int active))return false;
+          ReplacePanelsCore(_state,fitted,_beforePanels);
+          _state.Proposal=next;_state.Cuts=synced;_state.ActiveCut=Seam=active;
+          return _valid=true;
+        }
         var local=_state.Cuts??_state.Proposal.Seams.Select(position=>new LocalCut(
           new Plane(_state.Proposal.Frame.PointAt(0,position),_state.Proposal.Frame.XAxis,_state.Proposal.Frame.YAxis))).ToList();
-        var across=Pivoting?direction:_frame.XAxis;if(!across.Unitize())return false;
-        var cuts=local.ToList();cuts[Seam]=new(new Plane(Pivoting?Pivot:target,across,Vector3d.CrossProduct(_state.Part.Plane.Normal,across)))
-          {Start=Pivoting?Pivot:null,End=Pivoting?projected:null};
+        var cuts=local.ToList();cuts[Seam]=candidate;
         var panels=BuildLocalPanelsCore(_state.Part,_state.Proposal,cuts,EditingSettings(_state,_tolerance),_tolerance,out _,_state.Cuts==null?null:_state.Panels,Seam);
         if(panels.Count==0)return false;
         ReplacePanelsCore(_state,panels,_beforePanels);_state.Cuts=cuts;return _valid=true;
@@ -270,11 +337,44 @@ namespace vTools.Commands
         _state.Dragging=false;
       }
     }
+    private static Vector3d OrthoCutDirection(Plane partPlane,Plane cplane,Vector3d displacement)
+    {
+      var normal=partPlane.Normal;
+      var x=cplane.XAxis-normal*(cplane.XAxis*normal);
+      if(x.Length<=RhinoMath.ZeroTolerance||!x.Unitize())
+      {
+        var projectedY=cplane.YAxis-normal*(cplane.YAxis*normal);
+        x=Vector3d.CrossProduct(projectedY,normal);
+        if(!x.Unitize())x=partPlane.XAxis;
+      }
+      var y=Vector3d.CrossProduct(normal,x);
+      double horizontal=displacement*x,vertical=displacement*y;
+      if(Math.Max(Math.Abs(horizontal),Math.Abs(vertical))<=RhinoMath.ZeroTolerance)return Vector3d.Unset;
+      return Math.Abs(horizontal)>=Math.Abs(vertical)?x*Math.Sign(horizontal):y*Math.Sign(vertical);
+    }
+    private static Point3d OrthoCutEndpoint(Curve boundary,Point3d pivot,Vector3d direction,double tolerance)
+    {
+      using var hits=Intersection.CurveLine(boundary,new Line(pivot,pivot+direction),tolerance,tolerance);
+      if(hits==null)return Point3d.Unset;
+      double closest=double.PositiveInfinity;Point3d endpoint=Point3d.Unset;
+      foreach(var hit in hits)
+      {
+        if(!hit.IsPoint)continue;
+        double distance=(hit.PointB-pivot)*direction;
+        if(distance<=tolerance||distance>=closest)continue;
+        closest=distance;endpoint=hit.PointB;
+      }
+      return endpoint;
+    }
+
     private sealed record SeamLabel(int Seam, int Segment, string Value, TextEntity Text)
     {internal SeamMarker? Marker {get;init;}}
     private sealed record SeamMarker(int Seam,int Segment,string Value,Guid Match,Curve Source,double Length,
       Vector3d Direction,List<Curve> Geometry,MatchingNotches.Settings Style,Color Color) : IDisposable
-    {public void Dispose(){Source.Dispose();foreach(var curve in Geometry)curve.Dispose();}}
+    {
+      internal Point3d? CutAnchor {get;init;}
+      public void Dispose(){Source.Dispose();foreach(var curve in Geometry)curve.Dispose();}
+    }
     private sealed class Panel(Curve cut, BoundingBox bounds, List<Curve> preview, int bandIndex) : IDisposable
     {
       internal Curve Cut { get; } = cut;
@@ -294,21 +394,27 @@ namespace vTools.Commands
       internal List<Curve> Preview { get; } = preview;
       internal List<Item> Details { get; } = [];
       internal List<Curve> SewLines { get; } = [];
+      internal List<Curve> OffsetSewOrigins { get; } = [];
+      internal List<(Curve Line,Vector3d Inward)> DetailSewTrims { get; } = []; // Inward directions for the existing SewLines; does not own the curves.
       internal List<SeamLabel> Labels { get; } = [];
       internal List<SeamMarker> Markers {get;}=[];
       public void Dispose()
       {
         Cut.Dispose(); foreach (var curve in Preview) curve.Dispose();
         foreach (var curve in SewLines) curve.Dispose();
+        foreach (var curve in OffsetSewOrigins) curve.Dispose();
         foreach (var label in Labels) label.Text.Dispose();
         foreach(var marker in Markers)marker.Dispose();
         foreach (var item in Details) item.Geometry.Dispose();
       }
     }
     private sealed record Options(OptionDouble Width, OptionDouble Seam, int ModeIndex,
-      OptionDouble Distance, int LayoutIndex, int AutoIndex, int DirectionIndex, OptionToggle Label, int StartLabelIndex, int AddSplitIndex,OptionToggle Notches);
+       OptionDouble Distance, int LayoutIndex, int AutoIndex, int DirectionIndex, OptionToggle Label, int StartLabelIndex, int AddSplitIndex,OptionToggle Notches,OptionToggle SyncSplits,int SeamTypeIndex);
 
-    private static PlanarPartSplitter.Settings Settings(SplitDirection? direction=null) => new(_width, _seam, Gap: _distance,
+    private static double CutAllowance(double seam,SeamType type)=>type==SeamType.Overlap?seam/2:seam;
+    private static double SewInset(double cutAllowance)=>_seamType==SeamType.Overlap?cutAllowance:0;
+
+    private static PlanarPartSplitter.Settings Settings(SplitDirection? direction=null) => new(_width, CutAllowance(_seam,_seamType), Gap: _distance,
       Spacing: _mode == EvenModeIndex ? PlanarPartSplitter.SpacingMode.Even : PlanarPartSplitter.SpacingMode.MaxWidth)
       { Direction=direction??_direction };
 
@@ -316,22 +422,29 @@ namespace vTools.Commands
     {
       _width = ToolsOptionStore.TryGetDouble(section, "width", out var width) ? width : ConfiguredDefaultWidth;
       _seam = ToolsOptionStore.TryGetDouble(section, "seam", out var seam) ? seam : ConfiguredDefaultSeam;
+      _seamType = ToolsOptionStore.TryGetString(section,"seamType",out var type)&&Enum.TryParse<SeamType>(type,true,out var parsedType)&&Enum.IsDefined(parsedType)?parsedType:ConfiguredDefaultSeamType;
+      _trimToSewLine = ToolsOptionStore.TryGetString(section,TrimToSewLineKey,out var trimMode)&&
+        Enum.TryParse<SeamTrim>(trimMode,true,out var parsedTrim)&&Enum.IsDefined(parsedTrim)?parsedTrim:
+        ToolsOptionStore.TryGetBool(section,LegacyTrimToSewLineKey,out var legacyTrim)?(legacyTrim?SeamTrim.Seam:SeamTrim.None):ConfiguredDefaultTrimToSewLine;
       _mode = ToolsOptionStore.TryGetDouble(section, "mode", out var mode) && mode >= 0 && mode < ModeNames.Length && mode == Math.Truncate(mode) ? (int)mode : ConfiguredDefaultMode;
       _layout = ToolsOptionStore.TryGetDouble(section,"layout",out var layout) && layout>=0 && layout<LayoutNames.Length && layout==Math.Truncate(layout) ? (int)layout : ConfiguredDefaultLayout;
       _distance = ToolsOptionStore.TryGetDouble(section,"distance",out var distance) && double.IsFinite(distance) && distance>=0 ? distance : ConfiguredDefaultDistance;
       _direction = ToolsOptionStore.TryGetString(section,"direction",out var direction)&&Enum.TryParse<SplitDirection>(direction,true,out var parsed)&&Enum.IsDefined(parsed)?parsed:ConfiguredDefaultDirection;
       _label = ToolsOptionStore.TryGetBool(section,"label",out var label) ? label : ConfiguredDefaultLabel;
       _notches = ToolsOptionStore.TryGetBool(section,"notches",out var notches) ? notches : ConfiguredDefaultNotches;
-      if (!ValidOptions(_width, _seam)) { _width = ConfiguredDefaultWidth; _seam = ConfiguredDefaultSeam; }
+      _syncSplits = ToolsOptionStore.TryGetBool(section,"syncSplits",out var sync) ? sync : ConfiguredDefaultSyncSplits;
+      _autoGoal = ToolsOptionStore.TryGetString(section,"autoGoal",out var goal)&&Enum.TryParse<AutoGoal>(goal,true,out var parsedGoal)&&Enum.IsDefined(parsedGoal)?parsedGoal:ConfiguredDefaultAutoGoal;
       return 0;
     });
 
-    private static void Save() => ToolsOptionStore.Update(Section, section =>
+    private static void Save(bool saveSeamType) => ToolsOptionStore.Update(Section, section =>
     { section["width"] = _width; section["seam"] = _seam; section["mode"] = _mode;
-      section["layout"] = _layout; section["distance"] = _distance; section["direction"] = _direction.ToString(); section["label"] = _label;section["notches"]=_notches; });
+    if(saveSeamType)section["seamType"]=_seamType.ToString();
+    section["layout"] = _layout; section["distance"] = _distance; section["direction"] = _direction.ToString(); section["label"] = _label;section["notches"]=_notches; section["syncSplits"]=_syncSplits;
+    section["autoGoal"]=_autoGoal.ToString(); });
 
-    private static bool ValidOptions(double width, double seam) =>
-      double.IsFinite(width) && double.IsFinite(seam) && seam >= 0 && width > 2 * seam + RhinoMath.ZeroTolerance;
+    private static bool ValidOptions(double width, double seam,SeamType type) =>
+      double.IsFinite(width) && double.IsFinite(seam) && seam >= 0 && width > 2 * CutAllowance(seam,type) + RhinoMath.ZeroTolerance;
 
     private static Options AddOptions(GetBaseClass getter, double tolerance, bool editing = false, SplitDirection? direction = null, string? startLabel = null)
     {
@@ -339,23 +452,20 @@ namespace vTools.Commands
       var seam = new OptionDouble(_seam, 0, double.MaxValue);
       getter.AddOptionDouble("Width", ref width);
       getter.AddOptionDouble("Seam", ref seam);
+      int seamType=getter.AddOptionList("SeamType",SeamTypeNames,(int)_seamType);
       var label = new OptionToggle(_label,"No","Yes"); getter.AddOptionToggle("Label",ref label);
       var notches = new OptionToggle(_notches,"No","Yes");getter.AddOptionToggle("Notches",ref notches);
+      var sync = new OptionToggle(_syncSplits,"No","Yes");getter.AddOptionToggle("SyncSplits",ref sync);
       int startLabelIndex=getter.AddOption("StartLabel",startLabel??MatchingLabels.DefaultValue);
       int mode = getter.AddOptionList("Mode", ModeNames, _mode);
       var distance = new OptionDouble(_distance,0,double.MaxValue);
       getter.AddOptionDouble("Distance",ref distance);
       int layout = getter.AddOptionList("Layout",LayoutNames,_layout);
-      int auto = -1;
-      int addSplit = -1;
+      int auto=getter.AddOptionList("Auto",AutoGoalNames,(int)_autoGoal);
       int directionIndex=getter.AddOptionList("Direction",DirectionNames,(int)(direction??_direction));
-      if (editing)
-      {
-        auto = getter.AddOption("Auto");
-        addSplit = getter.AddOption("AddSplit");
-      }
+      int addSplit=editing?getter.AddOption("AddSplit"):-1;
       getter.AcceptNumber(true, false);
-      return new Options(width, seam, mode, distance, layout, auto, directionIndex, label, startLabelIndex, addSplit,notches);
+      return new Options(width, seam, mode, distance, layout, auto, directionIndex, label, startLabelIndex, addSplit,notches,sync,seamType);
     }
 
     private static bool ReadOptions(RhinoDoc doc, GetBaseClass getter, GetResult result, Options options)
@@ -372,11 +482,14 @@ namespace vTools.Commands
       }
       var width = result == GetResult.Number ? getter.Number() : options.Width.CurrentValue;
       var seam = options.Seam.CurrentValue;
-      if (!ValidOptions(width, seam) || !double.IsFinite(options.Distance.CurrentValue) || options.Distance.CurrentValue<0)
-      { RhinoApp.WriteLine("vPartSplit: Width must exceed twice Seam; Seam cannot be negative."); return false; }
-      _width = width; _seam = seam;
+      var type=result==GetResult.Option&&getter.Option()?.Index==options.SeamTypeIndex?
+        (SeamType)getter.Option().CurrentListOptionIndex:_seamType;
+      if (!ValidOptions(width, seam,type) || !double.IsFinite(options.Distance.CurrentValue) || options.Distance.CurrentValue<0)
+      { RhinoApp.WriteLine("vPartSplit: Width must exceed {0}; Seam and Distance cannot be negative.",type==SeamType.Overlap?"Seam":"twice Seam"); return false; }
+      _width = width; _seam = seam; _seamType=type;
       _label = options.Label.CurrentValue;
       _notches = options.Notches.CurrentValue;
+      _syncSplits = options.SyncSplits.CurrentValue;
       _distance = options.Distance.CurrentValue;
       if (result == GetResult.Option && getter.Option()?.Index == options.ModeIndex)
         _mode = getter.Option().CurrentListOptionIndex;
@@ -384,18 +497,34 @@ namespace vTools.Commands
         _layout = getter.Option().CurrentListOptionIndex;
       if (result == GetResult.Option && getter.Option()?.Index == options.DirectionIndex)
         _direction = (SplitDirection)getter.Option().CurrentListOptionIndex;
+      if (result == GetResult.Option && getter.Option()?.Index == options.AutoIndex)
+        _autoGoal = (AutoGoal)getter.Option().CurrentListOptionIndex;
       return true;
     }
 
-    internal static Result Run(RhinoDoc doc)
+    internal static Result Run(RhinoDoc doc,IReadOnlyList<Guid>? sources=null,double? initialWidth=null,Action<double>? beginPlacement=null,
+      SeamType? initialSeamType=null,Action<SeamType>? saveSeamType=null)
     {
       Load();
       double tolerance=Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance);
-      Options? selectionOptions=null;
-      var ids=PlanarPartSelection.Pick(doc,"Select parts to split",
-        getter=>selectionOptions=AddOptions(getter,tolerance,startLabel:MatchingLabels.Read(doc).Value),
-        (getter,result)=> { if(ReadOptions(doc,getter,result,selectionOptions!)) Save(); },out var selectionResult);
-      if(selectionResult!=Result.Success) return selectionResult;
+      if(initialSeamType is {} type)_seamType=type;
+      if(initialWidth is double width&&ValidOptions(width,_seam,_seamType))_width=width;
+      if(!ValidOptions(_width,_seam,_seamType)){_width=ConfiguredDefaultWidth;_seam=ConfiguredDefaultSeam;}
+      void SaveOptions()
+      {
+        Save(initialSeamType==null);
+        saveSeamType?.Invoke(_seamType);
+      }
+      IReadOnlyList<Guid> ids;
+      if(sources==null)
+      {
+        Options? selectionOptions=null;
+        ids=PlanarPartSelection.Pick(doc,"Select parts to split",
+          getter=>selectionOptions=AddOptions(getter,tolerance,startLabel:MatchingLabels.Read(doc).Value),
+          (getter,result)=> { if(ReadOptions(doc,getter,result,selectionOptions!)) SaveOptions(); },out var selectionResult);
+        if(selectionResult!=Result.Success)return selectionResult;
+      }
+      else ids=sources;
       if(ids.Count==0) return Result.Cancel;
       var states=PlanarPartSelection.Capture(doc,ids,tolerance).Select(part=>new State(part)).ToList();
       if(states.Count==0) { RhinoApp.WriteLine("vPartSplit: no closed planar parts found; selection retained."); return Result.Nothing; }
@@ -432,29 +561,45 @@ namespace vTools.Commands
         }
         return best==null?(-1,-1,-1):(selected,best.Seam,best.Endpoint);
       }
-      bool Replan(bool automatic)
+      bool Replan(bool automatic,bool retainCuts=false)
       {
-        var pending=new List<(State State,PlanarPartSplitter.Proposal Proposal,List<LocalCut>? Cuts,List<Panel> Panels)>();
+        var pending=new List<(State State,PlanarPartSplitter.Settings Settings,PlanarPartSplitter.Proposal Proposal,List<LocalCut>? Cuts,List<Panel> Panels)>();
         foreach(var state in states)
         {
-          PlanarPartSplitter.Proposal? next=null;
-          if(automatic)
+          var settings=Settings(state.Direction);
+          if(state.MatchesPlan(settings,_autoGoal))continue;
+          if(retainCuts)
           {
-            if(PlanarPartSplitter.TryPropose(state.Part.Outline,state.Part.Plane,Settings(state.Direction),out var candidate)) next=candidate;
+            var editing=settings with{Width=IntermediateWidthLimit};
+            var retained=state.Cuts==null?BuildPanels(state.Part,state.Proposal,editing,tolerance):
+              BuildLocalPanels(state.Part,state.Proposal,state.Cuts,editing,tolerance,out _);
+            if(retained.Count==0)
+            { foreach(var item in pending)foreach(var panel in item.Panels)panel.Dispose();return false; }
+            pending.Add((state,settings,state.Proposal,state.Cuts,retained));
+            continue;
           }
-          else
+          PlanarPartSplitter.Proposal? next=null;
+          if(!automatic)
           {
             var frame=state.Proposal.Frame;
             var box=state.Part.Outline.GetBoundingBox(frame);
-            next=PlanarPartSplitter.AtPosition(frame,box.Min.Y,box.Max.Y,Settings(state.Direction),null);
+            next=PlanarPartSplitter.AtPosition(frame,box.Min.Y,box.Max.Y,settings,null);
+            if(next==null)
+            { foreach(var item in pending) foreach(var panel in item.Panels) panel.Dispose(); return false; }
           }
-          if(next==null||!PlanCrossCuts(state.Part,next,Settings(state.Direction),tolerance,automatic,out var planned,out var cuts,out var panels))
+          if(!PlanCrossCuts(state.Part,next,settings,tolerance,automatic,out var planned,out var cuts,out var panels))
           { foreach(var item in pending) foreach(var panel in item.Panels) panel.Dispose(); return false; }
-          pending.Add((state,planned,cuts,panels));
+          pending.Add((state,settings,planned,cuts,panels));
         }
+        if(pending.Count==0)return true;
         ClearHover();
         foreach(var item in pending)
-        { foreach(var panel in item.State.Panels) panel.Dispose(); item.State.Proposal=item.Proposal; item.State.Cuts=item.Cuts; item.State.Panels=item.Panels; }
+        {
+          foreach(var panel in item.State.Panels)panel.Dispose();
+          item.State.Proposal=item.Proposal;item.State.Cuts=item.Cuts;item.State.Panels=item.Panels;
+          if(retainCuts)item.State.ForgetPlan();
+          else item.State.RememberPlan(item.Settings,_autoGoal);
+        }
         return true;
       }
       (Options Values,int PartIndex) Configure(GetPoint getter)
@@ -508,18 +653,20 @@ namespace vTools.Commands
         }
         if(result==GetResult.Option&&getter.Option()?.Index==controls.PartIndex)
         { active=getter.Option().CurrentListOptionIndex; return; }
-        var previous=(_width,_seam,_mode,_layout,_distance,_direction);
+        var previous=(_width,_seam,_mode,_layout,_distance,_direction,_autoGoal,_seamType);
         var previousDirection=states[active].Direction;
         if(!ReadOptions(doc,getter,result,controls.Values)) return;
         bool directionChanged=result==GetResult.Option&&getter.Option()?.Index==controls.Values.DirectionIndex;
         if(directionChanged) states[active].Direction=_direction;
         bool automatic=result==GetResult.Option&&getter.Option()?.Index==controls.Values.AutoIndex;
-        bool settingsChanged=directionChanged||_width!=previous._width||_seam!=previous._seam||_mode!=previous._mode;
+        bool settingsChanged=directionChanged||_width!=previous._width||_seam!=previous._seam||_mode!=previous._mode||
+          _autoGoal==AutoGoal.MinimumMaterial&&_distance!=previous._distance;
         bool updated=true;
-        if(settingsChanged||automatic)updated=Replan(automatic);
+        bool seamTypeChanged=_seamType!=previous._seamType;
+        if(settingsChanged||automatic||seamTypeChanged)updated=Replan(automatic,seamTypeChanged&&!settingsChanged&&!automatic);
         if(!updated)
-        { (_width,_seam,_mode,_layout,_distance,_direction)=previous; states[active].Direction=previousDirection; RhinoApp.WriteLine("vPartSplit: previous valid settings and all part previews retained."); return; }
-        Save();
+        { (_width,_seam,_mode,_layout,_distance,_direction,_autoGoal,_seamType)=previous; states[active].Direction=previousDirection; RhinoApp.WriteLine("vPartSplit: previous valid settings and all part previews retained."); return; }
+        SaveOptions();
       }
       try
       {
@@ -594,15 +741,21 @@ namespace vTools.Commands
             var endpointMove=move;
             while(true)
             {
-              using var destination=new GetPoint();destination.SetCommandPrompt("Split endpoint destination; Esc cancels this move");
+              using var destination=new GetPoint();destination.SetCommandPrompt("Split endpoint destination; Shift for Ortho, Esc cancels");
               destination.Constrain(states[movingPart].Part.Plane,false);
               destination.PermitOrthoSnap(false);destination.PermitTabMode(false);destination.PermitElevatorMode(SplitReviewElevatorMode);
               destination.PermitObjectSnap(AllowObjectSnaps);destination.EnableObjectSnapCursors(AllowObjectSnaps);refreshed=0;
               var destinationControls=Configure(destination);
+              bool? pickedOrtho=null;
+              var axes=cplane;
+              bool ShiftPressed()=>(System.Windows.Forms.Control.ModifierKeys&System.Windows.Forms.Keys.Shift)!=0;
+              bool UpdateEndpoint(Point3d point,bool ortho)=>ortho?endpointMove.UpdateOrtho(point,axes):endpointMove.Update(point);
+              destination.MouseMove+=(_,e)=>axes=e.Viewport.ConstructionPlane();
+              destination.MouseDown+=(_,e)=>{pickedOrtho=e.ShiftKeyDown;axes=e.Viewport.ConstructionPlane();};
               destination.DynamicDraw+=(_,e)=>
               {
                 long now=System.Environment.TickCount64;
-                if(now-refreshed>=ConfiguredDragRefreshMilliseconds){refreshed=now;endpointMove.Update(e.CurrentPoint);}
+                if(now-refreshed>=ConfiguredDragRefreshMilliseconds){refreshed=now;UpdateEndpoint(e.CurrentPoint,ShiftPressed());}
                 DrawBatch(e.Display,doc,states,cplane,anchor,tolerance,labelStyle);
                 if(endpointMove.Candidate.IsValid)
                 {
@@ -615,7 +768,7 @@ namespace vTools.Commands
               if(destinationResult is GetResult.Option or GetResult.Number)
               {move.Dispose();move=null;Change(destination,destinationResult,destinationControls);break;}
               if(destinationResult!=GetResult.Point)break;
-              if(endpointMove.Update(destination.Point())){endpointMove.Accept();break;}
+              if(UpdateEndpoint(destination.Point(),pickedOrtho??ShiftPressed())){endpointMove.Accept();break;}
               RhinoApp.WriteLine("vPartSplit: that endpoint cannot preserve valid split geometry; choose another point.");
             }
           }
@@ -650,16 +803,25 @@ namespace vTools.Commands
           { RhinoApp.WriteLine("vPartSplit: {0}",invalid.LabelError); continue; }
           var placements=BatchPlacements(states,cplane,anchor);
           var outputs=new List<Output>();
+          beginPlacement?.Invoke(_width);
           foreach(var (state,index) in states.Select((state,index)=>(state,index)))
           {
             if(!Commit(doc,state.Part,state.Proposal,state.Panels,cplane,anchor,tolerance,out var output,placements[index],PanelOrder(state.Panels,state.Proposal,state.Direction),state.Direction,state.Cuts,labelStyle))
             {
-              foreach(var created in outputs) { foreach(var id in created.Added) doc.Objects.Delete(id,true); foreach(var group in created.Groups) doc.Groups.Delete(group); }
+              foreach(var created in outputs)
+              {
+                foreach(var id in created.Added)doc.Objects.Delete(id,true);
+                foreach(var group in created.Groups)doc.Groups.Delete(group);
+                foreach(string key in created.NestSettings.Keys)doc.Strings.Delete(PartGroupData.NestSection,key);
+              }
               return Result.Failure;
             }
             outputs.Add(output!);
           }
-          committed=true; Save();
+          var nestSettings=outputs.SelectMany(output=>output.NestSettings).ToDictionary(pair=>pair.Key,pair=>pair.Value);
+          if(nestSettings.Count>0&&doc.CurrentUndoRecordSerialNumber!=0)
+            doc.AddCustomUndoEvent("vPartSplit part settings",UndoPartSettings,nestSettings);
+          committed=true; SaveOptions();
           if(_label&&!MatchingLabels.Advance(doc,labelStyle.Value,nextLabel))
             RhinoApp.WriteLine("vPartSplit: parts placed, but the shared next label could not be saved; see the diagnostic log.");
           RhinoApp.WriteLine($"vPartSplit: split {CountText.Format(states.Count, "source part")} into {CountText.Format(states.Sum(state=>state.Panels.Count), "grouped part")}; Layout={LayoutNames[_layout]}, Distance={_distance:G6}.");
@@ -717,6 +879,62 @@ namespace vTools.Commands
     }
     private static PlanarPartSplitter.Settings EditingSettings(State state,double tolerance)=>
       Settings(state.Direction) with{Width=IntermediateWidthLimit};
+
+    private static bool TryPlanSyncedMove(State state,PlanarPartSplitter.Proposal before,IReadOnlyList<LocalCut>? originalCuts,
+      IReadOnlyList<Panel> originalPanels,int seam,LocalCut moved,double tolerance,
+      out PlanarPartSplitter.Proposal proposal,out List<LocalCut> cuts,out List<Panel> panels,out int active)
+    {
+      var settings=Settings(state.Direction);
+      var editing=settings with{Width=IntermediateWidthLimit};
+      var adjusted=originalCuts?.ToList()??before.Seams.Select(position=>new LocalCut(
+        new Plane(before.Frame.PointAt(0,position),before.Frame.XAxis,before.Frame.YAxis))).ToList();
+      adjusted[seam]=moved;
+      cuts=adjusted;
+      proposal=before with{Seams=adjusted.Select(cut=>PlanarPartSplitter.FrameY(before.Frame,cut.Frame.Origin)).ToList()};
+      panels=[];active=seam;
+      var frame=moved.Frame;
+      var bounds=state.Part.Outline.GetBoundingBox(frame);
+      var next=bounds.IsValid?PlanarPartSplitter.AtPosition(frame,bounds.Min.Y,bounds.Max.Y,settings,0):null;
+      int pinned=next?.Seams.IndexOf(0)??-1;
+      List<LocalCut>? replanned=null;
+      if(next!=null&&pinned>=0)
+      {
+        replanned=next.Seams.Select(position=>new LocalCut(new Plane(frame.PointAt(0,position),frame.XAxis,frame.YAxis))).ToList();
+        replanned[pinned]=moved;
+      }
+
+      List<Panel>? TryCandidate(PlanarPartSplitter.Proposal candidate,IReadOnlyList<LocalCut> candidateCuts,bool reuse)
+      {
+        var trial=BuildLocalPanelsCore(state.Part,candidate,candidateCuts,editing,tolerance,out _,
+          reuse&&originalCuts!=null?originalPanels:null,reuse?seam:-1,includeDetails:false);
+        try
+        {
+          if(trial.Count>0&&trial.All(panel=>EditingWidth(panel,tolerance)<=settings.Width+tolerance))
+          {
+            var source=GetSourceDetails(state.Part,tolerance);
+            foreach(var panel in trial)if(!originalPanels.Contains(panel))AddCurveDetails(state.Part,source,panel,tolerance);
+            AssignNonCurveDetails(state.Part,trial,tolerance);
+            return trial;
+          }
+        }
+        catch(Exception ex){Log.Write("vPartSplit","synced cut rejected: {0}",ex.Message);}
+        foreach(var panel in trial)if(!originalPanels.Contains(panel))panel.Dispose();
+        return null;
+      }
+
+      // Prefer fewer cuts when the pinned station permits it. Otherwise retain fitting neighbors before adding cuts.
+      bool tryFewer=replanned!=null&&replanned.Count<adjusted.Count;
+      var fitted=tryFewer?TryCandidate(next!,replanned!,false):null;
+      if(fitted==null)
+      {
+        if(TryCandidate(proposal,adjusted,true) is {} unchangedCount)
+        {panels=unchangedCount;return true;}
+        fitted=!tryFewer&&replanned!=null?TryCandidate(next!,replanned,false):null;
+      }
+      if(fitted==null)return false;
+      proposal=next!;cuts=replanned!;panels=fitted;active=pinned;
+      return true;
+    }
 
     private static bool CrossSection(Curve outline,Plane frame,double tolerance,out Point3d a,out Point3d b,out Vector3d along)
     {
@@ -820,7 +1038,7 @@ namespace vTools.Commands
       => BuildLocalPanelsCore(part,proposal,cuts,settings,tolerance,out maximumWidth,null,-1);
 
     private static List<Panel> BuildLocalPanelsCore(Part part,PlanarPartSplitter.Proposal proposal,IReadOnlyList<LocalCut> cuts,
-      PlanarPartSplitter.Settings settings,double tolerance,out double maximumWidth,IReadOnlyList<Panel>? previous,int changedSeam)
+      PlanarPartSplitter.Settings settings,double tolerance,out double maximumWidth,IReadOnlyList<Panel>? previous,int changedSeam,bool includeDetails=true)
     {
       maximumWidth=0;
       var panels=new List<Panel>();double nominalArea=0;
@@ -830,7 +1048,7 @@ namespace vTools.Commands
         var source=GetSourceDetails(part,tolerance);
         var finished=source.FinishedBoundary??part.Outline;
         bool finite=cuts.Any(cut=>NeedsFiniteCut(finished,cut,tolerance));
-        if(finite)return BuildEndpointPanels(part,proposal,cuts,settings,tolerance,out maximumWidth);
+        if(finite)return BuildEndpointPanels(part,proposal,cuts,settings,tolerance,out maximumWidth,includeDetails);
         if(previous?.Any(panel=>panel.Finite)==true)previous=null;
         for(int band=0;band<=cuts.Count;band++)
         {
@@ -865,7 +1083,7 @@ namespace vTools.Commands
                 if(index<0||index>=cuts.Count)continue;
                 panel.Seams.Add(index);
                 using var sew=SplitLine(part,proposal,cuts,index,tolerance);
-                if(sew!=null)panel.SewLines.AddRange(ClipSewLine(part,sew,cut,tolerance));
+                if(sew!=null)AddSewLine(part,panel,sew,cuts[index].Frame.YAxis*(index<band?1:-1),settings.Allowance,tolerance);
               }
             }
             if(panels.Count>firstPanel)panels[firstPanel].NominalArea=bandArea;
@@ -876,23 +1094,12 @@ namespace vTools.Commands
           Math.Abs(nominalArea-source.NominalArea)>tolerance*finished.GetLength()*ConfiguredCoverageToleranceFactor)
           throw new InvalidOperationException("cross-cuts do not preserve the complete source area");
         // Trial layouts that fail the width limit never need expensive detail clipping.
-        if(maximumWidth<=settings.Width+tolerance)
+        if(includeDetails&&maximumWidth<=settings.Width+tolerance)
+        {
           foreach(var panel in panels)
-          {
-            if(previous!=null&&previous.Contains(panel))continue;
-            var cutBounds=panel.Cut.GetBoundingBox(part.Plane);
-            foreach(var detail in source.Items)
-            {
-              if(!BoundsOverlap(detail.Bounds,cutBounds,tolerance))continue;
-              var item=detail.Item;
-              if(item.Geometry is Curve curve)
-              {
-                foreach(var piece in ClipDetail(item,panel,part.Plane,tolerance))
-                  if(detail.Boundary&&Coincident(piece,part.Outline,tolerance))piece.Dispose();else panel.Details.Add(item with{Geometry=piece});
-              }
-            }
-          }
-        if(maximumWidth<=settings.Width+tolerance)AssignNonCurveDetails(part,panels,tolerance);
+            if(previous==null||!previous.Contains(panel)) AddCurveDetails(part,source,panel,tolerance);
+          AssignNonCurveDetails(part,panels,tolerance);
+        }
         return panels;
       }
       catch(Exception ex){foreach(var panel in panels)if(previous==null||!previous.Contains(panel))panel.Dispose();Log.Write("vPartSplit","cross-cut layout rejected: {0}",ex.Message);return [];}
@@ -934,8 +1141,25 @@ namespace vTools.Commands
       }
       finally{foreach(var curve in left.Concat(right))curve.Dispose();}
     }
+
+    private static Curve FiniteSplitPath(Curve outline,Curve finished,Curve seam,Plane plane,double tolerance)
+    {
+      Point3d OuterEnd(Point3d point)
+      {
+        if(!outline.ClosestPoint(point,out double parameter))throw new InvalidOperationException("split cannot reach the outer cut edge");
+        var end=outline.PointAt(parameter);
+        for(int sample=1;sample<ConfiguredBoundarySamples;sample++)
+          if(finished.Contains(point+(end-point)*sample/ConfiguredBoundarySamples,plane,tolerance)==PointContainment.Inside)
+            throw new InvalidOperationException("the split's allowance connector would cross finished material");
+        return end;
+      }
+      var points=new[]{OuterEnd(seam.PointAtStart),seam.PointAtStart,seam.PointAtEnd,OuterEnd(seam.PointAtEnd)}
+        .Aggregate(new List<Point3d>(),(values,point)=>{if(values.Count==0||values[^1].DistanceTo(point)>tolerance)values.Add(point);return values;});
+      return new PolylineCurve(points);
+    }
+
     private static List<Panel> BuildEndpointPanels(Part part,PlanarPartSplitter.Proposal proposal,IReadOnlyList<LocalCut> cuts,
-      PlanarPartSplitter.Settings settings,double tolerance,out double maximumWidth)
+      PlanarPartSplitter.Settings settings,double tolerance,out double maximumWidth,bool includeDetails)
     {
       maximumWidth=0;var panels=new List<Panel>();var seams=new List<Curve>();var paths=new List<Curve>();
       var nominal=new List<Curve>();var outer=new List<Curve>();
@@ -946,18 +1170,7 @@ namespace vTools.Commands
         foreach(int index in Enumerable.Range(0,cuts.Count))
         {
           var seam=SplitLine(part,proposal,cuts,index,tolerance)??throw new InvalidOperationException("finite split has no endpoints");seams.Add(seam);
-          Point3d OuterEnd(Point3d point)
-          {
-            if(!part.Outline.ClosestPoint(point,out double parameter))throw new InvalidOperationException("split cannot reach the outer cut edge");
-            var end=part.Outline.PointAt(parameter);
-            for(int sample=1;sample<ConfiguredBoundarySamples;sample++)
-              if(finished.Contains(point+(end-point)*sample/ConfiguredBoundarySamples,part.Plane,tolerance)==PointContainment.Inside)
-                throw new InvalidOperationException("the split's allowance connector would cross finished material");
-            return end;
-          }
-          var points=new[]{OuterEnd(seam.PointAtStart),seam.PointAtStart,seam.PointAtEnd,OuterEnd(seam.PointAtEnd)}
-            .Aggregate(new List<Point3d>(),(values,point)=>{if(values.Count==0||values[^1].DistanceTo(point)>tolerance)values.Add(point);return values;});
-          var path=new PolylineCurve(points);paths.Add(path);
+          paths.Add(FiniteSplitPath(part.Outline,finished,seam,part.Plane,tolerance));
         }
         nominal=PartitionBoundary(finished,seams,part.Plane,tolerance);outer=PartitionBoundary(part.Outline,paths,part.Plane,tolerance);
         double areaTolerance=tolerance*finished.GetLength()*ConfiguredCoverageToleranceFactor;
@@ -1004,29 +1217,25 @@ namespace vTools.Commands
           var frame=new Plane(part.Plane.Origin,Vector3d.CrossProduct(along,part.Plane.Normal),along);var bounds=joined[0].GetBoundingBox(frame);
           var panel=new Panel(joined[0],bounds,[nominal[region].DuplicateCurve()],region){Frame=frame,NominalArea=CurveArea(nominal[region]),Finite=true};panels.Add(panel);
           panel.Seams.UnionWith(touching);maximumWidth=Math.Max(maximumWidth,bounds.Max.Y-bounds.Min.Y);
-          foreach(int index in touching)panel.SewLines.AddRange(ClipSewLine(part,seams[index],panel.Cut,tolerance));
-          foreach(var detail in source.Items.Where(detail=>detail.Item.Geometry is Curve))
-            foreach(var piece in ClipDetail(detail.Item,panel,part.Plane,tolerance))
-              if(detail.Boundary&&Coincident(piece,part.Outline,tolerance))piece.Dispose();else panel.Details.Add(detail.Item with{Geometry=piece});
+          foreach(int index in touching)
+          {
+            var seam=seams[index];
+            var inward=SeamInward(part,panel,seam.PointAtNormalizedLength(0.5),cuts[index].Frame.YAxis,tolerance);
+            AddSewLine(part,panel,seam,inward,settings.Allowance,tolerance);
+          }
+          if(includeDetails)AddCurveDetails(part,source,panel,tolerance);
         }
-        AssignNonCurveDetails(part,panels,tolerance);return panels;
+        if(includeDetails)AssignNonCurveDetails(part,panels,tolerance);
+        return panels;
       }
       catch(Exception ex){foreach(var panel in panels)panel.Dispose();Log.Write("vPartSplit","finite split rejected: {0}",ex.Message);return [];}
       finally{foreach(var curve in seams.Concat(paths).Concat(nominal).Concat(outer))curve.Dispose();}
     }
     private static SourceDetails GetSourceDetails(Part part,double tolerance) => SourceCache.GetValue(part,source=>
     {
-      var items=new List<SourceItem>();
-      foreach(var item in source.Items)
-      {
-        bool boundary=item.Geometry is Curve&&item.Attributes.LayerIndex==source.Attributes.LayerIndex&&
-          !string.Equals(item.Attributes.Name,NotchName,StringComparison.OrdinalIgnoreCase)&&item.Attributes.GetUserString(NotchRoleKey)!="notch";
-        if(boundary&&Coincident((Curve)item.Geometry,source.Outline,tolerance))continue;
-        items.Add(new(item,item.Geometry.GetBoundingBox(source.Plane),boundary));
-      }
       using var mass=AreaMassProperties.Compute(source.Outline);
       double area=mass?.Area??throw new InvalidOperationException("source area could not be measured");
-      var sewItems=source.Items.Where(item=>item.Geometry is Curve&&IsSewDetail(item)).ToArray();
+      var sewItems=source.Items.Where(item=>item.Geometry is Curve&&!IsNotch(item)&&IsSewBoundaryCandidate(item)).ToArray();
       var loops=GroupBoundaryTopology.PlanarRegions(sewItems.Select(item=>(Curve)item.Geometry).ToArray(),tolerance,tolerance);
       try
       {
@@ -1037,6 +1246,16 @@ namespace vTools.Commands
           .Where(candidate=>Coincident(candidate.Loop,source.Outline,tolerance)||
             source.Outline.Contains(candidate.Loop.PointAtNormalizedLength(0.5),source.Plane,tolerance) is PointContainment.Inside or PointContainment.Coincident)
           .OrderByDescending(candidate=>candidate.Area).FirstOrDefault().Loop;
+        var items=new List<SourceItem>();
+        foreach(var item in source.Items)
+        {
+          if(item.Geometry is not Curve curve)continue;
+          bool notch=IsNotch(item);
+          bool cutEdge=!notch&&item.Attributes.LayerIndex==source.Attributes.LayerIndex;
+          if(cutEdge&&Coincident(curve,source.Outline,tolerance))continue;
+          bool finishedEdge=!notch&&IsSewBoundaryCandidate(item)&&Coincident(curve,finished??source.Outline,tolerance);
+          items.Add(new(item,curve.GetBoundingBox(source.Plane),cutEdge,finishedEdge));
+        }
         using var finishedMass=finished==null?null:AreaMassProperties.Compute(finished);
         return new(items,area,finished?.DuplicateCurve()){NominalArea=finishedMass?.Area??area,Tolerance=tolerance};
       }
@@ -1096,11 +1315,12 @@ namespace vTools.Commands
     {
       if(ReferenceEquals(state.CachedProposal,state.Proposal)&&ReferenceEquals(state.CachedCuts,state.Cuts))return state.CutPreviews;
       foreach(var cut in state.CutPreviews)cut.Dispose();state.CutPreviews.Clear();
+      bool finite=state.Panels.Any(panel=>panel.Finite);
       for(int index=0;index<state.Proposal.Seams.Count;index++)
       {
         var line=SplitLine(state.Part,state.Proposal,state.Cuts,index,tolerance);
         if(line==null)throw new InvalidOperationException("split has no boundary intersections");
-        state.CutPreviews.Add(new(line,PlanarPartSplitter.ClipCurve(line,SplitBoundary(state.Part,tolerance),state.Part.Plane,tolerance)));
+        state.CutPreviews.Add(new(line,ReferenceSplitSegments(state.Part,line,finite,tolerance)));
       }
       state.CachedProposal=state.Proposal;state.CachedCuts=state.Cuts;
       return state.CutPreviews;
@@ -1112,56 +1332,116 @@ namespace vTools.Commands
       proposal=null!;cuts=null;panels=[];
       var whole=PlanarFit.FitCurve(part.Outline,part.Plane,IntermediateWidthLimit,tolerance);
       if(whole==null)return false;
+      bool minimizeMaterial=_autoGoal==AutoGoal.MinimumMaterial;
       var frame=whole.Plane;
       if(whole.Width>whole.Height)frame.Rotate(Math.PI/2,frame.Normal);
-      if(frame.YAxis*ProgressFrame(part,settings.Samples).YAxis<0)frame=new(frame.Origin,-frame.XAxis,-frame.YAxis);
+      var progress=ProgressFrame(part,settings.Samples).YAxis;
+      PlanarFit.Fit? fittingWhole=minimizeMaterial?PlanarFit.FitCurveByRollLength(part.Outline,frame,settings.Width,tolerance):
+        VerticalWidth(whole.Bounds)<=settings.Width+tolerance?whole:PlanarFit.FitCurve(part.Outline,part.Plane,settings.Width,tolerance);
+      foreach(var axis in new[]{frame,new Plane(frame.Origin,-frame.YAxis,frame.XAxis)})
+      {
+        if(!minimizeMaterial&&panels.Count is >0 and <=2)break; // The whole-part fit is independent of cut direction.
+        var oriented=axis.YAxis*progress<0?new Plane(axis.Origin,-axis.XAxis,-axis.YAxis):axis;
+        int maxParts=!minimizeMaterial&&panels.Count>0?panels.Count-1:settings.MaxParts;
+        if(!TryFittedDirection(part,settings,tolerance,oriented,fittingWhole,maxParts,minimizeMaterial,
+          out var candidate,out var local,out var built))continue;
+        bool better=panels.Count==0||!minimizeMaterial||
+          candidate.MaterialLength<proposal.MaterialLength-tolerance||
+          Math.Abs(candidate.MaterialLength-proposal.MaterialLength)<=tolerance&&built.Count<panels.Count;
+        if(!better){foreach(var panel in built)panel.Dispose();continue;}
+        foreach(var panel in panels)panel.Dispose();
+        proposal=candidate;cuts=local;panels=built;
+      }
+      return panels.Count>0;
+    }
+
+    private static bool TryFittedDirection(Part part,PlanarPartSplitter.Settings settings,double tolerance,Plane frame,
+      PlanarFit.Fit? fittingWhole,int maxParts,bool minimizeMaterial,out PlanarPartSplitter.Proposal proposal,out List<LocalCut>? cuts,out List<Panel> panels)
+    {
+      proposal=null!;cuts=null;panels=[];
       if(!PlanarFit.TryBounds(part.Outline,frame,out var bounds))return false;
       double span=bounds.Max.Y-bounds.Min.Y;if(span<=tolerance)return false;
-      var fittingWhole=VerticalWidth(whole.Bounds)<=settings.Width+tolerance?whole:
-        PlanarFit.FitCurve(part.Outline,part.Plane,settings.Width,tolerance);
+      PlanarFit.Fit? Fit(Curve curve,Plane seedFrame)=>minimizeMaterial?PlanarFit.FitCurveByRollLength(curve,seedFrame,settings.Width,tolerance):
+        PlanarFit.FitCurve(curve,seedFrame,settings.Width,tolerance);
       var seed=PlanarPartSplitter.AtPosition(frame,bounds.Min.Y,bounds.Max.Y,settings,null);
       int divisions=Math.Clamp(Math.Max(ConfiguredAutoFitStations,seed?.Seams.Count+1??1),MinimumAutoFitStations,MaximumAutoFitStations);
       var finished=SplitBoundary(part,tolerance);
+      var finishedBounds=finished.GetBoundingBox(frame);
       var intervalCache=new Dictionary<(double Lower,double Upper),FittedInterval?>();
-      FittedInterval? FitInterval(double lower,double upper)
+      FittedInterval? MeasureInterval(Curve outline,double lower,double upper,bool widthOnly,out bool widthConfirmed)
       {
-        if(intervalCache.TryGetValue((lower,upper),out var cached))return cached;
+        widthConfirmed=false;
         FittedInterval? result=null;
         if(lower==bounds.Min.Y&&upper==bounds.Max.Y)
         {
           if(fittingWhole!=null)result=new(fittingWhole,MaterialLength(fittingWhole.Bounds,settings.Width,tolerance));
         }
-        else
+        else if(Math.Min(upper,finishedBounds.Max.Y)-Math.Max(lower,finishedBounds.Min.Y)>tolerance)
         {
-          var loops=PlanarPartSplitter.ClipBand(part.Outline,frame,lower-(lower>bounds.Min.Y?settings.Allowance:0),
+          var loops=PlanarPartSplitter.ClipBand(outline,frame,lower-(lower>bounds.Min.Y?settings.Allowance:0),
             upper+(upper<bounds.Max.Y?settings.Allowance:0),tolerance);
           try
           {
-            if(loops.Length==1&&loops[0].IsClosed&&PlanarFit.FitCurve(loops[0],frame,settings.Width,tolerance) is {} fit)
-              result=new(fit,MaterialLength(fit.Bounds,settings.Width,tolerance));
+            if(loops.Length==1&&loops[0].IsClosed)
+            {
+              var loop=loops[0];
+              // The full search also starts at this angle. A band already inside the width needs no search for a yes/no test.
+              if(widthOnly&&PlanarFit.TryBounds(loop,frame,out var measured)&&VerticalWidth(measured)<=settings.Width)
+              {
+                widthConfirmed=true;
+                return null;
+              }
+              if(Fit(loop,frame) is {} fit)result=new(fit,MaterialLength(fit.Bounds,settings.Width,tolerance));
+            }
           }
           finally{foreach(var loop in loops)loop.Dispose();}
         }
-        intervalCache[(lower,upper)]=result;return result;
+        return result;
       }
-      bool IsStation(double value)=>CrossSection(finished,new Plane(frame.PointAt(0,value),frame.XAxis,frame.YAxis),tolerance,out _,out _,out _);
+      FittedInterval? FitInterval(double lower,double upper)
+      {
+        if(!intervalCache.TryGetValue((lower,upper),out var result))
+          intervalCache[(lower,upper)]=result=MeasureInterval(part.Outline,lower,upper,false,out _);
+        return result;
+      }
+      var widthOnlyFits=new HashSet<(double Lower,double Upper)>();
+      bool FitsInterval(double lower,double upper)
+      {
+        var key=(lower,upper);
+        if(intervalCache.TryGetValue(key,out var cached))return cached!=null;
+        if(widthOnlyFits.Contains(key))return true;
+        var result=MeasureInterval(part.Outline,lower,upper,true,out bool widthConfirmed);
+        if(widthConfirmed){widthOnlyFits.Add(key);return true;}
+        intervalCache[key]=result;
+        return result!=null;
+      }
+      var stationCache=new Dictionary<double,bool>();
+      bool IsStation(double value)
+      {
+        if(!stationCache.TryGetValue(value,out bool result))
+          stationCache[value]=result=CrossSection(finished,new Plane(frame.PointAt(0,value),frame.XAxis,frame.YAxis),tolerance,out _,out _,out _);
+        return result;
+      }
       var candidates=new List<double>{bounds.Min.Y,bounds.Max.Y};
-      if(fittingWhole==null)
+      if(fittingWhole==null||minimizeMaterial)
       {
         candidates.AddRange(Enumerable.Range(1,divisions-1).Select(index=>bounds.Min.Y+span*index/divisions));
         candidates.AddRange(seed?.Seams??[]);
+      }
+      if(fittingWhole==null)
+      {
         // Width frontiers add feasible cut positions between grid stations, from both ends.
         foreach(bool reverse in new[]{false,true})
         {
           double cursor=reverse?bounds.Max.Y:bounds.Min.Y,end=reverse?bounds.Min.Y:bounds.Max.Y;
-          for(int piece=0;piece<settings.MaxParts-1;piece++)
+          for(int piece=0;piece<maxParts-1;piece++)
           {
             if(FitInterval(Math.Min(cursor,end),Math.Max(cursor,end))!=null)break;
             double near=0,far=Math.Abs(end-cursor);double? best=null;
             for(int pass=0;pass<Math.Clamp(ConfiguredAutoFitRefinementPasses,1,MaximumAutoFitRefinementPasses)&&far-near>tolerance;pass++)
             {
               double distance=(near+far)/2,position=cursor+(reverse?-distance:distance);
-              if(IsStation(position)&&FitInterval(Math.Min(cursor,position),Math.Max(cursor,position))!=null)
+            if(IsStation(position)&&FitsInterval(Math.Min(cursor,position),Math.Max(cursor,position)))
               {near=distance;best=position;}
               else far=distance;
             }
@@ -1173,59 +1453,205 @@ namespace vTools.Commands
       var positions=candidates.Where(value=>value==bounds.Min.Y||value==bounds.Max.Y||IsStation(value))
         .Order().Aggregate(new List<double>(),(values,value)=>
           {if(values.Count==0||value-values[^1]>tolerance)values.Add(value);return values;});
-      int last=positions.Count-1;
-      var intervals=new FittedInterval?[last+1,last+1];
-      for(int lower=0;lower<last;lower++)for(int upper=lower+1;upper<=last;upper++)
-        intervals[lower,upper]=FitInterval(positions[lower],positions[upper]);
-      for(int count=1;count<=Math.Min(settings.MaxParts,last);count++)
+      void CacheLayer(IEnumerable<(int Lower,int Upper)> reachable)
       {
-        var costs=new double[count+1,last+1];var ties=new double[count+1,last+1];var previous=new int[count+1,last+1];
-        for(int used=0;used<=count;used++)for(int node=0;node<=last;node++)costs[used,node]=double.PositiveInfinity;
-        costs[0,0]=0;
-        var ranks=BandOrder(count,settings.Direction).Select((band,rank)=>(band,rank)).ToDictionary(pair=>pair.band,pair=>pair.rank);
-        double balance=settings.Spacing==PlanarPartSplitter.SpacingMode.Even?Math.Max(0,PlanarPartSplitter.ConfiguredEvenBalanceWeight)*count/span:0;
-        for(int used=1;used<=count;used++)for(int upper=used;upper<=last;upper++)for(int lower=used-1;lower<upper;lower++)
+        if(ConfiguredFitWorkers==1)return;
+        var pending=reachable.Select(pair=>(Lower:positions[pair.Lower],Upper:positions[pair.Upper]))
+          .Where(pair=>!intervalCache.ContainsKey(pair)).ToArray();
+        if(pending.Length<2)return;
+        int workers=Math.Min(pending.Length,ConfiguredFitWorkers);
+        var copies=new List<Curve>(workers);
+        try
         {
-          if(!double.IsFinite(costs[used-1,lower])||intervals[lower,upper] is not {} interval)continue;
-          double width=positions[upper]-positions[lower];
-          double cost=costs[used-1,lower]+interval.Length+settings.Gap+balance*width*width;
-          double tie=ties[used-1,lower]-width*Math.Pow(1.0/(last+1),ranks[used-1]);
-          if(cost>costs[used,upper]+tolerance||Math.Abs(cost-costs[used,upper])<=tolerance&&tie>=ties[used,upper])continue;
-          costs[used,upper]=cost;ties[used,upper]=tie;previous[used,upper]=lower;
+          // Workers only use private geometry. Merge results on the command thread before scoring the layout.
+          for(int worker=0;worker<workers;worker++)copies.Add(part.Outline.DuplicateCurve());
+          var results=new FittedInterval?[pending.Length];
+          int next=-1;
+          Parallel.For(0,workers,new ParallelOptions{MaxDegreeOfParallelism=workers},worker=>
+          {
+            for(int index=Interlocked.Increment(ref next);index<pending.Length;index=Interlocked.Increment(ref next))
+            {
+              var pair=pending[index];
+              results[index]=MeasureInterval(copies[worker],pair.Lower,pair.Upper,false,out _);
+            }
+          });
+          for(int index=0;index<pending.Length;index++)intervalCache.Add(pending[index],results[index]);
         }
-        if(!double.IsFinite(costs[count,last]))continue;
-        var nodes=new int[count+1];nodes[count]=last;
-        for(int used=count;used>0;used--)nodes[used-1]=previous[used,nodes[used]];
-        var seams=nodes.Skip(1).Take(count-1).Select(node=>positions[node]).ToList();
-        double length=Enumerable.Range(0,count).Sum(index=>intervals[nodes[index],nodes[index+1]]!.Length)+settings.Gap*(count-1);
-        var next=new PlanarPartSplitter.Proposal(frame,bounds.Min.Y,bounds.Max.Y,seams,length);
+        finally{foreach(var copy in copies)copy.Dispose();}
+      }
+      var trials=minimizeMaterial?MinimumMaterialStations(positions,maxParts,settings,tolerance,
+        (lower,upper)=>FitInterval(lower,upper)?.Length??double.PositiveInfinity,CacheLayer):
+        FewestSplitStations(positions,maxParts,settings,tolerance,IsStation,FitsInterval,
+          (lower,upper)=>FitInterval(lower,upper)?.Length??double.PositiveInfinity,CacheLayer);
+      foreach(var stations in trials)
+      {
+        int count=stations.Length-1;
+        var seams=stations.Skip(1).Take(count-1).ToList();
+        double length=settings.Gap*(count-1);
+        var next=new PlanarPartSplitter.Proposal(frame,bounds.Min.Y,bounds.Max.Y,seams,0);
         var local=seams.Select(position=>new LocalCut(new Plane(frame.PointAt(0,position),frame.XAxis,frame.YAxis))).ToList();
-        var built=count==1?BuildPanels(part,next,settings with{Width=IntermediateWidthLimit},tolerance):
-          BuildLocalPanels(part,next,local,settings with{Width=IntermediateWidthLimit},tolerance,out _);
-        bool valid=built.Count==count;
+        var built=BuildPanels(part,next,settings with{Width=IntermediateWidthLimit},tolerance);
+        bool valid=built.Count==count&&Math.Abs(built.Sum(panel=>panel.NominalArea)-GetSourceDetails(part,tolerance).NominalArea)
+          <=tolerance*finished.GetLength()*ConfiguredCoverageToleranceFactor;
         foreach(var panel in built)
         {
-          var expected=intervals[nodes[panel.BandIndex],nodes[panel.BandIndex+1]]!.Fit;
+          var expected=FitInterval(stations[panel.BandIndex],stations[panel.BandIndex+1])!.Fit;
           if(!PlanarFit.TryBounds(panel.Cut,expected.Plane,out var measured)){valid=false;break;}
           var fitted=new PlanarFit.Fit(expected.Plane,measured,expected.Angle);
           if(VerticalWidth(measured)>settings.Width+tolerance)
-          {fitted=PlanarFit.FitCurve(panel.Cut,panel.Frame,settings.Width,tolerance);if(fitted==null){valid=false;break;}}
+          {fitted=Fit(panel.Cut,panel.Frame);if(fitted==null){valid=false;break;}}
+          length+=MaterialLength(fitted.Bounds,settings.Width,tolerance);
           panel.CompactFit=fitted;panel.CompactWidth=settings.Width;panel.CompactRefined=true;
           panel.EditingFit=fitted;panel.EditingFitLimit=settings.Width;panel.EditingFitTolerance=tolerance;
         }
         if(!valid){foreach(var panel in built)panel.Dispose();continue;}
-        proposal=next;cuts=local;panels=built;
-        Log.Write("vPartSplit","fitted split parts={0} stations={1} width={2:G6} materialLength={3:G6} intervalTests={4}",count,last,settings.Width,length,intervalCache.Count);
+        proposal=next with{MaterialLength=length};cuts=local;panels=built;
+        Log.Write("vPartSplit","fitted split direction={0} goal={1} parts={2} stations={3} width={4:G6} materialLength={5:G6} intervalTests={6}",
+          settings.Direction,_autoGoal,count,positions.Count-1,settings.Width,length,intervalCache.Count);
         return true;
       }
       return false;
     }
 
-    private static bool PlanCrossCuts(Part part,PlanarPartSplitter.Proposal initial,PlanarPartSplitter.Settings settings,double tolerance,bool automatic,
+    private static IEnumerable<(int Lower,int Upper)> ReachableIntervals(double[,] costs,int used,int firstUpper,int lastUpper)
+    {
+      for(int upper=firstUpper;upper<=lastUpper;upper++)for(int lower=used-1;lower<upper;lower++)
+        if(double.IsFinite(costs[used-1,lower]))yield return (lower,upper);
+    }
+
+    private static IEnumerable<double[]> FewestSplitStations(IReadOnlyList<double> positions,int maxParts,PlanarPartSplitter.Settings settings,
+      double tolerance,Func<double,bool> isStation,Func<double,double,bool> fits,Func<double,double,double> length,
+      Action<IEnumerable<(int Lower,int Upper)>> cacheLayer)
+    {
+      int last=positions.Count-1;
+      double span=positions[last]-positions[0];
+      for(int count=1;count<=Math.Min(maxParts,last);count++)
+      {
+        var costs=new double[count+1,last+1];var ties=new double[count+1,last+1];var previous=new int[count+1,last+1];
+        for(int used=0;used<=count;used++)for(int node=0;node<=last;node++)costs[used,node]=double.PositiveInfinity;
+        costs[0,0]=0;
+        var ranks=BandOrder(count,settings.Direction).Select((band,rank)=>(band,rank)).ToDictionary(pair=>pair.band,pair=>pair.rank);
+        bool maxWidth=settings.Spacing==PlanarPartSplitter.SpacingMode.MaxWidth;
+        double balance=settings.Spacing==PlanarPartSplitter.SpacingMode.Even?Math.Max(0,PlanarPartSplitter.ConfiguredEvenBalanceWeight)*count/span:0;
+        for(int used=1;used<=count;used++)
+        {
+          // Measure only reachable bands that leave at least one station for each remaining piece.
+          int firstUpper=used==count?last:used;
+          int lastUpper=last-(count-used);
+          var reachable=ReachableIntervals(costs,used,firstUpper,lastUpper);
+          cacheLayer(reachable);
+          foreach(var (lower,upper) in reachable)
+          {
+            double materialLength=length(positions[lower],positions[upper]);
+            if(!double.IsFinite(materialLength))continue;
+            double width=positions[upper]-positions[lower];
+            double cost=costs[used-1,lower]+materialLength+settings.Gap+balance*width*width;
+            double tie=ties[used-1,lower]-width*Math.Pow(1.0/(last+1),ranks[used-1]);
+            if(double.IsFinite(costs[used,upper]))
+            {
+              bool better=maxWidth&&tie!=ties[used,upper]?tie<ties[used,upper]:
+                cost<costs[used,upper]-tolerance||Math.Abs(cost-costs[used,upper])<=tolerance&&tie<ties[used,upper];
+              if(!better)continue;
+            }
+            costs[used,upper]=cost;ties[used,upper]=tie;previous[used,upper]=lower;
+          }
+        }
+        if(!double.IsFinite(costs[count,last]))continue;
+        var nodes=new int[count+1];nodes[count]=last;
+        for(int used=count;used>0;used--)nodes[used-1]=previous[used,nodes[used]];
+        var chosen=nodes.Select(node=>positions[node]).ToArray();
+        var centered=maxWidth&&settings.Direction==SplitDirection.Outward&&count>1?
+          CenteredFittedStations(positions,count,tolerance,isStation,fits):null;
+        if(centered!=null&&!centered.SequenceEqual(chosen))yield return centered;
+        yield return chosen;
+      }
+    }
+
+    private static IEnumerable<double[]> MinimumMaterialStations(IReadOnlyList<double> positions,int maxParts,PlanarPartSplitter.Settings settings,
+      double tolerance,Func<double,double,double> length,Action<IEnumerable<(int Lower,int Upper)>> cacheLayer)
+    {
+      int last=positions.Count-1,limit=Math.Min(maxParts,last);
+      var costs=new double[limit+1,last+1];var ties=new double[limit+1,last+1];var previous=new int[limit+1,last+1];
+      for(int used=0;used<=limit;used++)for(int node=0;node<=last;node++)costs[used,node]=double.PositiveInfinity;
+      costs[0,0]=0;
+      bool even=settings.Spacing==PlanarPartSplitter.SpacingMode.Even;
+      var results=new List<(double Length,double[] Stations)>();
+      // One interval graph finds the shortest roll length for each piece count.
+      for(int used=1;used<=limit;used++)
+      {
+        var reachable=ReachableIntervals(costs,used,used,last);
+        cacheLayer(reachable);
+        foreach(var (lower,upper) in reachable)
+        {
+          double cost=costs[used-1,lower]+length(positions[lower],positions[upper])+(used>1?settings.Gap:0);
+          if(!double.IsFinite(cost))continue;
+          double span=positions[upper]-positions[lower];
+          double tie=ties[used-1,lower]+(even?span*span:0);
+          if(cost>=costs[used,upper]-tolerance&&(cost>costs[used,upper]+tolerance||tie>=ties[used,upper]))continue;
+          costs[used,upper]=cost;ties[used,upper]=tie;previous[used,upper]=lower;
+        }
+        if(!double.IsFinite(costs[used,last]))continue;
+        var stations=new double[used+1];stations[used]=positions[last];
+        int node=last;
+        for(int band=used;band>0;band--){node=previous[band,node];stations[band-1]=positions[node];}
+        results.Add((costs[used,last],stations));
+      }
+      double best=results.Count==0?double.PositiveInfinity:results.Min(result=>result.Length);
+      return results.OrderBy(result=>result.Length<=best+tolerance?0:result.Length-best)
+        .ThenBy(result=>result.Stations.Length).Select(result=>result.Stations);
+    }
+
+    private static double[]? CenteredFittedStations(IReadOnlyList<double> positions,int count,double tolerance,
+      Func<double,bool> isStation,Func<double,double,bool> fits)
+    {
+      double start=positions[0],end=positions[^1],middle=start+(end-start)/2;
+      bool even=count%2==0;
+      if(even&&!isStation(middle))return null;
+      double Mirror(double point)=>point==start?end:point==middle?middle:end-(point-start);
+      bool IsPairStation(double point)=>isStation(point)&&isStation(Mirror(point));
+      bool FitsPair(double lower,double upper)=>fits(lower,upper)&&fits(Mirror(upper),Mirror(lower));
+      // Add the actual width frontier for the central band(s), rather than relying only on grid stations.
+      double low=start,high=middle;
+      double? frontier=null;
+      for(int pass=0;pass<Math.Clamp(ConfiguredAutoFitRefinementPasses,1,MaximumAutoFitRefinementPasses)&&high-low>tolerance;pass++)
+      {
+        double cut=(low+high)/2;
+        if(IsPairStation(cut)&&(even?FitsPair(cut,middle):fits(cut,Mirror(cut))))
+        {frontier=cut;high=cut;}
+        else low=cut;
+      }
+      var half=positions.Where(point=>point>start&&point<end).Select(point=>point<=middle?point:start+(end-point))
+        .Concat(frontier is double value?new[]{value}:[]).Where(point=>point-start>tolerance&&middle-point>tolerance&&IsPairStation(point))
+        .Append(start).Append(middle).Distinct().Order().ToArray();
+      var impossible=new HashSet<(int Pairs,int Upper)>();
+      List<double>? OuterPairs(int pairs,int upper)
+      {
+        if(pairs==0)return upper==0?[start]:null;
+        if(impossible.Contains((pairs,upper)))return null;
+        for(int lower=pairs-1;lower<upper;lower++)
+        {
+          if(half[upper]-half[lower]<=tolerance||!FitsPair(half[lower],half[upper]))continue;
+          var outer=OuterPairs(pairs-1,lower);
+          if(outer==null)continue;
+          outer.Add(half[upper]);return outer;
+        }
+        impossible.Add((pairs,upper));return null;
+      }
+      // Search from the center out, keeping paired stations and accepting only two fitting sides.
+      for(int inner=even?half.Length-1:count/2;inner<half.Length-(even?0:1);inner++)
+      {
+        if(!even&&!fits(half[inner],Mirror(half[inner])))continue;
+        var left=OuterPairs(count/2,inner);
+        if(left!=null)return left.Concat(left.Take(left.Count-(even?1:0)).Reverse().Select(Mirror)).ToArray();
+      }
+      return null;
+    }
+
+    private static bool PlanCrossCuts(Part part,PlanarPartSplitter.Proposal? initial,PlanarPartSplitter.Settings settings,double tolerance,bool automatic,
       out PlanarPartSplitter.Proposal proposal,out List<LocalCut>? cuts,out List<Panel> panels)
     {
-      proposal=initial;cuts=null;panels=[];
       if(TryFittedCrossCuts(part,settings,tolerance,out proposal,out cuts,out panels))return true;
+      if(initial==null&&!PlanarPartSplitter.TryPropose(part.Outline,part.Plane,settings,out initial))return false;
       proposal=initial;
       if(initial.Seams.Count==0){panels=BuildPanels(part,initial,settings,tolerance);return panels.Count>0;}
       var frame=automatic?ProgressFrame(part,settings.Samples):initial.Frame;
@@ -1262,7 +1688,8 @@ namespace vTools.Commands
       var panels = new List<Panel>();
       try
       {
-        var finished=SplitBoundary(part,tolerance);
+        var source=GetSourceDetails(part,tolerance);
+        var finished=source.FinishedBoundary??part.Outline;
         for (int index = 0; index <= proposal.Seams.Count; index++)
         {
           var (lower,upper) = PlanarPartSplitter.Band(proposal,index,settings.Allowance);
@@ -1285,20 +1712,9 @@ namespace vTools.Commands
                 if(seamIndex<0 || seamIndex>=proposal.Seams.Count) continue;
                 panel.Seams.Add(seamIndex);
                 using var sew = SplitLine(part,proposal,null,seamIndex,tolerance);
-                if(sew!=null) panel.SewLines.AddRange(ClipSewLine(part,sew,cut,tolerance));
+                if(sew!=null)AddSewLine(part,panel,sew,proposal.Frame.YAxis*(seamIndex<index?1:-1),settings.Allowance,tolerance);
               }
-              foreach (var item in part.Items)
-              {
-                if (item.Geometry is Curve curve)
-                {
-                  bool boundaryLayer = item.Attributes.LayerIndex == part.Attributes.LayerIndex &&
-                    !string.Equals(item.Attributes.Name,NotchName,StringComparison.OrdinalIgnoreCase) &&
-                    item.Attributes.GetUserString(NotchRoleKey) != "notch";
-                  foreach (var piece in ClipDetail(item,panel,proposal.Frame,tolerance))
-                    if (boundaryLayer && Coincident(piece,part.Outline,tolerance)) piece.Dispose();
-                    else panel.Details.Add(item with { Geometry=piece });
-                }
-              }
+              AddCurveDetails(part,source,panel,tolerance);
             }
           }
           finally { foreach (var curve in cuts.Concat(previews)) curve.Dispose(); }
@@ -1311,25 +1727,129 @@ namespace vTools.Commands
       { foreach (var panel in panels) panel.Dispose(); Log.Write("vPartSplit","layout rejected: {0}",ex.Message); return []; }
     }
 
-    private static bool IsSewDetail(Item item)=>string.Equals(item.LayerPath.Split("::").Last(),SewLayer,StringComparison.OrdinalIgnoreCase)||
-      string.Equals(item.Attributes.Name,SewName,StringComparison.OrdinalIgnoreCase)||item.Attributes.GetUserString("vSeam.sourceRoot")!=null;
+    private static bool IsNotch(Item item)=>string.Equals(item.Attributes.Name,NotchName,StringComparison.OrdinalIgnoreCase)||
+      item.Attributes.GetUserString(NotchRoleKey)=="notch";
 
-    private static IEnumerable<Curve> ClipSewLine(Part part,Curve line,Curve cut,double tolerance)
+    private static bool IsSewBoundaryCandidate(Item item)=>string.Equals(item.LayerPath.Split("::").Last(),SewLayer,StringComparison.OrdinalIgnoreCase)||
+      string.Equals(item.Attributes.Name,SewName,StringComparison.OrdinalIgnoreCase)||item.Attributes.GetUserString("vSeam.sourceRoot")!=null||
+      item.Attributes.GetUserString("vShade.role") is "boundary" or "perpendicular" or "connection" or "scallop";
+
+    private static Vector3d SeamInward(Part part,Panel panel,Point3d midpoint,Vector3d across,double tolerance)
     {
-      var boundary=GetSourceDetails(part,tolerance).FinishedBoundary??part.Outline;
-      foreach(var piece in PlanarPartSplitter.ClipCurve(line,boundary,part.Plane,tolerance))
-        using(piece)
-          foreach(var clipped in PlanarPartSplitter.ClipCurve(piece,cut,part.Plane,tolerance))yield return clipped;
+      var probe=midpoint+across*tolerance*ConfiguredBoundaryToleranceFactor;
+      return panel.Preview.Any(outline=>outline.Contains(probe,part.Plane,tolerance)==PointContainment.Inside)?across:-across;
     }
 
-    private static IEnumerable<Curve> ClipDetail(Item item,Panel panel,Plane plane,double tolerance)
+    private static void AddSewLine(Part part,Panel panel,Curve line,Vector3d inward,double cutAllowance,double tolerance)
     {
-      var source=(Curve)item.Geometry;
-      bool sew=IsSewDetail(item);
-      // Finished seam/reference paths stop at the sew line, not at the allowance's outer cut edge.
-      IEnumerable<Curve> boundaries=sew?panel.Preview:new[]{panel.Cut};
-      foreach(var boundary in boundaries)
-        foreach(var piece in PlanarPartSplitter.ClipCurve(source,boundary,plane,tolerance))yield return piece;
+      double inset=SewInset(cutAllowance);
+      foreach(var piece in ClipSewLine(part,line,panel.Cut,tolerance,inward*inset))
+      {
+        panel.SewLines.Add(piece);
+        if(_trimToSewLine==SeamTrim.All&&cutAllowance>tolerance)panel.DetailSewTrims.Add((piece,inward));
+      }
+      if(_trimToSewLine==SeamTrim.Seam&&inset>tolerance)panel.OffsetSewOrigins.Add(line.DuplicateCurve());
+    }
+
+    private static IEnumerable<Curve> ClipSewLine(Part part,Curve line,Curve cut,double tolerance,Vector3d shift=default)
+    {
+      var boundary=GetSourceDetails(part,tolerance).FinishedBoundary??part.Outline;
+      var direction=line.PointAtEnd-line.PointAtStart;
+      if(!direction.Unitize())yield break;
+      var frame=new Plane(line.PointAtStart+shift,direction,Vector3d.CrossProduct(part.Plane.Normal,direction));
+      var nominal=PlanarPartSplitter.ClipCurve(line,boundary,part.Plane,tolerance);
+      try
+      {
+        if(nominal.Count==0)yield break;
+        (double Start,double End) Span(Curve curve)
+        {
+          double a=(curve.PointAtStart-frame.Origin)*direction,b=(curve.PointAtEnd-frame.Origin)*direction;
+          return (Math.Min(a,b),Math.Max(a,b));
+        }
+        var anchors=nominal.Select(Span).ToArray();
+        var bounds=cut.GetBoundingBox(frame);
+        double pad=Math.Max(InitialLayoutGap,bounds.Diagonal.Length);
+        using var probe=new LineCurve(frame.PointAt(bounds.Min.X-pad,0),frame.PointAt(bounds.Max.X+pad,0));
+        // A concave cut may cross the same line in an unrelated arm. Keep only spans reached by the nominal split.
+        foreach(var piece in PlanarPartSplitter.ClipCurve(probe,cut,part.Plane,tolerance))
+        {
+          var span=Span(piece);
+          if(anchors.Any(anchor=>Math.Min(span.End,anchor.End)-Math.Max(span.Start,anchor.Start)>tolerance))
+            yield return piece;
+          else piece.Dispose();
+        }
+      }
+      finally{foreach(var piece in nominal)piece.Dispose();}
+    }
+
+    private static List<Curve> ReferenceSplitSegments(Part part,Curve line,bool finite,double tolerance) =>
+      finite ? [FiniteSplitPath(part.Outline,SplitBoundary(part,tolerance),line,part.Plane,tolerance)] :
+        ClipSewLine(part,line,part.Outline,tolerance).ToList();
+
+    private static bool SharesSpan(Curve edge,Curve divider,double tolerance)
+    {
+      using var hits=Intersection.CurveCurve(edge,divider,tolerance,tolerance);
+      return hits?.Any(hit=>hit.IsOverlap&&edge.GetLength(hit.OverlapA)>tolerance)==true;
+    }
+
+    private static bool IsOutsideDetailSewLine(Curve region,Panel panel,Plane plane,double tolerance)
+    {
+      var orientation=region.ClosedCurveOrientation(plane);
+      if(orientation==CurveOrientation.Undefined)return false;
+      double side=orientation==CurveOrientation.CounterClockwise?1:-1;
+      // A divided region is in the allowance if its interior is on the outward side of a shared sew edge.
+      foreach(var (line,inward) in panel.DetailSewTrims)
+      {
+        using var hits=Intersection.CurveCurve(region,line,tolerance,tolerance);
+        if(hits?.Any(hit=>hit.IsOverlap&&region.GetLength(hit.OverlapA)>tolerance&&
+          side*(Vector3d.CrossProduct(plane.Normal,region.TangentAt(hit.OverlapA.Mid))*inward)<0)==true)return true;
+      }
+      return false;
+    }
+
+    private static void AddCurveDetails(Part part,SourceDetails source,Panel panel,double tolerance)
+    {
+      var cutBounds=panel.Cut.GetBoundingBox(part.Plane);
+      Curve[] untrimmed=[panel.Cut];
+      List<Curve>? trimmed=null;
+      try
+      {
+        foreach(var detail in source.Items)
+        {
+          if(!BoundsOverlap(detail.Bounds,cutBounds,tolerance))continue;
+          IEnumerable<Curve> boundaries=untrimmed;
+          if(_trimToSewLine==SeamTrim.All&&panel.DetailSewTrims.Count>0&&!IsNotch(detail.Item))
+          {
+            if(trimmed==null)
+            {
+              trimmed=PartitionBoundary(panel.Cut,panel.SewLines,part.Plane,tolerance);
+              for(int index=trimmed.Count-1;index>=0;index--)
+                if(IsOutsideDetailSewLine(trimmed[index],panel,part.Plane,tolerance))
+                {trimmed[index].Dispose();trimmed.RemoveAt(index);}
+            }
+            boundaries=trimmed;
+          }
+          else if(_trimToSewLine==SeamTrim.Seam&&detail.FinishedEdge)
+          {
+            if(panel.OffsetSewOrigins.Count>0&&trimmed==null)
+            {
+              trimmed=[];
+              // Cut the nominal regions at the actual sew lines, then discard the strips touching the old split.
+              foreach(var outline in panel.Preview)
+                trimmed.AddRange(PartitionBoundary(outline,panel.SewLines,part.Plane,tolerance));
+              for(int index=trimmed.Count-1;index>=0;index--)
+                if(panel.OffsetSewOrigins.Any(origin=>SharesSpan(trimmed[index],origin,tolerance)))
+                { trimmed[index].Dispose();trimmed.RemoveAt(index); }
+            }
+            boundaries=trimmed??panel.Preview;
+          }
+          foreach(var boundary in boundaries)
+            foreach(var piece in PlanarPartSplitter.ClipCurve((Curve)detail.Item.Geometry,boundary,part.Plane,tolerance))
+              if(detail.CutEdge&&Coincident(piece,part.Outline,tolerance))piece.Dispose();
+              else panel.Details.Add(detail.Item with{Geometry=piece});
+        }
+      }
+      finally{if(trimmed!=null)foreach(var boundary in trimmed)boundary.Dispose();}
     }
 
     private static void AssignNonCurveDetails(Part part,IReadOnlyList<Panel> panels,double tolerance)
@@ -1390,10 +1910,11 @@ namespace vTools.Commands
 
     private static Vector3d[] OriginalSpreads(State state)
     {
-      if(state.Spacing is {} cached&&ReferenceEquals(cached.Panels,state.Panels)&&cached.Seam==_seam&&cached.Distance==_distance)
+      double allowance=CutAllowance(_seam,_seamType);
+      if(state.Spacing is {} cached&&ReferenceEquals(cached.Panels,state.Panels)&&cached.Seam==allowance&&cached.Distance==_distance)
         return cached.Offsets;
-      var offsets=state.Panels.Select(panel=>state.Cuts==null?state.Proposal.Frame.YAxis*OriginalBandSpread(panel.BandIndex,_seam,_distance)
-        :state.Cuts.Take(panel.BandIndex).Aggregate(Vector3d.Zero,(sum,cut)=>sum+cut.Frame.YAxis*(2*_seam+_distance))).ToArray();
+      var offsets=state.Panels.Select(panel=>state.Cuts==null?state.Proposal.Frame.YAxis*OriginalBandSpread(panel.BandIndex,allowance,_distance)
+        :state.Cuts.Take(panel.BandIndex).Aggregate(Vector3d.Zero,(sum,cut)=>sum+cut.Frame.YAxis*(2*allowance+_distance))).ToArray();
       if(!state.Panels.Any(panel=>panel.Finite))return offsets;
       double tolerance=Math.Max(GetSourceDetails(state.Part,RhinoMath.SqrtEpsilon).Tolerance,RhinoMath.ZeroTolerance);
       var placed=new List<Curve>();
@@ -1436,7 +1957,7 @@ namespace vTools.Commands
           }
           placed.Add(original.DuplicateCurve());
         }
-        state.Spacing=new(state.Panels,_seam,_distance,offsets);return offsets;
+        state.Spacing=new(state.Panels,allowance,_distance,offsets);return offsets;
       }
       finally{foreach(var curve in placed)curve.Dispose();}
     }
@@ -1581,6 +2102,21 @@ namespace vTools.Commands
       return Enumerable.Range(0,intervals+1).Select(index=>lower+available*index/intervals).ToArray();
     }
 
+    private static Point3d OverlapNotchAnchor(Panel panel,Point3d station,Vector3d outward,double allowance,double tolerance)
+    {
+      var expected=station+outward*allowance;
+      if(!panel.Cut.ClosestPoint(expected,out var parameter))
+        throw new InvalidOperationException("an overlap notch could not reach its cut edge.");
+      var closest=panel.Cut.PointAt(parameter);
+      if(closest.DistanceTo(expected)<=tolerance)return closest;
+      // A corner-ending split may meet the original perimeter before reaching its parallel cut edge.
+      double reach=panel.Bounds.Diagonal.Length+allowance;
+      using var cross=new LineCurve(station-outward*reach,station+outward*reach);
+      using var hits=Intersection.CurveCurve(cross,panel.Cut,tolerance,tolerance);
+      return hits?.Where(hit=>hit.IsPoint).Select(hit=>hit.PointB).DefaultIfEmpty(closest)
+        .MinBy(point=>point.DistanceToSquared(expected))??closest;
+    }
+
     private static string EnsureLabels(RhinoDoc doc,IReadOnlyList<State> states,MatchingLabels.Style style,double tolerance)
     {
       string next=style.Value;
@@ -1627,31 +2163,36 @@ namespace vTools.Commands
                     notchStyle.EndEnabled?notchStyle.End:0,unitsPerInch,tolerance):new[]{piece.GetLength()*.5};
                   foreach(double position in positions)
                   {
-                  var point=MatchingNotches.PointAtLength(piece,position);
-                  var match=Guid.NewGuid();
-                  foreach(var panel in mates)
-                  {
-                    var probe=midpoint+frame.YAxis*tolerance*ConfiguredBoundaryToleranceFactor;
-                    var inward=frame.YAxis*(panel.Preview.Any(outline=>outline.Contains(probe,state.Part.Plane,tolerance)==PointContainment.Inside)?1:-1);
-                    bool allowance=_seam>tolerance;
-                    var offsetDirection=allowance?-inward:inward;
-                    var geometry=_notches?MatchingNotches.StraightGeometry(point,frame.XAxis,offsetDirection,notchStyle.Length,
-                      allowance?_seam:0,notchStyle.Type,notchStyle.Width):[];
-                    var marker=new SeamMarker(seam,segment,_label?next:string.Empty,match,piece.DuplicateCurve(),position,offsetDirection,geometry,notchStyle,notchColor);
-                    panel.Markers.Add(marker);
-                    if(!_label)continue;
-                    var (plane,_,_)=MatchingLabels.Layout(doc,piece,position,offsetDirection,frame.XAxis,allowance?_seam:0,
-                      _notches?geometry:null,next,style.Height,notchStyle.LabelOffset,notchStyle.LabelOffsetY,notchStyle.TowardStart?"Left":"Right",style.Prefix);
-                    if(allowance)plane.Origin+=offsetDirection*_seam*(ConfiguredAllowanceLabelPositionFactor-AllowanceLabelPositionFactor);
-                    else plane=MatchingLabels.FacingPlane(doc,plane.Origin+inward*style.Height*ConfiguredLabelInsetHeightFactor,
-                      frame.XAxis,offsetDirection,point);
-                    if(!plane.IsValid) throw new InvalidOperationException("a seam label has no valid facing direction.");
-                    var text=MatchingLabels.CreateText(plane,next,style.Height);
-                    text.PlainText=MatchingLabels.FormatNotchLabel(next,style.Prefix,plane,point);
-                    text.DrawForward=false;
-                    panel.Labels.Add(new SeamLabel(seam,segment,next,text){Marker=marker});
-                  }
-                  if(_label)next=MatchingLabels.Next(next,style.AutoAdvance);segment++;
+                    bool labelHere=_label&&(!_notches||segment==0);
+                    var point=MatchingNotches.PointAtLength(piece,position);
+                    var match=Guid.NewGuid();
+                    foreach(var panel in mates)
+                    {
+                      var inward=SeamInward(state.Part,panel,midpoint,frame.YAxis,tolerance);
+                      bool allowance=_seam>tolerance;
+                      var offsetDirection=allowance?-inward:inward;
+                      bool overlap=_seamType==SeamType.Overlap;
+                      double labelAllowance=overlap?CutAllowance(_seam,_seamType):allowance?_seam:0;
+                      var cutAnchor=overlap?OverlapNotchAnchor(panel,point,-inward,labelAllowance,tolerance):(Point3d?)null;
+                      var geometry=_notches?MatchingNotches.StraightGeometry(cutAnchor??point,frame.XAxis,
+                        overlap?inward:offsetDirection,notchStyle.Length,overlap?0:labelAllowance,notchStyle.Type,notchStyle.Width):[];
+                      var marker=new SeamMarker(seam,segment,labelHere?next:string.Empty,match,piece.DuplicateCurve(),position,offsetDirection,geometry,notchStyle,notchColor)
+                        {CutAnchor=cutAnchor};
+                      panel.Markers.Add(marker);
+                      if(!labelHere)continue;
+                      var (plane,_,_)=MatchingLabels.Layout(doc,piece,position,offsetDirection,frame.XAxis,labelAllowance,
+                        _notches?geometry:null,next,style.Height,notchStyle.LabelOffset,notchStyle.LabelOffsetY,notchStyle.TowardStart?"Left":"Right",style.Prefix);
+                      if(allowance)plane.Origin+=offsetDirection*labelAllowance*(ConfiguredAllowanceLabelPositionFactor-AllowanceLabelPositionFactor);
+                      else plane=MatchingLabels.FacingPlane(doc,plane.Origin+inward*style.Height*ConfiguredLabelInsetHeightFactor,
+                        frame.XAxis,offsetDirection,point);
+                      if(!plane.IsValid) throw new InvalidOperationException("a seam label has no valid facing direction.");
+                      var text=MatchingLabels.CreateText(plane,next,style.Height);
+                      text.PlainText=MatchingLabels.FormatNotchLabel(next,style.Prefix,plane,point);
+                      text.DrawForward=false;
+                      panel.Labels.Add(new SeamLabel(seam,segment,next,text){Marker=marker});
+                    }
+                    if(labelHere)next=MatchingLabels.Next(next,style.AutoAdvance);
+                    segment++;
                   }
                 }
               }
@@ -1721,25 +2262,31 @@ namespace vTools.Commands
 
     private static void AddMatchingMarkers(RhinoDoc doc,IEnumerable<SeamMarker> markers,IReadOnlyList<SeamLabel> labels,
       IReadOnlyList<(Curve Curve,Guid Id)> sources,Transform transform,Vector3d normal,int notchLayer,int labelLayer,
-      string labelName,string session,double tolerance,MatchingLabels.Style? style,Func<GeometryBase,ObjectAttributes,string?,Guid> emit)
+      string labelName,string session,double tolerance,MatchingLabels.Style? style,Func<GeometryBase,ObjectAttributes,string?,Guid> emit,
+      (Curve Curve,Guid Id)? cutSource=null)
     {
       foreach(var marker in markers)
       {
-        var point=MatchingNotches.PointAtLength(marker.Source,marker.Length);
-        var source=sources.Select(item=>
+        bool bindCut=marker.CutAnchor!=null&&cutSource.HasValue;
+        var point=bindCut?marker.CutAnchor!.Value:MatchingNotches.PointAtLength(marker.Source,marker.Length);
+        IEnumerable<(Curve Curve,Guid Id)> candidates=bindCut?[cutSource!.Value]:sources;
+        var source=candidates.Select(item=>
         {
           bool found=item.Curve.ClosestPoint(point,out double parameter);
           return (item.Curve,item.Id,Parameter:parameter,Distance:found?point.DistanceTo(item.Curve.PointAt(parameter)):double.MaxValue);
         }).OrderBy(item=>item.Distance).FirstOrDefault();
         if(source.Curve==null||source.Distance>tolerance*ConfiguredBoundaryToleranceFactor)
-          throw new InvalidOperationException("a matching notch has no committed nominal seam curve.");
+          throw new InvalidOperationException("a matching notch has no committed source curve.");
         var label=labels.FirstOrDefault(item=>ReferenceEquals(item.Marker,marker));
         var tangent=source.Curve.TangentAt(source.Parameter);
-        string side=Vector3d.CrossProduct(normal,tangent)*marker.Direction>=0?"Left":"Right";
+        var direction=bindCut?-marker.Direction:marker.Direction;
+        if(bindCut&&_seam<=tolerance)direction=marker.Direction;
+        string side=Vector3d.CrossProduct(normal,tangent)*direction>=0?"Left":"Right";
         double length=source.Parameter<=source.Curve.Domain.T0?0:source.Parameter>=source.Curve.Domain.T1?source.Curve.GetLength():
           source.Curve.GetLength(new Interval(source.Curve.Domain.T0,source.Parameter));
         using var transformed=source.Curve.DuplicateCurve();transformed.Transform(transform);tangent.Transform(transform);
-        using var attributes=MatchingNotches.Attributes(transformed,source.Id,marker.Seam,"length",length,marker.Style.Length,_seam,
+        double offset=bindCut?0:marker.CutAnchor!=null?CutAllowance(_seam,_seamType):_seam;
+        using var attributes=MatchingNotches.Attributes(transformed,source.Id,marker.Seam,"length",length,marker.Style.Length,offset,
           marker.Style.Type,marker.Style.Width,side,label!=null,marker.Value,style?.Height??0,marker.Style.LabelOffset,marker.Style.LabelOffsetY,
           marker.Style.TowardStart?"Left":"Right",doc.Layers[notchLayer].FullPath,doc.Layers[labelLayer].FullPath,tangent,notchLayer);
         MatchingNotches.BindReference(doc,attributes,transformed,length);
@@ -1777,12 +2324,22 @@ namespace vTools.Commands
       }
     }
 
+    private static void UndoPartSettings(object? sender,CustomUndoEventArgs e)
+    {
+      if(e.Tag is not Dictionary<string,string> settings||e.Document is not {} doc)return;
+      doc.AddCustomUndoEvent("vPartSplit part settings",UndoPartSettings,settings);
+      foreach(var (key,value) in settings)
+        if(doc.RedoActive)doc.Strings.SetString(PartGroupData.NestSection,key,value);
+        else doc.Strings.Delete(PartGroupData.NestSection,key);
+    }
+
     private static bool Commit(RhinoDoc doc, Part part, PlanarPartSplitter.Proposal proposal,
       IReadOnlyList<Panel> panels, Plane cplane, Point3d anchor, double tolerance,
       out Output? output,IReadOnlyList<Transform> transforms,IReadOnlyList<int>? order=null,SplitDirection direction=DefaultDirection,IReadOnlyList<LocalCut>? localCuts=null,MatchingLabels.Style? labelStyle=null)
     {
       output=null;
       var added=new List<Guid>(); var groups=new List<int>(); var session=Guid.NewGuid().ToString("N");
+      var nestSettings=new Dictionary<string,string>();
       var referenceSources=new List<(Curve Curve,Guid Id)>();
       try
       {
@@ -1800,6 +2357,7 @@ namespace vTools.Commands
           {
             using var copy=geometry.Duplicate(); copy.Transform(transform);
             using var attributes=source.Duplicate(); attributes.RemoveFromAllGroups(); attributes.AddToGroup(group);
+            NestWorkflow.ClearPlacedPartIdentity(attributes);
             if(name!=null) attributes.Name=name;
             attributes.SetUserString(MetadataPrefix+"session",session);
             attributes.SetUserString(MetadataPrefix+"source",part.Attributes.ObjectId.ToString());
@@ -1807,6 +2365,7 @@ namespace vTools.Commands
             attributes.SetUserString(MetadataPrefix+"direction",direction.ToString());
             attributes.SetUserString(MetadataPrefix+"width",_width.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             attributes.SetUserString(MetadataPrefix+"seam",_seam.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
+            attributes.SetUserString(MetadataPrefix+"seamType",_seamType.ToString());
             attributes.SetUserString(MetadataPrefix+"layout",LayoutNames[_layout]);
             attributes.SetUserString(MetadataPrefix+"distance",_distance.ToString("R",System.Globalization.CultureInfo.InvariantCulture));
             var id=doc.Objects.Add(copy,attributes);
@@ -1814,7 +2373,9 @@ namespace vTools.Commands
             added.Add(id);
             return id;
           }
-          Add(panel.Cut,part.Attributes,BoundaryName);
+          var boundaryId=Add(panel.Cut,part.Attributes,BoundaryName);
+          if(NestWorkflow.InheritSplitSettings(doc,part,group,boundaryId,transform) is {} inherited)
+            nestSettings.Add(inherited.Key,inherited.Value);
           foreach(var item in panel.Details) Add(item.Geometry,item.Attributes,null);
           using var sewAttributes=new ObjectAttributes {LayerIndex=plot,Name=SewName};
           var sewSources=new List<(Curve Curve,Guid Id)>();
@@ -1830,17 +2391,20 @@ namespace vTools.Commands
             int notchLayer=string.IsNullOrWhiteSpace(notchLayerName)||LayerSelector.IsCurrentLayerValue(notchLayerName,MatchingNotches.CurrentLayer)?
               doc.Layers.CurrentLayerIndex:UzipCommon.EnsureLayer(doc,notchLayerName);
             if(notchLayer<0)throw new InvalidOperationException("could not create the seam notch layer");
-            AddMatchingMarkers(doc,panel.Markers,panel.Labels,sewSources,transform,part.Plane.Normal,notchLayer,labelLayer,SeamLabelName,session,tolerance,labelStyle,Add);
+            AddMatchingMarkers(doc,panel.Markers,panel.Labels,sewSources,transform,part.Plane.Normal,notchLayer,labelLayer,SeamLabelName,session,tolerance,labelStyle,Add,(panel.Cut,boundaryId));
           }
         }
         var cuts=new List<Guid>();
         var reference=UzipCommon.EnsureLayer(doc,ReferenceLayer);
+        bool finite=panels.Any(panel=>panel.Finite);
         for(int seam=0;seam<proposal.Seams.Count;seam++)
         {
           using var cut=SplitLine(part,proposal,localCuts,seam,tolerance);
           if(cut==null) continue;
-          foreach(var segment in PlanarPartSplitter.ClipCurve(cut,part.Outline,proposal.Frame,tolerance))
-            using(segment)
+          var segments=ReferenceSplitSegments(part,cut,finite,tolerance);
+          try
+          {
+            foreach(var segment in segments)
             {
               var attributes=new ObjectAttributes { LayerIndex=reference,Name=CutName };
               attributes.SetUserString(MetadataPrefix+"session",session);
@@ -1849,6 +2413,8 @@ namespace vTools.Commands
               added.Add(id); cuts.Add(id);
               referenceSources.Add((segment.DuplicateCurve(),id));
             }
+          }
+          finally{foreach(var segment in segments)segment.Dispose();}
         }
         Guid AddReference(GeometryBase geometry,ObjectAttributes source,string? name)
         {
@@ -1869,11 +2435,12 @@ namespace vTools.Commands
           doc.Groups.AddToGroup(group,cuts);
         }
         Log.Write("vPartSplit","committed session={0} parts={1} objects={2} source preserved=True",session,panels.Count,added.Count);
-        output=new Output(added,groups,added.Except(cuts).ToList());
+        output=new Output(added,groups,added.Except(cuts).ToList()){NestSettings=nestSettings};
         return true;
       }
       catch(Exception ex)
       {
+        foreach(string key in nestSettings.Keys)doc.Strings.Delete(PartGroupData.NestSection,key);
         foreach(var id in added) doc.Objects.Delete(id,true);
         foreach(var group in groups) doc.Groups.Delete(group);
         Log.Write("vPartSplit","commit rolled back: {0}",ex);

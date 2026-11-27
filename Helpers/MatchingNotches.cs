@@ -13,7 +13,9 @@ internal static class MatchingNotches
   // Shared vNotches/seam defaults and serialized output schema
   internal const double DefaultLength = 0.18; // Positive notch depth in model units.
   internal const double DefaultWidth = 0.18; // Positive notch width in model units.
-  internal const string DefaultType = "I"; // I, T, V, U or \/ (Open Vee).
+  internal const string DefaultType = "I"; // I, T, V, U, \/ (Open Vee), VExternal or UExternal.
+  internal const string ExternalVType = "VExternal"; // Stored type for a V pointing outward from the cut edge.
+  internal const string ExternalCastleType = "UExternal"; // Stored type for a Castle pointing outward from the cut edge.
   internal const double DefaultEndOffset = 2.0; // Nonnegative start/end clearance in model units.
   internal const string CurrentLayer = "*[Current]*"; // Sentinel resolving to the document's current layer.
   private const bool DefaultOffsetEnabled = true; // true uses the saved end clearance; false uses zero clearance.
@@ -83,13 +85,33 @@ internal static class MatchingNotches
     if(length>=curve.GetLength())return curve.PointAtEnd;
     return curve.LengthParameter(length,out double parameter)?curve.PointAt(parameter):curve.PointAtEnd;
   }
+  internal static string CanonicalType(string? type)=>(type??DefaultType).Trim().ToUpperInvariant() switch
+  {
+    "OPENV"=>"\\/",
+    "VEXTERNAL"=>ExternalVType,
+    "UEXTERNAL"=>ExternalCastleType,
+    var value=>value
+  };
+  internal static string ProfileType(string type)=>type switch{ExternalVType=>"V",ExternalCastleType=>"U",_=>type};
+  internal static bool IsExternalType(string type)=>type is ExternalVType or ExternalCastleType;
+  internal static bool CanSetExternal(string type)=>ProfileType(type) is ("V" or "U");
+  internal static string WithExternal(string type,bool external)=>ProfileType(type) switch
+  {
+    "V"=>external?ExternalVType:"V",
+    "U"=>external?ExternalCastleType:"U",
+    _=>type
+  };
+  internal static Point3d ProfileTip(Point3d cutPoint,Vector3d sideDirection,double depth,double offset,string type)=>
+    cutPoint+sideDirection*(IsExternalType(type)==(offset>0)?depth:-depth);
+
   internal static List<Curve> StraightGeometry(Point3d point,Vector3d tangent,Vector3d direction,
     double length,double offset,string type,double width)
   {
-    type=type.Trim().ToUpperInvariant();if(type=="OPENV")type="\\/";
+    type=CanonicalType(type);
     if(!tangent.Unitize()||!direction.Unitize())return [];
     var start=point+direction*Math.Max(0,offset);
-    var tip=offset>0?start-direction*length:point+direction*length;
+    var tip=ProfileTip(start,direction,length,offset,type);
+    type=ProfileType(type);
     if(type is "I" or "T")
     {
       var end=offset>0?start-direction*Math.Min(length,offset):tip;
@@ -183,7 +205,8 @@ internal static class MatchingNotches
   internal static bool Reassociate(RhinoDoc doc,RhinoObject notch,IEnumerable<RhinoObject> part,out ObjectAttributes? attributes,bool explicitSource=false,Curve? explicitCurve=null,IReadOnlyList<(Guid Id,Curve Segment)>? explicitPath=null)
   {
     attributes=null;if(notch.Geometry is not Curve geometry)return false;
-    string type=notch.Attributes.GetUserString(Prefix+"notch_type")??DefaultType;
+    string storedType=CanonicalType(notch.Attributes.GetUserString(Prefix+"notch_type"));
+    string type=ProfileType(storedType);
     if(type is not ("I" or "T" or "V" or "U"))return false;
     double tolerance=Math.Max(doc.ModelAbsoluteTolerance,RhinoMath.ZeroTolerance);
     double offset=Math.Max(0,CommandDefaults.Get(Section,"vTools.MatchingNotches.RepairSeamOffsetInches",RepairSeamOffsetInches))*RhinoMath.UnitScale(UnitSystem.Inches,doc.ModelUnitSystem);
@@ -226,7 +249,7 @@ internal static class MatchingNotches
     double station=source.GetLength(new Interval(source.Domain.T0,chosen.Parameter));
     var point=source.PointAt(chosen.Parameter);var tangent=source.TangentAt(chosen.Parameter);
     bool onEdge=chosen.Distance<=anchorTolerance;
-    var direction=onEdge?stem:anchor-point;
+    var direction=onEdge?(IsExternalType(storedType)?-stem:stem):anchor-point;
     var side=Vector3d.Multiply(Vector3d.CrossProduct(Vector3d.ZAxis,tangent),direction)>=0?"Left":"Right";
     attributes=notch.Attributes.Duplicate();
     if(explicitSource&&Guid.TryParse(attributes.GetUserString(MatchMemberKey),out var member)&&member!=notch.Id)
@@ -533,8 +556,7 @@ internal static class MatchingNotches
   }
   internal static ObjectAttributes Attributes(Curve sourceCurve,Guid sourceCurveId,int curveIndex,string placementMode,
     double lengthFromStart,double notchLength,double notchOffset,string notchType,double notchWidth,string curveSide,
-    bool labelEnabled,string labelText,double labelSize,double labelOffset,double labelOffsetY,string labelSide,
-    string notchLayer,string labelLayer,Vector3d tangent,int layerIndex)
+    string notchLayer,Vector3d tangent,int layerIndex)
   {
     var attributes=new ObjectAttributes{ObjectId=Guid.NewGuid(),LayerIndex=layerIndex,Name="Notch"};
     void Set(string key,string value)=>attributes.SetUserString(Prefix+key,value??string.Empty);
@@ -547,11 +569,23 @@ internal static class MatchingNotches
     Set("mode",placementMode);Set("length_from_start",Number(lengthFromStart));
     Set("percent",Number(placementMode.Equals("percent",StringComparison.OrdinalIgnoreCase)&&sourceLength>RhinoMath.ZeroTolerance?lengthFromStart/sourceLength:0));
     Set("notch_length",Number(notchLength));Set("notch_offset",Number(notchOffset));Set("notch_type",notchType);Set("notch_width",Number(notchWidth));
-    Set("curve_side",curveSide);Set("label_enabled",labelEnabled?"1":"0");Set("label_text",labelText);Set("label_size",Number(labelSize));
-    Set("label_offset",Number(labelOffset));Set("label_offset_y",Number(labelOffsetY));Set("label_side",labelSide);
-    Set("notch_layer",notchLayer);Set("label_layer",labelLayer);Set("tangent_hint",Point(new Point3d(tangent)));
+    Set("curve_side",curveSide);Set("notch_layer",notchLayer);Set("tangent_hint",Point(new Point3d(tangent)));
     Set("curve_start",Point(sourceCurve.PointAtStart));Set("curve_end",Point(sourceCurve.PointAtEnd));
     Set("curve_mid",Point(PointAtLength(sourceCurve,sourceLength*.5)));Set("curve_point",Point(PointAtLength(sourceCurve,lengthFromStart)));
+    return attributes;
+  }
+
+  internal static ObjectAttributes Attributes(Curve sourceCurve,Guid sourceCurveId,int curveIndex,string placementMode,
+    double lengthFromStart,double notchLength,double notchOffset,string notchType,double notchWidth,string curveSide,
+    bool labelEnabled,string labelText,double labelSize,double labelOffset,double labelOffsetY,string labelSide,
+    string notchLayer,string labelLayer,Vector3d tangent,int layerIndex)
+  {
+    var attributes=Attributes(sourceCurve,sourceCurveId,curveIndex,placementMode,lengthFromStart,notchLength,notchOffset,
+      notchType,notchWidth,curveSide,notchLayer,tangent,layerIndex);
+    void Set(string key,string value)=>attributes.SetUserString(Prefix+key,value??string.Empty);
+    static string Number(double value)=>value.ToString("R",CultureInfo.InvariantCulture);
+    Set("label_enabled",labelEnabled?"1":"0");Set("label_text",labelText);Set("label_size",Number(labelSize));
+    Set("label_offset",Number(labelOffset));Set("label_offset_y",Number(labelOffsetY));Set("label_side",labelSide);Set("label_layer",labelLayer);
     return attributes;
   }
 }

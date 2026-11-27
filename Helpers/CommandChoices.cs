@@ -31,7 +31,7 @@ internal static class CommandChoices
 
   private static Definition[] BuildDefinitions()
   {
-    EmbeddedDependencies.EnsureAll();
+    EmbeddedDependencies.EnsurePolygons();
     return typeof(CommandChoices).Assembly.GetTypes()
       .SelectMany(type => type.GetFields(BindingFlags.Static | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
       .Select(field => field.GetCustomAttribute<CommandChoicesAttribute>()).OfType<CommandChoicesAttribute>()

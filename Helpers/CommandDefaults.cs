@@ -69,7 +69,7 @@ internal static class CommandDefaults
   private static Entry[] BuildEntries()
   {
     // GetTypes also resolves base types in command-private packing types, even before vNest has run.
-    EmbeddedDependencies.EnsureAll();
+    EmbeddedDependencies.EnsurePolygons();
     var fields=typeof(CommandDefaults).Assembly.GetTypes()
     .SelectMany(type => type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly)).ToArray();
     return fields

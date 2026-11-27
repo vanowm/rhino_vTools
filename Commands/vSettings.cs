@@ -87,7 +87,7 @@ public sealed class vSettings : vToolsCommand
     }
     try
     {
-      using var dialog = new SettingsDialog(BuildRows(profile, CommandDefaults.FactoryOptions(), CommandDefaults.Entries()));
+      using var dialog = new SettingsDialog(BuildRows(profile, CommandDefaults.FactoryOptions(), CommandDefaults.Entries()),doc);
       dialog.ShowModal(RhinoEtoApp.MainWindowForDocument(doc));
       return Result.Success;
     }
@@ -99,7 +99,10 @@ public sealed class vSettings : vToolsCommand
     }
   }
 
-  internal sealed record Choice(string Label, JsonNode? Value);
+  internal sealed record Choice(string Label, JsonNode? Value, MaterialLibrary.PatternSmithReference? Material = null);
+  private static Choice[] MaterialChoices()=>[new Choice("None",JsonValue.Create(string.Empty)),..MaterialLibrary.LoadMaterialPresets()
+    .OrderBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase)
+    .Select(preset=>new Choice(preset.Name,JsonValue.Create(preset.Name),preset.PatternSmith))];
 
   internal sealed class SettingRow : System.ComponentModel.INotifyPropertyChanged
   {
@@ -120,6 +123,7 @@ public sealed class vSettings : vToolsCommand
     internal string OptionDescription { get; set; } = string.Empty;
     internal Type? SavedEnum { get; set; }
     internal Type? EnumType => Advanced?.Type.IsEnum == true ? Advanced.Type : SavedEnum;
+    internal bool IsMaterialChoice=>Advanced==null&&Section=="vShade"&&Key is vShade.ShadeMaterialKey or vShade.ReinforcementMaterialKey;
     private Choice[] _choices = [];
     internal Choice[] Choices { get => _choices; set { _choices=value; Invalidate(); } }
     internal string InternalName { get; set; } = string.Empty;
@@ -129,13 +133,27 @@ public sealed class vSettings : vToolsCommand
     public bool Customized => _customized ??= HasFactory && !Equivalent(Value, Factory);
     public bool Unsaved => Dirty;
     public bool Modified => Customized || Dirty;
-    internal string OptionName => _optionName ??= Advanced?.Label ?? Friendly(Key.Split('.').Last());
+    internal string OptionName => _optionName ??= Advanced?.Label ?? (Section=="vNest"&&Key==NestWorkflow.FacingsFirstKey
+      ?NestWorkflow.MarkedPartsFirstLabel:Friendly(Key.Split('.').Last()));
     internal string DisplayName => OptionName + (Modified ? " *" : "");
     internal string DisplayValue => _displayValue ??= ChoiceIndex(Value) is var index && index >= 0 ? Choices[index].Label :
       Value is JsonValue value && value.TryGetValue<string>(out var text) ? text : Value?.ToJsonString() ?? "Automatic";
     internal string FactoryText => _factoryText ??= !HasFactory ? "-" : ChoiceIndex(Factory) is var index && index >= 0 ? Choices[index].Label :
       Factory is JsonValue value && value.TryGetValue<string>(out var text) ? text : Factory?.ToJsonString() ?? "Automatic";
-    internal string Description => Advanced?.Description ?? OptionDescription;
+    internal string Description
+    {
+      get
+      {
+        string description=Advanced?.Description??OptionDescription;
+        if(Advanced?.Type!=typeof(bool)&&((Factory??Value) is not JsonValue value||!value.TryGetValue<bool>(out _)))return description;
+        return Regex.Replace(description,@"(^|[.;:]\s*|\r?\n[ \t]*)(on|off|true|false)(?:[ \t]*:[ \t]*|[ \t]+)",match=>
+        {
+          string separator=match.Groups[1].Value.TrimEnd().TrimEnd(';');
+          string label=match.Groups[2].Value.ToLowerInvariant() is "on" or "true"?"On: ":"Off: ";
+          return separator+(match.Index>0||separator.Length>0?"\n":"")+label;
+        },RegexOptions.IgnoreCase|RegexOptions.CultureInvariant);
+      }
+    }
     internal string SearchText => _searchText ??= string.Join(" ",Section,OptionName,Key,InternalName,Description,DisplayValue);
     internal string CopyText(string field) => field switch
     {
@@ -179,6 +197,7 @@ public sealed class vSettings : vToolsCommand
   {
     var rows = new List<SettingRow>();
     var named = CommandChoices.All();
+    Choice[]? materialChoices=null;
     static (bool Found, JsonNode? Value) InheritedOption(string section, string key, JsonObject current)
     {
       string? legacy = (section, key) switch
@@ -186,6 +205,7 @@ public sealed class vSettings : vToolsCommand
         ("vSeam", "partSeam" or "edgeSeam") => "allowance",
         ("vExportDXF", "notch_split_layer") => "notch_trim_layer",
         ("vShade", "finishedLayer") => "layer",
+        ("vPartSplit", PartSplitWorkflow.TrimToSewLineKey) => PartSplitWorkflow.LegacyTrimToSewLineKey,
         ("vMiddleCurve", "lines") => "tangentLines",
         ("vMiddleCurve", "lineInterval") => "tangentLineInterval",
         ("vPart", "cleanup") => "removeInteriorLines",
@@ -196,6 +216,8 @@ public sealed class vSettings : vToolsCommand
         _ => null
       };
       if (legacy == null || current[legacy] is not JsonValue value) return (false, null);
+      if((section,key) is ("vPartSplit", PartSplitWorkflow.TrimToSewLineKey)&&value.TryGetValue<bool>(out bool trim))
+        return (true,JsonValue.Create(trim?nameof(PartSplitWorkflow.SeamTrim.Seam):nameof(PartSplitWorkflow.SeamTrim.None)));
       if ((section, key) is ("vMatch", "startFrom") or ("vNest", "showGapMode" or "tableGridMode") or ("vUzip", "createParts"))
       {
         if (!value.TryGetValue<bool>(out bool enabled)) return (false, null);
@@ -210,6 +232,7 @@ public sealed class vSettings : vToolsCommand
         if ((section, key) is ("vMatch", "randStart") or ("vLine", "angleLock") or ("vCleanup", "preselectShort") or
           ("vPart", "removeInteriorLines") or ("vExportDXF", "notch_trim_layer") or
           ("vShade", "layer" or "length") or
+           ("vPartSplit", PartSplitWorkflow.LegacyTrimToSewLineKey) or
           ("vMiddleCurve", "tangentLines" or "tangentLineInterval") or ("vNotches", "label_side_flip") or
           ("vNest", "stack" or "showGap" or "tableGrid")) continue; // Superseded encodings remain in profiles for command-owned migration, not as competing editor controls.
         var location = path.Append(key).ToArray();
@@ -261,7 +284,11 @@ public sealed class vSettings : vToolsCommand
         row.OptionDescription = DescribeStoredOption(row.Section, row.Key);
       var definition = named.FirstOrDefault(entry => entry.Section == row.Section &&
         (Normalize(entry.Key) == key || Normalize(entry.Key) + "mode" == key));
-      if (definition != null)
+      if(row.IsMaterialChoice)
+      {
+         row.Choices=materialChoices??=MaterialChoices();
+      }
+      else if (definition != null)
       {
         bool indexed = row.Advanced != null ? row.Advanced.Type == typeof(int) : definition.Indexed;
         row.Choices = definition.Names.Select((name, index) => new Choice(name, indexed ? JsonValue.Create(index) : JsonValue.Create(name))).ToArray();
@@ -326,6 +353,9 @@ public sealed class vSettings : vToolsCommand
         if (parsed.RootElement.ValueKind != kind && !boolean) throw new FormatException($"Expected {kind}.");
       }
       if (row.Advanced != null && !CommandDefaults.Valid(row.Advanced, value, out error)) return false;
+      if (row.Section == "vNest" && row.Key == vNest.YardageDecimalsKey &&
+        (value is not JsonValue digits || !digits.TryGetValue<int>(out int decimals) || decimals is < 0 or > 3))
+        throw new FormatException("Enter a whole number from 0 through 3.");
       if (row.Choices.Length > 0 && row.ChoiceIndex(value) < 0) throw new FormatException("Choose one of the available values.");
       if (kind == JsonValueKind.Number && value != null &&
         (!double.TryParse(value.ToJsonString(), NumberStyles.Float, CultureInfo.InvariantCulture, out double number) || !double.IsFinite(number)))
@@ -339,6 +369,7 @@ public sealed class vSettings : vToolsCommand
   private sealed class SettingsDialog : Dialog<bool>
   {
     private readonly SettingRow[] _rows;
+    private readonly RhinoDoc _doc;
     private readonly TextBox _search = new() { PlaceholderText = "Search commands, settings, descriptions" };
     private readonly CheckBox _modifiedOnly = new() { Text = "Modified only", Checked = ConfiguredDefaultModifiedOnly };
     private readonly DropDown _mode = new() { Items = { OptionsMode, AdvancedMode }, SelectedIndex = 0 };
@@ -384,9 +415,9 @@ public sealed class vSettings : vToolsCommand
       }
     }
 
-    internal SettingsDialog(SettingRow[] rows)
+    internal SettingsDialog(SettingRow[] rows,RhinoDoc doc)
     {
-      _rows = rows;
+      _rows = rows;_doc=doc;
       _rowsBySection = rows.GroupBy(row=>row.Section).ToDictionary(group=>group.Key,group=>group.ToArray());
       _clearSearch = new(_search,()=>!string.IsNullOrEmpty(_search.Text),()=>
       { _search.Text=""; RefreshSections(); _search.Focus(); },"Clear search",clear:true);
@@ -554,6 +585,12 @@ public sealed class vSettings : vToolsCommand
       try { _grid.ReloadData(Enumerable.Range(0, (_grid.DataStore as SettingRow[])?.Length ?? 0)); }
       finally { _updating = false; }
     }
+    private void RefreshMaterialChoices()
+    {
+      var choices=MaterialChoices();
+      foreach(var row in _rows.Where(row=>row.IsMaterialChoice))row.Choices=choices;
+      foreach(var cell in _cells.Where(cell=>cell.Row?.IsMaterialChoice==true))cell.Configure(cell.Row,true);
+    }
     private void Reset(SettingRow row)
     {
       if (!row.HasFactory) return;
@@ -597,6 +634,16 @@ public sealed class vSettings : vToolsCommand
         MessageBox.Show(this, ToolsOptionStore.LastError, "Settings not saved", MessageBoxButtons.OK, MessageBoxType.Error); return false;
       }
       bool restart = changed.Any(row => row.Advanced != null);
+      if (changed.Any(row => row.Section == "vNest" && row.Key == vNest.CursorOrthoLinesKey))
+        vNest.RefreshTableCursorOrthoLines();
+      if (changed.Any(row => row.Section == "vNest" && row.Key == vNest.UsageOrthoLineKey))
+        vNest.RefreshUsageOrthoLine();
+      if (changed.Any(row => row.Section == "vNest" && row.Key.StartsWith("selectedRuler", StringComparison.Ordinal)))
+        vNest.RefreshSelectedTableDisplayOptions();
+      if (changed.Any(row => row.Section == "vNest" && row.Key is "showGapMode" or "tableGridMode"))
+        NestWorkflow.RefreshPreviewDisplayModes();
+      if (changed.Any(row => row.Section == "vNest" && row.Key is vNest.YardageDecimalsKey or vNest.RoundYardageUpKey))
+        vNest.RefreshTableYardageDisplay();
       foreach (var row in changed) { row.Before = ToolsOptionStore.Clone(row.Value); row.Existed = true; row.Notify(); }
       ReloadValues(); UpdateStatus(); _status.Text = restart ? "Saved; restart Rhino for advanced defaults" : "Saved";
       Log.Write("vSettings", $"Saved {changed.Length} defaults; advanced_restart={restart}"); return true;
@@ -620,7 +667,9 @@ public sealed class vSettings : vToolsCommand
     {
       private readonly SettingsDialog _owner;
       private TextBox? _text, _colorHex;
-      private DropDown? _choices;
+      private DropDown? _choices,_materialChoices;
+      private TableLayout? _materialEditor;
+      private Action? _refreshMaterialPicker;
       private CheckBox? _boolean;
       private NumericStepper? _number;
       private ColorPicker? _color;
@@ -650,12 +699,21 @@ public sealed class vSettings : vToolsCommand
       private TextBox TextEditor=>Editor(ref _text,()=>new TextBox(),control=>control.TextChanged+=(_,_)=>Change(control.Text),true);
       private CheckBox BooleanInput=>Editor(ref _boolean,()=>new CheckBox(),control=>control.CheckedChanged+=(_,_)=>Change(control.Checked==true?"true":"false"));
       private NumericStepper NumberInput=>Editor(ref _number,()=>new NumericStepper(),control=>control.ValueChanged+=(_,_)=>Change(control.Value.ToString("G17",CultureInfo.InvariantCulture)),true);
-      private DropDown ChoiceInput=>Editor(ref _choices,()=>new DropDown(),control=>control.SelectedIndexChanged+=(_,_)=>
+      private DropDown ChoiceInput(bool materials)=>Editor(ref (materials?ref _materialChoices:ref _choices),()=>new DropDown(),control=>
+      {
+        control.SelectedIndexChanged+=(_,_)=>
         {
           if (_assigning || Row == null) return;
           int index = control.SelectedIndex - (_unknownChoice ? 1 : 0);
           if (index >= 0 && index < Row.Choices.Length) _owner.Store(Row, Row.Choices[index].Value, this);
-        },true);
+        };
+        if(materials)
+          _refreshMaterialPicker=MaterialAppearance.Picker(control,index=>
+          {
+            index-=_unknownChoice?1:0;
+            return Row!=null&&index>=0&&index<Row.Choices.Length?Row.Choices[index].Material:null;
+          });
+      },true);
       private TextBox HexInput=>Editor(ref _colorHex,()=>new TextBox {Width=ConfiguredColorHexWidth,
         ToolTip="Enter #RRGGBB for an opaque color or #AARRGGBB including alpha; the # prefix is optional."},control=>control.TextChanged+=(_,_)=>ChangeHex());
       private ColorPicker ColorInput=>Editor(ref _color,()=>new ColorPicker {AllowAlpha=true},control=>control.ValueChanged+=(_,_)=>{if(!_assigning)ChangeColor();});
@@ -699,10 +757,11 @@ public sealed class vSettings : vToolsCommand
           if (row.Choices.Length > 0)
           {
             int selected = row.ChoiceIndex(row.Value); _unknownChoice = selected < 0;
-            var choices=ChoiceInput;choices.Items.Clear();
+            var choices=ChoiceInput(row.IsMaterialChoice);choices.Items.Clear();
             if (_unknownChoice) choices.Items.Add("Unknown: " + row.DisplayValue);
             foreach (var choice in row.Choices) choices.Items.Add(choice.Label);
-            choices.SelectedIndex = _unknownChoice ? 0 : selected; editor = choices;
+             choices.SelectedIndex = _unknownChoice ? 0 : selected;
+             editor=row.IsMaterialChoice?_materialEditor??=MaterialAppearance.WithManager(choices,_owner._doc,_owner,_owner.RefreshMaterialChoices):choices;
           }
           else if (row.ValueType == typeof(System.Drawing.Color) && uint.TryParse(row.DisplayValue.TrimStart('#'), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint argb))
           { HexInput.Text = $"#{argb:X8}"; ColorInput.Value = new Color(((argb >> 16) & 255) / 255f, ((argb >> 8) & 255) / 255f, (argb & 255) / 255f, ((argb >> 24) & 255) / 255f); editor = ColorEditor; }
@@ -721,6 +780,7 @@ public sealed class vSettings : vToolsCommand
           editor.ToolTip = row.ToolTipText;
           if (!ReferenceEquals(Content, editor)) Content = editor;
           SetEditorContrast(editor);
+           if(row.IsMaterialChoice)_refreshMaterialPicker?.Invoke();
         }
         finally { _assigning = false; }
         RefreshOverlays();

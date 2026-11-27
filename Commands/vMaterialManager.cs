@@ -48,19 +48,30 @@ public sealed class vMaterialManager : vToolsCommand
   protected override Result RunCommand(RhinoDoc doc, RunMode mode)
     => Open(doc);
 
-  internal static Result Open(RhinoDoc doc)
+  internal static Result Open(RhinoDoc doc,Window? modalOwner=null)
   {
-    if (_window is { IsDisposed: false }) { _window.BringToFront(); _window.Focus(); return Result.Success; }
+    if (modalOwner==null&&_window is { Host.IsDisposed: false } existing)
+    { existing.Host.BringToFront(); existing.Host.Focus(); return Result.Success; }
     if (!MaterialLibrary.TrySnapshot(out var snapshot, out var error))
     { RhinoApp.WriteLine("vMaterialManager: {0}", error); return Result.Failure; }
     try
     {
       double unitsPerInch=doc.ModelUnitSystem is UnitSystem.None or UnitSystem.Unset or UnitSystem.CustomUnits
         ?double.NaN:RhinoMath.UnitScale(UnitSystem.Inches,doc.ModelUnitSystem);
-      var window = new MaterialWindow(snapshot,unitsPerInch) { Owner = RhinoEtoApp.MainWindowForDocument(doc) };
-      _window = window;
-      window.Closed += (_, _) => { if (ReferenceEquals(_window, window)) _window = null; };
-      window.Show();
+      if(modalOwner!=null)
+      {
+        using var dialog=new Dialog();
+        _=new MaterialWindow(snapshot,unitsPerInch,dialog);
+        dialog.ShowModal(modalOwner);
+      }
+      else
+      {
+        var form=new Form{Owner=RhinoEtoApp.MainWindowForDocument(doc)};
+        var window=new MaterialWindow(snapshot,unitsPerInch,form);
+        _window=window;
+        form.Closed+=(_,_)=>{if(ReferenceEquals(_window,window))_window=null;};
+        form.Show();
+      }
       return Result.Success;
     }
     catch (Exception ex)
@@ -191,8 +202,10 @@ public sealed class vMaterialManager : vToolsCommand
       _grid.Columns.Add(new GridColumn {HeaderText="Folder",DataCell=new TextBoxCell(2),Width=NameWidth/2,Resizable=true});
       _grid.Columns.Add(new GridColumn {HeaderText="Width (in)",DataCell=new TextBoxCell(3),Width=NumberWidth,Resizable=true});
       _grid.Columns.Add(new GridColumn {HeaderText="Gap (in)",DataCell=new TextBoxCell(4),Width=NumberWidth,Resizable=true});
-      _grid.Columns.Add(new GridColumn {HeaderText="vNest preset",DataCell=new ComboBoxCell(5){DataStore=new[]{NewPresetChoice}.Concat(existing.Select(preset=>preset.Name).Order(StringComparer.OrdinalIgnoreCase)).ToArray()},Width=NameWidth,Resizable=true,Editable=true,
+      var targets=existing.OrderBy(preset=>preset.Name,StringComparer.OrdinalIgnoreCase).ToArray();
+      _grid.Columns.Add(new GridColumn {HeaderText="vNest preset",DataCell=new ComboBoxCell(5){DataStore=new[]{NewPresetChoice}.Concat(targets.Select(preset=>preset.Name)).ToArray()},Width=NameWidth,Resizable=true,Editable=true,
         HeaderToolTip="Map to an existing preset without changing its settings, or explicitly create a new preset."});
+      MaterialAppearance.GridPicker(_grid,5,index=>index>0&&index<=targets.Length?targets[index-1].PatternSmith:null);
       MaterialAppearance.Grid(_grid,1,item=>item is GridItem {Tag:CatalogMaterial material}?new(material.Id,material.Name,material.Group,_catalog.Identity):null);
       MaterialAppearance.Grid(_grid,5,item=>item is GridItem {Tag:CatalogMaterial material}&&_targets.TryGetValue(material,out var name)?_existing.FirstOrDefault(preset=>preset.Name==name)?.PatternSmith:null);
       _grid.CellEdited+=(_,e)=>{if(e.Item is GridItem {Tag:CatalogMaterial material} item){if(e.Column==5){_targets[material]=Convert.ToString(item.Values[5],CultureInfo.CurrentCulture)??NewPresetChoice;_selected.Add(material);RefreshRows();}else{if(item.Values[0] is true)_selected.Add(material);else _selected.Remove(material);UpdateCount();}}};
@@ -231,8 +244,9 @@ public sealed class vMaterialManager : vToolsCommand
     }
   }
 
-  private sealed class MaterialWindow : Form
+  private sealed class MaterialWindow
   {
+    internal Window Host {get;}
     private MaterialLibrary.Snapshot _snapshot;
     private readonly List<MaterialRow> _rows = [];
     private readonly GridView _grid = new() { AllowMultipleSelection = true, AllowColumnReordering = true, RowHeight = RowHeight };
@@ -252,14 +266,15 @@ public sealed class vMaterialManager : vToolsCommand
     private MaterialRow[] _mouseEditSelection = [];
     private MaterialRow[] _editingSelection = [];
 
-    internal MaterialWindow(MaterialLibrary.Snapshot snapshot,double unitsPerInch=DefaultUnitsPerInch)
+    internal MaterialWindow(MaterialLibrary.Snapshot snapshot,double unitsPerInch=DefaultUnitsPerInch,Window? host=null)
     {
+      Host=host??new Form();
       _unitsPerInch=unitsPerInch;
       _snapshot = snapshot;
-      Title = CommandName;
-      ClientSize = InitialSize;
-      MinimumSize = MinimumWindowSize;
-      Padding = ConfiguredWindowPadding;
+      Host.Title = CommandName;
+      Host.ClientSize = InitialSize;
+      Host.MinimumSize = MinimumWindowSize;
+      Host.Padding = ConfiguredWindowPadding;
       _grid.Columns.Add(new GridColumn { HeaderText = "Material", DataCell = new TextBoxCell(0), Width = NameWidth, Expand = true, Editable = true, Sortable = true,
         HeaderToolTip = "Material names are edited individually; other editable fields apply to all selected materials." });
       foreach (var field in new[] { ("Width", 1), ("Gap", 2) })
@@ -298,8 +313,8 @@ public sealed class vMaterialManager : vToolsCommand
       reload.Click += (_, _) => Reload();
       _save.Click += (_, _) => SaveMaterials();
       _sync.Click+=(_,_)=>SyncPatternSmith();
-      close.Click += (_, _) => Close();
-      Content = new TableLayout
+      close.Click += (_, _) => Host.Close();
+      Host.Content = new TableLayout
       {
         Spacing = new Size(Spacing, Spacing), Rows =
         {
@@ -310,14 +325,14 @@ public sealed class vMaterialManager : vToolsCommand
             Items = { new StackLayoutItem(_status, true), _save, close } })
         }
       };
-      Closing += (_, e) =>
+      Host.Closing += (_, e) =>
       {
         if(_syncCancellation!=null){_syncCancellation.Cancel();if(!_hostClosing){e.Cancel=true;_status.Text="Cancelling catalog read...";}return;}
         if (!_hostClosing && (LocalChanges() || _rows.Any(row => row.Unsaved)))
-          e.Cancel = !ApplyCloseDecision(CloseConfirmation.Show(this, CommandName, "Save material changes before closing?", "Save"));
+          e.Cancel = !ApplyCloseDecision(CloseConfirmation.Show(Host, CommandName, "Save material changes before closing?", "Save"));
       };
       RhinoApp.Closing += HostClosing;
-      Closed += (_, _) => RhinoApp.Closing -= HostClosing;
+      Host.Closed += (_, _) => RhinoApp.Closing -= HostClosing;
       LoadSnapshot(snapshot);
     }
 
@@ -329,11 +344,11 @@ public sealed class vMaterialManager : vToolsCommand
       try
       {
         var catalog=await Task.Run(()=>PatternSmithCatalog.Load(cancel.Token),cancel.Token);
-        if(IsDisposed||_hostClosing)return;
+        if(Host.IsDisposed||_hostClosing)return;
         cancel.Token.ThrowIfCancellationRequested();
         if(catalog.Materials.Count==0){_status.Text="No supported PS roll materials available. Check the material server or library settings in vSettings.";return;}
         using var dialog=new PatternSmithSyncDialog(catalog,_rows.Select(row=>row.Value).ToArray(),_unitsPerInch);
-        if(!dialog.ShowModal(this))return;
+        if(!dialog.ShowModal(Host))return;
         var result=dialog.SyncChanges!;
         foreach(var value in result.Materials)
         {
@@ -343,14 +358,14 @@ public sealed class vMaterialManager : vToolsCommand
         _search.Text="";RefreshRows();
         _status.Text=$"PS: {result.Added} added, {result.Updated} updated, {result.Skipped.Count} skipped. Save All to apply.";
         Log.Write(CommandName,"PatternSmith sync staged source={0} added={1} updated={2} skipped={3}; {4}",catalog.Source,result.Added,result.Updated,result.Skipped.Count,string.Join("; ",result.Skipped));
-        if(result.Skipped.Count>0)MessageBox.Show(this,string.Join("\n",result.Skipped),"Materials not imported",MessageBoxButtons.OK,MessageBoxType.Warning);
+        if(result.Skipped.Count>0)MessageBox.Show(Host,string.Join("\n",result.Skipped),"Materials not imported",MessageBoxButtons.OK,MessageBoxType.Warning);
       }
-      catch(OperationCanceledException){if(!IsDisposed)_status.Text="PatternSmith synchronization cancelled.";}
-      catch(Exception ex){Log.Write(CommandName,"PatternSmith sync failed: {0}",ex);if(!IsDisposed)_status.Text="PatternSmith synchronization failed: "+ex.Message;}
-      finally{_syncCancellation=null;if(!IsDisposed)_sync.Text="Map PS...";}
+      catch(OperationCanceledException){if(!Host.IsDisposed)_status.Text="PatternSmith synchronization cancelled.";}
+      catch(Exception ex){Log.Write(CommandName,"PatternSmith sync failed: {0}",ex);if(!Host.IsDisposed)_status.Text="PatternSmith synchronization failed: "+ex.Message;}
+      finally{_syncCancellation=null;if(!Host.IsDisposed)_sync.Text="Map PS...";}
     }
 
-    private void HostClosing(object? sender, EventArgs e) { _hostClosing = true; Close(); }
+    private void HostClosing(object? sender, EventArgs e) { _hostClosing = true; Host.Close(); }
     private bool LocalChanges() => _rows.Any(row => row.Dirty || row.Saved == null) ||
       !_rows.Select(row => row.Baseline.Name).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(_snapshot.Presets.Concat(_snapshot.Drafts).Select(material => material.Name));
     private MaterialRow[] SelectedRows() => _grid.SelectedItems.OfType<GridItem>().Select(item => item.Tag).OfType<MaterialRow>().ToArray();
@@ -483,7 +498,7 @@ public sealed class vMaterialManager : vToolsCommand
     private void DeleteSelected()
     {
       var selected = SelectedRows(); if (selected.Length == 0) return;
-      if (MessageBox.Show(this, $"Delete {CountText.Format(selected.Length, "selected material")} from the library?\nExisting drawing parts and tables keep their material data.",
+      if (MessageBox.Show(Host, $"Delete {CountText.Format(selected.Length, "selected material")} from the library?\nExisting drawing parts and tables keep their material data.",
         CommandName, MessageBoxButtons.YesNo, MessageBoxType.Question) != DialogResult.Yes) return;
       foreach (var row in selected) _rows.Remove(row);
       RefreshRows();
@@ -495,7 +510,7 @@ public sealed class vMaterialManager : vToolsCommand
     }
     private void Reload()
     {
-      if (LocalChanges() && MessageBox.Show(this, "Discard local edits and reload the material library?", CommandName,
+      if (LocalChanges() && MessageBox.Show(Host, "Discard local edits and reload the material library?", CommandName,
         MessageBoxButtons.YesNo, MessageBoxType.Question) != DialogResult.Yes) return;
       if (MaterialLibrary.TrySnapshot(out var snapshot, out var error)) LoadSnapshot(snapshot);
       else _status.Text = error;
